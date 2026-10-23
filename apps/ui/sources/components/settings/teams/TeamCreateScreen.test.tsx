@@ -335,7 +335,8 @@ describe('TeamCreateScreen', () => {
         await vi.waitFor(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('teams-create-unavailable');
         });
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
+        expect(screen.getTextContent()).not.toContain('teams.unavailable.offline');
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('teams-create-managed-only');
     });
 

@@ -154,6 +154,20 @@ describe('resolveTeamsSettingsAdmission', () => {
         expect(admission.homes).toEqual([{ serverId: 'home_a', state: 'unresolved', reason: 'loading' }]);
     });
 
+    it.each([
+        { status: 'error', reason: 'response_status', httpStatus: 503 },
+        { status: 'error', reason: 'identity_conflict' },
+    ] as const)('does not claim a Home is unreachable after a $reason feature probe', (snapshot) => {
+        const admission = resolveTeamsSettingsAdmission({
+            serverIds: ['home_a'],
+            snapshotsByServerId: { home_a: snapshot },
+        });
+
+        expect(admission.admitted).toBe(false);
+        expect(admission.capableServerIds).toEqual([]);
+        expect(admission.homes).toEqual([{ serverId: 'home_a', state: 'unresolved', reason: 'error' }]);
+    });
+
     it('keeps a partial multi-Home view usable: one capable Home admits while another stays explained', () => {
         const admission = resolveTeamsSettingsAdmission({
             serverIds: ['home_a', 'home_b'],

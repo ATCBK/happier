@@ -138,7 +138,7 @@ export function resolveTeamsDirectoryViewState(
                 homeName,
                 reason: home.reason === 'loading'
                     ? 'loading' as const
-                    : home.reason === 'credential_unreadable' ? 'credential_unreadable' as const : 'offline' as const,
+                    : home.reason === 'unreachable' ? 'offline' as const : home.reason,
                 retryable: home.reason !== 'loading',
             }));
             continue;

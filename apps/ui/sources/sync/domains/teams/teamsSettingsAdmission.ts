@@ -16,7 +16,7 @@ export type TeamsHomeAdmissionEntry =
      * not read its own saved credential for it — neither a Home failure nor a
      * sign-out, and settled rather than loading.
      */
-    | Readonly<{ serverId: string; state: 'unresolved'; reason: 'loading' | 'unreachable' | 'credential_unreadable' }>;
+    | Readonly<{ serverId: string; state: 'unresolved'; reason: 'loading' | 'unreachable' | 'error' | 'credential_unreadable' }>;
 
 export type TeamsSettingsAdmission = Readonly<{
     /** True when the exact Home set contains at least one capable Home. */
@@ -68,7 +68,13 @@ function resolveHomeEntry(
             reason: decision.blockerCode === 'endpoint_missing' ? 'endpoint_missing' : 'misconfigured',
         };
     }
-    return { serverId, state: 'unresolved', reason: 'unreachable' };
+    // A received HTTP error or an identity refusal is a failed probe, not
+    // evidence of transport loss. Neither admits Teams, but the reason shown
+    // by every consumer must preserve that distinction.
+    const reason = snapshot?.status === 'error'
+        && (snapshot.reason === 'response_status' || snapshot.reason === 'identity_conflict')
+        ? 'error' : 'unreachable';
+    return { serverId, state: 'unresolved', reason };
 }
 
 /**

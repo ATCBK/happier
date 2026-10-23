@@ -134,6 +134,23 @@ describe('resolveTeamsDirectoryViewState', () => {
         expect(state.unavailableHomes).toEqual([{ serverId: 'alpha', homeName: 'Alpha', reason: 'error', retryable: true }]);
         expect(state.kind).toBe('ready');
     });
+
+    it('presents a failed HTTP feature probe as a load error while keeping Teams unadmitted', () => {
+        const admission = resolveTeamsSettingsAdmission({
+            serverIds: ['alpha'],
+            snapshotsByServerId: { alpha: { status: 'error', reason: 'response_status', httpStatus: 503 } },
+            settings: { experiments: false, featureToggles: {} },
+        });
+        const state = resolveTeamsDirectoryViewState({
+            homes: admission.homes,
+            homeNamesByServerId: HOME_NAMES,
+            snapshotsByServerId: {},
+        });
+
+        expect(state.rows).toHaveLength(0);
+        expect(state.unavailableHomes).toEqual([{ serverId: 'alpha', homeName: 'Alpha', reason: 'error', retryable: true }]);
+        expect(teamsUnavailableHomeStateKind(state.unavailableHomes[0]!)).toBe('error');
+    });
     it('flattens capable Homes into addressed rows that carry their exact Home', () => {
         const state = resolveTeamsDirectoryViewState({
             homes: [

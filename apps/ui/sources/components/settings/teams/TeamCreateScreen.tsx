@@ -646,7 +646,9 @@ export const TeamCreateScreen = React.memo(function TeamCreateScreen(props: Read
                     ? t('teams.unavailable.disabled')
                     : admission.homes.some((home) => home.state === 'unsupported')
                         ? t('teams.unavailable.updateRequired')
-                        : t('teams.unavailable.offline')}
+                        : admission.homes.some((home) => home.state === 'unresolved' && home.reason === 'error')
+                            ? t('teams.errors.loadFailed')
+                            : t('teams.unavailable.offline')}
                 accessibilitySemantics="alert"
             />,
         );
