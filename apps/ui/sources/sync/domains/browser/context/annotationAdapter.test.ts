@@ -86,7 +86,7 @@ describe('browser context annotation adapter', () => {
         const view = buildView();
         const captureScreenshot = vi.fn(async () => ({ ok: true as const,
             snapshot: { bytes: new Uint8Array([1]), mimeType: 'image/png' as const, width: 20, height: 20, sizeBytes: 1 } }));
-        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const }));
+        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const, width: 20, height: 20, sizeBytes: 1 }));
         const adapter = createBrowserContextAnnotationAdapter({
             resolveBinding: () => ({ state, view, browserContextEnabled: true, attachmentsUploadsEnabled: true,
                 contextCapabilities: annotationCapabilities, captureProvider: createBrowserAnnotationCaptureProvider({ captureScreenshot, registerMedia }) }),
@@ -124,7 +124,7 @@ describe('browser context annotation adapter', () => {
             await pixels;
             return { ok: true as const, snapshot: { bytes: new Uint8Array([1]), mimeType: 'image/png' as const, width: 20, height: 20, sizeBytes: 1 } };
         });
-        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const }));
+        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const, width: 20, height: 20, sizeBytes: 1 }));
         const adapter = createBrowserContextAnnotationAdapter({
             resolveBinding: () => ({ state, view, browserContextEnabled: true, attachmentsUploadsEnabled: true,
                 contextCapabilities: annotationCapabilities, captureProvider: createBrowserAnnotationCaptureProvider({ captureScreenshot, registerMedia }) }),

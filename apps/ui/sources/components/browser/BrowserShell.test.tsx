@@ -524,7 +524,7 @@ describe('BrowserShell', () => {
       else await act(async () => {
         const result = await executor.execute(operation.actionId, operation.input, { surface });
         expect(result).toMatchObject({ ok: true });
-        if (result.ok) expect(getActionSpec(operation.actionId).outputSchema.safeParse(result.result).success).toBe(true);
+        if (result.ok) expect(getActionSpec(operation.actionId).outputSchema?.safeParse(result.result).success).toBe(true);
       });
     }
     expect(selectBrowserContextComposerAttachments(contextState)).toHaveLength(2);
