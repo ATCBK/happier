@@ -52,7 +52,9 @@ export function readHappierTempDirOwner(directory) {
 export function readHappierTempDirOwnerForDirectory(directory, ownerUid) {
   const owner = readHappierTempDirOwner(directory);
   if (!owner || !basename(directory).startsWith(`${owner.purpose}-`)
-    || !/^[a-zA-Z0-9]{6}$/u.test(basename(directory).slice(owner.purpose.length + 1))) return null;
+    // Trash's no-overwrite Put back beside it retains the generated name and
+    // appends this suffix; it does not create a new process-ownership witness.
+    || !/^[a-zA-Z0-9]{6}(?: \(restored\))*$/u.test(basename(directory).slice(owner.purpose.length + 1))) return null;
   const parent = dirname(directory);
   try {
     const expected = ownerUid === undefined ? getHappierTempRoot(dirname(parent)) : getHappierTempRootForUid(dirname(parent), ownerUid);
@@ -61,7 +63,7 @@ export function readHappierTempDirOwnerForDirectory(directory, ownerUid) {
 }
 
 /** Capture before removal; cleanup grants no directory-removal authority. */
-export function prepareHappierTempDirOwnerCleanup(directory, ownerUid) {
+export function prepareHappierTempDirOwnerCleanup(directory, ownerUid, retainMarker) {
   const nothing = async () => {};
   const marker = getHappierTempDirOwnerPath(directory);
   const owner = readHappierTempDirOwnerForDirectory(directory, ownerUid);
@@ -79,7 +81,8 @@ export function prepareHappierTempDirOwnerCleanup(directory, ownerUid) {
       const current = await lstat(marker, { bigint: true });
       if (!current.isFile() || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino
         || JSON.stringify(readHappierTempDirOwner(directory)) !== JSON.stringify(owner)) return;
-      await unlink(marker);
+      if (retainMarker) await retainMarker(marker, { dev: String(current.dev), ino: String(current.ino) });
+      else await unlink(marker);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   };
 }

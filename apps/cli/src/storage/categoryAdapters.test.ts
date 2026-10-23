@@ -70,10 +70,18 @@ it('contracts only validated creator markers when native storage retirement or d
     await writeFile(join(source, 'bytes'), 'temporary-bytes');
     const adapter = createStorageFilesystemAdapter({ sourcePath: source, allowedRoot: f.happyHomeDir });
     const payloadPath = join(f.happyHomeDir, 'payload');
+    const markerContents = await readFile(getHappierTempDirOwnerPath(source), 'utf8');
     await adapter.retire({ payloadPath });
     expect(await readFile(join(payloadPath, 'bytes'), 'utf8')).toBe('temporary-bytes');
     await expect(readFile(getHappierTempDirOwnerPath(source))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(siblingMarker, 'utf8')).toBe(siblingContents);
+    // A new adapter after daemon reload must restore the original ownership witness,
+    // not fabricate one for the restoring process.
+    const restarted = createStorageFilesystemAdapter({ sourcePath: source, allowedRoot: f.happyHomeDir });
+    await restarted.reinstate({ payloadPath, restorePath: source });
+    expect(await readFile(getHappierTempDirOwnerPath(source), 'utf8')).toBe(markerContents);
+    expect(await readFile(join(source, 'bytes'), 'utf8')).toBe('temporary-bytes');
+    await expect(readFile(getHappierTempDirOwnerPath(payloadPath))).rejects.toMatchObject({ code: 'ENOENT' });
     await createStorageFilesystemAdapter({ sourcePath: sibling, allowedRoot: f.happyHomeDir }).discard();
     await expect(readFile(siblingMarker)).rejects.toMatchObject({ code: 'ENOENT' });
 
@@ -116,6 +124,24 @@ it('preserves a valid replacement temp marker and an unaccepted retirement marke
     } });
     expect(await readFile(marker, 'utf8')).toBe(original);
     expect(await readFile(`${marker}.previous`, 'utf8')).toBe(original);
+});
+it('recovers interrupted temp marker moves and cleans ownership after Put back beside it', async () => {
+    const f = await fixture();
+    const source = createHappierTempDir({ purpose: 'marker-recovery', root: f.happyHomeDir });
+    const marker = getHappierTempDirOwnerPath(source);
+    const original = await readFile(marker, 'utf8');
+    const payloadPath = join(f.happyHomeDir, 'payload');
+    const adapter = createStorageFilesystemAdapter({ sourcePath: source, allowedRoot: f.happyHomeDir });
+    // Model interruption after the payload rename, before its sibling follows.
+    await rename(source, payloadPath); await adapter.retire({ payloadPath });
+    await rename(payloadPath, source); await adapter.reinstate({ payloadPath, restorePath: source });
+    expect(await readFile(marker, 'utf8')).toBe(original);
+    await adapter.retire({ payloadPath });
+    const beside = `${source} (restored)`;
+    await adapter.reinstate({ payloadPath, restorePath: beside });
+    expect(await readFile(getHappierTempDirOwnerPath(beside), 'utf8')).toBe(original);
+    await createStorageFilesystemAdapter({ sourcePath: beside, allowedRoot: f.happyHomeDir }).discard();
+    await expect(readFile(getHappierTempDirOwnerPath(beside))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it.skipIf(process.platform === 'win32')('moves, restores and deletes the exact native byte name without touching its replacement twin', async () => {
     const f = await fixture();
