@@ -418,6 +418,7 @@ export {
   HappierPageSectionHeader,
   HappierPageSheet,
   HappierPageSheetGroup,
+  happierPageRowDividerInset,
   happierPageRowDividerWidth,
   happierPageSheetShape,
   useHappierPageSection,
@@ -426,6 +427,7 @@ export {
   type HappierPageSectionHeaderProps,
   type HappierPageSectionTextRender,
   type HappierPageSheetGroupProps,
+  type HappierPageSheetColors,
   type HappierPageSheetProps,
 } from './layout/PageSection.js';
 export {

@@ -1,5 +1,6 @@
 import { createContext, type MutableRefObject, type ReactNode } from 'react';
 
+import type { HappierPageSheetColors } from '../presentation/layout/PageSection.js';
 import type { HappierStyleProp } from '../presentation/portableTypes.js';
 
 /**
@@ -56,7 +57,7 @@ export type ListCollectionControl = Readonly<{
    * (the page anatomy every other section of the page uses), in these colours.
    */
   pageSheet?: Readonly<{
-    colors: Readonly<{ sheet: string; sheetBorder: string; rowDivider: string; groupDivider: string }>;
+    colors: HappierPageSheetColors;
     /**
      * An ungrouped list is one page section: its rows, then its footer (totals), sit on one sheet, led by this bar
      * (the table's column header recomposed: what the rows are, and the order they are in).

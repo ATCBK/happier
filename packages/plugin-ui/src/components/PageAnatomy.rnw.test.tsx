@@ -146,6 +146,25 @@ describe('plugin page anatomy through the shared page owners', () => {
     } finally { mount.unmount(); }
   });
 
+  it('starts each row seam at its text and stops it at the trailing row inset (P7-R2)', () => {
+    const mount = mountPage(
+      <ItemGroup title="Devices">
+        <Item title="Laptop" icon={<View style={{ width: 16, height: 16 }} />} />
+        <Item title="Phone" />
+        <Item title="Tablet" />
+      </ItemGroup>,
+    );
+    try {
+      const seams = Array.from(mount.container.querySelectorAll<HTMLElement>('[role="separator"]')).map((separator) => {
+        const style = getComputedStyle(separator);
+        return [style.marginInlineStart || style.marginLeft, style.marginInlineEnd || style.marginRight];
+      });
+      const inset = HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;
+      const text = inset + HAPPIER_PAGE_METRICS.rowLeadingColumnPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx;
+      expect(seams).toEqual([[`${text}px`, `${inset}px`], [`${inset}px`, `${inset}px`]]);
+    } finally { mount.unmount(); }
+  });
+
   it('lets an explicit radio-group name override its visible title', () => {
     const mount = mountPage(
       <ItemGroup title="Use" accessibilityRole="radiogroup" accessibilityLabel="Checkout preparation">

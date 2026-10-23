@@ -21,10 +21,12 @@ import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle } from './pageText.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from './Surface.js';
 import type { HappierSurfaceGradient } from './material.js';
 import { HappierBodyEdgeContext } from './columnEdge.js';
+import { happierRaisedEdgeStyle, type HappierRaisedEdge } from './raisedEdge.js';
 
 /**
  * The shape of a page section's sheet: the page radius and a hairline edge on
- * every side (a page sheet is flat paper — no highlight edge, no shadow).
+ * every side. The host's card edge (`HappierPageSheetColors.sheetEdge`: the lip
+ * on one side of that hairline and the card's grounding) is laid over it.
  * Colours are the adapter's: Happier core's theme, or the palette. A function,
  * not a constant, so the platform's hairline is read at render rather than at
  * module load.
@@ -36,6 +38,20 @@ export function happierPageSheetShape(): Readonly<{ borderRadius: number; border
 /** The hairline between the rows of a page section's sheet. */
 export function happierPageRowDividerWidth(): number {
   return StyleSheet.hairlineWidth;
+}
+
+/**
+ * Where a row's hairline runs (P7-R2): from the row's text edge — its inset plus, when the row or its
+ * section reserves one, the leading column and its gap — to the row's trailing inset. Logical start and
+ * end, so a right-to-left page mirrors it. Core page rows and the public list rows both take it here.
+ */
+export function happierPageRowDividerInset(input: Readonly<{
+  /** The row's own inset from the sheet's edge (`HappierPageSection.rowInsetPx`). */
+  rowInsetPx: number;
+  /** The leading column plus its gap before the text, or 0 when the row's text starts at its inset. */
+  leadingPx?: number;
+}>): Readonly<{ marginStart: number; marginEnd: number }> {
+  return { marginStart: input.rowInsetPx + (input.leadingPx ?? 0), marginEnd: input.rowInsetPx };
 }
 
 export type HappierPageSectionTextRender = (input: Readonly<{
@@ -215,7 +231,7 @@ export type HappierPageSection = Readonly<{
 /**
  * Present while rendering the rows of a page section's sheet. A row that reads
  * it takes the page row anatomy (row insets, the page row title and
- * description steps, a full-width hairline divider).
+ * description steps, a hairline from its text to its trailing inset).
  */
 export const HappierPageSectionContext = createContext<HappierPageSection | null>(null);
 
@@ -278,13 +294,21 @@ function isSheetGroup(element: ReactElement): element is ReactElement<HappierPag
   return element.type === HappierPageSheetGroup;
 }
 
+/**
+ * Sheet and edge colours (Happier core's theme, or the palette). `groupDivider` is the separator between
+ * {@link HappierPageSheetGroup}s, lighter than `rowDivider`; `sheetEdge` is the host's card lip and grounding.
+ */
+export type HappierPageSheetColors = Readonly<{
+  sheet: string;
+  sheetBorder: string;
+  sheetEdge?: HappierRaisedEdge;
+  rowDivider: string;
+  groupDivider: string;
+}>;
+
 export type HappierPageSheetProps = Readonly<{
   children?: ReactNode;
-  /**
-   * Sheet and edge colours (Happier core's theme, or the palette). `groupDivider` is the separator
-   * between {@link HappierPageSheetGroup}s, lighter than `rowDivider`.
-   */
-  colors: Readonly<{ sheet: string; sheetBorder: string; rowDivider: string; groupDivider: string }>;
+  colors: HappierPageSheetColors;
   gradient?: HappierSurfaceGradient | null;
   renderMaterialSurface?: HappierMaterialSurfaceRender;
   /** `none` lays the rows on the page with the same insets and no sheet. */
@@ -304,8 +328,8 @@ export type HappierPageSheetProps = Readonly<{
 }>;
 
 /**
- * A page section's body: the rows on one hairline sheet, separated by
- * full-width hairlines, each row taking the page row anatomy. Rows may be
+ * A page section's body: the rows on one sheet, separated by hairlines that
+ * run from the rows' text to their trailing inset, each row taking the page row anatomy. Rows may be
  * grouped ({@link HappierPageSheetGroup}); a light, content-width separator
  * then sits between groups.
  */
@@ -316,6 +340,7 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
         ...happierPageSheetShape(),
         borderColor: props.colors.sheetBorder,
         backgroundColor: props.colors.sheet,
+        ...happierRaisedEdgeStyle(props.colors.sheetEdge),
       };
   const rowDividerColor = props.colors.rowDivider;
   const rowInsetPx = props.rowInsetPx ?? HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;

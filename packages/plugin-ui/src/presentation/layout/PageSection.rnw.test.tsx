@@ -171,6 +171,29 @@ describe('HappierPageSheet groups, row inset and row dividers', () => {
     view.unmount();
   });
 
+  it('stands a framed sheet on the host card edge — lip and grounding — and keeps a flat sheet bare', () => {
+    const colors = {
+      ...COLORS,
+      sheetEdge: { side: 'bottom' as const, color: '#123456', lift: { boxShadow: '0px 1px 2px rgba(0, 0, 0, 0.02)' } },
+    };
+    const view = mount(
+      <>
+        <HappierPageSheet testID="framed" colors={colors}><Row id="f1" /></HappierPageSheet>
+        <HappierPageSheet testID="flat" surface="none" colors={colors}><Row id="n1" /></HappierPageSheet>
+        <HappierPageSheet testID="hostless" colors={COLORS}><Row id="h1" /></HappierPageSheet>
+      </>,
+    );
+    const style = (id: string) => getComputedStyle(view.container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!);
+    expect(style('framed').borderBottomColor).toBe('rgb(18, 52, 86)');
+    expect(style('framed').borderTopColor).toBe('rgb(10, 11, 12)');
+    expect(style('framed').boxShadow).toContain('rgba(0, 0, 0, 0.02)');
+    expect(style('flat').boxShadow).toBe('');
+    expect(style('flat').borderBottomWidth).not.toBe('1px');
+    expect(style('hostless').borderBottomColor).toBe('rgb(10, 11, 12)');
+    expect(style('hostless').boxShadow).toBe('');
+    view.unmount();
+  });
+
   it('draws a group label inside a sheet as the group sub-heading, on the rows’ inset', () => {
     const roles: HappierCollectionListTextRole[] = [];
     const host: HappierCollectionListHost = {

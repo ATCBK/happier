@@ -93,7 +93,12 @@ export type HappierUiPalette = Readonly<{
   /** A page section's sheet and its hairline edge. */
   sheet: string;
   sheetBorder: string;
-  /** The full-width hairline between the rows of a sheet. */
+  /**
+   * The lip (one side of `sheetBorder` drawn in its raised colour) and the grounding a page sheet stands
+   * on: the host's in-flow card edge, resolved by the host. Absent, a sheet draws its flat hairline only.
+   */
+  sheetEdge?: HappierRaisedEdge;
+  /** The hairline between the rows of a sheet, from the rows' text edge to their trailing inset. */
   rowDivider: string;
   /**
    * The separator between groups of a sheet's rows (`HappierPageSheetGroup`): content width and

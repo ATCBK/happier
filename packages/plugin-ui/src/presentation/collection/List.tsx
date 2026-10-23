@@ -30,7 +30,7 @@ import type { HappierPageRowMetrics } from '../layout/pageRowMetrics.js';
 import { HappierPageRowFieldLayoutContext } from '../layout/pageRowField.js';
 import { resolveHappierPageRowDetailLayout } from '../layout/pageRowDetail.js';
 import { HAPPIER_FIELD_BOX_METRICS } from '../form/FieldBox.js';
-import { happierPageRowDividerWidth, useHappierPageSection } from '../layout/PageSection.js';
+import { happierPageRowDividerInset, happierPageRowDividerWidth, useHappierPageSection } from '../layout/PageSection.js';
 import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle } from '../layout/pageText.js';
 import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../semantics.js';
 import { HappierText } from '../text/Text.js';
@@ -632,6 +632,11 @@ export function HappierListItem({
   const [detailWidthPx, setDetailWidthPx] = useState<number | null>(null);
   const [titleNaturalWidthPx, setTitleNaturalWidthPx] = useState<number | null>(null);
   const [leadingWidthPx, setLeadingWidthPx] = useState<number | null>(null);
+  // The hairline under a page row starts at its text: past the measured leading glyph column and its gap.
+  const pageRowDividerInset = pageSection === null ? null : happierPageRowDividerInset({
+    rowInsetPx: pageSection.rowInsetPx,
+    leadingPx: icon ? (leadingWidthPx ?? HAPPIER_PAGE_METRICS.rowLeadingColumnPx) + HAPPIER_PAGE_METRICS.rowLeadingGapPx : 0,
+  });
   const measuresDetail = pageSection !== null && Boolean(detail) && isHappierPageRowNarrow(pageRowWidthPx);
   // A field beside a short name needs only that name's room (see `resolveHappierPageRowFieldMaxWidth`).
   const measuresFieldLabel = pageSection !== null && fieldAccessory === true && isHappierPageRowNarrow(pageRowWidthPx);
@@ -1262,8 +1267,8 @@ export function HappierListItem({
         // A grid row lays its cells out in a row, so its hairline is an overlay on the row's foot rather than
         // a third flex cell (which collapsed to no width and left Collection page sheets undivided).
         <HappierDivider color={pageSection.rowDividerColor} style={isGridRow
-          ? { height: happierPageRowDividerWidth(), position: 'absolute', left: 0, right: 0, bottom: 0 }
-          : { height: happierPageRowDividerWidth() }} />
+          ? { height: happierPageRowDividerWidth(), position: 'absolute', start: 0, end: 0, bottom: 0, ...pageRowDividerInset }
+          : { height: happierPageRowDividerWidth(), ...pageRowDividerInset }} />
       ) : behavior.dividerVisible && resolvedTheme ? (
         <HappierDivider color={resolvedTheme.colors.border} />
       ) : null}

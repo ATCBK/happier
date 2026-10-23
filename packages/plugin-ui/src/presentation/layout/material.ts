@@ -35,12 +35,15 @@ export function happierSurfaceGradientWebStyle(gradient: HappierSurfaceGradient 
     ...(gradient.band ? { backgroundSize: `100% ${gradient.band.height}px`, backgroundPosition: gradient.band.edge, backgroundRepeat: 'no-repeat' as const } : {}) };
 }
 
-/** Material G's one extra grounding step for in-flow cards. Flat retains the incumbent elevation. */
+/**
+ * Material G's one extra grounding step for in-flow cards on dark. A light card stands on its host's own
+ * card grounding whether Soft or Flat (W3: the faintest trace of each cue), so light adds no lift here.
+ */
 export function happierSurfaceFinishLift(gradient: HappierSurfaceGradient | null | undefined, role: HappierSurfaceFinishRole, dark: boolean, web: boolean): HappierPortableLayerStyle | null {
-  if (!gradient || role !== 'card') return null;
+  if (!gradient || role !== 'card' || !dark) return null;
   return web
-    ? { boxShadow: dark ? '0 2px 4px -1px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.1)' : '0 2px 4px -1px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05)' }
-    : { shadowColor: '#000000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: dark ? 0.06 : 0.07, shadowRadius: 2, elevation: 2 };
+    ? { boxShadow: '0 2px 4px -1px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.1)' }
+    : { shadowColor: '#000000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 2 };
 }
 
 /** The app's material groups. Policy and user preferences remain host-owned. */
