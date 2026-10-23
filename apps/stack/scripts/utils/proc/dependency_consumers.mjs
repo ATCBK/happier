@@ -61,7 +61,7 @@ export async function prepareDependencyConsumersForRefresh({ installDir, env = p
       const state = await readJsonIfExists(join(baseDir, 'stack.runtime.json'));
       if (pending) {
         throw Object.assign(new Error(`Dependency refresh cannot rewrite the installed tree while Stack ${basename(baseDir)} is starting; retry after it reaches readiness.`),
-          { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+          { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS', pendingStackBaseDir: baseDir });
       }
       if (isPidAlive(Number(state?.ownerPid)) || (state && hasLiveStackRuntimeProcesses(state))) {
         stacksNeedingRestart.add(basename(baseDir));

@@ -105,6 +105,7 @@ export async function bootstrapRemoteDependencies({
   executionPlacement = 'local',
   defaultBuildMode = validationKind === 'runtime' ? 'source-dev' : 'strict',
   env = process.env,
+  signal,
   packageExists = existsSync,
   installInitialDependencies: installInitialDependenciesImpl = installInitialDependencies,
   withDependencyRefresh: withDependencyRefreshImpl = withDependencyRefresh,
@@ -150,7 +151,7 @@ export async function bootstrapRemoteDependencies({
     // that never installs anything. Recheck under the existing shared custody;
     // release it before requesting an actual installation or output repair.
     try {
-      await withDependencyConsumption({ installDir: repoDir, env }, async () => {
+      await withDependencyConsumption({ installDir: repoDir, env, signal }, async () => {
         await assertDependenciesReady({ installDir: repoDir, componentDir, env,
           installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE });
       });
@@ -164,7 +165,8 @@ export async function bootstrapRemoteDependencies({
     // The readiness verifier and postinstall tools resolve source directly;
     // retain patched dependency preparation without publishing workspace dist.
     return await withDependencyRefreshImpl(
-      { installDir: repoDir, componentDir, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE, onDependenciesReady },
+      { installDir: repoDir, componentDir, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE, onDependenciesReady,
+        waitForPendingStart: true, signal },
       installAndPrepare,
     );
   }

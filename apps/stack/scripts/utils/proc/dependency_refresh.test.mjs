@@ -653,6 +653,62 @@ for (const scope of ['workspace', 'root']) test(`${scope} dependency freshness i
   }
 });
 
+test('lifecycle test edits keep admitted readers warm through a foreign pending start', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-dependency-test-inputs-' });
+  const baseDir = fixture.path('stacks', 'foreign');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_STACK_REPO_DIR: fixture.root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(fixture.path('tools', 'postinstall'), { recursive: true });
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.root}\n`);
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true,
+    happier: { installFreshnessInputs: ['tools/postinstall'] } }));
+  const script = fixture.path('tools', 'postinstall', 'patch.mjs');
+  const testPath = fixture.path('tools', 'postinstall', 'patch.test.mjs');
+  await writeFile(script, 'export const patch = 1;\n');
+  await writeFile(testPath, '// initial test\n');
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  // Existing v6 records include these test bytes. Reading that installed tree
+  // must not require a writer just to remove non-install inputs from its proof.
+  const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  const marker = JSON.parse(await readFile(markerPath, 'utf8'));
+  if (!marker.inputs.some(input => input.path.endsWith('/patch.test.mjs'))) {
+    marker.inputs.push({ path: 'install:tools/postinstall/patch.test.mjs', kind: 'file', digest: 'previous-test-only-digest' });
+    marker.inputs.sort((a, b) => a.path.localeCompare(b.path));
+    await writeFile(markerPath, JSON.stringify(marker));
+  }
+  const admittedBytes = await readFile(markerPath, 'utf8');
+  const pending = await beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: fixture.root, env });
+  let refreshes = 0;
+  let refusals = 0;
+  try {
+    for (let revision = 0; revision < 24; revision++) {
+      await writeFile(testPath, `// changed test ${revision}\n`);
+      const result = await withDependencyRefresh({ installDir: fixture.root, env }, async () => { refreshes++; })
+        .catch(error => { refusals++; throw error; });
+      assert.equal(result.refreshed, false);
+    }
+    await writeFile(fixture.path('tools', 'postinstall', 'added.spec.ts'), '// added test\n');
+    await rm(testPath);
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, env })).required, false);
+    assert.equal(refreshes, 0, 'unrelated test edits cause zero dependency refreshes');
+    assert.equal(refusals, 0, 'admitted readers never refuse because a foreign Stack is starting');
+    assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'warm inspection does not rewrite readiness');
+    await pending.publishPreparation(async () => {});
+    await writeFile(script, 'export const patch = 2;\n');
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root, env })).required, true,
+      'executable postinstall changes still require refresh');
+    await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env }, async () => { refreshes++; }),
+      { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+    assert.equal(refreshes, 0, 'genuine changes cannot rewrite a starting Stack tree');
+  } finally {
+    await pending.dispose();
+  }
+});
+
 test('workspace projection re-evaluates admitted raw v6 inputs without invalidating an unchanged install', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-workspace-admission-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
 import { mkdir, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from '../../../../../packages/cli-common/fileChangeObserver.mjs';
 
 import { readJsonIfExists, writeJsonAtomic } from '../../utils/fs/json.mjs';
-import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
+import { readJsonOwnerLockRaw, withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
+import { createWorkspaceBuildWaitNotifier } from '../../utils/proc/workspaceBuildWaitNotifier.mjs';
 import { isPidAlive, observePidLiveness } from '../../utils/proc/pids.mjs';
 import { resolveDependencyInstallRoot, withDependencyConsumption } from '../../utils/proc/dependency_refresh.mjs';
 import { getRepoDir } from '../../utils/paths/paths.mjs';
@@ -45,6 +47,31 @@ export async function readPendingSourcePreparation({ stackBaseDir }) {
   const targets = Object.fromEntries(Object.entries(current.targets ?? {})
     .map(([target, value]) => [target, readSourcePreparationPhase(value)]).filter(([, value]) => value));
   return { ...phase, ...(Object.keys(targets).length ? { targets } : {}) };
+}
+
+/** Await existing readiness/failure cleanup without blocking the dependency
+ * readers that this already-pending start still needs in order to finish. */
+export async function waitForPendingSourcePreparation({ stackBaseDir, env = process.env, signal }) {
+  const directory = join(stackBaseDir, 'source-runtime');
+  const markerPath = join(directory, 'start.pending.json');
+  const readSnapshot = () => readJsonOwnerLockRaw(markerPath);
+  const observer = createFileChangeObserver([directory], {
+    isRelevant: (_directory, filename) => filename == null || String(filename) === 'start.pending.json',
+  });
+  const onWait = createWorkspaceBuildWaitNotifier({ env,
+    label: `Stack ${basename(stackBaseDir)} readiness before dependency refresh` });
+  const startedAt = Date.now();
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const snapshot = observer.capture(readSnapshot);
+      if (!await readPendingSourcePreparation({ stackBaseDir })) return;
+      onWait({ waitedMs: Date.now() - startedAt });
+      await observer.wait({ snapshot, readSnapshot, signal, maxWaitMs: DEFAULT_FILE_CHANGE_CATCH_UP_MS });
+    }
+  } finally {
+    observer.close();
+  }
 }
 
 /** The admitted producer updates only its caller's existing pending request. */

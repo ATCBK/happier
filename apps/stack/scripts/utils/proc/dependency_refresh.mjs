@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { pathExists } from '../fs/fs.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
-import { coerceHappyMonorepoRootFromPath, getHappyStacksHomeDir } from '../paths/paths.mjs';
+import { coerceHappyMonorepoRootFromPath, getHappyStacksHomeDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { describeJsonOwnerLock, isJsonOwnerFileLockActive, readJsonOwnerLockSnapshot, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
 import { collectWorkspacePackageJsonPaths, isYarnWorkspace } from './workspace_package_manifests.mjs';
 import { prepareDependencyConsumersForRefresh } from './dependency_consumers.mjs';
@@ -232,6 +232,12 @@ function manifestInstallDigest(bytes, { root = false } = {}) {
   return createHash('sha256').update(JSON.stringify(stableJson(inputs))).digest('hex');
 }
 
+// Lifecycle directories contain their regression tests too. Those files do
+// not change installed bytes; executable scripts and assets remain inputs.
+function isDependencyTestInputPath(inputPath) {
+  return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(inputPath);
+}
+
 async function readInputSnapshot({ inputPaths, installDir, componentDir }) {
   const monorepoRoot = coerceHappyMonorepoRootFromPath(componentDir);
   const workspaceManifests = new Set(monorepoRoot && resolve(installDir) === resolve(monorepoRoot)
@@ -239,6 +245,7 @@ async function readInputSnapshot({ inputPaths, installDir, componentDir }) {
   const rootManifestPath = resolve(join(installDir, 'package.json'));
   const snapshot = [];
   const visit = async (inputPath) => {
+    if (isDependencyTestInputPath(inputPath)) return;
     try {
       const stats = await lstat(inputPath);
       const identityPath = dependencyInputIdentityPath({ installDir, componentDir, inputPath });
@@ -312,7 +319,12 @@ function dependencyIdentitySatisfies(before, after) {
 }
 
 function snapshotsMatch(before, after) {
-  if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
+  if (!Array.isArray(before) || !Array.isArray(after)) return false;
+  // Already-admitted v6 records include test files. Ignore them on both sides
+  // without rewriting the record or requiring an installation to upgrade it.
+  before = before.filter(entry => !isDependencyTestInputPath(entry.path));
+  after = after.filter(entry => !isDependencyTestInputPath(entry.path));
+  if (before.length !== after.length) return false;
   return before.every((entry, index) => {
     const candidate = after[index];
     return entry.path === candidate?.path
@@ -472,6 +484,8 @@ export async function withDependencyRefresh({
   installMode,
   refreshExisting = true,
   force = false,
+  waitForPendingStart = false,
+  signal,
 }, refresh) {
   if (typeof refresh !== 'function') throw new TypeError('withDependencyRefresh requires a refresh callback');
   if (onDependenciesReady != null && typeof onDependenciesReady !== 'function') {
@@ -482,7 +496,7 @@ export async function withDependencyRefresh({
     // Readiness is not mutation: share installed-tree custody with finite
     // consumers, and wait as a reader when an installer is active. Release
     // before requesting a real refresh; never upgrade a held reader to writer.
-    const readiness = await withDependencyConsumption({ installDir, env }, () =>
+    const readiness = await withDependencyConsumption({ installDir, env, signal }, () =>
       inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env }));
     if (!readiness.required) return { refreshed: false, reason: 'up-to-date' };
     if (!refreshExisting && readiness.selfReferentialNodeModulesLinkPath === null) {
@@ -490,7 +504,7 @@ export async function withDependencyRefresh({
     }
   }
 
-  return await withDependencyRefreshLock({ installDir, env }, async ({ lockPath, owner }) => {
+  const refreshUnderLock = () => withDependencyRefreshLock({ installDir, env, signal }, async ({ lockPath, owner }) => {
     const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
     if (!force && !afterDependencyLock.required && !shouldRunDependencyReadyAction) return { refreshed: false, reason: 'up-to-date' };
     let stacksNeedingRestart = [];
@@ -590,11 +604,43 @@ export async function withDependencyRefresh({
     const componentPrerequisites = onDependenciesReady && !willRefresh && resolve(componentDir) !== resolve(join(installDir, 'apps', 'ui'))
       ? await inspectUiPostinstallOutputs(componentDir, installDir, { env })
       : [];
+    let serverPrerequisitesRequired = false;
+    if (onDependenciesReady && !willRefresh) {
+      // The ready action can replace generated provider clients even when
+      // package inputs/UI outputs are current. Use the generator's own check
+      // before withdrawing admission or permitting any repair during a start.
+      const { ensureServerGeneratedProviderOutputs } = await import('./pm.mjs');
+      try {
+        await ensureServerGeneratedProviderOutputs(join(installDir, 'apps', 'server'), installDir, {
+          env: resolveLockedInstallEnv(env, { lockPath, owner }), quiet: true, checkOnly: true, signal,
+        });
+      } catch {
+        signal?.throwIfAborted();
+        serverPrerequisitesRequired = true;
+      }
+    }
     if (willRefresh
       || afterDependencyLock.selfReferentialNodeModulesLinkPath !== null
-      || uiPrerequisites.length > 0 || componentPrerequisites.length > 0) {
+      || uiPrerequisites.length > 0 || componentPrerequisites.length > 0 || serverPrerequisitesRequired) {
       ({ stacksNeedingRestart } = await prepareDependencyConsumersForRefresh({ installDir, env }));
     }
     return await mutate();
   });
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      return await refreshUnderLock();
+    } catch (error) {
+      if (!waitForPendingStart || error?.code !== 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS'
+        || typeof error.pendingStackBaseDir !== 'string') throw error;
+      const callerEnvFile = resolveExplicitStackEnvFilePath(env);
+      // A start cannot await its own readiness. Its existing explicit retry
+      // contract remains authoritative; only independent readers opt in.
+      if (callerEnvFile && resolve(dirname(callerEnvFile)) === resolve(error.pendingStackBaseDir)) throw error;
+      // withDependencyRefreshLock has released both custody and its priority
+      // ticket here. Keeping either would deadlock the start's later readers.
+      const { waitForPendingSourcePreparation } = await import('../../runtime/shared/pending_source_start.mjs');
+      await waitForPendingSourcePreparation({ stackBaseDir: error.pendingStackBaseDir, env, signal });
+    }
+  }
 }
