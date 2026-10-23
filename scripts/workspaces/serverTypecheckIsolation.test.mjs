@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import ts from 'typescript';
@@ -18,6 +18,11 @@ function readProject(name, packageRoot = serverRoot) {
   assert.ok(project);
   assert.deepEqual(project.errors, []);
   return project;
+}
+
+function resolvesToTypeScriptSource(target) {
+  const isSource = (path) => /\.(?:[cm]?ts|tsx)$/.test(path) && !/\.d\.[cm]?ts$/.test(path) && existsSync(path);
+  return [target, `${target}.ts`, `${target}.tsx`, join(target, 'index.ts')].some(isSource);
 }
 
 test('CLI editor roots keep composed fixtures outside its package compiler', () => {
@@ -63,12 +68,16 @@ test('server compiler roots keep cross-app composition in the test-only project'
     function visit(node) {
       if (ts.isStringLiteralLike(node) && node.text.startsWith('.')) {
         const target = resolve(dirname(file), node.text);
-        for (const app of ['cli', 'ui']) {
-          const appPath = relative(resolve(repoRoot, `apps/${app}`), target);
-          if (appPath && appPath !== '..' && !appPath.startsWith(`..${sep}`) && !isAbsolute(appPath)) {
-            const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
-            crossAppEdges.push(`${relative(repoRoot, file)}:${line + 1} -> ${node.text}`);
-          }
+        const isInside = (root) => {
+          const path = relative(root, target);
+          return Boolean(path) && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+        };
+        // Another app, or TypeScript source from any other workspace package,
+        // would join the server program outside its rootDir.
+        if (['cli', 'ui'].some(app => isInside(resolve(repoRoot, `apps/${app}`)))
+          || (isInside(repoRoot) && !isInside(serverRoot) && resolvesToTypeScriptSource(target))) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+          crossAppEdges.push(`${relative(repoRoot, file)}:${line + 1} -> ${node.text}`);
         }
       }
       ts.forEachChild(node, visit);

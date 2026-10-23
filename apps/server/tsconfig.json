@@ -101,6 +101,9 @@
     "sources/app/machines/managed/managedAcquire.integration.spec.ts",
     "sources/app/machines/managed/managedFiniteWake.sqlite.integration.spec.ts",
     "sources/app/session/follow/accountFollowRuleService.sqlite.integration.spec.ts",
+    // These Home search specs share the packages/tests performance fixture ids.
+    "sources/app/search/homeSearchStartApi.sqlite.integration.spec.ts",
+    "sources/app/search/readHomeSearchVisibleSessionConstraints.postgres.dbcontract.spec.ts",
     // Browser code and its unit fixture are checked by tsconfig.publicViewer.json.
     "sources/app/api/routes/share/artifactHtmlViewer.ts",
     "sources/app/api/routes/share/publicDeclarativeViewer.ts",
