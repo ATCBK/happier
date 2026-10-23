@@ -157,21 +157,29 @@ describe('native usage producer → ingest → query', () => {
                 }));
                 expect(exactOnly.totals.tokens.total).toBe(6);
                 expect(JSON.stringify(privateResult)).not.toContain('must-never-reach-usage');
-                const endMs = Date.now() + 1;
-                const query = normalizeUsageQuery({ population: 'public_eligible_personal', period: { startMs: endMs - 86_400_000, endMs },
+                // This journey compares populations over every written source
+                // instant; wall-clock progress is not its selection contract.
+                const sourceTimes = storedRows.map(row => row.observedAt.getTime());
+                const endMs = Math.max(...sourceTimes) + 1;
+                const query = normalizeUsageQuery({ population: 'public_eligible_personal', period: { startMs: Math.min(...sourceTimes), endMs },
                     session: [session.id], includeActivity: true });
                 const publicResult = await queryUsageAnalytics(account.id, usageQueryToAnalyticsRequest(query, endMs));
-                expect(publicResult.totals.tokens.total).toBe(planType === 'plus' && binding === 'bound' ? 6 : 0);
-                if (planType === 'plus' && binding === 'bound') {
-                    expect(publicResult.contributions).toHaveLength(2);
-                    expect(publicResult.contributions?.every(row => row.providerAttribution === 'known' && row.turnId === 'host-turn')).toBe(true);
+                // Unknown native ownership and cumulative residuals count. Only
+                // the exact requests with witnessed workspace scope are removed.
+                const expectedPublicTokens = planType === 'team' && binding === 'bound' ? 1000 : 1006;
+                expect(publicResult.totals.tokens.total, JSON.stringify({ endMs, storedRows,
+                    contributions: publicResult.contributions })).toBe(expectedPublicTokens);
+                if (binding === 'bound' && planType !== 'team') {
+                    expect(publicResult.contributions).toHaveLength(3);
+                    expect(publicResult.contributions?.filter(row => row.turnId === 'host-turn')
+                        .every(row => row.providerAttribution === 'known')).toBe(true);
                     expect(publicResult.coverage?.sources.some(source => source.source === 'codex-app-server-response-usage'
                         && source.path === 'runtime' && source.status === 'partial' && typeof source.asOfMs === 'number')).toBe(true);
                     const queryResult = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available',
                         value: publicResult }] }).results[0]!;
                     expect(buildPublicProfileSnapshot({ queryResult, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, nowMs: endMs }))
-                        .toMatchObject({ kind: 'ready', snapshot: { facts: { tokens: 6 } } });
-                } else expect(publicResult.contributions).toHaveLength(0);
+                        .toMatchObject({ kind: 'ready', snapshot: { facts: { tokens: expectedPublicTokens } } });
+                }
             } finally {
                 restoreSourceClock?.();
                 unsubscribe();
@@ -187,7 +195,7 @@ describe('native usage producer → ingest → query', () => {
         } });
     });
 
-    it.each(['pro', 'max', 'team', 'enterprise', undefined, 'future-plan'])('admits only witnessed personal Claude subscription deltas (%s)', async subscriptionType => {
+    it.each(['pro', 'max', 'team', 'enterprise', undefined, 'future-plan'])('excludes only witnessed workspace Claude subscription deltas (%s)', async subscriptionType => {
         const account = await db.account.create({ data: { publicKey: `pk-claude-scope-${subscriptionType}` } });
         const session = await db.session.create({ data: { accountId: account.id,
             tag: `claude-scope-${subscriptionType}`, encryptionMode: 'plain', metadata: '{}' } });
@@ -239,10 +247,10 @@ describe('native usage producer → ingest → query', () => {
                 expect(privateResult.totals.tokens.total).toBe(12);
                 const publicResult = await queryUsageAnalytics(account.id, UsageAnalyticsQueryRequestSchema.parse({
                     filters: { sessionIds: [session.id] }, population: 'public_eligible_personal' }));
-                const eligible = subscriptionType === 'pro' || subscriptionType === 'max';
+                const eligible = subscriptionType !== 'team' && subscriptionType !== 'enterprise';
                 expect(publicResult.totals.tokens.total).toBe(eligible ? 12 : 0);
-                if (eligible) expect(publicResult.contributions).toEqual([expect.objectContaining({
-                    turnId: 'claude-host-turn', providerAttribution: 'known', providerSource: 'native' })]);
+                if (eligible) expect(publicResult.contributions).toEqual(expect.arrayContaining([expect.objectContaining({
+                    turnId: 'claude-host-turn', providerAttribution: 'known', providerSource: 'native' })]));
             } finally { unsubscribe(); await operations.resetOrDisposeRuntime('runtime_recovery'); }
         } });
     });

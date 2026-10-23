@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toScopedUsageEventRow } from "./scopedUsageEventRow";
+import { isPublicEligibleUsageRow, toScopedUsageEventRow } from "./scopedUsageEventRow";
 
 function row(overrides: Partial<Parameters<typeof toScopedUsageEventRow>[0]> = {}) {
     return {
@@ -43,6 +43,30 @@ function row(overrides: Partial<Parameters<typeof toScopedUsageEventRow>[0]> = {
         ...overrides,
     };
 }
+
+describe('public usage eligibility', () => {
+    it.each([
+        { agentId: 'opencode', metadata: undefined },
+        { agentId: 'pi', scope: 'session_cumulative', isCumulative: true, turnId: null },
+        { agentId: 'legacy', sessionId: null, turnId: null },
+    ])('counts usage without personal ownership proof ($agentId)', overrides => {
+        expect(isPublicEligibleUsageRow(toScopedUsageEventRow(row(overrides)))).toBe(true);
+    });
+
+    it('excludes witnessed workspace usage without requiring a matching turn or exact delta', () => {
+        expect(isPublicEligibleUsageRow(toScopedUsageEventRow(row({ turnId: null, scope: 'session_cumulative',
+            isCumulative: true, metadata: { usageAttribution: { v: 1, turnId: 'request',
+                source: { kind: 'native', connectedAccount: null, accountScope: 'workspace' } } },
+        })))).toBe(false);
+    });
+
+    it.each(['teamCredentialResourceId', 'teamCredentialActorAccountId', 'teamCredentialExternalApiKeyId',
+        'teamCredentialSourceCredentialId'] as const)('excludes each Team credential marker (%s)', marker => {
+        expect(isPublicEligibleUsageRow(toScopedUsageEventRow(row({ [marker]: 'team-marker', metadata: {
+            usageAttribution: { v: 1, turnId: 'turn-1', source: { kind: 'native', connectedAccount: null, accountScope: 'personal' } },
+        } })))).toBe(false);
+    });
+});
 
 describe("toScopedUsageEventRow", () => {
     it("opens stored metadata, preserves internal evidence, and normalizes canonical accounting fields", () => {

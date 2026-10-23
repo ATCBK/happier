@@ -85,7 +85,7 @@ describe("usageQueryService scoped aggregation", () => {
         ]);
     });
 
-    it('admits only exact personal requests after reconciliation, without admitting mixed-Session evidence', async () => {
+    it('excludes only known Team requests after reconciliation, without admitting mixed-Session evidence', async () => {
         const owner = await createUsageOwner('public-population');
         const rows = [
             { at: 0, tokens: 100, scope: 'session_cumulative', turnId: null, accountScope: undefined, team: false },
@@ -93,7 +93,7 @@ describe("usageQueryService scoped aggregation", () => {
             { at: 120, tokens: 20, scope: 'turn_delta', turnId: 'workspace', accountScope: 'workspace', team: false },
             { at: 130, tokens: 30, scope: 'turn_delta', turnId: 'unknown', accountScope: undefined, team: false },
             { at: 140, tokens: 40, scope: 'turn_delta', turnId: 'team-credential', accountScope: 'personal', team: true },
-            { at: 200, tokens: 200, scope: 'session_cumulative', turnId: null, accountScope: undefined, team: false },
+            { at: 200, tokens: 250, scope: 'session_cumulative', turnId: null, accountScope: undefined, team: false },
         ] as const;
         await db.usageEvent.createMany({ data: rows.map(row => ({
             ...buildUsageEvent({ ...owner, observedAt: new Date(row.at).toISOString(), scope: row.scope, totalTokens: row.tokens }),
@@ -111,16 +111,16 @@ describe("usageQueryService scoped aggregation", () => {
         const clauses = { dateRange: { startMs: 100, endMs: 300 }, breakdowns: ['source'],
             includeActivity: true, includeLeaders: true, includeModelTimeline: true, includeMessageStats: true, includeInsights: true };
         const ordinary = await querySession(owner.accountId, owner.sessionId, clauses);
-        expect(ordinary.totals.tokens.total).toBe(100);
+        expect(ordinary.totals.tokens.total).toBe(150);
         expect(ordinary.messageStats?.messageCount).toBe(2);
         const admitted = await querySession(owner.accountId, owner.sessionId, { ...clauses, population: 'public_eligible_personal' });
-        expect(admitted.totals.tokens.total).toBe(10);
-        expect(admitted.series?.reduce((sum, row) => sum + row.tokens.total, 0)).toBe(10);
-        expect(admitted.contributions?.map(row => row.turnId)).toEqual(['personal']);
-        expect(admitted.breakdowns?.source?.map(row => row.key)).toEqual(['personal']);
-        expect(admitted.coverage?.sources.map(row => row.source)).toEqual(['personal']);
-        expect(admitted.coverage).toMatchObject({ status: 'partial', range: { complete: false }, reasons: expect.arrayContaining(['incomplete_history']) });
-        expect(admitted.activity?.calendarDays?.[0]?.eventCount).toBe(1);
+        expect(admitted.totals.tokens.total).toBe(90);
+        expect(admitted.series?.reduce((sum, row) => sum + row.tokens.total, 0)).toBe(90);
+        expect(admitted.contributions?.map(row => row.turnId)).toEqual(['personal', 'unknown', null]);
+        expect(admitted.breakdowns?.source?.map(row => row.key)).toEqual(['counter', 'unknown', 'personal']);
+        expect(admitted.coverage?.sources.map(row => row.source)).toEqual(['personal', 'unknown', 'counter']);
+        expect(admitted.coverage?.reasons).not.toContain('incomplete_history');
+        expect(admitted.activity?.calendarDays?.[0]?.eventCount).toBe(3);
         // A Session can contain both admitted and excluded requests. Whole-Session
         // message counts cannot establish public exact-request detail membership.
         expect(admitted.messageStats).toBeUndefined();

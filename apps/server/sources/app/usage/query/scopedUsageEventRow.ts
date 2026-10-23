@@ -12,14 +12,12 @@ export interface ScopedUsageAccountingEvidence {
 
 const nativeSubjectReadSchema = createStoredReadSchema(UsageNativeAccountingSubjectSchema);
 
-/** Reconciled request facts only: neither a current plan nor missing Team markers proves personal usage. */
+/** Exclude known Team usage; unknown ownership keeps ordinary Usage reconciliation. */
 export function isPublicEligibleUsageRow(row: ScopedUsageEventRow): boolean {
-    if (!row.sessionId || row.scope !== 'turn_delta' || row.isCumulative
-        || row.teamCredentialResourceId || row.teamCredentialActorAccountId
+    if (row.teamCredentialResourceId || row.teamCredentialActorAccountId
         || row.teamCredentialExternalApiKeyId || row.teamCredentialSourceCredentialId) return false;
     const attribution = readUsageRequestAttribution(row.metadata);
-    return attribution?.turnId === row.turnId && attribution.source.kind === 'native'
-        && attribution.source.accountScope === 'personal';
+    return !(attribution?.source.kind === 'native' && attribution.source.accountScope === 'workspace');
 }
 
 /** Keep parsed evidence on the row, including the neutral parser's normalized JSON snapshots. */

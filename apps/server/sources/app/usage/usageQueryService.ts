@@ -268,7 +268,6 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
     // individual requests. Excluding raw rows first would manufacture residuals.
     const publicPopulation = request.population === 'public_eligible_personal';
     const population = publicPopulation ? resolved.totalContributions.filter(isPublicEligibleUsageRow) : resolved.totalContributions;
-    const populationExcluded = population.length !== resolved.totalContributions.length;
     const costMode = resolveUsageCostMode(request.costMode);
     const priceCatalog = resolveCapturedUsageModelPriceCatalog(snapshot.priceCatalog);
     const totalContributions = population.filter((row) => matchesUsageFilters(row, request.filters)).map((row) => ({
@@ -342,7 +341,6 @@ export function projectUsageAnalytics(snapshot: UsageAnalyticsSnapshot, request:
     const projection = buildUsageResultProjection({
         contributions: totalContributions, evidenceRows,
         coverageReasons: [...totalContributions.flatMap((row) => row.coverageReasons ?? []),
-            ...(populationExcluded ? ['incomplete_history' as const] : []),
             ...(truncatedTimeline ? ['ranked_truncation' as const] : [])], request, ranked,
     });
     if (!projection.costPresentation) {
