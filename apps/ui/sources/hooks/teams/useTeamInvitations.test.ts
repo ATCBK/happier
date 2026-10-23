@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { renderHook } from '@/dev/testkit';
+import { renderHook, teamInvitationRowFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const harness = createHomeGovernanceHarness();
@@ -13,6 +13,38 @@ beforeEach(async () => {
 });
 
 describe('useTeamInvitations', () => {
+    it('retains 400 admitted invitation identities across a full reread while independently merging delivery changes', async () => {
+        const serverId = await harness.addHome({ name: 'Invitations', serverUrl: 'https://invitation-admission.example.test', accountId: 'account-a', teamsEnabled: true });
+        const path = '/v1/teams/invitations/list';
+        let rows = Array.from({ length: 400 }, (_, index) => teamInvitationRowFixture({ id: `invitation-${index}` }));
+        let emailDelivery: 'available' | 'unavailable' = 'available';
+        harness.answer(serverId, path, { select: body => {
+            const cursor = typeof body === 'object' && body !== null && 'cursor' in body ? body.cursor : null;
+            const start = typeof cursor === 'string' ? Number(cursor) : 0;
+            return { body: { items: rows.slice(start, start + 50), nextCursor: start + 50 < rows.length ? String(start + 50) : null,
+                emailDelivery, linkDelivery: 'available' } };
+        } });
+        const rendered = await renderHook(() => useTeamInvitations({ scope: { serverId, accountId: 'account-a' },
+            address: { serverId, teamId: 'team-1' }, state: null, enabled: true }));
+        await vi.waitFor(() => expect(rendered.getCurrent().status).toBe('ready'));
+        for (let page = 1; page < 8; page += 1) await act(async () => { await rendered.getCurrent().loadMore(); });
+        const admitted = rendered.getCurrent().rows;
+        expect(admitted).toHaveLength(400);
+        expect(harness.requestsFor(path)).toHaveLength(8);
+        emailDelivery = 'unavailable';
+        await act(async () => { await rendered.getCurrent().reload(); });
+        expect(rendered.getCurrent().emailDelivery).toBe('unavailable');
+        expect(rendered.getCurrent().linkDelivery).toBe('available');
+        expect(rendered.getCurrent().rows).toBe(admitted);
+        expect(harness.requestsFor(path)).toHaveLength(16);
+        rows = rows.map((row, index) => index === 250 ? { ...row, role: 'admin' as const } : row);
+        await act(async () => { await rendered.getCurrent().reload(); });
+        expect(rendered.getCurrent().rows.filter((row, index) => row !== admitted[index])).toHaveLength(1);
+        expect(rendered.getCurrent().rows[250]?.role).toBe('admin');
+        expect(harness.requestsFor(path)).toHaveLength(24);
+        await rendered.unmount();
+    });
+
     it('does not let a superseded Home answer replace the current delivery capability', async () => {
         let releaseFirst!: () => void;
         const first = new Promise<void>((resolve) => { releaseFirst = resolve; });

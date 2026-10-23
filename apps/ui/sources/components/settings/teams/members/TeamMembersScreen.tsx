@@ -91,6 +91,38 @@ const MemberFilterRow = React.memo(function MemberFilterRow(props: Readonly<{
     );
 });
 
+const MemberRow = React.memo(function MemberRow(props: Readonly<{
+    membership: TeamMembershipV1;
+    viewerAccountId: string;
+    language: string;
+    leaveContext?: TeamSectionContext;
+    onOpen: (membershipId: string) => void;
+}>) {
+    const { membership, leaveContext } = props;
+    const person = resolveAccountDisplayName({ profile: membership.account, accountId: membership.accountId, viewerAccountId: props.viewerAccountId });
+    return (
+        <Item
+            testID={`team-members-row:${membership.id}`}
+            title={person.name}
+            subtitle={teamMemberRowSubtitle(membership, person, t('teams.members.joined', {
+                when: formatCalendarDate(membership.joinedAt, props.language),
+            }))}
+            leftElement={<Avatar id={membership.accountId} size={MEMBER_AVATAR_SIZE} imageUrl={membership.account.avatarUrl} />}
+            accessoryLayout="adaptive"
+            rightElement={membership.status === 'suspended' || leaveContext ? <>
+                {membership.status === 'suspended' ? <StatusPill
+                    testID={`team-members-status:${membership.id}`}
+                    variant="warning"
+                    label={t('teams.status.suspended')}
+                    labelVariant="phrase"
+                /> : null}
+                {leaveContext ? <TeamLeaveAction context={leaveContext} presentation="button" testID={`team-members-leave:${membership.id}`} /> : null}
+            </> : undefined}
+            onPress={() => props.onOpen(membership.id)}
+        />
+    );
+});
+
 const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
     context: TeamSectionContext;
     header?: React.ReactNode;
@@ -99,6 +131,12 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
     const router = useRouter();
     const view = useHappierCollectionIndexView();
     const { context } = props;
+    const language = getPreferredLanguage();
+    const addressServerId = context.address.serverId;
+    const teamId = context.address.teamId;
+    const openMember = React.useCallback((membershipId: string) => {
+        router.push(teamMemberDetailPath({ serverId: addressServerId, teamId }, membershipId));
+    }, [router, addressServerId, teamId]);
     const [filter, setFilter] = React.useState<TeamMembersListFilterV1>('all');
     const [query, setQuery] = React.useState('');
 
@@ -224,36 +262,15 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
             add(`members:${chunk[0]!.id}`, () => (
                 <ItemGroup virtualizedSegment={{ first: false, last }}>
                     {chunk.map((membership) => {
-                        const person = resolveAccountDisplayName({ profile: membership.account, accountId: membership.accountId, viewerAccountId: context.scope.accountId });
                         const leavesOwnMembership = membership.accountId === context.scope.accountId && context.team.capabilities.leave;
                         return (
-                            <Item
+                            <MemberRow
                                 key={membership.id}
-                                testID={`team-members-row:${membership.id}`}
-                                title={person.name}
-                                subtitle={teamMemberRowSubtitle(membership, person, t('teams.members.joined', {
-                                    when: formatCalendarDate(membership.joinedAt, getPreferredLanguage()),
-                                }))}
-                                leftElement={(
-                                    <Avatar
-                                        id={membership.accountId}
-                                        size={MEMBER_AVATAR_SIZE}
-                                        imageUrl={membership.account.avatarUrl}
-                                    />
-                                )}
-                                accessoryLayout="adaptive"
-                                rightElement={membership.status === 'suspended' || leavesOwnMembership ? <>
-                                    {membership.status === 'suspended' ? <StatusPill
-                                        testID={`team-members-status:${membership.id}`}
-                                        variant="warning"
-                                        label={t('teams.status.suspended')}
-                                        labelVariant="phrase"
-                                    /> : null}
-                                    {leavesOwnMembership ? (
-                                        <TeamLeaveAction context={context} presentation="button" testID={`team-members-leave:${membership.id}`} />
-                                    ) : null}
-                                </> : undefined}
-                                onPress={() => router.push(teamMemberDetailPath(context.address, membership.id))}
+                                membership={membership}
+                                viewerAccountId={context.scope.accountId}
+                                language={language}
+                                leaveContext={leavesOwnMembership ? context : undefined}
+                                onOpen={openMember}
                             />
                         );
                     })}
@@ -296,7 +313,8 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
         noOwnerCandidate,
         query,
         roster,
-        router,
+        openMember,
+        language,
         theme.colors.text.secondary,
     ]);
 

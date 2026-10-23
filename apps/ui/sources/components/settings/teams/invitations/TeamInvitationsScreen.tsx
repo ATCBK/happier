@@ -3,6 +3,7 @@ import { useFocusEffect } from '@/components/appShell/workspace/destinationRoute
 import type {
     TeamInvitationReissueResultV1,
     TeamInvitationRowV1,
+    TeamInvitationEmailDeliveryAvailabilityV1,
 } from '@happier-dev/protocol/teams';
 import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -48,6 +49,63 @@ type InvitationVirtualizedSegment = Readonly<{
     first: boolean;
     last: boolean;
 }>;
+
+type InvitationRowActionTarget = Readonly<{
+    id: string;
+    title: string;
+    canRevoke: boolean;
+    canReissue: boolean;
+    canChangeEmail: boolean;
+}>;
+type InvitationRowAction = (target: InvitationRowActionTarget, preset: 'retry' | null) => Promise<void>;
+
+const InvitationRow = React.memo(function InvitationRow(props: Readonly<{
+    row: TeamInvitationRowV1;
+    waiting: boolean;
+    now: number;
+    viewerAccountId: string;
+    canMutate: boolean;
+    emailDelivery: TeamInvitationEmailDeliveryAvailabilityV1 | null;
+    language: string;
+    busy: boolean;
+    onAction: InvitationRowAction;
+}>) {
+    const { theme } = useUnistyles();
+    const { row, waiting } = props;
+    const presentation = resolveTeamInvitationPresentation(row, props.now, props.viewerAccountId);
+    const canRevoke = presentation.canRevoke && props.canMutate;
+    const canReissue = presentation.reissueMode !== 'none' && props.canMutate
+        && (presentation.reissueMode !== 'email' || props.emailDelivery === 'available');
+    const canChangeEmail = presentation.reissueMode === 'email' && props.canMutate && props.emailDelivery === 'available';
+    const target = { id: row.id, title: presentation.title, canRevoke, canReissue, canChangeEmail };
+    const actionable = canRevoke || canReissue;
+    const sendAgain = waiting && presentation.emailUndelivered && canReissue;
+    const date = (at: number) => formatCalendarDate(at, props.language);
+    return <Item
+        testID={`team-invitations-row:${row.id}`}
+        title={presentation.title}
+        subtitle={(waiting
+            ? [presentation.deliveryLabel, presentation.offerLabel, t('teams.invitations.expires', { when: date(row.expiresAt) })]
+            : [presentation.finishedLabel, presentation.offerLabel])
+            .filter((part): part is string => part !== null).join(' · ')}
+        subtitleLines={0}
+        detail={presentation.finishedAt === null ? undefined : date(presentation.finishedAt)}
+        subtitleLeading={waiting && presentation.emailUndelivered ? <StatusDot size={6} color={theme.colors.state.warning.foreground} /> : undefined}
+        accessoryLayout={sendAgain ? 'adaptive' : undefined}
+        rightElement={sendAgain ? <RoundButton
+            testID={`team-invitations-send-again:${row.id}`}
+            size="small"
+            display="secondary"
+            title={t('teams.invitations.sendAgain')}
+            disabled={props.busy}
+            onPress={() => void props.onAction(target, 'retry')}
+        /> : undefined}
+        disabled={actionable && props.busy}
+        mode={actionable ? 'interactive' : 'info'}
+        onPress={actionable ? () => void props.onAction(target, null) : undefined}
+        showChevron={false}
+    />;
+});
 
 const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
     context: TeamSectionContext;
@@ -167,23 +225,9 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
         return segments;
     }, [invitations.rows, now]);
 
-    /** What may be done to one row right now: the row's own answer, and this page's readiness. */
-    const rowActions = (row: TeamInvitationRowV1) => {
-        const presentation = resolveTeamInvitationPresentation(row, now, context.scope.accountId);
-        const canRevoke = presentation.canRevoke && context.canMutate;
-        const canReissue = presentation.reissueMode !== 'none'
-            && context.canMutate
-            && (presentation.reissueMode !== 'email'
-                || invitations.emailDelivery === 'available');
-        const canChangeEmail = presentation.reissueMode === 'email'
-            && context.canMutate
-            && invitations.emailDelivery === 'available';
-        return { presentation, canRevoke, canReissue, canChangeEmail, isActionable: canRevoke || canReissue };
-    };
-
     /** Runs one row's action: the chooser a press opens, or the retry "Send again" asks for directly. */
-    const act = async (row: TeamInvitationRowV1, preset: 'retry' | null) => {
-        const { presentation, canRevoke, canReissue, canChangeEmail } = rowActions(row);
+    const act = React.useCallback<InvitationRowAction>(async (target, preset) => {
+        const { canRevoke, canReissue, canChangeEmail } = target;
         if (rowActionInFlightRef.current) return;
         rowActionInFlightRef.current = true;
         try {
@@ -197,7 +241,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
             let chosen = preset as 'revoke' | 'retry' | 'change_email' | null;
             if (chosen === null) {
                 await Modal.alertAsync(
-                    presentation.title,
+                    target.title,
                     canReissue ? t('teams.invitations.reissueNotice') : t('teams.invitations.revokeBody'),
                     [
                         ...(canReissue ? [{
@@ -227,7 +271,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                     outcome = await revokeTeamInvitation({
                         scope: context.scope,
                         address: context.address,
-                        invitationId: row.id,
+                        invitationId: target.id,
                         // An approved revocation is the
                         // same revocation, so it is
                         // announced and re-read here
@@ -292,7 +336,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
 
             let outcome: Awaited<ReturnType<typeof reissueTeamInvitation>>;
             const reissueIntent = JSON.stringify([
-                row.id,
+                target.id,
                 chosen,
                 recipientEmail,
             ]);
@@ -304,7 +348,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                 outcome = await reissueTeamInvitation({
                     scope: context.scope,
                     address: context.address,
-                    invitationId: row.id,
+                    invitationId: target.id,
                     recipientEmail,
                     requestKey: retryIdentity.requestKey,
                     // Live-only custody: an explicit
@@ -330,9 +374,9 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
         } finally {
             rowActionInFlightRef.current = false;
         }
-    };
+    }, [context.scope, context.address, context.requestApproval, invitations.reload, publishNotice, settleReissue]);
 
-    const date = (at: number) => formatCalendarDate(at, getPreferredLanguage());
+    const language = getPreferredLanguage();
     const firstSegmentKey = invitationSegments[0]?.key ?? null;
 
     return (
@@ -426,49 +470,20 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                         : segment.key === firstSegmentKey ? notice ?? undefined : undefined}
                     virtualizedSegment={{ first: segment.first, last: segment.last }}
                 >
-                    {segment.items.map((row) => {
-                        const { presentation, canReissue, isActionable } = rowActions(row);
-                        const waiting = segment.group === 'waiting';
-                        // Trouble carries its action in the row (lab `tsInvites-A`): an email
-                        // that did not arrive offers "Send again" without opening the chooser.
-                        const sendAgain = waiting && presentation.emailUndelivered && canReissue;
-                        return (
-                            <Item
-                                key={row.id}
-                                testID={`team-invitations-row:${row.id}`}
-                                title={presentation.title}
-                                subtitle={(waiting
-                                    ? [
-                                        presentation.deliveryLabel,
-                                        presentation.offerLabel,
-                                        t('teams.invitations.expires', { when: date(row.expiresAt) }),
-                                    ]
-                                    : [presentation.finishedLabel, presentation.offerLabel])
-                                    .filter((part): part is string => part !== null)
-                                    .join(' · ')}
-                                subtitleLines={0}
-                                detail={presentation.finishedAt === null ? undefined : date(presentation.finishedAt)}
-                                subtitleLeading={waiting && presentation.emailUndelivered
-                                    ? <StatusDot size={6} color={theme.colors.state.warning.foreground} />
-                                    : undefined}
-                                accessoryLayout={sendAgain ? 'adaptive' : undefined}
-                                rightElement={sendAgain ? (
-                                    <RoundButton
-                                        testID={`team-invitations-send-again:${row.id}`}
-                                        size="small"
-                                        display="secondary"
-                                        title={t('teams.invitations.sendAgain')}
-                                        disabled={busy}
-                                        onPress={() => void act(row, 'retry')}
-                                    />
-                                ) : undefined}
-                                disabled={isActionable && busy}
-                                mode={isActionable ? 'interactive' : 'info'}
-                                onPress={isActionable ? () => void act(row, null) : undefined}
-                                showChevron={false}
-                            />
-                        );
-                    })}
+                    {segment.items.map((row) => (
+                        <InvitationRow
+                            key={row.id}
+                            row={row}
+                            waiting={segment.group === 'waiting'}
+                            now={now}
+                            viewerAccountId={context.scope.accountId}
+                            canMutate={context.canMutate}
+                            emailDelivery={invitations.emailDelivery}
+                            language={language}
+                            busy={busy}
+                            onAction={act}
+                        />
+                    ))}
                 </ItemGroup>
             )}
             ListFooterComponent={canManage ? (

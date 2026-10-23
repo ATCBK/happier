@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { createRenderCommitCounter, renderHook, useRenderCommitCounter } from '@/dev/testkit';
+import { teamCredentialResourceFixture, teamCredentialViewerFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import {
     NO_TEAM_CAPABILITIES_V1,
     NO_TEAM_GROUP_CAPABILITIES_V1,
@@ -31,6 +32,7 @@ import {
     applyTeamsDirectoryFailure,
     applyTeamsDirectoryPage,
     beginTeamsDirectoryLoad,
+    beginTeamLoad,
     clearTeamsSnapshotsForServer,
     getTeamSnapshot,
     getTeamCredentialResourceCatalogSnapshot,
@@ -111,6 +113,56 @@ afterEach(() => {
 });
 
 describe('teamsSnapshots', () => {
+    it('keeps immutable Team binding identities across loading and real Team edits', () => {
+        const address = createTeamAddress(scopeA.serverId, 'team_1')!;
+        applyTeamProjection({ scope: scopeA, address, team: team(address.teamId), observedAt: 1 });
+        const admitted = getTeamSnapshot(scopeA, address)!;
+        beginTeamLoad({ ...scopeA }, { ...address });
+        expect(getTeamSnapshot(scopeA, address)?.scope).toBe(admitted.scope);
+        expect(getTeamSnapshot(scopeA, address)?.address).toBe(admitted.address);
+        applyTeamProjection({ scope: { ...scopeA }, address: { ...address },
+            team: team(address.teamId, { name: 'Renamed Team' }), observedAt: 2 });
+        const edited = getTeamSnapshot(scopeA, address)!;
+        expect(edited.data?.name).toBe('Renamed Team');
+        expect(edited.scope).toBe(admitted.scope);
+        expect(edited.address).toBe(admitted.address);
+        applyTeamFailure({ scope: { ...scopeA }, address: { ...address }, error: { kind: 'unreachable', retryable: true } });
+        expect(getTeamSnapshot(scopeA, address)?.scope).toBe(admitted.scope);
+        expect(getTeamSnapshot(scopeA, address)?.address).toBe(admitted.address);
+    });
+
+    it('appends credential pages with linear identity reads while retaining existing rows and page order', () => {
+        let identityReads = 0;
+        const resource = (id: string) => ({
+            ...teamCredentialResourceFixture({ id, teamId: groupAddressA.teamId }),
+            // Instrument admitted data, not the owner: the cost contract counts
+            // identity work for an overlapping page without timing the machine.
+            get id() { identityReads += 1; return id; },
+        });
+        const previous = Array.from({ length: 400 }, (_, i) => resource(`resource-${i}`));
+        const incoming = Array.from({ length: 100 }, (_, i) => resource(`resource-${350 + i}`));
+        const viewer = teamCredentialViewerFixture();
+        applyTeamCredentialResourcesPage({
+            scope: scopeA, address: groupAddressA, resources: previous,
+            viewer, observedAt: 1, nextCursor: 'next',
+        });
+        identityReads = 0;
+        applyTeamCredentialResourcesPage({
+            scope: scopeA, address: groupAddressA, resources: incoming,
+            viewer, observedAt: 2, append: true,
+        });
+        const appendIdentityReads = identityReads;
+        const snapshot = getTeamCredentialResourcesSnapshot(scopeA, groupAddressA);
+        expect(snapshot?.data?.map((row) => row.id)).toEqual(
+            Array.from({ length: 450 }, (_, i) => `resource-${i}`),
+        );
+        expect(snapshot?.data?.[350]).toBe(previous[350]);
+        expect(snapshot?.data?.[400]).toBe(incoming[50]);
+        expect(snapshot?.lastObservedAt).toBe(2);
+        expect(snapshot?.nextCursor).toBeNull();
+        expect(appendIdentityReads).toBeLessThanOrEqual(8 * (previous.length + incoming.length));
+    });
+
     it('does not render unchanged list data on repeated admissions, but publishes changed rows and order', async () => {
         const rows = Array.from({ length: 400 }, (_, i) => team(`team-${i}`));
         const publish = (items: readonly TeamSummaryV1[], observedAt: number) => applyTeamsDirectoryPage({

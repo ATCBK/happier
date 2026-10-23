@@ -13,6 +13,8 @@ import { listTeamInvitations } from '@/sync/ops/teams/teamInvitationOperations';
 
 import { useTeamPagedList, type TeamPagedList } from './useTeamPagedList';
 
+const invitationRowKey = (row: TeamInvitationRowV1) => row.id;
+
 /**
  * One Team's invitations for one exact Home and Account.
  *
@@ -90,6 +92,7 @@ export function useTeamInvitations(params: Readonly<{
         key: params.scope && params.address ? sequenceKey : '',
         enabled: params.enabled && serverId !== '' && accountId !== '' && teamId !== '',
         loadPage,
+        getRowKey: invitationRowKey,
         accountChange: { serverId, entityId: TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 },
     });
 

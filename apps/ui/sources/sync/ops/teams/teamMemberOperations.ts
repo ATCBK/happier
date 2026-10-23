@@ -1,14 +1,11 @@
 import {
     TeamMemberRemoveResultV1Schema,
-    TeamMembersPageV1Schema,
     TeamGroupsPageV1Schema,
     TeamMembershipV1Schema,
     type SessionHistoryAccessV1,
     type TeamAdmissibleRoleV1,
     type TeamMemberRemoveResultV1,
     type TeamActionIdV1,
-    type TeamMembersListFilterV1,
-    type TeamMembersPageV1,
     type TeamGroupsPageV1,
     type TeamMemberManagementTargetV1,
     type TeamMembershipV1,
@@ -21,6 +18,8 @@ import { invalidateTeam, refreshTeamsDirectory } from '@/sync/engine/teams/teams
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { runTeamAction, type HomeDomainFailure } from './teamActionClient';
+
+export { listTeamMembers } from './teamMemberReadOperations';
 
 /**
  * Team membership reads and mutations, addressed to one explicit Home.
@@ -47,30 +46,6 @@ function succeeded<TValue>(value: TValue): TeamMemberOutcome<TValue> {
 
 function failed<TValue>(failure: HomeDomainFailure): TeamMemberOutcome<TValue> {
     return Object.freeze({ kind: 'failed' as const, failure });
-}
-
-export async function listTeamMembers(params: Readonly<{
-    scope: ServerAccountScope;
-    address: TeamAddress;
-    filter: TeamMembersListFilterV1;
-    query?: string;
-    cursor?: string | null;
-    limit?: number;
-}>): Promise<TeamMemberOutcome<TeamMembersPageV1>> {
-    const outcome = await runTeamAction({
-        scope: params.scope,
-        actionId: 'teams.members.list',
-        input: {
-            v: 1,
-            teamId: params.address.teamId,
-            filter: params.filter,
-            ...(params.query ? { query: params.query } : {}),
-            ...(params.cursor ? { cursor: params.cursor } : {}),
-            ...(params.limit ? { limit: params.limit } : {}),
-        },
-        parse: (value) => TeamMembersPageV1Schema.parse(value),
-    });
-    return outcome.kind === 'succeeded' ? succeeded(outcome.value) : failed(outcome.failure);
 }
 
 export async function getTeamMember(params: Readonly<{

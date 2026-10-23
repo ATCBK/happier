@@ -7,6 +7,7 @@ import {
     teamCredentialResourcesQueryKeyV1,
     teamGroupsQueryKeyV1,
     type TeamCredentialResourceListFilterV1,
+    type TeamMembersListFilterV1,
     type TeamsListInputV1,
 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
@@ -31,6 +32,7 @@ import {
     type ScopedLoadTarget,
 } from '@/sync/engine/scope/scopedSnapshotLoader';
 import { loadTeamPageRange } from '@/sync/engine/teams/loadTeamPageRange';
+import { listTeamMembers } from '@/sync/ops/teams/teamMemberReadOperations';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
     getTeamCredentialResource,
@@ -62,6 +64,14 @@ import {
     applyTeamsDirectoryPage,
     beginTeamGroupLoad,
     beginTeamGroupsLoad,
+    beginTeamMembersLoad,
+    applyTeamMembersPage,
+    applyTeamMembersFailure,
+    getTeamMembersSnapshot,
+    invalidateTeamMembersSnapshot,
+    teamMembersQueryKey,
+    teamMembersSnapshotKey,
+    retireTeamMembersSnapshot,
     beginTeamLoad,
     beginTeamsDirectoryLoad,
     getTeamGroupSnapshot,
@@ -323,15 +333,85 @@ export async function loadMoreTeamsDirectory(
 }
 
 /**
- * One Team's Groups, on the same scoped-snapshot lifetime as the Team directory.
- *
- * Groups were previously read by a component-local paged list, which meant each
- * mounted surface held its own pages, no Account-change wake reached them, and
- * nothing retired them with their credential. They now share this owner, so a
- * Group label is readable synchronously by any surface — session rows, Activity,
- * Inbox and notification context — from one subscription rather than one
- * subscription per card.
+ * One Team roster sequence for its index, retained member rail and other visible
+ * consumers. The scoped owner shares acquisition and preserves Account wakes;
+ * unobserved searches retire just as the former component-local pager did.
  */
+type TeamMembersTarget = ScopedLoadTarget & Readonly<{
+    scope: ServerAccountScope;
+    address: TeamAddress;
+    filter: TeamMembersListFilterV1;
+    query: string;
+    queryKey: string;
+}>;
+
+function membersTargetFor(scope: ServerAccountScope, address: TeamAddress, filter: TeamMembersListFilterV1, query = ''): TeamMembersTarget | null {
+    if (scope.serverId !== address.serverId) return null;
+    const queryKey = teamMembersQueryKey(filter, query);
+    return { key: teamMembersSnapshotKey(scope, address, queryKey),
+        serverId: scope.serverId, scope, address, filter, query: query.trim(), queryKey };
+}
+
+const membersLoader = createScopedSnapshotLoader<TeamMembersTarget>({
+    load: async ({ scope, address, filter, query, queryKey }, context) => {
+        const loadedRowCount = getTeamMembersSnapshot(scope, address, queryKey)?.data?.length ?? 0;
+        beginTeamMembersLoad(scope, address, queryKey);
+        const begun = getTeamMembersSnapshot(scope, address, queryKey);
+        const outcome = await loadTeamPageRange({ loadedRowCount,
+            loadPage: cursor => listTeamMembers({ scope, address, filter, ...(query ? { query } : {}), cursor }),
+        });
+        // Sign-out and the last observer retire this sequence while its request
+        // may still be pending. Its old answer cannot recreate those private rows.
+        if (!outcome || getTeamMembersSnapshot(scope, address, queryKey) !== begun) return;
+        if (outcome.kind === 'succeeded') {
+            applyTeamMembersPage({ scope, address, queryKey, ...outcome.value, current: context.isCurrent() });
+        } else applyTeamMembersFailure({ scope, address, queryKey, error: outcome.failure });
+    },
+    shouldLoadOnObserve: ({ scope, address, queryKey }) => {
+        const snapshot = getTeamMembersSnapshot(scope, address, queryKey);
+        return !snapshot || snapshot.stale || (snapshot.data === null && snapshot.status !== 'loading');
+    },
+    invalidateServer: invalidateTeamsSnapshotsForServer,
+    invalidateTarget: ({ scope, address, queryKey }, reason) => {
+        if (reason === 'observer-gap') retireTeamMembersSnapshot(scope, address, queryKey);
+        else invalidateTeamMembersSnapshot(scope, address, queryKey);
+    },
+    matchesWake: event => event.entityIds === undefined || event.entityIds.includes(TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1),
+});
+
+export function observeTeamMembers(scope: ServerAccountScope, address: TeamAddress, filter: TeamMembersListFilterV1, query?: string): () => void {
+    const target = membersTargetFor(scope, address, filter, query);
+    return target ? membersLoader.observe(target) : () => {};
+}
+
+export async function refreshTeamMembers(scope: ServerAccountScope, address: TeamAddress, filter: TeamMembersListFilterV1, query?: string): Promise<void> {
+    const target = membersTargetFor(scope, address, filter, query);
+    if (!target) return;
+    const status = getTeamMembersSnapshot(scope, address, target.queryKey)?.status;
+    // A read already at the Home predates this explicit refresh. Owe one
+    // deciding pass, while same-turn refreshes before loading begins still join.
+    if (status === 'loading' || status === 'loading_more') await membersLoader.invalidate(target);
+    else await membersLoader.refresh(target);
+}
+
+export async function loadMoreTeamMembers(scope: ServerAccountScope, address: TeamAddress, filter: TeamMembersListFilterV1, query?: string): Promise<void> {
+    const target = membersTargetFor(scope, address, filter, query);
+    if (!target) return;
+    const snapshot = getTeamMembersSnapshot(scope, address, target.queryKey);
+    if (!snapshot?.nextCursor || snapshot.status === 'loading' || snapshot.status === 'loading_more') return;
+    const cursor = snapshot.nextCursor;
+    beginTeamMembersLoad(scope, address, target.queryKey, true);
+    const pending = getTeamMembersSnapshot(scope, address, target.queryKey);
+    const outcome = await listTeamMembers({ scope, address, filter, query: target.query, cursor });
+    // A refresh or wake replaces this snapshot even when its cursor repeats.
+    // That older continuation can no longer append to the deciding sequence.
+    if (getTeamMembersSnapshot(scope, address, target.queryKey) !== pending) return;
+    if (outcome.kind === 'succeeded') {
+        applyTeamMembersPage({ scope, address, queryKey: target.queryKey, ...outcome.value, append: true, current: pending?.stale === false });
+    } else applyTeamMembersFailure({ scope, address, queryKey: target.queryKey, error: outcome.failure });
+}
+
+/** Shared Group labels retain their scoped snapshot beyond their visible list. */
 type TeamGroupsTarget = ScopedLoadTarget & Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
@@ -957,6 +1037,7 @@ export function resetTeamsDirectoryEngineForTests(): void {
     loader.resetForTests();
     teamLoader.resetForTests();
     groupsLoader.resetForTests();
+    membersLoader.resetForTests();
     groupLoader.resetForTests();
     credentialResourcesLoader.resetForTests();
     credentialResourceLoader.resetForTests();

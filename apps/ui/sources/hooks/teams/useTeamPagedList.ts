@@ -1,22 +1,24 @@
 import * as React from 'react';
 
 import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
+import { preserveUnchangedSnapshotRows } from '@/sync/domains/scope/preserveUnchangedSnapshotRows';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { loadTeamPageRange, type TeamPageOutcome } from '@/sync/engine/teams/loadTeamPageRange';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 /**
- * The one paged-list lifetime for Team rosters.
+ * The paged lifetime for Team reads with one mounted owner.
  *
- * Members, Groups, Group members and invitations are four different reads with
+ * Group members, invitations, credential activity and directory adjuncts share
  * the same lifetime: accumulate pages in the Home's own order, retain them
  * across transport failure, withdraw them after authoritative access loss,
  * restart when the sequence identity changes, consume the existing AccountChange
  * wake, and refuse a second continuation while one is in flight.
- * Four copies of that would eventually disagree about the one behaviour that
+ * Separate copies would eventually disagree about the one behaviour that
  * matters — whether a partial roster survives a failure — so it lives here once.
  *
- * This is a paged read, not a cache: it holds no cross-surface state. The caller
+ * Members and Groups collections use the shared Teams snapshot owner instead.
+ * This pager holds no cross-surface state. The caller
  * supplies the exact Home/entity identity for the canonical wake, while the
  * Home's HTTP page remains the sole data and authority source.
  */
@@ -62,10 +64,12 @@ export function useTeamPagedList<TRow>(params: Readonly<{
     key: string;
     enabled: boolean;
     loadPage: (cursor: string | null, signal: AbortSignal) => Promise<TeamPageOutcome<TRow>>;
+    /** Domain identity for admitted rows whose consumers require reference reuse. */
+    getRowKey?: (row: TRow) => string;
     /** Optional AccountChange invalidation for the exact Home owning this page. */
     accountChange?: Readonly<{ serverId: string; entityId: string }>;
 }>): TeamPagedList<TRow> {
-    const { key, enabled } = params;
+    const { key, enabled, getRowKey } = params;
     const [state, setState] = React.useState<ListState<TRow>>(initialState<TRow>);
 
     // Answers for a superseded sequence must never be applied over its successor.
@@ -136,8 +140,9 @@ export function useTeamPagedList<TRow>(params: Readonly<{
                 return;
             }
             inFlight.current = false;
+            const incoming = mode === 'more' ? [...base.rows, ...outcome.value.items] : outcome.value.items;
             publish({
-                rows: mode === 'more' ? [...base.rows, ...outcome.value.items] : outcome.value.items,
+                rows: getRowKey ? preserveUnchangedSnapshotRows(base.rows, incoming, getRowKey) : incoming,
                 status: 'ready',
                 error: null,
                 cursor: outcome.value.nextCursor,
@@ -146,7 +151,7 @@ export function useTeamPagedList<TRow>(params: Readonly<{
         } finally {
             if (currentGeneration === generation.current) inFlight.current = false;
         }
-    }, [enabled, publish]);
+    }, [enabled, publish, getRowKey]);
 
     React.useEffect(() => {
         if (!enabled) {
@@ -162,7 +167,7 @@ export function useTeamPagedList<TRow>(params: Readonly<{
             request.current?.abort();
             inFlight.current = false;
         };
-        // `key` is the sequence identity; `load` only closes over `enabled`.
+        // `key` is the sequence identity; the domain's row identity callback is stable.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [enabled, key, load]);
 

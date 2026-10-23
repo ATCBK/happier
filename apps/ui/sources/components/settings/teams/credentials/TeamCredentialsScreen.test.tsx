@@ -28,6 +28,9 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const CREDENTIALS_LIST_PATH = '/v1/teams/credential-resources/list';
@@ -62,9 +65,6 @@ async function waitForTestId(
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();

@@ -1,5 +1,7 @@
 import {
     teamGroupsQueryKeyV1,
+    type TeamMembersListFilterV1,
+    type TeamMembershipV1,
     type TeamCredentialResourceCatalogEntryV1,
     type TeamCredentialResourceSummaryV1,
     type TeamCredentialViewerCapabilitiesV1,
@@ -7,7 +9,9 @@ import {
     type TeamSummaryV1,
 } from '@happier-dev/protocol/teams';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { snapshotReferenceSelectionKey } from '@/sync/domains/scope/snapshotReferenceSelectionKey';
+import { areSnapshotProjectionsEquivalent as areProjectionsEquivalent, preserveUnchangedSnapshotRows } from '@/sync/domains/scope/preserveUnchangedSnapshotRows';
 
 import {
     serverAccountScopeKeySuffix,
@@ -15,10 +19,12 @@ import {
 } from '@/sync/domains/scope/serverAccountScope';
 import {
     serverAccountScopedTeamKey,
+    serverAccountScopedTeamResourceKey,
     type TeamAddress,
 } from '@/sync/domains/teams/teamAddress';
 import {
     isAuthoritativeScopedSnapshotRefusal,
+    isAuthoritativeScopedSnapshotRefusalKind,
     reachabilityForScopedSnapshotError,
     type ScopedSnapshotError,
     type ScopedSnapshotReachability,
@@ -75,6 +81,26 @@ export type TeamGroupsSnapshot = Readonly<{
     reachability: ScopedSnapshotReachability;
     error: ScopedSnapshotError | null;
 }>;
+
+/** One exact Team/filter/lookup sequence shared by its visible roster consumers. */
+export type TeamMembersSnapshot = Readonly<{
+    scope: ServerAccountScope;
+    address: TeamAddress;
+    queryKey: string;
+    status: Exclude<ScopedSnapshotStatus, 'refreshing'> | 'loading_more';
+    data: readonly TeamMembershipV1[] | null;
+    nextCursor: string | null;
+    stale: boolean;
+    error: HomeDomainFailure | null;
+}>;
+
+export function teamMembersQueryKey(filter: TeamMembersListFilterV1, query = ''): string {
+    return JSON.stringify([filter, query.trim()]);
+}
+
+export function teamMembersSnapshotKey(scope: ServerAccountScope, address: TeamAddress, queryKey: string): string {
+    return serverAccountScopedTeamResourceKey(scope, address, 'members', queryKey);
+}
 
 export type TeamGroupSnapshot = Readonly<{
     scope: ServerAccountScope;
@@ -163,6 +189,7 @@ export type TeamCredentialResourceSnapshot = Readonly<{
 const directories = new Map<string, TeamsDirectorySnapshot>();
 const teams = new Map<string, TeamSnapshot>();
 const groupLists = new Map<string, TeamGroupsSnapshot>();
+const memberLists = new Map<string, TeamMembersSnapshot>();
 const groups = new Map<string, TeamGroupSnapshot>();
 const credentialLists = new Map<string, TeamCredentialResourcesSnapshot>();
 const credentialCatalogs = new Map<string, TeamCredentialResourceCatalogSnapshot>();
@@ -259,6 +286,64 @@ export function getTeamGroupsSnapshot(
 ): TeamGroupsSnapshot | null {
     if (!scope || !address) return null;
     return groupLists.get(groupListKey(scope, address, queryKey)) ?? null;
+}
+
+export function getTeamMembersSnapshot(
+    scope: ServerAccountScope | null | undefined,
+    address: TeamAddress | null | undefined,
+    queryKey: string,
+): TeamMembersSnapshot | null {
+    if (!scope || !address) return null;
+    return memberLists.get(teamMembersSnapshotKey(scope, address, queryKey)) ?? null;
+}
+
+export function beginTeamMembersLoad(scope: ServerAccountScope, address: TeamAddress, queryKey: string, continuation = false): void {
+    const current = getTeamMembersSnapshot(scope, address, queryKey);
+    memberLists.set(teamMembersSnapshotKey(scope, address, queryKey), Object.freeze({
+        scope, address, queryKey, status: continuation ? 'loading_more' : 'loading',
+        data: current?.data ?? null, nextCursor: current?.nextCursor ?? null,
+        stale: current?.stale ?? false, error: null,
+    }));
+    notify();
+}
+
+export function applyTeamMembersPage(params: Readonly<{
+    scope: ServerAccountScope; address: TeamAddress; queryKey: string;
+    items: readonly TeamMembershipV1[]; nextCursor: string | null; append?: boolean; current?: boolean;
+}>): void {
+    const previous = getTeamMembersSnapshot(params.scope, params.address, params.queryKey);
+    const incoming = params.append ? [...(previous?.data ?? []), ...params.items] : params.items;
+    memberLists.set(teamMembersSnapshotKey(params.scope, params.address, params.queryKey), Object.freeze({
+        scope: params.scope, address: params.address, queryKey: params.queryKey, status: 'ready',
+        data: preserveUnchangedSnapshotRows(previous?.data ?? null, incoming, row => row.id), nextCursor: params.nextCursor,
+        stale: params.current === false, error: null,
+    }));
+    notify();
+}
+
+export function applyTeamMembersFailure(params: Readonly<{
+    scope: ServerAccountScope; address: TeamAddress; queryKey: string; error: HomeDomainFailure;
+}>): void {
+    const previous = getTeamMembersSnapshot(params.scope, params.address, params.queryKey);
+    const withdrawn = isAuthoritativeScopedSnapshotRefusalKind(params.error.kind);
+    memberLists.set(teamMembersSnapshotKey(params.scope, params.address, params.queryKey), Object.freeze({
+        scope: params.scope, address: params.address, queryKey: params.queryKey, status: 'error',
+        data: withdrawn ? null : previous?.data ?? null, nextCursor: withdrawn ? null : previous?.nextCursor ?? null,
+        stale: !withdrawn && Boolean(previous?.data), error: params.error,
+    }));
+    notify();
+}
+
+export function invalidateTeamMembersSnapshot(scope: ServerAccountScope, address: TeamAddress, queryKey: string): void {
+    const current = getTeamMembersSnapshot(scope, address, queryKey);
+    if (!current || current.stale) return;
+    memberLists.set(teamMembersSnapshotKey(scope, address, queryKey), Object.freeze({ ...current, stale: true }));
+    notify();
+}
+
+/** Unlike label projections, a roster search has no reader after its last observer leaves. */
+export function retireTeamMembersSnapshot(scope: ServerAccountScope, address: TeamAddress, queryKey: string): void {
+    if (memberLists.delete(teamMembersSnapshotKey(scope, address, queryKey))) notify();
 }
 
 export function getTeamGroupSnapshot(
@@ -481,36 +566,8 @@ export function readTeamGroup(
     return null;
 }
 
-/**
- * Both projections originate from one strict schema parse, so their key order is
- * deterministic and a serialized comparison is a sound equivalence check here.
- */
-function areProjectionsEquivalent(a: unknown, b: unknown): boolean {
-    return a === b || JSON.stringify(a) === JSON.stringify(b);
-}
-
 function areTeamSummariesEquivalent(a: TeamSummaryV1, b: TeamSummaryV1): boolean {
     return areProjectionsEquivalent(a, b);
-}
-
-/**
- * Reuses the object already on screen whenever a Team's content is unchanged, so
- * an unrelated Team's mutation cannot re-render every row in a long directory.
- */
-function preserveUnchangedRows<TRow extends Readonly<{ id: string }>>(
-    previous: readonly TRow[] | null,
-    incoming: readonly TRow[],
-): readonly TRow[] {
-    if (!previous) return Object.freeze([...incoming]);
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-    let changed = previous.length !== incoming.length;
-    const rows = incoming.map((row, index) => {
-        const existing = previousById.get(row.id);
-        const next = existing && areProjectionsEquivalent(existing, row) ? existing : row;
-        if (next !== previous[index]) changed = true;
-        return next;
-    });
-    return changed ? Object.freeze(rows) : previous;
 }
 
 export function beginTeamsDirectoryLoad(scope: ServerAccountScope, queryKey: string): void {
@@ -552,7 +609,7 @@ export function applyTeamsDirectoryPage(params: Readonly<{
         scope: params.scope,
         queryKey: params.queryKey,
         status: 'ready',
-        data: preserveUnchangedRows(current?.data ?? null, incoming),
+        data: preserveUnchangedSnapshotRows(current?.data ?? null, incoming, row => row.id),
         nextCursor: params.nextCursor ?? null,
         lastObservedAt: params.observedAt,
         stale: params.current === false,
@@ -627,7 +684,7 @@ export function applyTeamGroupsPage(params: Readonly<{
         address: params.address,
         queryKey: params.queryKey,
         status: 'ready',
-        data: preserveUnchangedRows(current?.data ?? null, incoming),
+        data: preserveUnchangedSnapshotRows(current?.data ?? null, incoming, row => row.id),
         nextCursor: params.nextCursor ?? null,
         lastObservedAt: params.observedAt,
         stale: params.current === false,
@@ -699,17 +756,17 @@ export function applyTeamCredentialResourcesPage(params: Readonly<{
 }>): void {
     const queryKey = params.queryKey ?? '';
     const current = getTeamCredentialResourcesSnapshot(params.scope, params.address, queryKey);
-    const resources = params.append && current?.data
-        ? [...current.data, ...params.resources.filter((incoming) => (
-            !current.data?.some((existing) => existing.id === incoming.id)
-        ))]
-        : params.resources;
+    let resources = params.resources;
+    if (params.append && current?.data) {
+        const existingIds = new Set(current.data.map((resource) => resource.id));
+        resources = [...current.data, ...params.resources.filter((incoming) => !existingIds.has(incoming.id))];
+    }
     credentialLists.set(credentialListKey(params.scope, params.address, queryKey), Object.freeze({
         scope: params.scope,
         address: params.address,
         queryKey,
         status: 'ready',
-        data: preserveUnchangedRows(current?.data ?? null, resources),
+        data: preserveUnchangedSnapshotRows(current?.data ?? null, resources, row => row.id),
         nextCursor: params.nextCursor ?? null,
         viewer: current?.viewer && areProjectionsEquivalent(current.viewer, params.viewer)
             ? current.viewer
@@ -807,7 +864,7 @@ export function applyTeamCredentialResourceCatalog(params: Readonly<{
         address: params.address,
         ...(params.application ? { application: params.application } : {}),
         status: 'ready',
-        data: preserveUnchangedRows(current?.data ?? null, params.resources),
+        data: preserveUnchangedSnapshotRows(current?.data ?? null, params.resources, row => row.id),
         lastObservedAt: params.observedAt,
         stale: params.current === false,
         selectionCurrent: params.current !== false,
@@ -1029,8 +1086,8 @@ export function beginTeamLoad(scope: ServerAccountScope, address: TeamAddress): 
     const status: ScopedSnapshotStatus = current?.data ? 'refreshing' : 'loading';
     if (current && current.status === status && current.error === null) return;
     teams.set(serverAccountScopedTeamKey(scope, address), Object.freeze({
-        scope,
-        address,
+        scope: current?.scope ?? scope,
+        address: current?.address ?? address,
         status,
         data: current?.data ?? null,
         lastObservedAt: current?.lastObservedAt ?? null,
@@ -1053,8 +1110,8 @@ export function applyTeamProjection(params: Readonly<{
         ? current.data
         : params.team;
     teams.set(serverAccountScopedTeamKey(params.scope, params.address), Object.freeze({
-        scope: params.scope,
-        address: params.address,
+        scope: current?.scope ?? params.scope,
+        address: current?.address ?? params.address,
         status: 'ready',
         data,
         lastObservedAt: params.observedAt,
@@ -1073,8 +1130,8 @@ export function applyTeamFailure(params: Readonly<{
     const current = getTeamSnapshot(params.scope, params.address);
     const withdrawn = isAuthoritativeScopedSnapshotRefusal(params.error);
     teams.set(serverAccountScopedTeamKey(params.scope, params.address), Object.freeze({
-        scope: params.scope,
-        address: params.address,
+        scope: current?.scope ?? params.scope,
+        address: current?.address ?? params.address,
         status: 'error',
         data: withdrawn ? null : current?.data ?? null,
         lastObservedAt: withdrawn ? null : current?.lastObservedAt ?? null,
@@ -1157,6 +1214,11 @@ export function invalidateTeamsSnapshotsForServer(serverIdRaw: string): boolean 
         groupLists.set(key, Object.freeze({ ...snapshot, stale: true }));
         changed = true;
     }
+    for (const [key, snapshot] of memberLists) {
+        if (snapshot.scope.serverId !== serverId || snapshot.stale) continue;
+        memberLists.set(key, Object.freeze({ ...snapshot, stale: true }));
+        changed = true;
+    }
     for (const [key, snapshot] of groups) {
         if (snapshot.scope.serverId !== serverId || snapshot.stale) continue;
         groups.set(key, Object.freeze({ ...snapshot, stale: true }));
@@ -1206,6 +1268,11 @@ export function clearTeamsSnapshotsForServer(serverIdRaw: string): void {
         groupLists.delete(key);
         changed = true;
     }
+    for (const [key, snapshot] of memberLists) {
+        if (snapshot.scope.serverId !== serverId) continue;
+        memberLists.delete(key);
+        changed = true;
+    }
     for (const [key, snapshot] of groups) {
         if (snapshot.scope.serverId !== serverId) continue;
         groups.delete(key);
@@ -1236,6 +1303,7 @@ export function resetTeamsSnapshotsForTests(): void {
     directories.clear();
     teams.clear();
     groupLists.clear();
+    memberLists.clear();
     groups.clear();
     credentialLists.clear();
     credentialCatalogs.clear();

@@ -13,7 +13,8 @@ import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamCredentialResources } from '@/hooks/teams/useTeamCredentialResources';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { useProjectedConnectedServicesRegistry } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { ConnectedServiceMark } from '@/components/settings/connectedServices/ConnectedServiceMark';
 
@@ -37,11 +38,12 @@ import { TeamCredentialResourceFilterPicker } from './TeamCredentialResourceFilt
  * administrator's task and all of which would be a disclosure.
  */
 const CredentialRow = React.memo(function CredentialRow(props: Readonly<{
-    context: TeamSectionContext;
+    address: TeamAddress;
     resource: TeamCredentialResourceSummaryV1;
+    language: string;
 }>) {
     const router = useRouter();
-    const { context, resource } = props;
+    const { address, resource } = props;
     const registry = useProjectedConnectedServicesRegistry();
     // Whether the Home disclosed this resource's audience and policy to this
     // viewer is the resource's own `capabilities`, which the presentation owner
@@ -56,7 +58,7 @@ const CredentialRow = React.memo(function CredentialRow(props: Readonly<{
             icon={<ConnectedServiceMark legacyServiceId={resourceConnectedServiceMarkId(resource, registry)} size="row" />}
             subtitle={summaryLines.join('\n')}
             accessibilityLabel={resourceAccessibilityLabel(resource)}
-            onPress={() => router.push(teamCredentialDetailPath(context.address, resource.id))}
+            onPress={() => router.push(teamCredentialDetailPath(address, resource.id))}
         />
     );
 });
@@ -244,8 +246,9 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
                 ) : rows.map((resource) => (
                     <CredentialRow
                         key={resource.id}
-                        context={context}
+                        address={context.address}
                         resource={resource}
+                        language={getPreferredLanguage()}
                     />
                 ))}
                 {projection.hasMore && !projection.error ? (

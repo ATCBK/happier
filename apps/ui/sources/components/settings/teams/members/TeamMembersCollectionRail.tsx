@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { TeamMembershipV1 } from '@happier-dev/protocol/teams';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
@@ -16,7 +17,7 @@ import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -31,6 +32,34 @@ const MEMBER_RAIL_AVATAR_SIZE = 28;
 type RailRow = Readonly<{ key: string; render: () => React.ReactElement }>;
 const railRowKey = (row: RailRow) => row.key;
 const renderRailRow = ({ item }: Readonly<{ item: RailRow }>) => item.render();
+
+const MemberRailRow = React.memo(function MemberRailRow(props: Readonly<{
+  membership: TeamMembershipV1;
+  viewerAccountId?: string;
+  selected: boolean;
+  language: string;
+  onOpen: (membershipId: string) => void;
+}>) {
+  const { membership } = props;
+  const { theme } = useUnistyles();
+  const person = resolveAccountDisplayName({ profile: membership.account, accountId: membership.accountId, viewerAccountId: props.viewerAccountId });
+  return <Item
+    testID={`team-members-rail-row:${membership.id}`}
+    title={person.name}
+    // Suspension leads the rail's one subtitle line instead of squeezing the name with a pill.
+    subtitle={membership.status === 'suspended'
+      ? `${t('teams.status.suspended')} · ${teamMemberRowSubtitle(membership, person)}`
+      : teamMemberRowSubtitle(membership, person)}
+    subtitleLines={1}
+    subtitleLeading={membership.status === 'suspended' ? <StatusDot size={6} color={theme.colors.state.warning.foreground} /> : undefined}
+    icon={<HappierCollectionListMark><Avatar id={membership.accountId} size={MEMBER_RAIL_AVATAR_SIZE} imageUrl={membership.account.avatarUrl} /></HappierCollectionListMark>}
+    selected={props.selected}
+    density="compact"
+    showChevron={false}
+    pressableStyle={collectionListStyles.row}
+    onPress={() => props.onOpen(membership.id)}
+  />;
+});
 
 /**
  * The Members rail beside an open person (lab `tsMembers-A`, the Home People pattern): everyone in
@@ -63,18 +92,21 @@ export const TeamMembersCollectionRail = React.memo(
       enabled: canRead,
     });
     const searching = query.trim().length > 0;
+    const language = getPreferredLanguage();
+    const addressServerId = props.address.serverId;
+    const teamId = props.address.teamId;
 
     const open = React.useCallback(
       (membershipId: string) => {
         const result = runGuardedNavigation(() =>
           router.replace(
-            teamMemberDetailPath(props.address, membershipId) as never,
+            teamMemberDetailPath({ serverId: addressServerId, teamId }, membershipId) as never,
           ),
         );
         if (result !== true)
           fireAndForget(result, { tag: 'TeamMembersCollectionRail.open' });
       },
-      [props.address, router],
+      [addressServerId, teamId, router],
     );
 
     const rows: RailRow[] = [];
@@ -101,38 +133,13 @@ export const TeamMembersCollectionRail = React.memo(
       ));
     }
     for (const membership of roster.rows) {
-      const person = resolveAccountDisplayName({
-        profile: membership.account,
-        accountId: membership.accountId,
-        viewerAccountId: state?.scope.accountId,
-      });
       add(`member:${membership.id}`, () => (
-        <Item
-          testID={`team-members-rail-row:${membership.id}`}
-          title={person.name}
-          // The rail is narrow: a suspension leads the row's one line with its amber dot (the
-          // invitations' "email didn't arrive" anatomy) instead of a pill that squeezes the name.
-          subtitle={membership.status === 'suspended'
-            ? `${t('teams.status.suspended')} · ${teamMemberRowSubtitle(membership, person)}`
-            : teamMemberRowSubtitle(membership, person)}
-          subtitleLines={1}
-          subtitleLeading={membership.status === 'suspended'
-            ? <StatusDot size={6} color={theme.colors.state.warning.foreground} />
-            : undefined}
-          icon={
-            <HappierCollectionListMark>
-              <Avatar
-                id={membership.accountId}
-                size={MEMBER_RAIL_AVATAR_SIZE}
-                imageUrl={membership.account.avatarUrl}
-              />
-            </HappierCollectionListMark>
-          }
+        <MemberRailRow
+          membership={membership}
+          viewerAccountId={state?.scope.accountId}
+          language={language}
           selected={props.selectedMembershipId === membership.id}
-          density="compact"
-          showChevron={false}
-          pressableStyle={collectionListStyles.row}
-          onPress={() => open(membership.id)}
+          onOpen={open}
         />
       ));
     }

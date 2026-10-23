@@ -102,12 +102,16 @@ export function useTeamCredentialResource(params: Readonly<{
     enabled: boolean;
 }>): TeamCredentialResourceProjection {
     const { scope, address, resourceId } = params;
+    const serverId = scope?.serverId ?? '';
+    const accountId = scope?.accountId ?? '';
+    const addressServerId = address?.serverId ?? '';
+    const teamId = address?.teamId ?? '';
     const active = params.enabled && scope !== null && address !== null && resourceId !== '';
 
     React.useEffect(() => {
-        if (!active || !scope || !address) return;
-        return observeTeamCredentialResource(scope, address, resourceId);
-    }, [active, scope, address, resourceId]);
+        if (!active) return;
+        return observeTeamCredentialResource({ serverId, accountId }, { serverId: addressServerId, teamId }, resourceId);
+    }, [active, serverId, accountId, addressServerId, teamId, resourceId]);
 
     const snapshot = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
@@ -118,9 +122,9 @@ export function useTeamCredentialResource(params: Readonly<{
         ? null
         : snapshot?.data ?? (active ? readTeamCredentialResource(scope, address, resourceId) : null);
     const reload = React.useCallback(async () => {
-        if (!active || !scope || !address) return;
-        await refreshTeamCredentialResource(scope, address, resourceId);
-    }, [active, scope, address, resourceId]);
+        if (!active) return;
+        await refreshTeamCredentialResource({ serverId, accountId }, { serverId: addressServerId, teamId }, resourceId);
+    }, [active, serverId, accountId, addressServerId, teamId, resourceId]);
 
     return React.useMemo(() => Object.freeze({
         resource,
@@ -148,20 +152,24 @@ export function useTeamCredentialResourceCatalog(params: Readonly<{
     enabled: boolean;
 }>): TeamCredentialResourceCatalogProjection {
     const { scope, address } = params;
+    const serverId = scope?.serverId ?? '';
+    const accountId = scope?.accountId ?? '';
+    const addressServerId = address?.serverId ?? '';
+    const teamId = address?.teamId ?? '';
     const active = params.enabled && scope !== null && address !== null;
     React.useEffect(() => {
-        if (!active || !scope || !address) return;
-        return observeTeamCredentialResourceCatalog(scope, address);
-    }, [active, scope, address]);
+        if (!active) return;
+        return observeTeamCredentialResourceCatalog({ serverId, accountId }, { serverId: addressServerId, teamId });
+    }, [active, serverId, accountId, addressServerId, teamId]);
     const snapshot = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
         () => (active ? getTeamCredentialResourceCatalogSnapshot(scope, address) : null),
         () => null,
     );
     const reload = React.useCallback(async () => {
-        if (!active || !scope || !address) return;
-        await refreshTeamCredentialResourceCatalog(scope, address);
-    }, [active, scope, address]);
+        if (!active) return;
+        await refreshTeamCredentialResourceCatalog({ serverId, accountId }, { serverId: addressServerId, teamId });
+    }, [active, serverId, accountId, addressServerId, teamId]);
     return React.useMemo(() => Object.freeze({
         resources: snapshot?.data ?? NO_CATALOG,
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
@@ -180,6 +188,10 @@ export function useTeamCredentialResources(params: Readonly<{
     filter?: TeamCredentialResourceListFilterV1;
 }>): TeamCredentialResourcesProjection {
     const { scope, address, enabled, search, filter = 'all' } = params;
+    const serverId = scope?.serverId ?? '';
+    const accountId = scope?.accountId ?? '';
+    const addressServerId = address?.serverId ?? '';
+    const teamId = address?.teamId ?? '';
     const active = enabled && scope !== null && address !== null;
     const queryKey = address && (search || filter !== 'all')
         ? teamCredentialResourcesQueryKeyV1({
@@ -190,9 +202,9 @@ export function useTeamCredentialResources(params: Readonly<{
         : '';
 
     React.useEffect(() => {
-        if (!active || !scope || !address) return;
-        return observeTeamCredentialResources(scope, address, search, filter);
-    }, [active, scope, address, search, filter]);
+        if (!active) return;
+        return observeTeamCredentialResources({ serverId, accountId }, { serverId: addressServerId, teamId }, search, filter);
+    }, [active, serverId, accountId, addressServerId, teamId, search, filter]);
 
     const snapshot = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
@@ -201,20 +213,20 @@ export function useTeamCredentialResources(params: Readonly<{
     );
 
     const reload = React.useCallback(async () => {
-        if (!active || !scope || !address) return;
-        await refreshTeamCredentialResources(scope, address, search, filter);
-    }, [active, scope, address, search, filter]);
+        if (!active) return;
+        await refreshTeamCredentialResources({ serverId, accountId }, { serverId: addressServerId, teamId }, search, filter);
+    }, [active, serverId, accountId, addressServerId, teamId, search, filter]);
 
     const [loadingMore, setLoadingMore] = React.useState(false);
     const loadMore = React.useCallback(async () => {
-        if (!active || !scope || !address) return;
+        if (!active) return;
         setLoadingMore(true);
         try {
-            await loadMoreTeamCredentialResources(scope, address, search, filter);
+            await loadMoreTeamCredentialResources({ serverId, accountId }, { serverId: addressServerId, teamId }, search, filter);
         } finally {
             setLoadingMore(false);
         }
-    }, [active, scope, address, search, filter]);
+    }, [active, serverId, accountId, addressServerId, teamId, search, filter]);
     const hasMore = (snapshot?.nextCursor ?? null) !== null;
     const retry = hasMore && snapshot?.data
         ? loadMore
