@@ -39,12 +39,16 @@ export async function projectDiscussionsForViewerInTx(tx: Tx, input: Readonly<{
     viewerAccountId: string; authentication: SessionAccessAuthentication;
     discussions: readonly DiscussionRow[]; contexts: ReadonlyMap<string, DiscussionContext>;
     anchorDocArtifactId?: string;
+    docSourceAdmissions?: DiscussionDocSourceAdmissions;
 }>): Promise<DiscussionResult<DiscussionSummaryV1[]>> {
     const facts = await loadDiscussionViewerFactsInTx(tx, { viewerAccountId: input.viewerAccountId, discussions: input.discussions, tracked: true,
         includeFirstMessage: input.anchorDocArtifactId !== undefined });
     const firstMessages = new Map<string, DiscussionMessageV1 | null>();
     const unavailableLatestContent = new Set<string>();
     const destination = contentDestination(input.authentication);
+    const docSourceAdmissions: DiscussionDocSourceAdmissions = input.docSourceAdmissions ?? new Map();
+    const latestSources = new Map<string, DiscussionDocSource | null>();
+    const roots: ReadableDiscussionMessageGroup[] = [];
     for (const discussion of input.discussions) {
         const context = input.contexts.get(discussion.id), current = facts.get(discussion.id);
         if (!context || !current) return discussionFailure('discussion_invalid_content');
@@ -63,26 +67,30 @@ export async function projectDiscussionsForViewerInTx(tx: Tx, input: Readonly<{
                 return discussionFailure('discussion_invalid_content');
             }
             if (!context.keyReadiness) firstMessages.set(discussion.id, null);
-            else {
-                const readable = await projectReadableMessagesInTx(tx, { discussionId: discussion.id, actorAccountId: input.viewerAccountId,
-                    authentication: input.authentication, context, rows: [root], unavailableDocSources: 'omit' });
-                if (!readable.ok) {
-                    if (readable.error !== 'discussion_content_unavailable' && readable.error !== 'discussion_access_forbidden') return readable;
-                    firstMessages.set(discussion.id, null);
-                } else firstMessages.set(discussion.id, readable.value.messages[0] ?? null);
-            }
+            else roots.push({ discussionId: discussion.id, context, rows: [root] });
             // Scoped summaries disclose only the exact admitted root, never latest content.
             continue;
         }
         const sources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: discussion.id, messages: [current.latestMessage] });
         if (!sources.ok) return sources;
-        const admitted = await admitDiscussionDocSourceInTx(tx, { actorAccountId: input.viewerAccountId,
-            authentication: input.authentication, source: sources.value.get(current.latestMessage.id) ?? null, destination });
+        latestSources.set(discussion.id, sources.value.get(current.latestMessage.id) ?? null);
         const executableSource = destination ? await admitDiscussionSecondOpinionSourceInTx(tx, {
             actorAccountId: input.viewerAccountId, authentication: input.authentication, anchor: discussion.anchorV1, destination,
         }) : discussionSuccess(undefined);
         // The Discussion grant still admits metadata, but cannot disclose its independent Doc source.
-        if (!admitted.ok || !executableSource.ok) unavailableLatestContent.add(discussion.id);
+        if (!executableSource.ok) unavailableLatestContent.add(discussion.id);
+    }
+    await admitDiscussionDocSourcesInTx(tx, { actorAccountId: input.viewerAccountId, authentication: input.authentication,
+        sources: latestSources.values(), admissions: docSourceAdmissions });
+    for (const [discussionId, source] of latestSources) {
+        if (source && !docSourceAdmissions.get(source.ref.artifactId)!.ok) unavailableLatestContent.add(discussionId);
+    }
+    if (roots.length) {
+        const readable = await projectReadableMessageGroupsInTx(tx, { actorAccountId: input.viewerAccountId,
+            authentication: input.authentication, groups: roots, unavailableDocSources: 'omit', docSourceAdmissions });
+        if (!readable.ok && readable.error !== 'discussion_content_unavailable' && readable.error !== 'discussion_access_forbidden') return readable;
+        for (const root of roots) firstMessages.set(root.discussionId,
+            readable.ok ? readable.value.get(root.discussionId)!.messages[0] ?? null : null);
     }
     const actors = await projectDiscussionAccountActorsInTx(tx, input.discussions.map(row => facts.get(row.id)!.latestMessage),
         input.discussions.flatMap(row => facts.get(row.id)!.participantAccountIds));
@@ -105,50 +113,87 @@ export async function readDiscussionRowInTx(tx: Tx, input: Readonly<{ discussion
 
 type Reader = Readonly<{ actorAccountId: string; authentication: SessionAccessAuthentication }>;
 
+// These results belong only to one snapshot and one caller/disclosure destination.
+type DiscussionDocSourceAdmissions = Map<string, DiscussionResult<void>>;
+
+async function admitDiscussionDocSourcesInTx(tx: Tx, input: Reader & Readonly<{
+    sources: Iterable<DiscussionDocSource | null>; admissions: DiscussionDocSourceAdmissions;
+}>): Promise<void> {
+    const distinct = new Map<string, DiscussionDocSource>();
+    for (const source of input.sources) {
+        if (source && !input.admissions.has(source.ref.artifactId)) distinct.set(source.ref.artifactId, source);
+    }
+    for (const [artifactId, source] of distinct) input.admissions.set(artifactId,
+        await admitDiscussionDocSourceInTx(tx, { ...input, source, destination: contentDestination(input.authentication) }));
+}
+
+type ReadableDiscussionMessageGroup = Readonly<{
+    discussionId: string; context: DiscussionContext; rows: readonly DiscussionMessageRow[];
+}>;
+type ReadableDiscussionMessages = Readonly<{
+    messages: DiscussionMessageV1[]; docSources: ReadonlyMap<string, DiscussionDocSource | null>;
+}>;
+
 /** Exact and paged reads share admission; pages may withhold independently unavailable Doc rows. */
-export async function projectReadableMessagesInTx(tx: Tx, input: Reader & Readonly<{
-    discussionId: string; context: DiscussionContext;
-    rows: readonly DiscussionMessageRow[];
+export async function projectReadableMessagesInTx(tx: Tx, input: Reader & ReadableDiscussionMessageGroup & Readonly<{
     unavailableDocSources?: 'omit';
-}>): Promise<DiscussionResult<Readonly<{ messages: DiscussionMessageV1[]; docSources: ReadonlyMap<string, DiscussionDocSource | null> }>>> {
-    for (const row of input.rows) {
-        const failure = validateDiscussionStoredMessage(row, input.context.storageMode);
-        if (failure) return discussionFailure(failure);
-    }
+}>): Promise<DiscussionResult<ReadableDiscussionMessages>> {
+    const projected = await projectReadableMessageGroupsInTx(tx, { ...input, groups: [input] });
+    return projected.ok ? discussionSuccess(projected.value.get(input.discussionId)!) : projected;
+}
+
+/** Resolve group inheritance, then admit distinct sources and project all readable actors once. */
+export async function projectReadableMessageGroupsInTx(tx: Tx, input: Reader & Readonly<{
+    groups: readonly ReadableDiscussionMessageGroup[]; unavailableDocSources?: 'omit';
+    docSourceAdmissions?: DiscussionDocSourceAdmissions;
+}>): Promise<DiscussionResult<ReadonlyMap<string, ReadableDiscussionMessages>>> {
     const destination = contentDestination(input.authentication);
-    if (destination && input.rows.length > 0) {
-        const discussion = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { anchorV1: true } });
-        const executableSource = await admitDiscussionSecondOpinionSourceInTx(tx, { ...input, anchor: discussion?.anchorV1, destination });
-        if (!executableSource.ok) return executableSource;
+    const sourcesByDiscussion = new Map<string, ReadonlyMap<string, DiscussionDocSource | null>>();
+    for (const group of input.groups) {
+        for (const row of group.rows) {
+            const failure = validateDiscussionStoredMessage(row, group.context.storageMode);
+            if (failure) return discussionFailure(failure);
+        }
+        if (destination && group.rows.length > 0) {
+            const discussion = await tx.discussion.findUnique({ where: { id: group.discussionId }, select: { anchorV1: true } });
+            const executableSource = await admitDiscussionSecondOpinionSourceInTx(tx, { ...input, anchor: discussion?.anchorV1, destination });
+            if (!executableSource.ok) return executableSource;
+        }
+        const sources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: group.discussionId, messages: group.rows });
+        if (!sources.ok) return sources;
+        sourcesByDiscussion.set(group.discussionId, sources.value);
     }
-    const sources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: input.discussionId, messages: input.rows });
-    if (!sources.ok) return sources;
-    const admitted = new Map<string, boolean>();
-    for (const source of sources.value.values()) {
-        if (!source || admitted.has(source.ref.artifactId)) continue;
-        const access = await admitDiscussionDocSourceInTx(tx, { ...input, source, destination });
+    const admissions: DiscussionDocSourceAdmissions = input.docSourceAdmissions ?? new Map();
+    const sources = [...sourcesByDiscussion.values()].flatMap(group => [...group.values()]);
+    await admitDiscussionDocSourcesInTx(tx, { ...input, sources, admissions });
+    for (const source of sources) {
+        if (!source) continue;
+        const access = admissions.get(source.ref.artifactId)!;
         // Human history can omit unavailable Doc rows. An executable disclosure
         // must report refusal, not silently return a partial protected context.
         if (!access.ok && (destination || input.unavailableDocSources !== 'omit')) return access;
-        admitted.set(source.ref.artifactId, access.ok);
     }
-    const readable = input.rows.filter(row => {
-        const source = sources.value.get(row.id);
-        return !source || admitted.get(source.ref.artifactId) === true;
-    });
+    const readable = input.groups.flatMap(group => group.rows.filter(row => {
+        const source = sourcesByDiscussion.get(group.discussionId)!.get(row.id);
+        return !source || admissions.get(source.ref.artifactId)!.ok;
+    }));
     const actors = await projectDiscussionAccountActorsInTx(tx, readable);
     const messages = readable.map((row, index) => projectDiscussionMessageV1(row, input.actorAccountId,
         actors.messages[index]?.accountActor ?? null, actors.messages[index]?.requesterAccountActor ?? null));
     const addresses = messages.flatMap(message => (message.addressingV1?.participantSessionIds ?? []).map(participantSessionId => ({
-        discussionId: input.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
+        discussionId: message.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
     })));
     const held = await readHeldDiscussionPendingInputsInTx(tx, addresses);
-    return discussionSuccess({ docSources: sources.value, messages: messages.map(message => {
+    const projected = messages.map(message => {
         const deliveries = (message.addressingV1?.participantSessionIds ?? []).flatMap(participantSessionId => held.has(deriveDiscussionFollowInputLocalIdV1({
-            discussionId: input.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
+            discussionId: message.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
         })) ? [{ participantSessionId, disposition: 'held' as const, code: 'session_input_target_unavailable' as const }] : []);
         return deliveries.length ? { ...message, participantDeliveryV1: deliveries } : message;
-    }) });
+    });
+    const byDiscussion = new Map<string, ReadableDiscussionMessages>(input.groups.map(group => [group.discussionId,
+        { docSources: sourcesByDiscussion.get(group.discussionId)!, messages: [] }]));
+    for (const message of projected) byDiscussion.get(message.discussionId)!.messages.push(message);
+    return discussionSuccess(byDiscussion);
 }
 
 type ExactDiscussionMessageSelection = Readonly<{ messageId: string; localId?: never } | { localId: string; messageId?: never }>;
@@ -186,10 +231,11 @@ export async function listDiscussions(input: Reader & Readonly<{
     if (input.anchorDocArtifactId !== undefined && !DiscussionListQueryV1Schema.safeParse({
         anchorDocArtifactId: input.anchorDocArtifactId, state: input.state,
     }).success) return discussionFailure('discussion_invalid_content');
+    const cursor = input.cursor === undefined ? null : decodeDiscussionListCursorV1(input.cursor);
+    if (input.cursor !== undefined && !cursor) return discussionFailure('discussion_invalid_content');
     return inReadSnapshot(async tx => {
-        const cursor = input.cursor === undefined ? null : decodeDiscussionListCursorV1(input.cursor);
-        if (input.cursor !== undefined && !cursor) return discussionFailure('discussion_invalid_content');
         const take = pageSize(input.limit);
+        const docSourceAdmissions: DiscussionDocSourceAdmissions = new Map();
         const discussions: DiscussionSummaryV1[] = [];
         let frontier = cursor;
         // Access may disappear between candidate discovery and read. Continue
@@ -227,7 +273,7 @@ export async function listDiscussions(input: Reader & Readonly<{
                     && anchor.data.doc.ref.artifactId === input.anchorDocArtifactId;
             });
             const selected = admitted.slice(0, take - discussions.length);
-            const projected = await projectDiscussionsForViewerInTx(tx, { contexts, discussions: selected,
+            const projected = await projectDiscussionsForViewerInTx(tx, { contexts, discussions: selected, docSourceAdmissions,
                 viewerAccountId: input.actorAccountId, authentication: input.authentication,
                 ...(input.anchorDocArtifactId === undefined ? {} : { anchorDocArtifactId: input.anchorDocArtifactId }) });
             if (!projected.ok) return projected;

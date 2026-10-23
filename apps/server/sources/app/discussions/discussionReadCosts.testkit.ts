@@ -11,7 +11,7 @@ import { createArtifact } from '@/app/artifacts/artifactWriteService';
 import { createDiscussion } from './mutations';
 import { listDiscussions, readDiscussionMessages } from './queries';
 import { readDiscussionAttention } from './attentionFacts';
-import { resolveDiscussionDocSourcesInTx } from './docPassages';
+import { resolveDiscussionDocSourcesInTx, type DiscussionDocSource } from './docPassages';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
@@ -30,6 +30,7 @@ const fixtureAccountIds: string[] = [];
 /** Observe only the real DB transport. All queries, admission and projection execute unchanged. */
 async function measure<T>(run: () => Promise<T>) {
     const reads: Array<{ model: string; rows: number }> = [];
+    let transactions = 0;
     const observeQuery = (query: unknown, record: (result: unknown) => void) => observeLazyPrismaQuery(query,
         () => ({ started() {}, settled() {} }), undefined, async consume => {
             const result = await consume();
@@ -47,10 +48,12 @@ async function measure<T>(run: () => Promise<T>) {
                 });
             }
             if (typeof delegate === 'function') return delegate.bind(target);
-            if (!String(property).startsWith('discussion') || delegate === null || typeof delegate !== 'object') return delegate;
+            if ((!String(property).startsWith('discussion') && !['artifact', 'publicSessionShare', 'account'].includes(String(property)))
+                || delegate === null || typeof delegate !== 'object') return delegate;
             return new Proxy(delegate, { get(owner, operation, delegateReceiver) {
                 const method: unknown = Reflect.get(owner, operation, delegateReceiver);
                 if (typeof method !== 'function' || !String(operation).startsWith('find')) return method;
+                if (property === 'account' && operation !== 'findMany') return method.bind(owner);
                 return (...args: unknown[]) => observeQuery(Reflect.apply(method, owner, args), result => {
                     const select: unknown = args[0] && typeof args[0] === 'object' ? Reflect.get(args[0], 'select') : null;
                     const ancestry = property === 'discussionMessage' && select && typeof select === 'object'
@@ -63,14 +66,17 @@ async function measure<T>(run: () => Promise<T>) {
     const original = db.$transaction;
     const sqliteRead = storage.withSqliteReadSnapshot;
     const sqlite = storage.getDbProviderFromEnv(process.env, 'postgres') === 'sqlite';
-    const spy = sqlite ? vi.spyOn(storage, 'withSqliteReadSnapshot').mockImplementation((read, options) =>
-        sqliteRead(tx => read(observe(tx)), options)) : null;
+    const spy = sqlite ? vi.spyOn(storage, 'withSqliteReadSnapshot').mockImplementation((read, options) => {
+        transactions++;
+        return sqliteRead(tx => read(observe(tx)), options);
+    }) : null;
     if (!sqlite) db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+        transactions++;
         const callback = args[0];
         return typeof callback !== 'function' ? Reflect.apply(target, receiver, args)
             : Reflect.apply(target, receiver, [(tx: Tx) => callback(observe(tx)), ...args.slice(1)]);
     } });
-    try { return { result: await run(), reads }; }
+    try { return { result: await run(), reads, transactions }; }
     finally { spy?.mockRestore(); if (!sqlite) db.$transaction = original; }
 }
 
@@ -97,6 +103,15 @@ export function discussionReadCostContracts() {
         const ids = fixtureAccountIds.splice(0);
         await db.artifact.deleteMany({ where: { accountId: { in: ids } } });
         await db.account.deleteMany({ where: { id: { in: ids } } });
+    });
+    it('D1 rejects malformed list and attention cursors before acquiring a database transaction', async () => {
+        const reader = { actorAccountId: randomUUID(), authentication, cursor: 'invalid', limit: 1 };
+        const attention = await measure(() => readDiscussionAttention(reader));
+        const list = await measure(() => listDiscussions(reader));
+        expect(attention.result).toEqual({ ok: false, error: 'discussion_invalid_content' });
+        expect(list.result).toEqual(attention.result);
+        expect(attention.transactions).toBe(0);
+        expect(list.transactions).toBe(0);
     });
     it('selects one exact committed message without acquiring unrelated history and keeps local IDs private', async () => {
         const owner = await account(), another = await account();
@@ -206,10 +221,13 @@ export function discussionReadCostContracts() {
         } while (cursor);
         expect(occurrences).toEqual(expected.map(index => ({ id: ids[index], type: index === 1 ? 'mention' : 'update' })));
         expect(new Set(occurrences.map(row => row.id)).size).toBe(expected.length);
-        const whole = await readDiscussionAttention({ actorAccountId: owner.id, authentication, limit: 100 });
+        const measuredWhole = await measure(() => readDiscussionAttention({ actorAccountId: owner.id, authentication, limit: 100 }));
+        const whole = measuredWhole.result;
         expect(whole).toMatchObject({ ok: true, value: { nextCursor: null } });
         if (!whole.ok) throw new Error(whole.error);
         expect(whole.value.discussions.flatMap(entry => entry.occurrences.map(row => row.message.id))).toEqual(expected.map(index => ids[index]));
+        const cursorReads = measuredWhole.reads.filter(read => read.model === 'discussionReadState').length;
+        expect(cursorReads).toBe(1);
         await db.discussionReadState.update({ where: { discussionId_accountId: { discussionId, accountId: owner.id } }, data: { lastReadSeq: 4 } });
         const after = await readDiscussionAttention({ actorAccountId: owner.id, authentication, limit: 1 });
         expect(after).toMatchObject({ ok: true, value: { nextCursor: null, discussions: [{ occurrences: [{ message: { id: ids[4] } }] }] } });
@@ -290,6 +308,69 @@ export function discussionReadCostContracts() {
         if (!measured.result.ok || !measured.result.value.nextCursor) throw new Error('Missing second page');
         expect(await listDiscussions({ actorAccountId: owner.id, authentication, limit: 1, cursor: measured.result.value.nextCursor }))
             .toMatchObject({ ok: true, value: { discussions: [{ id: third }], nextCursor: null } });
+    });
+
+    it.each([[1, 1], [8, 1], [8, 2]])('D3/D4 admit %i roots across %i Docs once per source and project actors per page', async (count, sourceCount) => {
+        const owner = await account(), author = await account();
+        const docs: DiscussionDocSource[] = [];
+        for (let index = 0; index < sourceCount; index++) {
+            const artifact = await createArtifact({ actorUserId: owner.id, artifactId: randomUUID(),
+                header: decodeBase64(encodePlainArtifactStoredContent({ title: 'Source', kind: 'markdown' })),
+                body: decodeBase64(encodePlainArtifactStoredContent({ body: 'Text' })),
+                dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) });
+            if (!artifact.ok) throw new Error(artifact.error);
+            docs.push({ ref: { kind: 'doc' as const, serverId: 'test-home', artifactId: artifact.artifact.id },
+                revision: { headerVersion: artifact.artifact.headerVersion, bodyVersion: artifact.artifact.bodyVersion } });
+        }
+        const roots: Array<{ discussionId: string; sourceId: string; messageId: string }> = [];
+        for (let index = 0; index < count; index++) {
+            const doc = docs[index % sourceCount]!;
+            const created = await createDiscussion({ authentication, actorAccountId: owner.id, request: {
+                creationLocalId: randomUUID(), anchor: { kind: 'doc', doc },
+                titleContent: { t: 'plain', v: { v: 1, title: 'Scoped' } },
+                firstMessage: { localId: randomUUID(), content: { t: 'plain', v: { kind: 'doc_passage_comment',
+                    passage: { ...doc, range: { start: 0, end: 4 }, quote: 'Text' }, content: body.v } },
+                    replyTarget: { kind: 'doc_passage', doc }, mentionedAccountIds: [] },
+            } });
+            if (!created.ok) throw new Error(created.error);
+            const discussionId = created.value.discussion.id;
+            const message = await db.discussionMessage.findFirstOrThrow({ where: { discussionId, seq: 1 } });
+            await db.discussionMessage.update({ where: { id: message.id }, data: { authorAccountId: author.id } });
+            roots.push({ discussionId, sourceId: doc.ref.artifactId, messageId: message.id });
+        }
+        const counts = (reads: Array<{ model: string }>) => ({
+            artifacts: reads.filter(read => read.model === 'artifact').length,
+            publications: reads.filter(read => read.model === 'publicSessionShare').length,
+            actors: reads.filter(read => read.model === 'account').length,
+        });
+        const reader = { authentication, actorAccountId: owner.id, limit: 100 };
+        const list = await measure(() => listDiscussions({ ...reader,
+            ...(sourceCount === 1 ? { anchorDocArtifactId: docs[0]!.ref.artifactId } : {}) }));
+        if (!list.result.ok) throw new Error(list.result.error);
+        expect(list.result.value.discussions).toHaveLength(count);
+        if (sourceCount === 1) {
+            expect(list.result.value.discussions.every(row => row.firstMessage?.accountActor?.accountId === author.id
+                && row.firstMessage.localId === null)).toBe(true);
+        }
+        const attention = await measure(() => readDiscussionAttention(reader));
+        if (!attention.result.ok) throw new Error(attention.result.error);
+        expect(attention.result.value.discussions.flatMap(row => row.occurrences.map(item => item.message.id)).sort())
+            .toEqual(roots.map(row => row.messageId).sort());
+        expect.soft(counts(list.reads)).toEqual({ artifacts: sourceCount, publications: sourceCount, actors: sourceCount === 1 ? 2 : 1 });
+        expect.soft(counts(attention.reads)).toEqual({ artifacts: sourceCount, publications: sourceCount, actors: 2 });
+
+        // A later request must re-admit the source, including full mode/key validation.
+        const deniedId = docs[0]!.ref.artifactId;
+        await db.artifact.update({ where: { id: deniedId }, data: { dataEncryptionKey: new Uint8Array([1]) } });
+        const denied = await readDiscussionAttention(reader);
+        if (!denied.ok) throw new Error(denied.error);
+        expect(denied.value.incomplete).toBe(true);
+        expect(denied.value.discussions.flatMap(row => row.occurrences.map(item => item.message.id)).sort())
+            .toEqual(roots.filter(row => row.sourceId !== deniedId).map(row => row.messageId).sort());
+        const deniedRoots = await listDiscussions({ ...reader, anchorDocArtifactId: deniedId });
+        if (!deniedRoots.ok) throw new Error(deniedRoots.error);
+        expect(deniedRoots.value.discussions).toHaveLength(roots.filter(row => row.sourceId === deniedId).length);
+        expect(deniedRoots.value.discussions.every(row => row.firstMessage === null)).toBe(true);
     });
 
     it('pages every reachable Doc root and agrees with doc.read across timestamp ties', async () => {
