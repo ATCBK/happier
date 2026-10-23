@@ -355,17 +355,31 @@ private `header.kind`, without extracting content, names or titles. Its stored
 form is `v1:<coarse>:<exact-or-empty>` in the existing nullable string column and
 Account/kind index. Read projections still expose coarse `kind`; `kindHint`
 presence distinguishes a canonical exact classification from a legacy row.
-The existing MySQL column's 191-character boundary is validated without
-truncating private data. This encoding needs no additional schema migration.
+The existing MySQL column's 191-codepoint boundary limits optional metadata,
+not the supported private header type string. Shared extraction omits an
+unrepresentable hint; valid private content is neither rejected nor truncated,
+and the row remains unclassified. Explicit malformed wire hints still fail
+validation. This encoding needs no additional schema migration.
 
 The shared `listArtifactHeadersV1` owner requests the indexed selector and
-reports unknown membership as explicitly incomplete. Neither UI inventory nor
-selective reads perform metadata writes or a full-inventory fallback. The
-previous automatic read-triggered repair was withdrawn after a live write-burst
-regression. The owning daemon labels its existing notices, only for currently
-consumed notice kinds; its bounded backfill and typed refusal lifecycle are
-being revised before re-landing. New Artifact writers set hints at create.
-Labels use the observed header CAS at the existing metadata-only update owner.
+propagates server-derived coverage: complete with count0, or partial with the
+unclassified count and reason `unclassified_legacy_rows`. Neither UI inventory
+nor selective reads write metadata. The previous automatic read-triggered repair
+was withdrawn after a live write-burst regression. The replacement is one
+explicitly paged native daemon Account bootstrap pass, labeling every openable
+owner legacy header across all type families. Its `ownerAccountId` selector
+intersects authorization; ordinary unclassified discovery also includes
+authorized shared rows. The derived count uses the same requested scope,
+including for an empty exact-kind set. Labels use the observed header CAS
+at the existing metadata-only batch owner. Unopenable/refused rows remain
+unclassified and keep coverage partial. No completion marker is stored. While
+partial, the same reader may resolve legacy headers through the existing
+coarse/unclassified path; that branch stops executing once derived coverage is
+complete. Bodies remain selected-id only. New Artifact writers set hints at create.
+Adapters keep classification progress in `kindCoverage`, distinct from existing
+read/decryption `coverage`. A fully resolved legacy answer is readable-complete
+even while its server index remains partial; genuinely unavailable sources are
+still incomplete and retain their existing refusal behavior.
 Equal labels are no-ops, and labels
 change neither private bytes, header/body content versions, nor Artifact recency
 and row sequence; discovery AccountChanges remain independent. Needed labels
@@ -379,8 +393,10 @@ that lacks that earlier extension. Environment owners deploy migrations and
 generate shared Prisma clients; this exact-kind extension adds neither another
 column/index nor an operator backfill. The current server contract must load
 before changed tagged writers/exact readers are used, followed by matching
-client reloads. Retained 0.2 notices require automatic owning-daemon backfill
-through the current Home, not UI-reader repair or an operator full scan.
+client reloads. Retained 0.2 rows are labeled by their owning daemon through the
+current Home, not UI-reader repair or an operator full scan. A refusal settles
+to a typed result for the daemon run; the next attempt is the next bootstrap,
+never the next reader fetch or a retry timer.
 
 ## Map the seam
 
@@ -710,6 +726,27 @@ Canonical writes are strict. Stored ref readers drop unknown fields recursively
 while validating known identity and enrichment fields. These are development
 source contracts, not a released row-storage rollout or loaded-runtime QA claim;
 Project row persistence has its own Account/Home owner.
+
+Session Project association uses `resolveSessionProjectKeyV1` at that same
+Protocol owner. The optional nullable `Session.projectKey` row field carries the
+accepted Home-local anchor; readers qualify it with the row's Home and can group
+or filter before private Project refs or labels load. Missing and null both mean
+not yet published. Older rows remain readable through exact Machine/root
+association, using a published sandbox's host `machinePath`. An explicit
+Home-qualified `workspaceId` selects its accepted checkout independently of the
+Session's subdirectory or execution Machine. Legacy `projectId` only checks a
+resolved ref; it cannot establish association alone. Incomplete or ambiguous ref
+coverage remains unavailable rather than becoming a guessed Project.
+
+The accepted-workspace registration publishes the key through the existing
+owner metadata tuple patch. Omission preserves the stored key; shared-editor
+and migration patches cannot set it. The additive nullable column has no SQL
+backfill: the server cannot derive private Project association. Pre-upgrade
+Sessions may remain keyless. The visible list retains their exact Machine/folder
+group and demands the open Home's existing Projects read while those rows are
+visible. Foreign Homes retain the fallback until their accepted row key arrives.
+This is a development-source contract; retained database deployment and loaded
+runtime validation remain separate evidence.
 
 Worker-copy classification uses optional creation provenance on the same Sync
 relationship: `worker_clean_copy` binds distinct source and target WorkspaceRefs
