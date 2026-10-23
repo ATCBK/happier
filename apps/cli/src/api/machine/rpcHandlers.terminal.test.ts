@@ -905,8 +905,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
 
   it('mounts accepted finite work after drain closes and retains the same bytes after a nonzero exit', async () => {
     const h = await finiteHarness({ waived: true, acceptedRootTrailingSlash: true });
-    const unsubscribe = h.runtime.workerAdmission.subscribe(() => {
-      if (h.runtime.workerAdmission.dependencies().some(dependency => dependency.state === 'reserved')) h.admissionDrain.beginUnusedStopDrain();
+    const unsubscribe = h.operationRuntime.store.subscribe(() => {
+      const progress = h.operationRuntime.store.get({ accountId: 'owner', machineId: 'machine' }, 'operation')?.progress;
+      if (progress?.kind === 'phase' && progress.phase === 'preparing') h.admissionDrain.beginUnusedStopDrain();
     });
     try {
       const ensured = await h.invoke();

@@ -64,7 +64,6 @@ export function createProjectWorkerAdmission(options: Readonly<{
 }>) {
   const entries = new Map<string, Entry>();
   const queue: Entry[] = [];
-  const listeners = new Set<() => void>();
   const readMemory = options.readMemory ?? (() => null);
   let admissionTail: Promise<void> = Promise.resolve();
   let pumping: Promise<void> | null = null;
@@ -122,9 +121,8 @@ export function createProjectWorkerAdmission(options: Readonly<{
     else ({ reason, observedMemory } = assessMemory(memoryDemand));
     return { policy, reason, observedMemory };
   }
-  function changed() {
-    queue.forEach((entry, ahead) => entry.request.onQueue?.(ahead));
-    for (const listener of listeners) listener();
+  function publishQueuePositions(fromIndex: number) {
+    for (let ahead = fromIndex; ahead < queue.length; ahead += 1) queue[ahead].request.onQueue?.(ahead);
   }
   function finish(entry: Entry, result: ActionExecuteResult) {
     if (entries.get(entry.request.operationId) !== entry) return;
@@ -133,7 +131,7 @@ export function createProjectWorkerAdmission(options: Readonly<{
     entries.delete(entry.request.operationId);
     entry.removeAbortListener();
     entry.resolve(result);
-    changed();
+    if (queuedIndex >= 0) publishQueuePositions(queuedIndex);
     void notifyChanged();
   }
   async function pump() {
@@ -162,7 +160,7 @@ export function createProjectWorkerAdmission(options: Readonly<{
         queue.shift();
         entry.state = 'reserved';
         entry.request.onReserved?.();
-        changed();
+        publishQueuePositions(0);
         // No work has entered the preparation/process owner yet, so this is a proved no-launch cancellation.
         if (entry.request.signal.aborted) { finish(entry, cancelled()); continue; }
         void (async () => {
@@ -170,7 +168,6 @@ export function createProjectWorkerAdmission(options: Readonly<{
             const outcome = await entry.request.run({ signal: entry.request.signal, phase: phase => {
               if (entries.get(entry.request.operationId) !== entry) return;
               entry.state = phase;
-              changed();
             } });
             if (outcome.kind === 'outcome_uncertain') {
               entry.request.onUnknown?.(outcome);
@@ -225,7 +222,7 @@ export function createProjectWorkerAdmission(options: Readonly<{
         queue.push(entry);
         request.accept({ kind: 'accepted', operationId: request.operationId, machineId: options.machineId,
           workspaceRefId: request.workspaceRefId });
-        changed();
+        if (!request.signal.aborted) publishQueuePositions(queue.length - 1);
         void notifyChanged();
       }).catch(error => {
         // Pre-acceptance failures cannot acquire a reservation. Accepted callback failures leave custody intact.
@@ -254,10 +251,6 @@ export function createProjectWorkerAdmission(options: Readonly<{
         return { operationId: entry.request.operationId, workspaceRefId: entry.request.workspaceRefId, state: entry.state,
           ...(relationshipId ? { relationshipId } : {}) };
       });
-    },
-    subscribe(listener: () => void): () => void {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
     },
   });
 }

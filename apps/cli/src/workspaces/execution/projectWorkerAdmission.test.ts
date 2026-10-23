@@ -75,6 +75,45 @@ function harness(runAtMost: number | null = 1) {
 }
 
 describe('finite target admission and real reservation custody', () => {
+  it('publishes only changed queue positions across a thousand accepted requests and native phases', async () => {
+    const h = harness();
+    const settled = deferred<ProjectWorkerReservationOutcome>();
+    const controllers = Array.from({ length: 1_000 }, () => new AbortController());
+    const reports = controllers.map(() => 0);
+    const positions = controllers.map(() => -1);
+    const results: Promise<unknown>[] = [];
+    const reserved = deferred<(phase: 'copying' | 'setup' | 'running') => void>();
+    try {
+      for (const [index, controller] of controllers.entries()) {
+        const accepted = deferred<void>();
+        results.push(h.admission.execute({ operationId: `queue-${index}`, workspaceRefId: 'worker-copy',
+          signal: controller.signal, accept: () => accepted.resolve(),
+          onQueue: ahead => { reports[index] += 1; positions[index] = ahead; },
+          run: async reservation => { reserved.resolve(reservation.phase); return await settled.promise; },
+        }));
+        await accepted.promise;
+      }
+      await h.admission.notifyChanged();
+      expect(reports.reduce((sum, count) => sum + count, 0)).toBe(controllers.length);
+      expect(positions.slice(1)).toEqual(controllers.slice(1).map((_, index) => index));
+      const phase = await reserved.promise;
+      for (const value of ['copying', 'setup', 'running'] as const) phase(value);
+      expect(reports.reduce((sum, count) => sum + count, 0)).toBe(controllers.length);
+
+      controllers[500].abort();
+      expect(reports.slice(0, 501)).toEqual(controllers.slice(0, 501).map(() => 1));
+      expect(reports.slice(501)).toEqual(controllers.slice(501).map(() => 2));
+      expect(positions.slice(501)).toEqual(controllers.slice(501).map((_, index) => index + 499));
+      const beforeTailRemoval = reports.reduce((sum, count) => sum + count, 0);
+      controllers.at(-1)!.abort();
+      expect(reports.reduce((sum, count) => sum + count, 0)).toBe(beforeTailRemoval);
+    } finally {
+      for (let index = controllers.length - 1; index >= 0; index -= 1) controllers[index].abort();
+      settled.resolve(success);
+      await Promise.all(results);
+    }
+  });
+
   it('checks live service admission without waiting for unrelated finite-policy IO', async () => {
     const drain = createDaemonAdmissionDrain();
     let memory: { totalBytes: number; availableBytes: number } | null = { totalBytes: 100, availableBytes: 1 };
@@ -333,12 +372,13 @@ describe('finite target admission and real reservation custody', () => {
     h.gates.get('next')!.resolve(success); await turn();
   });
 
-  it('does not enter preparation if cancellation arrives at reservation before any work starts', async () => {
+  it.each(['acceptance', 'reservation'] as const)('does not enter preparation if cancellation arrives at %s before any work starts', async phase => {
     const h = harness();
     const controller = new AbortController();
     let launched = false;
     const result = h.admission.execute({ operationId: 'cancel-at-dequeue', workspaceRefId: 'worker-copy',
-      signal: controller.signal, accept: () => undefined, onReserved: () => controller.abort(),
+      signal: controller.signal, accept: () => { if (phase === 'acceptance') controller.abort(); },
+      onReserved: () => { if (phase === 'reservation') controller.abort(); },
       run: async () => { launched = true; return success; },
     });
     await expect(result).resolves.toMatchObject({ ok: false, errorCode: 'cancelled' });
