@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -208,15 +209,65 @@ test('pnpm lockfile, workspace configuration and patch bytes invalidate installe
   await mkdir(fixture.path('node_modules'));
   await mkdir(fixture.path('patches'));
   await writeFile(fixture.path('package.json'), '{"private":true}');
-  for (const input of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/dependency.patch']) {
+  const workspace = 'packages: []\npatchedDependencies:\n  dependency@1.0.0: patches/dependency.patch\n';
+  await writeFile(fixture.path('pnpm-workspace.yaml'), workspace);
+  for (const input of ['pnpm-lock.yaml', 'patches/dependency.patch']) {
     await writeFile(fixture.path(input), 'initial');
   }
   for (const input of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/dependency.patch']) {
     await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
     assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false);
-    await writeFile(fixture.path(input), 'changed');
+    await writeFile(fixture.path(input), input === 'pnpm-workspace.yaml' ? `${workspace}# changed\n` : 'changed');
     assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true, input);
   }
+});
+
+test('unregistered patch files leave dependency admission unchanged, including existing v6 records', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-unregistered-patch-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root };
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(fixture.path('patches'));
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'patchedDependencies:\n  dependency@1.0.0: patches/dependency.patch\n');
+  await writeFile(fixture.path('patches/dependency.patch'), 'registered');
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  const marker = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  const admitted = await readFile(marker, 'utf8');
+  for (let edit = 0; edit < 24; edit++) {
+    await writeFile(fixture.path('patches/x.patch'), `unregistered ${edit}`);
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false,
+      'unregistered patch bytes must not invalidate admission');
+  }
+  assert.equal(await readFile(marker, 'utf8'), admitted);
+  // Earlier v6 capture included every patch. Preserve its real entry shape
+  // while projecting an obsolete unregistered input out of the comparison.
+  const legacy = JSON.parse(admitted);
+  legacy.inputs.push({ ...legacy.inputs.find(entry => entry.path === 'install:patches/dependency.patch'),
+    path: 'install:patches/x.patch', digest: createHash('sha256').update(await readFile(fixture.path('patches/x.patch'))).digest('hex') });
+  legacy.inputs.sort((a, b) => a.path.localeCompare(b.path));
+  await writeFile(marker, JSON.stringify(legacy));
+  const legacyBytes = await readFile(marker, 'utf8');
+  await rm(fixture.path('patches/x.patch'));
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, false);
+  assert.equal(await readFile(marker, 'utf8'), legacyBytes, 'inspection must not rewrite v6 admission');
+  await writeFile(fixture.path('patches/dependency.patch'), 'registered changed');
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true,
+    'legacy projection must retain registered patch freshness');
+});
+
+test('registered patch paths outside the conventional directory remain install inputs', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-registered-patch-path-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root };
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(fixture.path('changes'));
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), "patchedDependencies: # registered paths\n  '@scope/dependency@1.0.0': 'changes/dependency.diff' # canonical\n");
+  await writeFile(fixture.path('changes/dependency.diff'), 'registered');
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  await writeFile(fixture.path('changes/dependency.diff'), 'changed');
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true);
+  await rm(fixture.path('changes/dependency.diff'));
+  assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true);
 });
 
 test('worker pnpm admission cleans an unproven tree once and binds proof to installed metadata', async t => {

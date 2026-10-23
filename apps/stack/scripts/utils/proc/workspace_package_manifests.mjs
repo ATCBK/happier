@@ -7,6 +7,56 @@ export function isYarnWorkspace(manifest) {
   return typeof manifest?.packageManager === 'string' && manifest.packageManager.startsWith('yarn@');
 }
 
+function readWorkspaceString(item, unsupported) {
+  const doubleQuoted = item.match(/^("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/u);
+  const singleQuoted = item.match(/^'((?:[^']|'')*)'\s*(?:#.*)?$/u);
+  let value;
+  if (doubleQuoted) {
+    try { value = JSON.parse(doubleQuoted[1]); } catch { throw unsupported(); }
+  } else if (singleQuoted) {
+    value = singleQuoted[1].replaceAll("''", "'");
+  } else {
+    value = item.replace(/\s+#.*$/u, '').trim();
+    if (/^["'&*!\[\]{}>|%@`]/u.test(value) || /:\s/u.test(value)
+      || /^(?:null|true|false|~|[-+]?\d+(?:\.\d+)?)$/iu.test(value)) throw unsupported();
+  }
+  if (!value) throw unsupported();
+  return value;
+}
+
+// This reader runs before installation. Both workspace membership and patch
+// inputs consume the repository's block-string YAML without installed parsers.
+async function readWorkspaceStringBlock(monorepoRoot, field, { mapping = false, optional = false } = {}) {
+  const workspacePath = join(monorepoRoot, 'pnpm-workspace.yaml');
+  let contents;
+  try { contents = await readFile(workspacePath, 'utf-8'); } catch (error) {
+    if (optional && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  const lines = contents.split(/\r?\n/u);
+  const header = lines.findIndex(line => line.startsWith(`${field}:`));
+  const unsupported = () => new Error(`Unsupported ${field} syntax in ${workspacePath}: expected a block ${mapping ? 'mapping of string paths' : 'sequence of string globs'}.`);
+  if (header < 0 && optional) return [];
+  if (mapping && header >= 0 && /^patchedDependencies:\s*\{\}\s*(?:#.*)?$/u.test(lines[header])) return [];
+  if (header < 0 || !new RegExp(`^${field}:\\s*(?:#.*)?$`, 'u').test(lines[header])) throw unsupported();
+  const values = [];
+  for (const line of lines.slice(header + 1)) {
+    if (/^\s*(?:#.*)?$/u.test(line)) continue;
+    if (/^\S/u.test(line)) break;
+    const item = mapping
+      ? line.match(/^ +("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s"'][^:]*):[ \t]+(.+)$/u)
+      : line.match(/^ +-[ \t]+(.+)$/u);
+    if (!item) throw unsupported();
+    if (mapping) readWorkspaceString(item[1], unsupported);
+    values.push(readWorkspaceString(item[mapping ? 2 : 1], unsupported));
+  }
+  return values;
+}
+
+export async function readWorkspacePatchPaths(monorepoRoot) {
+  return await readWorkspaceStringBlock(monorepoRoot, 'patchedDependencies', { mapping: true, optional: true });
+}
+
 export async function readWorkspacePatterns(monorepoRoot) {
   // The executor also serves the supported Yarn predecessor checkout. Its
   // declared workspace set remains owned by package.json, never pnpm's YAML.
@@ -21,38 +71,7 @@ export async function readWorkspacePatterns(monorepoRoot) {
       return patterns;
     }
   }
-  const workspacePath = join(monorepoRoot, 'pnpm-workspace.yaml');
-  const lines = (await readFile(workspacePath, 'utf-8')).split(/\r?\n/u);
-  const header = lines.findIndex((line) => /^packages:/u.test(line));
-  const unsupported = () => new Error(`Unsupported packages syntax in ${workspacePath}: expected a block sequence of string globs.`);
-  if (header < 0 || !/^packages:\s*(?:#.*)?$/u.test(lines[header])) throw unsupported();
-
-  // Gate selection consumes this before dependencies are installed. Keep its one workspace
-  // reader dependency-free: the repository writes a block sequence of string globs. If the
-  // workspace owner adopts other YAML syntax, extend this boundary explicitly instead of
-  // guessing a different workspace set or falling back to directory discovery.
-  const patterns = [];
-  for (const line of lines.slice(header + 1)) {
-    if (/^\s*(?:#.*)?$/u.test(line)) continue;
-    if (/^\S/u.test(line)) break;
-    const item = line.match(/^ +-[ \t]+(.+)$/u)?.[1];
-    if (!item) throw unsupported();
-    const doubleQuoted = item.match(/^("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/u);
-    const singleQuoted = item.match(/^'((?:[^']|'')*)'\s*(?:#.*)?$/u);
-    let pattern;
-    if (doubleQuoted) {
-      try { pattern = JSON.parse(doubleQuoted[1]); } catch { throw unsupported(); }
-    } else if (singleQuoted) {
-      pattern = singleQuoted[1].replaceAll("''", "'");
-    } else {
-      pattern = item.replace(/\s+#.*$/u, '').trim();
-      if (/^["'&*!\[\]{}>|%@`]/u.test(pattern) || /:\s/u.test(pattern)
-        || /^(?:null|true|false|~|[-+]?\d+(?:\.\d+)?)$/iu.test(pattern)) throw unsupported();
-    }
-    if (!pattern) throw unsupported();
-    patterns.push(pattern);
-  }
-  return patterns;
+  return await readWorkspaceStringBlock(monorepoRoot, 'packages');
 }
 
 function workspacePatternToSegments(pattern) {

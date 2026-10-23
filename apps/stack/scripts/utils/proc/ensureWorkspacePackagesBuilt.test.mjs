@@ -501,7 +501,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds unscoped internal workspac
     workspaceBuildBoundary: {
       prepareEnv: async (_packageDir, env) => ({ ...env }),
       runPackageBuild: async (packageDir, { env }) => {
-        buildCalls.push(packageDir);
+        buildCalls.push(JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf-8')).name);
         const outputDir = env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;
         assert.ok(outputDir);
         await mkdir(outputDir, { recursive: true });
@@ -510,7 +510,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds unscoped internal workspac
     },
   });
 
-  assert.deepEqual(buildCalls, [privacyKitDir]);
+  assert.deepEqual(buildCalls, ['privacy-kit']);
   assert.deepEqual(result.built, ['privacy-kit']);
   assert.equal(await readFile(join(privacyKitDir, 'dist', 'index.js'), 'utf-8'), 'export const privacy = true;\n');
 });
@@ -1220,6 +1220,7 @@ test('ensureWorkspacePackagesBuiltForComponent rebuilds prior outputs without a 
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
+  await writePnpmWorkspace(root);
   await writeJson(join(root, 'apps', 'ui', 'package.json'), {
     name: '@happier-dev/app',
     private: true,

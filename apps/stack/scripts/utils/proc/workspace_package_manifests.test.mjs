@@ -4,11 +4,34 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { collectWorkspacePackageJsonPaths, readWorkspacePatterns } from './workspace_package_manifests.mjs';
+import { collectWorkspacePackageJsonPaths, readWorkspacePatterns, readWorkspacePatchPaths } from './workspace_package_manifests.mjs';
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
+
+test('reads registered patch paths through the dependency-free workspace reader', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-workspace-patches-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.deepEqual(await readWorkspacePatchPaths(root), []);
+  await writeFile(join(root, 'pnpm-workspace.yaml'), [
+    'packages:', '  - apps/*', 'patchedDependencies: # canonical patches',
+    '  "@scope/first@1.0.0": "changes/first.diff" # double quoted',
+    "  'second@2.0.0': 'patches/it''s-second.patch'",
+    '  third@3.0.0: patches/third.patch', 'nodeLinker: hoisted', '',
+  ].join('\n'));
+  assert.deepEqual(await readWorkspacePatchPaths(root), ['changes/first.diff', "patches/it's-second.patch", 'patches/third.patch']);
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  assert.deepEqual(await readWorkspacePatchPaths(root), []);
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'patchedDependencies: {}\n');
+  assert.deepEqual(await readWorkspacePatchPaths(root), []);
+  for (const source of ['patchedDependencies: { dependency: patches/x.patch }\n',
+    'patchedDependencies:\n  dependency: &patch patches/x.patch\n',
+    'patchedDependencies:\n  dependency:\n    path: patches/x.patch\n']) {
+    await writeFile(join(root, 'pnpm-workspace.yaml'), source);
+    await assert.rejects(readWorkspacePatchPaths(root), /Unsupported patchedDependencies syntax/u);
+  }
+});
 
 test('collectWorkspacePackageJsonPaths expands character-class workspace globs for plugin packages', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-workspace-package-manifests-'));

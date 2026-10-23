@@ -8,7 +8,7 @@ import { pathExists } from '../fs/fs.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { coerceHappyMonorepoRootFromPath, getHappyStacksHomeDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { describeJsonOwnerLock, isJsonOwnerFileLockActive, readJsonOwnerLockSnapshot, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
-import { collectWorkspacePackageJsonPaths, isYarnWorkspace } from './workspace_package_manifests.mjs';
+import { collectWorkspacePackageJsonPaths, isYarnWorkspace, readWorkspacePatchPaths } from './workspace_package_manifests.mjs';
 import { prepareDependencyConsumersForRefresh } from './dependency_consumers.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -129,14 +129,7 @@ export function isDependencyRefreshMutationActive({ installDir, env = process.en
 }
 
 async function collectPatchPaths(installDir) {
-  const patchesDir = join(installDir, 'patches');
-  if (!(await pathExists(patchesDir))) return [];
-  try {
-    const entries = await readdir(patchesDir, { withFileTypes: true });
-    return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.patch')).map((entry) => join(patchesDir, entry.name));
-  } catch {
-    return [];
-  }
+  return (await readWorkspacePatchPaths(installDir)).map(patchPath => resolve(installDir, patchPath));
 }
 
 async function collectDependencyInputPaths({ installDir, componentDir }) {
@@ -322,7 +315,12 @@ function snapshotsMatch(before, after) {
   if (!Array.isArray(before) || !Array.isArray(after)) return false;
   // Already-admitted v6 records include test files. Ignore them on both sides
   // without rewriting the record or requiring an installation to upgrade it.
-  before = before.filter(entry => !isDependencyTestInputPath(entry.path));
+  const currentPaths = new Set(after.map(entry => entry.path));
+  before = before.filter(entry => !isDependencyTestInputPath(entry.path)
+    // Older v6 capture included every top-level patches/*.patch file. Only
+    // current registered/explicit inputs remain authoritative; retain missing
+    // registered patches too, so deletion still invalidates their admission.
+    && (!/^install:patches\/[^/]+\.patch$/u.test(entry.path) || currentPaths.has(entry.path)));
   after = after.filter(entry => !isDependencyTestInputPath(entry.path));
   if (before.length !== after.length) return false;
   return before.every((entry, index) => {
