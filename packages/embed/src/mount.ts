@@ -98,7 +98,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
   root.append(frame, placeholder);
   container.append(root);
   function showLoading() {
-    if (!placeholder.isConnected) return;
+    if (placeholder.parentNode !== root) return;
     placeholder.setAttribute('role', 'status');
     placeholder.setAttribute('aria-label', `Loading ${frame.title}`);
     failure.removeAttribute('role');
@@ -107,7 +107,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
     failure.style.display = 'none';
   }
   function surfaceBootstrapError(code: EmbedError) {
-    if (placeholder.isConnected) {
+    if (placeholder.parentNode === root) {
       placeholder.removeAttribute('role');
       placeholder.removeAttribute('aria-label');
       skeleton.hidden = true;
