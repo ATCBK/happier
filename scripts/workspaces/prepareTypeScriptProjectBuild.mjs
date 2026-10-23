@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
-export async function verifyTypeScriptProjectCoverage({ baselinePath, projectPaths, cwd = process.cwd() }) {
+export async function verifyTypeScriptProjectCoverage({ baselinePath, baseline: selectedBaseline, projectPaths, cwd = process.cwd() }) {
   // Retain the compiler API for configuration parsing only. Native TypeScript
   // still owns every semantic diagnostic and declaration emission.
   const { default: ts } = await import('typescript');
@@ -21,7 +21,8 @@ export async function verifyTypeScriptProjectCoverage({ baselinePath, projectPat
       ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')).join('\n'));
     return { configPath, fileNames: parsed.fileNames };
   };
-  const baseline = parse(baselinePath);
+  const configPath = normalizeProjectPath(baselinePath, cwd);
+  const baseline = selectedBaseline?.configPath === configPath ? selectedBaseline : parse(configPath);
   const assignments = new Map();
   for (const path of projectPaths) {
     const project = parse(path);

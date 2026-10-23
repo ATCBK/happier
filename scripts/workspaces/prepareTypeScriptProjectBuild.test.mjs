@@ -73,10 +73,18 @@ test('partition coverage detects newly added roots and overlapping implementatio
       return path;
     });
     const verify = () => preparation.verifyTypeScriptProjectCoverage({ baselinePath: join(root, 'tsconfig.json'), projectPaths, cwd: root });
+    const baseline = { configPath: join(root, 'tsconfig.json'),
+      fileNames: ['first.ts', 'second.ts', 'shared.d.ts'].map(name => join(root, 'src', name)) };
+    const verifySelected = (selectedBaseline = baseline) => preparation.verifyTypeScriptProjectCoverage({
+      baselinePath: baseline.configPath, baseline: selectedBaseline, projectPaths, cwd: root,
+    });
     await verify();
     writeFileSync(join(root, 'src', 'new.ts'), 'export const value = 2;');
+    await verifySelected();
     await assert.rejects(verify(), /unassigned: src[/\\]new\.ts/);
+    await assert.rejects(verifySelected({ ...baseline, configPath: join(root, 'other.json') }), /unassigned: src[/\\]new\.ts/);
     writeFileSync(projectPaths[1], JSON.stringify({ files: ['src/first.ts', 'src/second.ts', 'src/new.ts', 'src/shared.d.ts'] }));
     await assert.rejects(verify(), /duplicate: src[/\\]first\.ts/);
+    await assert.rejects(verifySelected(), /duplicate: src[/\\]first\.ts/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

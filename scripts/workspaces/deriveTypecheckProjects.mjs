@@ -394,6 +394,9 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   }
   if (check && changed.length) throw new Error(`TypeScript compiler partitions need regeneration: ${changed.join(', ')}`);
   const inventory = results.map((config, index) => ({ project: names[index], files: config.files.length, configPath: targets[index] }));
+  // Coverage must observe the same editor roots that this invocation assigned.
+  // Files created during graph traversal belong to the next invocation.
+  inventory.baseline = { configPath: originalConfigPath, fileNames: [...originalRoots] };
   inventory.foreignProjects = [...foreignProjects.values()].map(project => ({ ...project, files: [...project.files].sort() }));
   inventory.testContexts = testContexts;
   inventory.consumerPrimaryAmbientInputs = consumerPrimaryAmbientInputs;

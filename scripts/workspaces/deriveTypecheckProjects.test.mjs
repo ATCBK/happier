@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import { deriveTypecheckProjects, readTypecheckProject } from './deriveTypecheckProjects.mjs';
+import { verifyTypeScriptProjectCoverage } from './prepareTypeScriptProjectBuild.mjs';
 import { prepareReferencedTypecheckDeclarations } from './prepareReferencedTypecheckDeclarations.mjs';
 import { prepareUiTypecheckProjects } from '../../apps/ui/scripts/deriveTypecheckProjects.mjs';
 import { deriveCliTypecheckProjects, prepareCliTypecheckProjects } from '../../apps/cli/scripts/deriveTypecheckProjects.mjs';
@@ -355,6 +356,15 @@ for (const [app, prepare, names] of [
     await assertPrivateOutputs?.(initial);
     const membership = async inventory => (await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8')).files))).flat();
     assert.ok((await membership(initial)).includes(resolve(packageDir, 'src/deleted.ts')));
+    // A moving checkout can gain roots after derivation selected this program.
+    // Check the admitted roots now; the next invocation must admit the additions.
+    await writeFile(join(packageDir, 'src/added.ts'), 'export const added = 1;');
+    await writeFile(join(packageDir, 'src/added.test.ts'), 'export const addedTest = 1;');
+    await verifyTypeScriptProjectCoverage({
+      baselinePath: join(packageDir, 'tsconfig.json'),
+      baseline: initial.baseline,
+      projectPaths: initial.map(({ configPath }) => configPath), cwd: packageDir,
+    });
     await rm(join(packageDir, 'src/deleted.ts'));
     await rm(join(packageDir, 'src/deleted.test.ts'));
     const nextProjects = projects();
@@ -362,6 +372,9 @@ for (const [app, prepare, names] of [
     await assertPrivateOutputs?.(next);
     const files = await membership(next);
     assert.ok(files.includes(resolve(packageDir, 'src/kept.ts')), 'valid source remains checked');
+    for (const name of ['added.ts', 'added.test.ts']) assert.equal(
+      files.filter(file => file === resolve(packageDir, 'src', name)).length, 1,
+      'the next invocation assigns each newly added source and test exactly once');
     assert.ok(!files.includes(resolve(packageDir, 'src/deleted.ts')), 'deleted implementation leaves membership');
     assert.ok(!files.includes(resolve(packageDir, 'src/deleted.test.ts')), 'deleted explicit test leaves membership');
     for (const project of nextProjects) assert.equal(project.args[1], project.project, 'compiler arguments consume the regenerated projection');

@@ -141,10 +141,11 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
   try {
     const projects = compilerProjects(args).map(project => ({ ...project, authoredProject: project.project, authoredArgs: project.args }));
     const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
-    if (!cancelled) await prepareUiTypecheckProjects(projects, process.cwd());
+    const uiInventory = cancelled ? undefined : await prepareUiTypecheckProjects(projects, process.cwd());
     const { prepareCliTypecheckProjects } = await import('../../apps/cli/scripts/deriveTypecheckProjects.mjs');
     const inventory = cancelled ? undefined : await prepareCliTypecheckProjects(projects, process.cwd());
     if (coverageBaseline && !cancelled) await verifyTypeScriptProjectCoverage({ baselinePath: coverageBaseline,
+      baseline: (inventory ?? uiInventory)?.baseline,
       projectPaths: projects.map(({ project }) => project).filter(Boolean), cwd: process.cwd() });
     const producers = cancelled ? [] : await prepareReferencedTypecheckDeclarations(projects, process.cwd(), inventory);
     for (const project of [...producers, ...projects]) {
