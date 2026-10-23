@@ -2607,12 +2607,30 @@ issuing one request per participant.
 Selected conditionals retain the same invocation scope, so the narrow reader
 follows their admitted branches when locating peer collections and preparation.
 Protocol's `readWorkflowInvocationMembersV1` owns structural recovery for
-the round projector, Action retry binding and the durable coordinator's slot/member reads. Action binding
+the round projector, Action retry binding and the durable coordinator's
+slot/member reads. Action binding
 resolves superseded ancestors to their current physical slots before selecting
 the requested logical Action attempt, preserving exact Run, Action and envelope
 binding and fresh typed Session authorization. A replacement
 parent inherits its predecessor's nearest unreplaced slots through
-`previousAttemptRecordId`; newer and skipped slots mask older ones. Completed
+`previousAttemptRecordId`; newer and skipped slots mask older ones. A
+root replacement updates the checkpoint's `rootRecordId` in the same recovery
+write. `readWorkflowInvocationRootV1` verifies root predecessor correspondence
+for both binding and the durable coordinator. A retained checkpoint pointing to
+a superseded root uses the existing newest-member selector with explicit
+`parentRecordId: null` and `memberOrdinal: '0'`; omitted parent selection still
+means Run history, and cursors distinguish the two. The selector opens one
+root body and then only its exact predecessor chain. Binding walks
+current slots, including inherited Actions whose physical parents remain in
+history. `readWorkflowCurrentInvocationAncestryV1` owns that correspondence for
+both binding and recovery eligibility. Recovery derives causal parents from
+the selected ancestry, so an inherited child can fail and retry after a root
+or intermediate parent replacement without replaying completed effects.
+Physical parent ids remain unchanged in authenticated stored envelopes.
+The durable coordinator uses that checkpoint root for control and
+member reads; the original-root list projection does not replace it. Independent
+retry stops at a healthy ancestor, while a fail-stop group retains its complete
+causal closure and eligibility checks. Completed
 descendants survive a replaced parent, while skipped and superseded children
 contribute no round outcomes. Recovery ancestry is read in batches, and unavailable
 ancestry or incomplete declared collection membership fails closed rather than
