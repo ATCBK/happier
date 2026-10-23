@@ -1468,7 +1468,7 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
             transfers.push({ savedSecretId: current.id, resourceId: deriveSavedSecretImportResourceIdV1({ accountId: scope.accountId,
                 source: { kind: 'personal-saved-secret', secretId: current.id } }), expectedRevision: 1 });
         }
-        if (!pending || pending.reason === 'source-uncharacterized') {
+        if (source.inferenceCredential && (!pending || pending.reason === 'source-uncharacterized')) {
             const before = await readProfileTransferSourceInContext(context);
             if (before.mode !== mode) return { status: 'pending', reason: 'source-unavailable' };
             if (!matchesSourceFrontier(before)) return { status: 'pending', reason: 'changed' };
@@ -1487,10 +1487,10 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
                 }
             }
         }
-        const voiceSource = await readProfileTransferSourceInContext(context);
-        if (voiceSource.mode !== mode) return { status: 'pending', reason: 'source-unavailable' };
-        if (!matchesSourceFrontier(voiceSource)) return { status: 'pending', reason: 'changed' };
-        for (const receipt of readSavedSecretTransferSourceV1(voiceSource.source.raw).legacyVoiceCredentials ?? []) {
+        // Discover candidates from the captured source, not another fresh
+        // authority read for each empty category. Every candidate still gets
+        // the fresh source proof immediately before its promotion or receipt.
+        for (const receipt of source.legacyVoiceCredentials ?? []) {
             const before = await readProfileTransferSourceInContext(context);
             if (before.mode !== mode) return { status: 'pending', reason: 'source-unavailable' };
             if (!matchesSourceFrontier(before)) return { status: 'pending', reason: 'changed' };
@@ -1525,7 +1525,11 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
             transfers.push({ savedSecretId: credential.source.secretId, resourceId: deriveSavedSecretImportResourceIdV1({
                 accountId: scope.accountId, source: credential.source }), expectedRevision: 1 });
         }
-        const beforeHistory = await readProfileTransferSourceInContext(context);
+        // With no effects to reconcile, the initial source is sufficient for
+        // discovery. History normalization and retained-reference verification
+        // below own their fresh authority before any write or disclosure.
+        const beforeHistory = transfers.length > 0 || verifiedReferences.length > 0
+            ? await readProfileTransferSourceInContext(context) : initial;
         if (beforeHistory.mode !== mode) return { status: 'pending', reason: 'source-unavailable' };
         if (!matchesSourceFrontier(beforeHistory)) return { status: 'pending', reason: 'changed' };
         const chatCredential = readSavedSecretTransferSourceV1(beforeHistory.source.raw).legacyChatCredential;

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as catalog from './apiSavedSecretCatalog';
 import type { ServerFetch } from '@/sync/http/client';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
@@ -9,8 +9,9 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
-import { observeSavedSecretCatalog, refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { invalidateSavedSecretCatalogProjection, observeSavedSecretCatalog, refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { applyPlannedChangeActions } from '@/sync/runtime/orchestration/changesApplier';
 import { planSyncActionsFromChanges, plannedChangesAffectProfileCatalog } from '@/sync/runtime/orchestration/changesPlanner';
 import { getSavedSecretCatalogSnapshot, resetSavedSecretCatalogSnapshotsForTests, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -37,6 +38,9 @@ installDisconnectedServerSocketBoundary(socket => {
         return socket;
     });
 });
+// Cold source-graph loading belongs to collection, after installing transport
+// boundaries. Keep the hook budget for actual per-suite setup and behavior.
+await loadSyncSingletonForTests();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 afterEach(async () => {
     resetSavedSecretCatalogEngineForTests();
@@ -90,7 +94,6 @@ describe('SavedSecret catalog captured request boundary', () => {
     });
 
     describe('incumbent loaded material demand', () => {
-    beforeAll(loadSyncSingletonForTests);
 
     it('publishes retained-source diagnostics from actual material demand while keeping current resources usable', async () => {
         const accountId = 'saved-secret-demand-account';
@@ -101,12 +104,14 @@ describe('SavedSecret catalog captured request boundary', () => {
         const raw = { secrets: [{ id: 'future-material', name: 'Future', kind: 'token', createdAt: 1, updatedAt: 1,
             encryptedValue: { _isSecretValue: true, encryptedValue: { t: 'future-secret-envelope', c: 'opaque' } } }] };
         const writes: string[] = [];
+        const reads = new Map<string, number>();
         const resourceMutationPaths = new Set<string>(Object.values(SHARED_SAVED_SECRET_ACTION_PATHS_V1));
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://saved-secret-demand.test', serverIdentityId: homeId, accountId,
             credentials: { token: createAccountTokenForTests(accountId, { currentAccount: true }) },
             request: async (rawUrl, init) => {
                 const path = new URL(String(rawUrl)).pathname;
+                reads.set(path, (reads.get(path) ?? 0) + 1);
                 if (init?.method === 'POST' && (resourceMutationPaths.has(path) || path === '/v2/account/settings'
                     || path === '/v1/artifacts' || path.endsWith('/mutate'))) writes.push(path);
                 if (path === '/health') return Response.json({});
@@ -140,13 +145,60 @@ describe('SavedSecret catalog captured request boundary', () => {
             });
             expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' });
             expect(getSavedSecretCatalogSnapshot(scope)).toBe(before);
+            const measuredPaths = ['/v1/account/encryption/currentness', '/v1/account/encryption',
+                '/v1/account/saved-secrets/resources/materials'];
+            const readCounts = () => measuredPaths.map(path => reads.get(path) ?? 0);
+            const idleReads = readCounts();
+            for (let index = 0; index < 20; index += 1) {
+                // An early content-free wake carries no new material. The
+                // subsequent Artifact receipt also changes no Saved Secret.
+                publishHomeAccountChange(scope.serverId, undefined, { source: 'catch-up-pending' });
+                publishHomeAccountChange(scope.serverId, [`approval-artifact-${index}`], { changeKinds: ['artifact'] });
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
+            expect(readCounts().map((count, index) => count - idleReads[index]!)).toEqual([0, 0, 0]);
+            expect(getSavedSecretCatalogSnapshot(scope)).toBe(before);
             const resourceChanges = planSyncActionsFromChanges([{ cursor: 2, kind: 'savedSecretResource', entityId: 'current', changedAt: 2 }]);
+            const beforeResourceReads = readCounts();
             publishHomeAccountChange(scope.serverId, ['current'], {
+                changeKinds: ['savedSecretResource'],
                 profileCatalogAffects: plannedChangesAffectProfileCatalog(resourceChanges),
             });
             expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable' });
-            await refreshSavedSecretCatalog(scope);
-            await vi.waitFor(() => expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' }));
+            await vi.waitFor(() => {
+                expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready', stale: false,
+                    legacyImport: { status: 'pending', reason: 'source-uncharacterized' } });
+                expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' });
+            });
+            // History normalization still owns its fresh currentness decision;
+            // absent legacy categories do not require separate admissions.
+            expect(readCounts()[0]! - beforeResourceReads[0]!).toBe(1);
+            // The focused change applier also awaits materialization before it
+            // checkpoints. Its Home publication is not a second read demand.
+            const focusedReads = readCounts();
+            const focusedChanges = planSyncActionsFromChanges([{ cursor: 3, kind: 'savedSecretResource', entityId: 'current', changedAt: 3 }]);
+            const unexpectedDomainWork = () => { throw new Error('unexpected_non_secret_domain_work'); };
+            const applied = await applyPlannedChangeActions({
+                planned: focusedChanges, credentials: connection.credentials,
+                isSessionMessagesLoaded: unexpectedDomainWork,
+                invalidate: { savedSecretResources: () => invalidateSavedSecretCatalogProjection(scope) },
+                publishAccountChanges: (changes, materialization) => publishHomeAccountChange(scope.serverId,
+                    changes.map(change => change.entityId), {
+                        changeKinds: changes.map(change => change.kind),
+                        profileCatalogAffects: plannedChangesAffectProfileCatalog(focusedChanges),
+                        ...(materialization && 'savedSecretResourcesRefreshStarted' in materialization
+                            && materialization.savedSecretResourcesRefreshStarted === true
+                            ? { savedSecretResourcesRefreshStarted: true as const } : {}),
+                    }),
+                invalidateMessagesForSession: unexpectedDomainWork,
+                invalidateScmStatusForSession: unexpectedDomainWork,
+                applyTodoSocketUpdates: unexpectedDomainWork,
+                kvBulkGet: unexpectedDomainWork,
+            });
+            expect(applied).toMatchObject({ status: 'complete', safeAdvanceCursor: '3' });
+            await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready', stale: false,
+                legacyImport: { status: 'pending', reason: 'source-uncharacterized' } }));
+            expect(readCounts()[0]! - focusedReads[0]!).toBe(1);
             publishHomeAccountChange(scope.serverId);
             expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable' });
             await refreshSavedSecretCatalog(scope);

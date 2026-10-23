@@ -8,6 +8,7 @@ import type { SavedSecretLegacyImportResult } from '@/sync/domains/settings/save
 import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { sync } from '@/sync/sync';
+import { isArtifactOnlyHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
     applySavedSecretCatalogFailure,
     applySavedSecretCatalogPage,
@@ -115,10 +116,10 @@ const loader = createScopedSnapshotLoader<Target>({
     },
     invalidateServer: invalidateSavedSecretCatalogsForServer,
     invalidateTarget: ({ scope }) => invalidateSavedSecretCatalog(scope),
-    // Material, legacy Settings admission and retained-history cleanup share
-    // the planner's source/resource decision. Machine/Session-only writes do
-    // not withdraw this catalog; content-free secondary wakes still revalidate.
-    matchesWake: event => event.profileCatalogAffects !== false,
+    // Resources and legacy Settings own this material. Artifact receipts also
+    // wake Profile bodies, but do not change Saved Secrets or their source.
+    // Coarse secondary wakes retain revalidation when no exact domains exist.
+    matchesWake: event => !isArtifactOnlyHomeAccountChange(event) && event.profileCatalogAffects !== false,
 });
 
 export function observeSavedSecretCatalog(scope: ServerAccountScope): () => void {
