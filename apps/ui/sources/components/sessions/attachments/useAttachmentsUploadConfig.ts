@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { useSetting } from '@/sync/domains/state/storage';
 import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
+import { DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES_V1 } from '@happier-dev/protocol/transfers/attachments/attachmentLimitsV1';
 
 export function useAttachmentsUploadConfig(): AttachmentsUploadConfig {
     const attachmentsUploadsUploadLocation = useSetting('attachmentsUploadsUploadLocation');
@@ -24,7 +25,7 @@ export function useAttachmentsUploadConfig(): AttachmentsUploadConfig {
         const maxFileBytes =
             typeof attachmentsUploadsMaxFileBytes === 'number' && Number.isFinite(attachmentsUploadsMaxFileBytes)
                 ? Math.max(1024, Math.floor(attachmentsUploadsMaxFileBytes))
-                : 25 * 1024 * 1024;
+                : DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES_V1;
 
         return {
             uploadLocation,

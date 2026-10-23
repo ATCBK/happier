@@ -1,4 +1,5 @@
 import type { AttachmentsUploadFileSource, AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import { describeAttachmentUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import { resolveUploadRelativePath } from '@/sync/domains/transfers/uploadRelativePath';
 import { randomUUID } from '@/platform/randomUUID';
 import { openLocalUploadSourceReader, resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
@@ -50,33 +51,6 @@ function resolveUploadPreflightSizeTimeoutMs(): number {
     const fallback = 2_000;
     const resolved = raw ?? fallback;
     return Math.min(20_000, Math.max(100, resolved));
-}
-
-function describeUploadSource(source: AttachmentsUploadFileSource): Readonly<{
-    name: string;
-    sizeBytes: number;
-    mimeType?: string;
-}> {
-    if (source.kind === 'web') {
-        return {
-            name: source.file.name,
-            sizeBytes: source.file.size,
-            mimeType: source.file.type || undefined,
-        };
-    }
-    if (source.kind === 'memory') {
-        return {
-            name: source.name,
-            sizeBytes: source.bytes.byteLength,
-            mimeType: source.mimeType ? String(source.mimeType) : undefined,
-        };
-    }
-
-    return {
-        name: source.name,
-        sizeBytes: typeof source.sizeBytes === 'number' && Number.isFinite(source.sizeBytes) ? source.sizeBytes : -1,
-        mimeType: source.mimeType ? String(source.mimeType) : undefined,
-    };
 }
 
 async function resolveSizeBytesWithTimeout(source: AttachmentsUploadFileSource): Promise<
@@ -189,7 +163,8 @@ export async function sessionAttachmentsUploadFile(args: SessionAttachmentUpload
             };
             return await uploadNext(0);
         }
-        let described = describeUploadSource(args.file);
+        const sourceDescription = describeAttachmentUploadFileSource(args.file);
+        let described = { ...sourceDescription, sizeBytes: sourceDescription.sizeBytes ?? -1 };
         if (described.sizeBytes < 0) {
             const resolved = await resolveSizeBytesWithTimeout(args.file);
             assertCurrent();
