@@ -79,18 +79,21 @@ export function ArtifactPassageThreadCard(
   // A thread re-attached to new text keeps what it was first written on, visible beside its new quote.
   const reattached = thread.passage !== thread.original;
   // Who suggested the edit, named as the thread names them: an agent by its Session, a person by name.
+  // A Workflow Run is neither; it can't be asked to redo, so it names no proposer to address.
   const producer = thread.proposal?.producerV1 ?? null;
+  const producerSessionId = producer?.kind === 'agent' ? producer.sessionId : null;
   const producerAddresses = React.useMemo(
-    () => producer && thread.proposal?.messageRef
-      ? [{ serverId: thread.proposal.messageRef.discussion.serverId, sessionId: producer.sessionId }] : [],
-    [producer, thread.proposal?.messageRef],
+    () => producerSessionId && thread.proposal?.messageRef
+      ? [{ serverId: thread.proposal.messageRef.discussion.serverId, sessionId: producerSessionId }] : [],
+    [producerSessionId, thread.proposal?.messageRef],
   );
   const [producerTitle] = useSessionDisplayTitles(producerAddresses);
   const proposer = React.useMemo(() => {
     const message = thread.proposal;
     if (!message) return null;
     const accountLabel = resolveDiscussionMessageAuthorLabel(message);
-    if (message.producerV1) return { label: producerTitle ?? accountLabel, mention: { sessionId: message.producerV1.sessionId } };
+    if (message.producerV1?.kind === 'agent') return { label: producerTitle ?? accountLabel, mention: { sessionId: message.producerV1.sessionId } };
+    if (message.producerV1) return null;
     return message.authorAccountId ? { label: accountLabel, mention: { accountId: message.authorAccountId } } : null;
   }, [producerTitle, thread.proposal]);
   const testID = `artifact:passage-thread:${thread.discussionId}`;

@@ -8,6 +8,7 @@ import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/H
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { useSessionGettingStartedGuidanceBaseModel } from '@/components/sessions/guidance/useSessionGettingStartedGuidanceBaseModel';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PAGE_ROW_TOUCH_MIN_HEIGHT_PX } from '@/components/ui/lists/pageRowMetrics';
 import { useWidgetFrameStyle } from '@/components/widgets/frame/useWidgetFrameStyle';
@@ -397,6 +398,13 @@ function HomeNewRowTarget(props: Readonly<{
  * getting-started guidance is the home instead.
  */
 export const HomeHub = React.memo(function HomeHub() {
+    const presented = useLayoutPresentationActive();
+    // The destination owner already hides parked Home. Suspend its Effects and
+    // subscriptions too, retaining the composer, customization and scroll state.
+    return <React.Activity mode={presented ? 'visible' : 'hidden'}><HomeHubContent /></React.Activity>;
+});
+
+const HomeHubContent = React.memo(function HomeHubContent() {
     const observedGuidance = useSessionGettingStartedGuidanceBaseModel();
     const homeUnavailable = useActiveHomeUnavailable();
     const guidance = { ...observedGuidance, kind: useHomeHubGuidanceKind(observedGuidance.kind, homeUnavailable) };

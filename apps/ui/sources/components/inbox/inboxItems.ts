@@ -14,6 +14,10 @@ import { resolveAccountActorPresentation } from '@/sync/domains/account/accountA
 import { readDiscussionMessagePreview } from '@/components/discussions/discussionTimelineProjection';
 import { readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
 import { presentInboxWorkflowRun } from './inboxWorkflowRunPresentation';
+import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
+import { isExecutionRunActive, type ExecutionRunPublicState } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { readExecutionRunAgentActivityStatus, resolveAgentActivityStatusPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
+import { resolveWorkStatusTone, type WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { admittedInboxDiscussionOccurrences, inboxItemView, type InboxDiscussionSource, type InboxItemView, type InboxItemType } from './inboxItemProjection';
 export { inboxItemView, type InboxDiscussionSource, type InboxItemView, type InboxItemType } from './inboxItemProjection';
 export const INBOX_ITEM_VIEWS = ['needs_you', 'updates', 'mentions'] as const satisfies readonly InboxItemView[];
@@ -21,6 +25,11 @@ export function getInboxNeedsYouItemTypes() {
     return ['approval', 'decision', 'blocked'] as const;
 }
 export type AccountNoticeInboxEntry = AccountNoticeArtifact;
+export type InboxExecutionRun = Readonly<{ address: SessionAddress; run: ExecutionRunPublicState }>;
+export function classifyInboxExecutionRun(run: ExecutionRunPublicState): 'approval' | 'update' | null {
+    if (run.status !== 'running') return null;
+    return run.attention?.kind === 'permission_required' ? 'approval' : isExecutionRunActive(run) ? 'update' : null;
+}
 export type InboxItem = Readonly<{
     key: string;
     producer: 'live' | 'notice';
@@ -32,6 +41,8 @@ export type InboxItem = Readonly<{
     read: boolean;
     focus: InboxItemFocus;
     pageRoute: string;
+    workStatus?: WorkStatusPresentation;
+    phase?: 'attention' | 'live';
     /** Only the shared approval review owner can offer unchanged one-shot decisions. */
     approvalQuickActions?: ApprovalQuickActions;
     /** The owning record, never a mirrored Inbox lifecycle. */
@@ -58,6 +69,7 @@ export type InboxItemsInput = Readonly<{
     workflowServerId: string | null;
     accountServerId: string | null;
     notices: readonly AccountNoticeInboxEntry[];
+    executionRuns?: readonly InboxExecutionRun[];
     /** Already resolved package names from the app's Account-scoped plugin projection. */
     pluginDisplayNames?: ReadonlyMap<string, string>;
     /** Loaded exact-Home requester names, keyed by their owning approval Artifact. */
@@ -134,6 +146,20 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
             read: false, focus, pageRoute: resolveInboxItemPageRoute(focus), source: { kind: 'session', id: candidate.sessionId, serverId, displayName: candidate.title,
                 ...(onceDelivery ? { onceDelivery } : {}) } });
     }
+    for (const { address, run } of input.executionRuns ?? []) {
+        const type = classifyInboxExecutionRun(run);
+        if (!type) continue;
+        const focus = { kind: 'execution_run', id: run.runId, ...address } as const;
+        const title = resolveExecutionRunTitle(run);
+        const activityStatus = type === 'approval' ? 'waiting' : readExecutionRunAgentActivityStatus(run.status);
+        rows.push({ key: `execution-run:${JSON.stringify([address.serverId, address.sessionId, run.runId])}`,
+            producer: 'live', type, view: inboxItemView(type), title, context: null,
+            createdAt: run.startedAtMs, read: false, focus, pageRoute: resolveInboxItemPageRoute(focus),
+            phase: type === 'approval' ? 'attention' : 'live',
+            workStatus: resolveWorkStatusTone({ kind: 'agent_activity', facts: { status: activityStatus,
+                word: resolveAgentActivityStatusPresentation(activityStatus, isExecutionRunActive(run)).label } }),
+            source: { kind: 'execution_run', id: run.runId, serverId: address.serverId, displayName: title } });
+    }
     if (input.accountServerId) {
         for (const entry of input.notices) {
             const focus = { kind: 'notice', id: entry.artifact.id, serverId: input.accountServerId } as const;
@@ -147,7 +173,8 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
     if (input.discussions) {
         const { scope } = input.discussions;
         for (const { discussion, message, type } of admittedInboxDiscussionOccurrences(input.discussions)) {
-            const producerName = message.producerV1 ? input.discussions.sessionDisplayNames?.get(message.producerV1.sessionId) : null;
+            const producerName = message.producerV1?.kind === 'agent'
+                ? input.discussions.sessionDisplayNames?.get(message.producerV1.sessionId) : null;
             const focus = { kind: 'discussion', serverId: scope.serverId, id: discussion.id, messageId: message.id } as const;
             rows.push({ key: `discussion:${scope.serverId}:${discussion.id}:${message.id}`, producer: 'live',
                 type, view: inboxItemView(type), title: discussion.title ?? discussion.id, context: null,
@@ -191,6 +218,7 @@ function sameItem(left: InboxItem, right: InboxItem): boolean {
         && left.pageRoute === right.pageRoute && createInboxItemRoute(left.focus).params.item === createInboxItemRoute(right.focus).params.item
         && left.source.kind === right.source.kind && left.source.id === right.source.id && left.source.serverId === right.source.serverId
         && left.source.displayName === right.source.displayName && left.excerpt === right.excerpt
+        && left.phase === right.phase && JSON.stringify(left.workStatus) === JSON.stringify(right.workStatus)
         && JSON.stringify(left.source.onceDelivery) === JSON.stringify(right.source.onceDelivery)
         && JSON.stringify(left.author) === JSON.stringify(right.author)
         && JSON.stringify(left.question) === JSON.stringify(right.question)

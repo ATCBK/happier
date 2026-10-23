@@ -64,6 +64,16 @@ describe('ArtifactPassageThreadCard re-attachment', () => {
     expect(run?.props.selectable).toBe(true);
   });
 
+  it('renders a message without mentions as Markdown too, so an answer keeps its emphasis and code blocks', async () => {
+    const source = thread({ state: 'exact', range: { start: 0, end: 11 } });
+    const markdown = '1. **Choose names** that describe intent.\n\n```ts\nconst activeUsers = users.filter(isActive);\n```';
+    const view = await mount({ thread: { ...source, root: { ...source.root, content: { v: 1, parts: [{ t: 'text', text: markdown }] } } } });
+    const runs = view.screen.findAllByType('EnrichedMarkdownText');
+    expect(runs[0]?.props.markdown).toBe('1. **Choose names** that describe intent.');
+    expect(view.screen.getTextContent()).toContain('const activeUsers = users.filter(isActive);');
+    expect(view.screen.getTextContent()).not.toContain('```');
+  });
+
   it('offers to attach a changed passage to new text, beside its revision, and asks for the selection while attaching', async () => {
     const view = await mount({ thread: thread({ state: 'detached' }) });
     expect(view.screen.findByTestId(`${id}.compare`)).not.toBeNull();

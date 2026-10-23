@@ -14,10 +14,39 @@ Canonical UI-local testing surface for `apps/ui`.
 - `hooks/`: hook render, deferred, and effect-flush helpers
 - `harness/`: repeated screen and feature harnesses
 - `cleanup/`: shared cleanup registration used by render and hook helpers
+- `performance/`: deterministic render/commit, real-store notification, transport request and live timer counts
+
+## Performance contracts
+
+Use `createRenderCommitCounter` with `useRenderCommitCounter` inside the mounted
+consumer, then `reset()` after settling the mount. Renders count render attempts;
+commits count layout effects, so an abandoned render is not mistaken for a commit.
+Keep StrictMode explicit in the scenario rather than dividing counts afterwards.
+
+`countStoreNotifications(realStore)` records every notification and its changed
+top-level keys, including `[]` for an empty merge that still notifies Zustand.
+Always call `stop()` before restoring the store. `countTransportRequests` wraps
+the actual HTTP/RPC boundary: its caller supplies a method/route key and only
+physical requests are counted, including failed requests. Do not wrap an internal
+domain reader or include credentials, bodies or query secrets in the key.
+
+Install `installTimerCensus` after fake timers and before mounting. Its stack
+classifier names the known timer owner; unknown callers remain `consumer: null`.
+Check both the records and `vi.getTimerCount()` so pre-existing timers cannot hide
+outside the capture. `stop()` restores the timer boundary; the surface still owns
+cancelling its timers. Fake timers must be restored after stopping the census.
+
+Budgets belong next to the owner contract and state the observed baseline and
+update basis. Zero unrelated renders/notifications/timers has no noise margin;
+changing that budget requires evidence that the additional work has a consumer.
 
 ## Migration Rules
 
 - Prefer importing from `@/dev/testkit` in new tests.
+- After publishing fresh Machine rows, use `observeMachinePresenceForTest(scope, machineIds)`
+  from `harness/machinePresence` to feed the real presence observation owner. A retained row or
+  a transport reconnect alone does not establish fresh presence. This runtime-bearing helper
+  stays off the root barrel, and it never clears failed requests or admits revoked Machines.
 - Import a bucket module directly only when its helper is intentionally not part of the root testkit surface.
 - Import `homeGovernanceHarness` and `providerSettingsHarness` from their own `harness/` modules. They load domain runtime state and are deliberately not exported by the lightweight root surface.
 - Prefer `renderSettingsView` or `renderScreen` over file-local `findByTestId` helpers.

@@ -15,7 +15,7 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
  * agent. `?mode=diff` shows Changes; `?line=<n>` moves the region (the caret travels there). The content is the
  * lab's illustration (the settings-modal change), not product data.
  */
-const ROUTE_KEY = [
+export const ROUTE_KEY = [
     "import * as React from 'react';",
     "import type { SettingsRoute } from './settingsRoutes';",
     '',
@@ -37,7 +37,7 @@ const ROUTE_KEY = [
     '}',
 ].join('\n');
 
-const MODAL_DIFF = [
+export const MODAL_DIFF = [
     'diff --git a/SettingsModal.tsx b/SettingsModal.tsx',
     '--- a/SettingsModal.tsx',
     '+++ b/SettingsModal.tsx',

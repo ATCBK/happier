@@ -24,6 +24,9 @@ import type { WidgetAddSection } from '@/components/widgets/add/widgetAddModel';
 import { SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { Text } from '@/components/ui/text/Text';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { decryptArtifactWithBody } from '@/sync/engine/artifacts/syncArtifacts';
+import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -44,6 +47,7 @@ const settings = vi.hoisted(() => ({
     viewport: { width: 800, height: 600 },
     positions: {} as Record<string, number>,
     scrollOffset: 0,
+    presented: undefined as boolean | undefined,
 }));
 installDisconnectedServerSocketBoundary();
 let artifact = createHomeHubArtifactHttpBoundary('account-home');
@@ -209,6 +213,7 @@ afterEach(async () => {
     settings.viewport = { width: 800, height: 600 };
     settings.positions = {};
     settings.scrollOffset = 0;
+    settings.presented = undefined;
     usage.summary = { entries: [], asOf: null, source: 'none' };
     usage.listeners.clear();
     widgets.projection = null;
@@ -255,7 +260,9 @@ async function renderHome(request = artifact.request, initial: 'stored' | 'missi
                 reloadConnectedAccountProjection: () => {},
             }}
         >
-            <HomeHub />
+            {settings.presented === undefined ? <HomeHub /> : <PluginSurfaceFocusEligibilityProvider active={settings.presented} presentationActive={settings.presented}>
+                <HomeHub />
+            </PluginSurfaceFocusEligibilityProvider>}
         </AppShellPluginUiProjectionValueProvider>
         </InjectedAuthProvider>
         </RoutedHomeBoundary>
@@ -309,6 +316,36 @@ function shownSections(text: string): string[] {
 }
 
 describe('HomeHub', () => {
+    it('parks Home subscriptions while hidden and restores current layout without losing customization', async () => {
+        settings.presented = true;
+        let reads = 0;
+        const screen = await renderHome(async (input, init) => {
+            if (new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}` && init?.method !== 'POST') reads++;
+            return artifact.request(input, init);
+        });
+        try {
+            await vi.waitFor(() => expect(reads).toBeGreaterThan(0));
+            await act(async () => { screen.pressByTestId('home-hub.customize'); });
+            await flushHookEffects({ cycles: 2 });
+            expect(screen.findByTestId('home-hub.customizing.sections')).toBeTruthy();
+            settings.presented = false;
+            await screen.rerender();
+            const parkedReads = reads;
+            artifact.seed({ v: 1, items: [], order: ['setup', 'start'], hidden: ['automations'] });
+            const wire: Artifact = await (await artifact.request(`https://home-layout.test/v1/artifacts/${artifact.artifactId}`)).json();
+            const updated = await decryptArtifactWithBody({ artifact: wire, encryption: null, artifactDataKeys: new Map() });
+            if (!updated) throw new Error('Expected the real Home layout codec to open its fixture');
+            await act(async () => { storage.getState().updateArtifact(updated); });
+            await flushHookEffects({ cycles: 8 });
+            expect(reads).toBe(parkedReads);
+            settings.presented = true;
+            await screen.rerender();
+            await vi.waitFor(() => expect(shownSections(screen.getTextContent())).toEqual(['setup', 'start', 'attention']));
+            expect(reads).toBeGreaterThan(parkedReads);
+            expect(screen.findByTestId('home-hub.customizing.sections')).toBeTruthy();
+        } finally { await screen.unmount(); }
+    });
+
     it('reserves the phone sections while its acknowledged layout is unknown, then replaces the placeholder', async () => {
         settings.viewport = { width: 390, height: 900 };
         settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };

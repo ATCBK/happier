@@ -28,6 +28,7 @@ import { WALKTHROUGH_SPECIMEN_FRAMES } from './WalkthroughSpecimen';
 import { COMMITS_SPECIMEN_FRAMES } from './CommitsSpecimen';
 import { REVIEW_WALKTHROUGH_SPECIMEN_FRAMES } from './ReviewWalkthroughSpecimen';
 import { PULL_REQUEST_SPECIMEN_FRAMES } from './PullRequestSpecimen';
+import { PULL_REQUEST_FORM_SPECIMEN_FRAMES } from './PullRequestFormSpecimen';
 import { SPECIMEN_ANALYSIS_COMPLETE, SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH, specimenReviewedRefs } from './walkthroughSpecimenFixture';
 
 /**
@@ -218,6 +219,7 @@ const FRAMES: readonly Frame[] = [
     ...COMMITS_SPECIMEN_FRAMES.map((frame) => ({ ...frame, tall: true })),
     ...REVIEW_WALKTHROUGH_SPECIMEN_FRAMES.map((frame) => ({ ...frame, tall: true })),
     ...PULL_REQUEST_SPECIMEN_FRAMES.map((frame) => ({ ...frame, tall: true })),
+    ...PULL_REQUEST_FORM_SPECIMEN_FRAMES,
 ];
 
 export function ChangesSpecimen(props: Readonly<{ only: string | null; phone: boolean }>) {

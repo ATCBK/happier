@@ -88,6 +88,46 @@ describe('InboxView focused item on a phone', () => {
     expect(routerMock.current?.spies.replace.mock.calls).toHaveLength(0);
   });
 
+  it('opens the full Inbox from its popover through the real workspace route body and renders its tabs', async () => {
+    routerMock.width = 1200;
+    const { FeaturesResponseSchema } = await import('@happier-dev/protocol');
+    const { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    const { registerWorkspaceRouteContext } = await import('@/components/appShell/workspace/workspaceRouteContext');
+    const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+    const { WorkspaceDestinationBody } = await import('@/components/appShell/workspace/WorkspaceDestinationBody');
+    const { resolveCompactAppDestinations, resolveDestinationRefFromHref } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+    const { InboxPopoverContent } = await import('@/components/inbox/InboxPopover');
+    // Expo's module loader is the boundary; the exported page, feature admission,
+    // destination params, model and list/detail composition all remain real.
+    let loadedPage: Promise<typeof import('@/app/(app)/inbox/index')> | undefined;
+    registerWorkspaceRouteContext(() => loadedPage ??= import('@/app/(app)/inbox/index'));
+    primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
+      features: { inbox: { global: { enabled: true } }, actions: { approvals: { enabled: true } } }, capabilities: {},
+    }) } });
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+      externalSessions: false, inbox: true, discussions: true, workflows: false, friends: false,
+    } });
+    const target = resolveDestinationRefFromHref(catalog, '/inbox')!;
+    function OpenInboxJourney() {
+      const [opened, setOpened] = React.useState(false);
+      return opened ? <DestinationInstanceHost tabId="full-inbox" ref={target} pathname="/inbox" focused visible
+        navigation={{ push: () => {}, replace: () => {}, back: () => {}, setParams: () => {} }}>
+        <WorkspaceDestinationBody target={target} pathname="/inbox" renderSession={() => null} renderSessionDetails={() => null} />
+      </DestinationInstanceHost> : <InboxPopoverContent close={() => {}} onOpenInbox={() => setOpened(true)} />;
+    }
+    try {
+      const screen = await renderScreen(<OpenInboxJourney />);
+      await screen.pressByTestIdAsync('inbox.popover.open');
+      await act(async () => { await loadedPage; });
+      expect(screen.findByTestId('inbox.screen')).not.toBeNull();
+      expect(screen.findHostByTestId('inbox.view:needs_you')).not.toBeNull();
+      expect(screen.findHostByTestId('inbox.view:mentions')).not.toBeNull();
+    } finally {
+      standardCleanup();
+      deleteServerFeaturesSnapshot();
+    }
+  });
+
   it('restores Mentions when a hosted phone Inbox remounts after opening a Discussion and Back', async () => {
     const { InboxView } = await import('./InboxView');
     const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
