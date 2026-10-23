@@ -7728,6 +7728,23 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     },
     startFailure: {
       title: "Nie udało się uruchomić tej sesji",
+      cause: {
+        agent_startup_rpc_rejected: "Natywne API agenta odrzuciło uruchomienie.",
+        agent_startup_transport_failed: "Transport uruchamiania agenta nie powiódł się.",
+        agent_startup_invalid_state: "Podczas uruchamiania agent napotkał nieprawidłowy lokalny stan środowiska uruchomieniowego.",
+        agent_startup_failed: "Nie udało się uruchomić agenta.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "Brakuje natywnego stanu agenta potrzebnego do wznowienia.",
+        codex_refresh_free_auth_unsupported: "Uwierzytelnianie uruchamiania agenta jest niedostępne.",
+        plugin_services_managed_provider_authority_unavailable: "Dostęp do współdzielonego dostawcy jest niedostępny. Sprawdź Gateway i jego połączenie z maszyną, a następnie ponów próbę uruchomienia sesji.",
+        provider_endpoint_unavailable: "Punkt końcowy dostawcy jest niedostępny. Sprawdź Gateway i jego połączenie z maszyną, a następnie ponów próbę uruchomienia sesji.",
+        plugin_mcp_preparation_unavailable: "Przygotowanie MCP wtyczki jest niedostępne. Sprawdź maszynę docelową, a następnie ponów próbę uruchomienia sesji.",
+        agent_runtime_daemon_service_generation_not_current: "Generacja agenta runnera nie jest już aktualna. Ponów próbę uruchomienia sesji na maszynie docelowej.",
+        native_agent_privileged_effect_authority_unavailable: "Uprawnienia daemona runnera są niedostępne. Sprawdź maszynę docelową, a następnie ponów próbę uruchomienia sesji.",
+        native_agent_privileged_effect_outcome_unknown: "Nie udało się potwierdzić przygotowania daemona runnera. Sprawdź sesję i maszynę docelową przed ponowną próbą.",
+        skills_unavailable: "Dostarczanie umiejętności jest niedostępne. Sprawdź maszynę docelową, a następnie ponów próbę uruchomienia sesji.",
+        team_credential_provider_selection_not_current: "Wybrany dostawca Teamu jest niedostępny. Sprawdź wybór modelu Teamu, a następnie ponów próbę uruchomienia sesji.",
+        teamCredential: "Współdzielone dane uwierzytelniające Teamu odrzuciły żądanie.",
+      },
     },
     staleRunner: {
       banner: {

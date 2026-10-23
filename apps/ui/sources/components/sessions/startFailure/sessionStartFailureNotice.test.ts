@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
+import { t } from '@/text';
+
 import { resolveSessionStartFailureNotice } from './sessionStartFailureNotice';
 
 function issue(overrides: Partial<SessionRuntimeIssueV1>): SessionRuntimeIssueV1 {
@@ -26,7 +28,7 @@ describe('resolveSessionStartFailureNotice', () => {
     it('explains an inactive Session whose start failed with the stored cause', () => {
         expect(resolveSessionStartFailureNotice({ issue: startFailure, sessionActive: false })).toEqual({
             code: 'native_agent_privileged_effect_authority_unavailable',
-            message: 'Runner daemon authority is unavailable. Check the target Machine, then retry the Session.',
+            message: t('session.startFailure.cause.native_agent_privileged_effect_authority_unavailable'),
         });
     });
 

@@ -7874,6 +7874,23 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         },
         startFailure: {
           title: 'Diese Session konnte nicht gestartet werden',
+          cause: {
+            agent_startup_rpc_rejected: "Die native API des Agents hat den Start abgelehnt.",
+            agent_startup_transport_failed: "Der Start-Transport des Agents ist fehlgeschlagen.",
+            agent_startup_invalid_state: "Beim Start des Agents wurde ein ungültiger lokaler Laufzeitzustand festgestellt.",
+            agent_startup_failed: "Der Start des Agents ist fehlgeschlagen.",
+            AGENT_RESUME_PROVIDER_STATE_MISSING: "Der native Agent-Zustand, der zum Fortsetzen nötig ist, fehlt.",
+            codex_refresh_free_auth_unsupported: "Die Authentifizierung für den Agent-Start ist nicht verfügbar.",
+            plugin_services_managed_provider_authority_unavailable: "Der Zugriff auf den geteilten Provider ist nicht verfügbar. Prüfe das Gateway und seine Verbindung zum Rechner und starte die Session dann erneut.",
+            provider_endpoint_unavailable: "Der Provider-Endpunkt ist nicht verfügbar. Prüfe das Gateway und seine Verbindung zum Rechner und starte die Session dann erneut.",
+            plugin_mcp_preparation_unavailable: "Die MCP-Vorbereitung des Plugins ist nicht verfügbar. Prüfe den Zielrechner und starte die Session dann erneut.",
+            agent_runtime_daemon_service_generation_not_current: "Die Agent-Generation des Runners ist nicht mehr aktuell. Starte die Session auf dem Zielrechner erneut.",
+            native_agent_privileged_effect_authority_unavailable: "Die Daemon-Berechtigung des Runners ist nicht verfügbar. Prüfe den Zielrechner und starte die Session dann erneut.",
+            native_agent_privileged_effect_outcome_unknown: "Die Daemon-Vorbereitung des Runners konnte nicht bestätigt werden. Prüfe die Session und den Zielrechner, bevor du es erneut versuchst.",
+            skills_unavailable: "Die Skill-Bereitstellung ist nicht verfügbar. Prüfe den Zielrechner und starte die Session dann erneut.",
+            team_credential_provider_selection_not_current: "Der ausgewählte Team-Provider ist nicht verfügbar. Prüfe die Modellauswahl des Teams und starte die Session dann erneut.",
+            teamCredential: "Die geteilten Team-Zugangsdaten haben die Anfrage abgelehnt.",
+          },
         },
         staleRunner: {
             banner: {

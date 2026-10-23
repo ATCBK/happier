@@ -1,10 +1,10 @@
-import { readSessionStartupFailurePreview, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
-import { presentSessionRuntimeIssue } from '@/components/sessions/presentation/sessionRuntimeIssuePresentation';
+import { presentSessionStartupFailureCause } from '@/components/sessions/presentation/sessionRuntimeIssuePresentation';
 
 export type SessionStartFailureNotice = Readonly<{
     code: string;
-    /** The stored cause, worded by the source that classified it. */
+    /** The localized cause and recovery step for the closed startup failure. */
     message: string;
 }>;
 
@@ -19,7 +19,6 @@ export function resolveSessionStartFailureNotice(input: Readonly<{
 }>): SessionStartFailureNotice | null {
     const { issue } = input;
     if (input.sessionActive || !issue || issue.scope !== 'primary_session' || issue.status !== 'failed') return null;
-    const preview = readSessionStartupFailurePreview(issue.code);
-    if (preview === null) return null;
-    return { code: issue.code, message: presentSessionRuntimeIssue(issue).message ?? preview };
+    const message = presentSessionStartupFailureCause(issue.code);
+    return message === null ? null : { code: issue.code, message };
 }

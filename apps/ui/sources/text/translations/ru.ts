@@ -8272,6 +8272,23 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     },
     startFailure: {
       title: "Не удалось запустить эту сессию",
+      cause: {
+        agent_startup_rpc_rejected: "Нативный API агента отклонил запуск.",
+        agent_startup_transport_failed: "Сбой транспорта при запуске агента.",
+        agent_startup_invalid_state: "При запуске агент обнаружил недопустимое локальное состояние среды выполнения.",
+        agent_startup_failed: "Не удалось запустить агента.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "Отсутствует нативное состояние агента, необходимое для возобновления.",
+        codex_refresh_free_auth_unsupported: "Аутентификация для запуска агента недоступна.",
+        plugin_services_managed_provider_authority_unavailable: "Доступ к общему провайдеру недоступен. Проверьте Gateway и его подключение к компьютеру, затем повторите запуск сессии.",
+        provider_endpoint_unavailable: "Конечная точка провайдера недоступна. Проверьте Gateway и его подключение к компьютеру, затем повторите запуск сессии.",
+        plugin_mcp_preparation_unavailable: "Подготовка MCP плагина недоступна. Проверьте целевой компьютер, затем повторите запуск сессии.",
+        agent_runtime_daemon_service_generation_not_current: "Поколение агента раннера больше не актуально. Повторите запуск сессии на целевом компьютере.",
+        native_agent_privileged_effect_authority_unavailable: "Полномочия демона раннера недоступны. Проверьте целевой компьютер, затем повторите запуск сессии.",
+        native_agent_privileged_effect_outcome_unknown: "Не удалось подтвердить подготовку демона раннера. Проверьте сессию и целевой компьютер, прежде чем повторять попытку.",
+        skills_unavailable: "Доставка навыков недоступна. Проверьте целевой компьютер, затем повторите запуск сессии.",
+        team_credential_provider_selection_not_current: "Выбранный провайдер Team недоступен. Проверьте выбор модели Team, затем повторите запуск сессии.",
+        teamCredential: "Общие учётные данные Team отклонили запрос.",
+      },
     },
     staleRunner: {
       banner: {

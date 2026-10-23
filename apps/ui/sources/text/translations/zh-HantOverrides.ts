@@ -6419,6 +6419,26 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
               body: ({ count }: { count: number }) => count > 0 ? `${count} 個背景工作正在執行。重新啟動可能會停止這些工作。` : '重新啟動可能會停止此工作階段的背景工作。',
               confirmAction: '仍要重新啟動',
           },
+          startFailure: {
+            title: '無法啟動此工作階段',
+            cause: {
+              agent_startup_rpc_rejected: "代理程式的原生 API 拒絕了啟動。",
+              agent_startup_transport_failed: "代理程式啟動傳輸失敗。",
+              agent_startup_invalid_state: "代理程式啟動時遇到無效的本機執行階段狀態。",
+              agent_startup_failed: "代理程式啟動失敗。",
+              AGENT_RESUME_PROVIDER_STATE_MISSING: "缺少繼續所需的代理程式原生狀態。",
+              codex_refresh_free_auth_unsupported: "代理程式啟動所需的驗證無法使用。",
+              plugin_services_managed_provider_authority_unavailable: "無法存取共用提供者。請檢查 Gateway 及其與機器的連線，然後重試工作階段。",
+              provider_endpoint_unavailable: "提供者端點無法使用。請檢查 Gateway 及其與機器的連線，然後重試工作階段。",
+              plugin_mcp_preparation_unavailable: "外掛程式 MCP 準備無法使用。請檢查目標機器，然後重試工作階段。",
+              agent_runtime_daemon_service_generation_not_current: "執行器的代理程式世代已不是最新。請在目標機器上重試工作階段。",
+              native_agent_privileged_effect_authority_unavailable: "執行器的 daemon 授權無法使用。請檢查目標機器，然後重試工作階段。",
+              native_agent_privileged_effect_outcome_unknown: "無法確認執行器 daemon 的準備情況。重試前請檢查工作階段和目標機器。",
+              skills_unavailable: "技能派送無法使用。請檢查目標機器，然後重試工作階段。",
+              team_credential_provider_selection_not_current: "所選的 Team 提供者無法使用。請檢查 Team 的模型選擇，然後重試工作階段。",
+              teamCredential: "共用的 Team 憑證拒絕了該請求。",
+            },
+          },
           staleRunner: {
             banner: {
               stopAndResumeBody: '此執行器無法安全重新啟動。請停止工作階段，然後繼續工作階段以使用目前的執行階段。',

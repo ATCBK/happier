@@ -7732,6 +7732,23 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     },
     startFailure: {
       title: "Impossible de démarrer cette session",
+      cause: {
+        agent_startup_rpc_rejected: "L’API native de l’agent a rejeté le démarrage.",
+        agent_startup_transport_failed: "Le transport de démarrage de l’agent a échoué.",
+        agent_startup_invalid_state: "Le démarrage de l’agent a rencontré un état d’exécution local non valide.",
+        agent_startup_failed: "Le démarrage de l’agent a échoué.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "L’état natif de l’agent nécessaire à la reprise est introuvable.",
+        codex_refresh_free_auth_unsupported: "L’authentification de démarrage de l’agent est indisponible.",
+        plugin_services_managed_provider_authority_unavailable: "L’accès au provider partagé est indisponible. Vérifie la Gateway et sa connexion à la machine, puis réessaie la session.",
+        provider_endpoint_unavailable: "Le point de terminaison du provider est indisponible. Vérifie la Gateway et sa connexion à la machine, puis réessaie la session.",
+        plugin_mcp_preparation_unavailable: "La préparation MCP du plugin est indisponible. Vérifie la machine cible, puis réessaie la session.",
+        agent_runtime_daemon_service_generation_not_current: "La génération de l’agent du runner n’est plus à jour. Réessaie la session sur la machine cible.",
+        native_agent_privileged_effect_authority_unavailable: "L’autorité du daemon du runner est indisponible. Vérifie la machine cible, puis réessaie la session.",
+        native_agent_privileged_effect_outcome_unknown: "La préparation du daemon du runner n’a pas pu être confirmée. Vérifie la session et la machine cible avant de réessayer.",
+        skills_unavailable: "La livraison des skills est indisponible. Vérifie la machine cible, puis réessaie la session.",
+        team_credential_provider_selection_not_current: "Le provider sélectionné pour la Team est indisponible. Vérifie la sélection de modèle de la Team, puis réessaie la session.",
+        teamCredential: "Les identifiants partagés de la Team ont refusé la requête.",
+      },
     },
     staleRunner: {
       banner: {

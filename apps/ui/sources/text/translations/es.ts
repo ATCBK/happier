@@ -7892,6 +7892,23 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     },
     startFailure: {
       title: "No se pudo iniciar esta sesión",
+      cause: {
+        agent_startup_rpc_rejected: "La API nativa del agente rechazó el inicio.",
+        agent_startup_transport_failed: "Falló el transporte de inicio del agente.",
+        agent_startup_invalid_state: "El inicio del agente encontró un estado de ejecución local no válido.",
+        agent_startup_failed: "Falló el inicio del agente.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "Falta el estado nativo del agente necesario para reanudar.",
+        codex_refresh_free_auth_unsupported: "La autenticación de inicio del agente no está disponible.",
+        plugin_services_managed_provider_authority_unavailable: "El acceso al proveedor compartido no está disponible. Revisa el Gateway y su conexión con la máquina y vuelve a intentar la sesión.",
+        provider_endpoint_unavailable: "El endpoint del proveedor no está disponible. Revisa el Gateway y su conexión con la máquina y vuelve a intentar la sesión.",
+        plugin_mcp_preparation_unavailable: "La preparación de MCP del plugin no está disponible. Revisa la máquina de destino y vuelve a intentar la sesión.",
+        agent_runtime_daemon_service_generation_not_current: "La generación del agente del runner ya no está vigente. Vuelve a intentar la sesión en la máquina de destino.",
+        native_agent_privileged_effect_authority_unavailable: "La autoridad del daemon del runner no está disponible. Revisa la máquina de destino y vuelve a intentar la sesión.",
+        native_agent_privileged_effect_outcome_unknown: "No se pudo confirmar la preparación del daemon del runner. Revisa la sesión y la máquina de destino antes de reintentar.",
+        skills_unavailable: "La entrega de skills no está disponible. Revisa la máquina de destino y vuelve a intentar la sesión.",
+        team_credential_provider_selection_not_current: "El proveedor seleccionado del equipo no está disponible. Revisa la selección de modelo del equipo y vuelve a intentar la sesión.",
+        teamCredential: "Las credenciales compartidas del equipo rechazaron la solicitud.",
+      },
     },
     staleRunner: {
       banner: {

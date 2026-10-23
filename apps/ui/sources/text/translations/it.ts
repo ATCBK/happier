@@ -8115,6 +8115,23 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },
     startFailure: {
       title: "Impossibile avviare questa sessione",
+      cause: {
+        agent_startup_rpc_rejected: "L’API nativa dell’agente ha rifiutato l’avvio.",
+        agent_startup_transport_failed: "Il trasporto di avvio dell’agente non è riuscito.",
+        agent_startup_invalid_state: "L’avvio dell’agente ha rilevato uno stato di runtime locale non valido.",
+        agent_startup_failed: "L’avvio dell’agente non è riuscito.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "Manca lo stato nativo dell’agente necessario per riprendere.",
+        codex_refresh_free_auth_unsupported: "L’autenticazione di avvio dell’agente non è disponibile.",
+        plugin_services_managed_provider_authority_unavailable: "L’accesso al provider condiviso non è disponibile. Controlla il Gateway e la sua connessione alla macchina, poi riprova la sessione.",
+        provider_endpoint_unavailable: "L’endpoint del provider non è disponibile. Controlla il Gateway e la sua connessione alla macchina, poi riprova la sessione.",
+        plugin_mcp_preparation_unavailable: "La preparazione MCP del plugin non è disponibile. Controlla la macchina di destinazione, poi riprova la sessione.",
+        agent_runtime_daemon_service_generation_not_current: "La generazione dell’agente del runner non è più attuale. Riprova la sessione sulla macchina di destinazione.",
+        native_agent_privileged_effect_authority_unavailable: "L’autorità del daemon del runner non è disponibile. Controlla la macchina di destinazione, poi riprova la sessione.",
+        native_agent_privileged_effect_outcome_unknown: "Non è stato possibile confermare la preparazione del daemon del runner. Controlla la sessione e la macchina di destinazione prima di riprovare.",
+        skills_unavailable: "La consegna delle skill non è disponibile. Controlla la macchina di destinazione, poi riprova la sessione.",
+        team_credential_provider_selection_not_current: "Il provider selezionato del Team non è disponibile. Controlla la selezione del modello del Team, poi riprova la sessione.",
+        teamCredential: "Le credenziali condivise del Team hanno rifiutato la richiesta.",
+      },
     },
     staleRunner: {
       banner: {

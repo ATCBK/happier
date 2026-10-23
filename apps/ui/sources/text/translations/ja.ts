@@ -8196,6 +8196,23 @@ localTailscale: {
     },
     startFailure: {
       title: "このセッションを開始できませんでした",
+      cause: {
+        agent_startup_rpc_rejected: "エージェントのネイティブ API が起動を拒否しました。",
+        agent_startup_transport_failed: "エージェントの起動トランスポートが失敗しました。",
+        agent_startup_invalid_state: "エージェントの起動中に、無効なローカルランタイム状態が見つかりました。",
+        agent_startup_failed: "エージェントを起動できませんでした。",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "再開に必要なエージェントのネイティブ状態が見つかりません。",
+        codex_refresh_free_auth_unsupported: "エージェントの起動認証を利用できません。",
+        plugin_services_managed_provider_authority_unavailable: "共有プロバイダーにアクセスできません。Gateway とそのマシンへの接続を確認してから、セッションを再試行してください。",
+        provider_endpoint_unavailable: "プロバイダーのエンドポイントを利用できません。Gateway とそのマシンへの接続を確認してから、セッションを再試行してください。",
+        plugin_mcp_preparation_unavailable: "プラグインの MCP 準備を利用できません。対象のマシンを確認してから、セッションを再試行してください。",
+        agent_runtime_daemon_service_generation_not_current: "ランナーのエージェント世代が最新ではありません。対象のマシンでセッションを再試行してください。",
+        native_agent_privileged_effect_authority_unavailable: "ランナーの daemon 権限を利用できません。対象のマシンを確認してから、セッションを再試行してください。",
+        native_agent_privileged_effect_outcome_unknown: "ランナーの daemon の準備を確認できませんでした。再試行する前に、セッションと対象のマシンを確認してください。",
+        skills_unavailable: "スキルの配信を利用できません。対象のマシンを確認してから、セッションを再試行してください。",
+        team_credential_provider_selection_not_current: "選択した Team のプロバイダーを利用できません。Team のモデル選択を確認してから、セッションを再試行してください。",
+        teamCredential: "共有された Team の認証情報がリクエストを拒否しました。",
+      },
     },
     staleRunner: {
       banner: {

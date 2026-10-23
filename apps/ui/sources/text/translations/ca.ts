@@ -7153,6 +7153,23 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         },
         startFailure: {
           title: 'No s’ha pogut iniciar aquesta sessió',
+          cause: {
+            agent_startup_rpc_rejected: "L’API nativa de l’agent ha rebutjat l’inici.",
+            agent_startup_transport_failed: "El transport d’inici de l’agent ha fallat.",
+            agent_startup_invalid_state: "L’inici de l’agent ha trobat un estat d’execució local no vàlid.",
+            agent_startup_failed: "L’inici de l’agent ha fallat.",
+            AGENT_RESUME_PROVIDER_STATE_MISSING: "Falta l’estat natiu de l’agent necessari per reprendre.",
+            codex_refresh_free_auth_unsupported: "L’autenticació d’inici de l’agent no està disponible.",
+            plugin_services_managed_provider_authority_unavailable: "L’accés al proveïdor compartit no està disponible. Revisa el Gateway i la seva connexió amb la màquina i torna a provar la sessió.",
+            provider_endpoint_unavailable: "L’endpoint del proveïdor no està disponible. Revisa el Gateway i la seva connexió amb la màquina i torna a provar la sessió.",
+            plugin_mcp_preparation_unavailable: "La preparació de l’MCP del plugin no està disponible. Revisa la màquina de destinació i torna a provar la sessió.",
+            agent_runtime_daemon_service_generation_not_current: "La generació de l’agent de l’executor ja no és vigent. Torna a provar la sessió a la màquina de destinació.",
+            native_agent_privileged_effect_authority_unavailable: "L’autoritat del daemon de l’executor no està disponible. Revisa la màquina de destinació i torna a provar la sessió.",
+            native_agent_privileged_effect_outcome_unknown: "No s’ha pogut confirmar la preparació del daemon de l’executor. Revisa la sessió i la màquina de destinació abans de tornar-ho a provar.",
+            skills_unavailable: "El lliurament de skills no està disponible. Revisa la màquina de destinació i torna a provar la sessió.",
+            team_credential_provider_selection_not_current: "El proveïdor seleccionat de l’equip no està disponible. Revisa la selecció de model de l’equip i torna a provar la sessió.",
+            teamCredential: "Les credencials compartides de l’equip han rebutjat la sol·licitud.",
+          },
         },
         staleRunner: {
             banner: {

@@ -7999,6 +7999,23 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     },
     startFailure: {
       title: "Não foi possível iniciar esta sessão",
+      cause: {
+        agent_startup_rpc_rejected: "A API nativa do agente rejeitou a inicialização.",
+        agent_startup_transport_failed: "O transporte de inicialização do agente falhou.",
+        agent_startup_invalid_state: "A inicialização do agente encontrou um estado de execução local inválido.",
+        agent_startup_failed: "A inicialização do agente falhou.",
+        AGENT_RESUME_PROVIDER_STATE_MISSING: "O estado nativo do agente necessário para retomar está ausente.",
+        codex_refresh_free_auth_unsupported: "A autenticação de inicialização do agente não está disponível.",
+        plugin_services_managed_provider_authority_unavailable: "O acesso ao provedor compartilhado não está disponível. Verifique o Gateway e a conexão dele com a máquina e tente a sessão novamente.",
+        provider_endpoint_unavailable: "O endpoint do provedor não está disponível. Verifique o Gateway e a conexão dele com a máquina e tente a sessão novamente.",
+        plugin_mcp_preparation_unavailable: "A preparação do MCP do plugin não está disponível. Verifique a máquina de destino e tente a sessão novamente.",
+        agent_runtime_daemon_service_generation_not_current: "A geração do agente do runner não está mais atual. Tente a sessão novamente na máquina de destino.",
+        native_agent_privileged_effect_authority_unavailable: "A autoridade do daemon do runner não está disponível. Verifique a máquina de destino e tente a sessão novamente.",
+        native_agent_privileged_effect_outcome_unknown: "Não foi possível confirmar a preparação do daemon do runner. Verifique a sessão e a máquina de destino antes de tentar novamente.",
+        skills_unavailable: "A entrega de skills não está disponível. Verifique a máquina de destino e tente a sessão novamente.",
+        team_credential_provider_selection_not_current: "O provedor selecionado da equipe não está disponível. Revise a seleção de modelo da equipe e tente a sessão novamente.",
+        teamCredential: "As credenciais compartilhadas da equipe recusaram a solicitação.",
+      },
     },
     staleRunner: {
       banner: {

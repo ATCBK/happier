@@ -9397,6 +9397,23 @@ const enSession = {
   },
   startFailure: {
     title: 'Couldn’t start this session',
+    cause: {
+      agent_startup_rpc_rejected: 'Agent startup was rejected by its native API.',
+      agent_startup_transport_failed: 'Agent startup transport failed.',
+      agent_startup_invalid_state: 'Agent startup encountered invalid local runtime state.',
+      agent_startup_failed: 'Agent startup failed.',
+      AGENT_RESUME_PROVIDER_STATE_MISSING: 'The native agent state needed to resume is missing.',
+      codex_refresh_free_auth_unsupported: 'Agent startup authentication is unavailable.',
+      plugin_services_managed_provider_authority_unavailable: 'Access to the shared provider is unavailable. Check the Gateway and its machine connection, then retry the session.',
+      provider_endpoint_unavailable: 'The provider endpoint is unavailable. Check the Gateway and its machine connection, then retry the session.',
+      plugin_mcp_preparation_unavailable: 'Plugin MCP preparation is unavailable. Check the target machine, then retry the session.',
+      agent_runtime_daemon_service_generation_not_current: 'The runner agent generation is no longer current. Retry the session on the target machine.',
+      native_agent_privileged_effect_authority_unavailable: 'Runner daemon authority is unavailable. Check the target machine, then retry the session.',
+      native_agent_privileged_effect_outcome_unknown: 'Runner daemon preparation could not be confirmed. Check the session and target machine before retrying.',
+      skills_unavailable: 'Skill delivery is unavailable. Check the target machine, then retry the session.',
+      team_credential_provider_selection_not_current: 'The selected Team provider is unavailable. Review the Team model selection, then retry the session.',
+      teamCredential: 'The shared Team credential refused the request.',
+    },
   },
   staleRunner: {
     banner: {
