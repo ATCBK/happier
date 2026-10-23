@@ -12,13 +12,16 @@ export async function buildPublicProfileRenderer({ projectDir = defaultProjectDi
     const requireServer = createRequire(resolve(projectDir, 'package.json'));
     const sourceDir = resolve(projectDir, 'sources/app/account/profile/render');
     const target = resolve(sourceDir, 'publicProfileRenderer.generated.mjs');
+    // One RNW instance: the page's StyleSheet rules and the sheet the renderer serializes must be the same module.
+    const reactNativeWeb = requireServer.resolve('react-native-web/dist/index.js');
     const result = await build({
         absWorkingDir: projectDir, entryPoints: [resolve(sourceDir, 'publicProfileRenderer.ts')],
         bundle: true, write: false, minify: true, platform: 'node', format: 'esm', target: ['node20'], jsx: 'automatic',
         tsconfig: resolve(projectDir, 'tsconfig.json'), conditions: ['happier-source'],
         external: ['react', 'react-dom/server', 'react/jsx-runtime'],
         alias: {
-            'react-native': requireServer.resolve('react-native-web/dist/index.js'),
+            'react-native': reactNativeWeb,
+            'react-native-web': reactNativeWeb,
             'react-native-svg': requireServer.resolve('react-native-svg/lib/module/elements.web.js'),
         },
         define: { 'process.env.NODE_ENV': '"production"', '__DEV__': 'false' },
