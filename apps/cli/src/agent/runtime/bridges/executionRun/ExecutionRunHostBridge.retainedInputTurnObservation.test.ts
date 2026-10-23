@@ -21,6 +21,12 @@ import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
 import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { SessionMessageReplyMutationV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import type { CommittedTranscriptMessageOptions } from '@/api/session/transcriptPort';
+import { normalizeRawMessage } from '@happier-dev/session-core/raw';
+import { ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { readScmDiffSummaryPublicationReceipt } from '../../../../../../ui/sources/sync/domains/scm/diffSummary/publicationReceipt';
 
 const TEST_BACKEND_ID = `${'test'}.${'agent'}` as never;
 
@@ -52,6 +58,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
     const replyMutations: unknown[] = [];
     const releasedSourceTurns: unknown[] = [];
     const committedResultLookups: string[] = [];
+    const transcriptPublications: { body: ACPMessageData; meta?: Record<string, unknown>; localId?: string }[] = [];
     const runtimeLifetime = new AbortController();
     let emit: ((event: RuntimeEvent) => void) | null = null;
     const controller = {
@@ -101,7 +108,7 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
             ...input,
             sessionMetadata: {},
         }),
-        sendAcp: async () => undefined,
+        sendAcp: async (_provider, body, options) => { transcriptPublications.push({ body, meta: options?.meta }); },
         onPublicStateUpdated,
         sessionInteractionHost: {
             session: {
@@ -114,7 +121,10 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
                 getMetadataSnapshot: () => null,
                 updateMetadata: vi.fn(),
                 updateAgentState: vi.fn(),
-                enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: true })),
+                enqueueAgentMessageCommitted: vi.fn(async (_provider: string, body: ACPMessageData, options: CommittedTranscriptMessageOptions) => {
+                    transcriptPublications.push({ body, meta: options?.meta, localId: options.localId });
+                    return { persisted: true, delivered: true };
+                }),
                 readCommittedTranscriptMessageByLocalId: async (localId: string) => {
                     committedResultLookups.push(localId);
                     return { type: 'found', message: { id: `committed:${localId}`, localId, sidechainId: committedResultSidechainId,
@@ -192,10 +202,74 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
             inputIds: [localId], delivery: { kind: 'newTurn', turnId } });
     };
     return { manager, internals, attachment, emitRuntimeEvent, acceptInput, prepareScmInput, runtimeLifetime, admittedParts,
-        replyMutations, releasedSourceTurns, committedResultLookups };
+        replyMutations, releasedSourceTurns, committedResultLookups, transcriptPublications };
 }
 
 describe('ExecutionRunHostBridge retained exact input observation', () => {
+    it('publishes a saved-result receipt instead of native JSON and preserves the next prose discussion', async () => {
+        const { internals, attachment, acceptInput, emitRuntimeEvent, transcriptPublications, replyMutations } = composeRetainedRun();
+        const comparison = ScmComparisonSchema.parse({ id: 'receipt-comparison', source: { kind: 'workingTree' },
+            repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
+        internals.runs.set('run-1', { ...internals.runs.get('run-1')!, intent: 'scm_diff_summary', intentInput: {
+            comparison, outputs: ['walkthrough'], source: comparison.source, sourceKey: comparison.id,
+            metadata: { source: comparison.source, sourceKey: comparison.id },
+        } });
+        try {
+            await acceptInput('write-reading', 'generation-turn');
+            const transcript = internals.createSessionOwnedRunScope('run-1')!.projectRunTranscriptSession();
+            const stream = createKeyedStreamedTranscriptBridge({ provider: 'test.agent', createSessionForStream: () => transcript });
+            const text = JSON.stringify({ walkthrough: { title: 'Saved explanation', intro: '', stops: [], otherChangeRefs: [] } });
+            await projectRuntimeTranscriptEvent({ session: transcript, provider: 'test.agent', event: {
+                kind: 'transcript-message-committed', sessionId: 'session-1', sequence: 2, emittedAtMs: 2,
+                turnId: 'generation-turn', messageId: 'generation-answer', role: 'assistant', text,
+            } });
+            expect(transcriptPublications.filter(item => item.body.type === 'message' && item.body.message.includes('"walkthrough"'))).toEqual([]);
+            const consumed = transcriptPublications.find(item => item.body.type === 'output');
+            expect(consumed).toMatchObject({ body: { sidechainId: 'sidechain-1', type: 'output', data: {
+                type: 'progress', marker: 'source_fact_consumed', reason: 'host_structured_output',
+            } }, meta: { runtimeTurnId: 'generation-turn' } });
+            expect(normalizeRawMessage('native-answer', 'generation-answer', 2,
+                buildAcpAgentMessageEnvelope({ provider: 'test.agent', body: consumed?.body }))).toBeNull();
+            internals.controllers.get('run-1')!.buffer = text;
+            emitRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', sequence: 3, emittedAtMs: 3, turnId: 'generation-turn' });
+            // Native terminal projection can arrive while the saved publication is still queued.
+            const terminalProjection = projectRuntimeTranscriptEvent({ session: transcript, provider: 'test.agent', runtimeMessageDeltaBridge: stream, event: {
+                kind: 'turn-complete', sessionId: 'session-1', sequence: 3, emittedAtMs: 3, turnId: 'generation-turn',
+            } });
+            await internals.controllers.get('run-1')!.pendingHostBarrier;
+            const receipts = transcriptPublications.filter(item => item.meta?.scmResultUpdate !== undefined);
+            expect(receipts).toHaveLength(1);
+            expect(receipts[0]?.meta?.scmResultUpdate).toMatchObject({ status: 'published',
+                outputs: [{ kind: 'walkthrough', change: 'created' }] });
+            expect(ScmDiffSummaryPublicationReceiptSchema.parse(receipts[0]?.meta?.scmResultUpdate).outputs)
+                .toEqual([{ kind: 'walkthrough', change: 'created' }]);
+            const receipt = readScmDiffSummaryPublicationReceipt(receipts[0]?.meta);
+            expect(receipt?.output).toEqual(internals.runs.get('run-1')?.structuredMeta?.payload);
+            expect(receipt?.publication.outputs).toEqual([{ kind: 'walkthrough', change: 'created' }]);
+            await terminalProjection;
+            expect(replyMutations).toMatchObject([{ requestLocalId: 'write-reading', operation: {
+                kind: 'fulfill', outcome: { kind: 'answer', result: { sessionId: 'session-1' } },
+            } }]);
+            expect(receipts[0]?.localId).toEqual(expect.any(String));
+            expect(replyMutations).toMatchObject([{ operation: {
+                nativeResult: { localId: receipts[0]?.localId },
+                outcome: { result: { messageId: `committed:${receipts[0]?.localId}` } },
+            } }]);
+            const saved = internals.runs.get('run-1')?.structuredMeta;
+            await acceptInput('ask-question', 'discussion-turn');
+            const answer = 'The deleted code remains available on the before side.';
+            await projectRuntimeTranscriptEvent({ session: transcript, provider: 'test.agent', event: {
+                kind: 'transcript-message-committed', sessionId: 'session-1', sequence: 4, emittedAtMs: 4,
+                turnId: 'discussion-turn', messageId: 'discussion-answer', role: 'assistant', text: answer,
+            } });
+            internals.controllers.get('run-1')!.buffer = answer;
+            emitRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', sequence: 5, emittedAtMs: 5, turnId: 'discussion-turn' });
+            await internals.controllers.get('run-1')!.pendingHostBarrier;
+            expect(transcriptPublications.filter(item => item.body.type === 'message' && item.body.message === answer)).toHaveLength(1);
+            expect(transcriptPublications.filter(item => item.meta?.scmResultUpdate !== undefined)).toHaveLength(1);
+            expect(internals.runs.get('run-1')?.structuredMeta).toEqual(saved);
+        } finally { await attachment?.release(); }
+    });
     it('fulfills and releases only the exact native input after its committed terminal fact', async () => {
         const { internals, attachment, acceptInput, replyMutations, releasedSourceTurns, committedResultLookups } = composeRetainedRun();
         try {
@@ -222,6 +296,10 @@ describe('ExecutionRunHostBridge retained exact input observation', () => {
                 ...options, localId: 'draft-checkpoint', meta: { runtimeTurnId: 'native-turn', happierStreamSegmentV1: {
                     segmentKind: 'assistant', segmentState: 'streaming',
                 } },
+            });
+            await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'message', message: 'Unvalidated metadata' }, {
+                ...options, localId: 'unvalidated-result', meta: { runtimeTurnId: 'native-turn',
+                    happier: { kind: 'external.unvalidated', payload: null } },
             });
             await transcript.enqueueAgentMessageCommitted('test.agent', { type: 'task_complete', id: 'native-turn' }, {
                 ...options, localId: 'native-turn:task_complete',

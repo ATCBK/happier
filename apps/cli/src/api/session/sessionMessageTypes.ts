@@ -18,7 +18,7 @@ type SourceFactConsumedMessage = {
   data: {
     type: 'progress';
     marker: 'source_fact_consumed';
-    reason: 'host_prompt_echo';
+    reason: 'host_prompt_echo' | 'host_structured_output';
   };
 };
 type ContextCompactionPhase = 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';

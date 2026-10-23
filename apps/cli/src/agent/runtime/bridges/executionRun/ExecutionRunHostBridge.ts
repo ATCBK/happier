@@ -90,6 +90,7 @@ import {
 import { createExecutionRunPendingInputConsumer } from './pending/executionRunPendingInputConsumer';
 import { createRetainedExecutionRunInputDelivery } from './pending/retainedExecutionRunInputDelivery';
 import { publishExecutionRunTurn } from './publishExecutionRunTurn';
+import { projectExecutionRunTranscriptBody } from './sidechainStreamText';
 import {
   acknowledgeExecutionRunWorkerUpdate,
   readPendingExecutionRunWorkerUpdates,
@@ -639,6 +640,16 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
                 opts,
               );
             }
+            const currentRun = this.runs.get(runId);
+            if (!currentRun) throw createExecutionRunTranscriptCustodyError();
+            if (body.type === 'task_complete' || body.type === 'turn_failed' || body.type === 'turn_cancelled') {
+              // Host structured completion must reach durable custody before the
+              // native terminal fact selects the exact visible reply result.
+              await controller.pendingHostBarrier;
+            }
+            const profile = resolveExecutionRunIntentProfileFromCatalog(this.readRunProfileCatalog(runId),
+              currentRun.intent, currentRun.profileId, currentRun.profileSourceCustody);
+            body = projectExecutionRunTranscriptBody(profile, body);
             const runtimeTurnId = typeof opts.meta?.runtimeTurnId === 'string'
               ? opts.meta.runtimeTurnId.trim()
               : '';
@@ -740,7 +751,24 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
       diagnostic?: Readonly<{ code: string; message?: string }>; admittedInputId?: string }>): Promise<void> => {
       await publishExecutionRunTurn({
         ...turn, runId, controller, runs: this.runs, controllers: this.controllers,
-        profileCatalog, sendAcp: this.sendAcp, parentProvider: this.parentProvider,
+        profileCatalog, parentProvider: this.parentProvider,
+        sendAcp: async (provider, body, options) => {
+          // This callback receives canonical profile completions, not arbitrary
+          // native metadata. Baseline/admission notices are not turn results.
+          if (body.type !== 'message' || !options?.meta?.happier || options.meta.runtimeTurnId !== turn.turnId) {
+            await this.sendAcp(provider, body, options);
+            return;
+          }
+          const transcript = this.createSessionOwnedRunScope(runId)?.projectRunTranscriptSession();
+          if (!transcript?.enqueueAgentMessageCommitted) throw createExecutionRunTranscriptCustodyError();
+          const committedOptions = { localId: randomUUID(), meta: options.meta, createdAt: turn.finishedAtMs,
+            provenance: { kind: 'non_dependent' as const, source: 'external' as const },
+            admission: { signal: controller.backend.getRuntimeLifetimeSignal(), requireDelivery: true } };
+          const committed = await transcript.enqueueAgentMessageCommitted(provider, body, committedOptions);
+          if (!committed.persisted || !committed.delivered) throw createExecutionRunTranscriptCustodyError();
+          await observeExecutionRunCommittedReply({ controller, runId, session: host.session, sidechainId,
+            body, options: committedOptions, source: 'host_structured_completion', isCurrent });
+        },
         reviewComments: this.reviewComments,
         onPublicStateUpdated: (id) => this.emitPublicStateUpdated(id),
         admitNextInput: async ({ instructions, localId }) => {

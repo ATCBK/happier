@@ -12,7 +12,7 @@ export function isExecutionRunCommittedAssistantResult(body: ACPMessageData, opt
         && Reflect.get(segment, 'segmentKind') === 'assistant' && Reflect.get(segment, 'segmentState') === 'complete');
 }
 
-/** Result identity is captured at the incumbent native transcript writer, never by a result scanner. */
+/** Result identity is captured at the incumbent durable transcript writer, never by a result scanner. */
 export async function observeExecutionRunCommittedReply(args: Readonly<{
     controller: ExecutionRunBackendController;
     runId: string;
@@ -20,6 +20,8 @@ export async function observeExecutionRunCommittedReply(args: Readonly<{
     sidechainId: string;
     body: ACPMessageData;
     options: CommittedTranscriptMessageOptions;
+    /** Only the canonical host completion publisher can supply this process-local fact. */
+    source?: 'host_structured_completion';
     isCurrent(): boolean;
 }>): Promise<void> {
     const { controller, session, body, options } = args;
@@ -28,7 +30,8 @@ export async function observeExecutionRunCommittedReply(args: Readonly<{
     const turn = [controller.currentInputTurn, controller.lastInputTurn].find(candidate => candidate?.turnId === turnId);
     if (!turn || (body.sidechainId !== undefined && body.sidechainId !== args.sidechainId)) return;
     if (body.type === 'message' || body.type === 'tool-call') {
-        if (body.type === 'message' && !isExecutionRunCommittedAssistantResult(body, options)) return;
+        if (body.type === 'message' && args.source !== 'host_structured_completion'
+            && !isExecutionRunCommittedAssistantResult(body, options)) return;
         const { committedResultLocalId: _previousResult, ...facts } = turn;
         const updated = { ...facts, ...(body.type === 'message' && body.message.trim().length > 0
             ? { committedResultLocalId: options.localId, committedPartialResultLocalId: options.localId } : {}) };
