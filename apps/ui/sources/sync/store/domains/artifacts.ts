@@ -41,9 +41,10 @@ function retainOpenedContent(previous: DecryptedArtifact | undefined, incoming: 
 function reconcileArtifacts(
   previous: Record<string, DecryptedArtifact>,
   incoming: readonly DecryptedArtifact[],
-): Readonly<{ artifacts: Record<string, DecryptedArtifact>; storageChanged: boolean }> {
+): Readonly<{ artifacts: Record<string, DecryptedArtifact>; storageChanged: boolean; changedIds: readonly string[] }> {
   let next = previous;
   let storageChanged = false;
+  const changedIds = new Set<string>();
   for (const incomingArtifact of incoming) {
     const before = next[incomingArtifact.id];
     // HTTP body/list reads can finish after a newer socket settlement. Admit
@@ -68,12 +69,43 @@ function reconcileArtifacts(
       || before.storageMode !== artifact.storageMode) storageChanged = true;
     if (next === previous) next = { ...previous };
     next[artifact.id] = artifact;
+    changedIds.add(artifact.id);
   }
-  return { artifacts: next, storageChanged };
+  return { artifacts: next, storageChanged, changedIds: [...changedIds] };
+}
+
+function skillRevision(artifact: DecryptedArtifact | undefined): string | undefined {
+  return artifact && !artifact.draft && artifact.header?.kind === 'prompt_bundle.v2'
+    && artifact.header.bundleSchemaId === 'skills.skill_md_v1'
+    ? `${artifact.id}@${artifact.headerVersion}:${artifact.bodyVersion ?? 0}` : undefined;
+}
+
+function inventoryUnready(artifact: DecryptedArtifact | undefined): boolean {
+  return Boolean(artifact && !artifact.draft
+    && (!artifact.isDecrypted || !artifact.rawHeader || artifact.access === undefined));
+}
+
+/** Publish the library's exact inputs at the same ingress as the admitted Artifact rows. */
+function projectSkillInventory(state: ArtifactsDomain, artifacts: Record<string, DecryptedArtifact>, changedIds: Iterable<string>) {
+  let revisions = state.artifactSkillRevisions;
+  let unreadyCount = state.artifactInventoryUnreadyCount;
+  for (const id of changedIds) {
+    const revision = skillRevision(artifacts[id]);
+    if (revision !== revisions[id]) {
+      if (revisions === state.artifactSkillRevisions) revisions = { ...revisions };
+      if (revision === undefined) delete revisions[id]; else revisions[id] = revision;
+    }
+    unreadyCount += Number(inventoryUnready(artifacts[id])) - Number(inventoryUnready(state.artifacts[id]));
+  }
+  return { artifactSkillRevisions: revisions, artifactInventoryUnreadyCount: unreadyCount };
 }
 
 export type ArtifactsDomain = {
   artifacts: Record<string, DecryptedArtifact>;
+  /** Content revisions only; unrelated Artifacts and body hydration retain this identity. */
+  artifactSkillRevisions: Record<string, string>;
+  /** Visible rows whose membership/access cannot yet establish a complete library inventory. */
+  artifactInventoryUnreadyCount: number;
   /** A complete Account inventory was published; targeted body reads do not set this. */
   artifactsLoaded: boolean;
   /** Invalidates the storage projection, not local hydration or grant-only changes. */
@@ -92,6 +124,8 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
 }): ArtifactsDomain {
   return {
     artifacts: {},
+    artifactSkillRevisions: {},
+    artifactInventoryUnreadyCount: 0,
     artifactsLoaded: false,
     artifactsStorageRevision: 0,
     applyArtifacts: (artifacts, inventoryReadStartedWith) =>
@@ -103,12 +137,14 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
         const merged = reconcileArtifacts(state.artifacts, admitted);
         let reconciled = merged.artifacts;
         let removed = false;
+        const changedIds = new Set(merged.changedIds);
         if (inventoryReadStartedWith) {
           const members = new Set(artifacts.map(artifact => artifact.id));
           for (const [id, artifact] of Object.entries(state.artifacts)) {
             if (members.has(id) || artifact !== inventoryReadStartedWith[id]) continue;
             if (reconciled === state.artifacts) reconciled = { ...reconciled };
             delete reconciled[id];
+            changedIds.add(id);
             removed = true;
           }
         }
@@ -117,6 +153,7 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
         return {
           ...state,
           artifacts: reconciled,
+          ...projectSkillInventory(state, reconciled, changedIds),
           artifactsLoaded: loaded,
           artifactsStorageRevision: state.artifactsStorageRevision + Number(merged.storageChanged || removed),
         };
@@ -128,6 +165,7 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
         return {
           ...state,
           artifacts: updated.artifacts,
+          ...projectSkillInventory(state, updated.artifacts, updated.changedIds),
           artifactsStorageRevision: state.artifactsStorageRevision + Number(updated.storageChanged),
         };
       }),
@@ -138,6 +176,7 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
         return {
           ...state,
           artifacts: updated.artifacts,
+          ...projectSkillInventory(state, updated.artifacts, updated.changedIds),
           artifactsStorageRevision: state.artifactsStorageRevision + Number(updated.storageChanged),
         };
       }),
@@ -149,6 +188,7 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
         return {
           ...state,
           artifacts: remainingArtifacts,
+          ...projectSkillInventory(state, remainingArtifacts, [artifactId]),
           artifactsStorageRevision: state.artifactsStorageRevision + 1,
         };
       }),

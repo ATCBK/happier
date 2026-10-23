@@ -14,10 +14,32 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 installDisconnectedServerSocketBoundary();
 const { SkillsList } = await import('./SkillsRail');
+const { CapabilityRow } = await import('@/components/capabilities/row/CapabilityRow');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 
 afterEach(() => { standardCleanup(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests(); navigation.params = {}; vi.clearAllMocks(); });
+
+it('retains row render locality when one of 139 listed skills changes', async () => {
+    const home = await createSkillsSurfaceHarness('https://skills-rail-row-cost.test');
+    // Observe the real render function without replacing any of its logic or dependencies.
+    const row = CapabilityRow as React.MemoExoticComponent<React.FunctionComponent<React.ComponentProps<typeof CapabilityRow>>>;
+    const original = row.type;
+    const counts = new Map<string, number>();
+    const render = vi.spyOn(row, 'type').mockImplementation(props => {
+        if (props.testID.startsWith('skills.rail.row.')) counts.set(props.testID, (counts.get(props.testID) ?? 0) + 1);
+        return original(props);
+    });
+    const items = Array.from({ length: 139 }, (_, i) => skill(`row-${i}`));
+    const screen = await renderScreen(<SkillsList variant="page" library={library(items)} />);
+    try {
+        await vi.waitFor(() => expect(screen.findByTestId('skills.rail.row.row-138')).not.toBeNull());
+        counts.clear();
+        await screen.update(<SkillsList variant="page" library={library(items.map((item, i) => i === 0
+            ? { ...item, description: 'Changed instructions' } : item))} />);
+        expect([...counts.entries()]).toEqual([['skills.rail.row.row-0', 1]]);
+    } finally { await screen.unmount(); render.mockRestore(); await home.dispose(); }
+});
 
 it('moves rendered rows from use groups to personal folders, filters by the route Machine and clears that filter', async () => {
     const home = await createSkillsSurfaceHarness('https://skills-rail-groups.test', [{ key: 'folders', value: { v: 1,

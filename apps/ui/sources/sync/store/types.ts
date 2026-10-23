@@ -259,6 +259,8 @@ export interface TodosDomainSlice {
 
 export interface ArtifactsDomainSlice {
     artifacts: Record<string, DecryptedArtifact>;
+    artifactSkillRevisions: Record<string, string>;
+    artifactInventoryUnreadyCount: number;
     artifactsLoaded: boolean;
     artifactsStorageRevision: number;
     applyArtifacts: (artifacts: DecryptedArtifact[], inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>) => void;

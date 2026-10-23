@@ -35,6 +35,57 @@ afterEach(() => {
     resetPromptLibraryCatalogSnapshotsForTests();
 });
 
+it('does no library render or read work for unrelated publications at Account scale and retains unchanged skill rows', async () => {
+    const home = await createSeededSkillsHome('https://skills-arrival-cost.test', {
+        skills: Array.from({ length: 139 }, (_, i) => ({ id: `cost-skill-${i}` })),
+    });
+    const unrelated = Array.from({ length: 1000 }, (_, i) => ({
+        id: `unrelated-${i}`, title: 'Unrelated document', header: { kind: 'markdown', title: 'Unrelated document' },
+        rawHeader: { kind: 'markdown', title: 'Unrelated document' }, access: 'owner' as const,
+        ownerAccountId: 'artifact-account', isDecrypted: true as const, headerVersion: 1, bodyVersion: 1,
+        seq: 1, createdAt: 1, updatedAt: 1,
+    }));
+    storage.getState().applyArtifacts(unrelated);
+    let renders = 0;
+    let library: ReturnType<typeof useSkillsLibrary> | undefined;
+    const rowRenders = new Map<string, number>();
+    const Row = React.memo(function Row({ item }: { item: NonNullable<typeof library>['items'][number] }) {
+        rowRenders.set(item.skillId, (rowRenders.get(item.skillId) ?? 0) + 1);
+        return null;
+    });
+    function ListProbe() {
+        renders++;
+        library = useSkillsLibrary();
+        return <>{library.items.map(item => <Row key={item.skillId} item={item} />)}</>;
+    }
+    const screen = await renderScreen(<ListProbe />);
+    try {
+        await vi.waitFor(() => expect(library?.items.filter(item => item.skillId.startsWith('cost-skill-'))).toHaveLength(139));
+        await vi.waitFor(() => expect(library?.status).toBe('ready'));
+        await flushHookEffects();
+        const settled = renders;
+        const items = library?.items;
+        const reads = home.requests.length;
+        rowRenders.clear();
+        for (let i = 0; i < 5; i++) {
+            await act(async () => storage.getState().updateArtifact({ ...unrelated[i]!, headerVersion: 2, updatedAt: 2 }));
+        }
+        expect(renders - settled).toBe(0);
+        expect(library?.items).toBe(items);
+        expect(rowRenders.size).toBe(0);
+        expect(home.requests).toHaveLength(reads);
+        await act(async () => {
+            const result = await createDefaultActionExecutor().execute('skills.update', {
+                skillId: 'cost-skill-0', expectedRevision: '1:1', name: 'changed',
+            }, { serverId: home.home.id, surface: 'ui', authority: 'present_user' });
+            expect(result).toMatchObject({ ok: true });
+        });
+        await vi.waitFor(() => expect(library?.items.find(item => item.skillId === 'cost-skill-0')?.name).toBe('changed'));
+        expect([...rowRenders.keys()]).toEqual(['cost-skill-0']);
+        expect(rowRenders.get('cost-skill-0')).toBe(1);
+    } finally { await screen.unmount(); await home.dispose(); }
+});
+
 it('does not rerender the real library for executable-only AppShell updates', async () => {
     const home = await createSeededSkillsHome('https://skills-declaration-subscription.test', { skills: [{ id: 'stable-skill' }] });
     let renders = 0;

@@ -3521,6 +3521,8 @@ class Sync {
             sessionMessagesHistoryStartLoaded: {},
             sessionPending: {},
             artifacts: {},
+            artifactSkillRevisions: {},
+            artifactInventoryUnreadyCount: 0,
             artifactsLoaded: false,
             automations: {},
             automationDefinitionNextCursor: null,

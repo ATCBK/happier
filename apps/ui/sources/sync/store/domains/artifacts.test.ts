@@ -24,6 +24,37 @@ function artifact(id: number): Extract<DecryptedArtifact, { isDecrypted: true }>
 }
 
 describe('createArtifactsDomain', () => {
+    it('publishes skill inventory only for changed skill revisions and tracks incomplete inventory through removal', () => {
+        const store = createHarness();
+        const skills = Array.from({ length: 139 }, (_, i) => ({ ...artifact(i),
+            header: { title: `Skill ${i}`, kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' },
+            rawHeader: { kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' }, access: 'owner' as const, bodyVersion: 1 }));
+        const documents = Array.from({ length: 1000 }, (_, i) => ({ ...artifact(i + 139),
+            header: { title: 'Document', kind: 'markdown' }, rawHeader: { kind: 'markdown' }, access: 'owner' as const }));
+        store.getState().applyArtifacts([...skills, ...documents]);
+        const before = store.getState().artifactSkillRevisions;
+        let notifications = 0;
+        const off = store.subscribe((state, previous) => { if (state.artifactSkillRevisions !== previous.artifactSkillRevisions) notifications++; });
+        try {
+            for (const document of documents.slice(0, 10)) store.getState().updateArtifact({ ...document, bodyVersion: 2 });
+            expect(notifications).toBe(0);
+            expect(Object.keys(before)).toHaveLength(139);
+            expect(store.getState().artifactInventoryUnreadyCount).toBe(0);
+            store.getState().updateArtifact({ ...skills[0]!, bodyVersion: 2 });
+            expect(notifications).toBe(1);
+            expect(store.getState().artifactSkillRevisions[skills[0]!.id]).toBe('artifact-0@1:2');
+            store.getState().addArtifact(artifact(2000));
+            expect(store.getState().artifactInventoryUnreadyCount).toBe(1);
+            store.getState().deleteArtifact('artifact-2000');
+            expect(store.getState().artifactInventoryUnreadyCount).toBe(0);
+            store.getState().deleteArtifact(skills[0]!.id);
+            expect(Object.keys(store.getState().artifactSkillRevisions)).toHaveLength(138);
+            const readStartedWith = store.getState().artifacts;
+            store.getState().applyArtifacts([], readStartedWith);
+            expect(store.getState().artifactSkillRevisions).toEqual({});
+            expect(store.getState().artifactInventoryUnreadyCount).toBe(0);
+        } finally { off(); }
+    });
     it('retains unchanged Artifact slices when exact board or workflow reads hydrate or revise a body', () => {
         const store = createHarness();
         const head = { ...artifact(1), storageMode: 'plain', access: 'owner', ownerAccountId: 'owner',

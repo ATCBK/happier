@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { useArtifacts, useArtifactsLoaded } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storage';
 import { skillUsageObservedSinceV1 } from '@happier-dev/protocol/prompts/library/skills/skillUsageV1';
 import { isMigratedReachRuleIdV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import { resolveArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
@@ -163,10 +163,9 @@ export function useSkillsLibrary(
   const scope = requestedScope === undefined ? activeScope : requestedScope;
   const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
   const { binding, ready } = useMountedActionExecution(scope);
-  const artifacts = useArtifacts();
-  const artifactsLoaded = useArtifactsLoaded();
-  const inventoryComplete = artifactsLoaded && areServerAccountScopesEqual(scope, activeScope)
-    && artifacts.every(artifact => artifact.isDecrypted && artifact.rawHeader && artifact.access !== undefined);
+  const skillRevisions = getStorage()(state => state.artifactSkillRevisions);
+  const inventoryReady = getStorage()(state => state.isDataReady && state.artifactsLoaded && state.artifactInventoryUnreadyCount === 0);
+  const inventoryComplete = inventoryReady && areServerAccountScopesEqual(scope, activeScope);
   const rules = usePromptLibraryCatalogValue('skill-rules', scope);
   const usage = usePromptLibraryCatalogValue('skill-usage', scope);
   const folders = usePromptLibraryCatalogValue('folders', scope);
@@ -176,31 +175,8 @@ export function useSkillsLibrary(
   const pluginSourcesReady = !readsActiveScope || declarations.ready;
   // Reach and usage already have scoped publications below. Content reads depend on
   // membership and revisions; unknown membership is distinct from an empty inventory.
-  const sourceRevisions = React.useMemo(() => {
-    const skills = (
-      areServerAccountScopesEqual(scope, activeScope) ? artifacts : []
-    )
-      .filter((artifact) => {
-        const header = artifact.header as
-          | Readonly<Record<string, unknown>>
-          | null
-          | undefined;
-        return (
-          header?.kind === 'prompt_bundle.v2' &&
-          header.bundleSchemaId === 'skills.skill_md_v1'
-        );
-      })
-      .map(
-        (artifact) =>
-          `${artifact.id}@${artifact.headerVersion}:${artifact.bodyVersion ?? 0}`,
-      );
-    return skills;
-  }, [
-    scope,
-    activeScope,
-    artifacts,
-  ]);
-  const sourceKey = contentKey(sourceRevisions);
+  const sourceRevisions = React.useMemo(() => readsActiveScope ? Object.values(skillRevisions) : [], [readsActiveScope, skillRevisions]);
+  const sourceKey = React.useMemo(() => contentKey(sourceRevisions), [sourceRevisions]);
   const completedRead = React.useRef<Readonly<{ observationKey: string; sourceRevisions: readonly string[];
     pluginRevision: PluginSkillSourceIdentity }> | null>(null);
   const [state, setState] = React.useState<{
