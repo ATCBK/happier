@@ -101,6 +101,15 @@ function isRetryableSessionCreation(actionId: string, result: ActionExecuteResul
   return settlement.success && settlement.data.type === 'error' && settlement.data.retryable;
 }
 
+function isFreshManagedBootstrapRetry(
+  actionId: string,
+  snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1,
+  settled: ActionExecuteResult | null,
+): boolean {
+  if (actionId !== 'machines.managed.bootstrap.retry') return false;
+  return snapshot.observation?.kind === 'outcome_uncertain' || (settled !== null && !settled.ok);
+}
+
 function isUnconfirmedOwnedOutcome(actionId: string, result: ActionExecuteResult): boolean {
   if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild'
     || actionId === 'machines.managed.acquire' || actionId === 'machines.managed.bootstrap.retry') {
@@ -353,26 +362,30 @@ export function createActionOperationRunner(deps: Readonly<{
       }
       const settled = terminalResult(existing);
       if (settled) {
-        if (!isRetryableSessionCreation(action.actionId, settled)) return settled;
+        if (!isRetryableSessionCreation(action.actionId, settled)
+          && !isFreshManagedBootstrapRetry(action.actionId, existing, settled)) return settled;
         // An explicit same-input retry gets a new execution receipt, not a
-        // rewind of terminal evidence. The ordinary creator still owns the
-        // unchanged creation key, tag and nonce and must create-or-rejoin it.
+        // rewind of terminal evidence.
       } else {
-        if (existing.state === 'running' && action.actionId === 'session.handoff') {
-          return await invoke(existing.operationId, existing.cancellation);
+        if (!isFreshManagedBootstrapRetry(action.actionId, existing, settled)) {
+          if (existing.state === 'running' && action.actionId === 'session.handoff') {
+            return await invoke(existing.operationId, existing.cancellation);
+          }
+          if (existing.state === 'running' && action.actionId === 'session.spawn_new') {
+            // Re-entry observes the already-owned creation nonce; it never submits
+            // another Session after an unconfirmed native outcome.
+            return await invoke(existing.operationId, existing.cancellation, true);
+          }
+          if (existing.state === 'running' && action.actionId === 'machines.managed.acquire'
+            && existing.observation?.kind === 'outcome_uncertain') {
+            // The exact original requester/input retains the continuation. The
+            // enrolled acquisition owner observes its row without buying again.
+            return await invoke(existing.operationId, existing.cancellation);
+          }
+          return { ok: false, errorCode: 'action_operation_unavailable', error: 'action_operation_unavailable' };
         }
-        if (existing.state === 'running' && action.actionId === 'session.spawn_new') {
-          // Re-entry observes the already-owned creation nonce; it never submits
-          // another Session after an unconfirmed native outcome.
-          return await invoke(existing.operationId, existing.cancellation, true);
-        }
-        if (existing.state === 'running' && action.actionId === 'machines.managed.acquire'
-          && existing.observation?.kind === 'outcome_uncertain') {
-          // The exact original requester/input retains the continuation. The
-          // enrolled acquisition owner observes its row without buying again.
-          return await invoke(existing.operationId, existing.cancellation);
-        }
-        return { ok: false, errorCode: 'action_operation_unavailable', error: 'action_operation_unavailable' };
+        // Retry is an explicit new attempt. Preserve the uncertain receipt,
+        // but let the same UI intent create a fresh pairing operation.
       }
     }
     // Final retirement closes only new finite admission. Exact request replay

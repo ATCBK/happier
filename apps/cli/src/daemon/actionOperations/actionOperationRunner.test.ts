@@ -9,6 +9,28 @@ import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './
 const scope = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation canonical execution observer', () => {
+  it('starts a fresh managed bootstrap retry for the same explicit retry identity after an unconfirmed attempt', async () => {
+    const store = createActionOperationStore();
+    let operationNumber = 0;
+    const runner = createActionOperationRunner({ store, generateOperationId: () => `bootstrap-retry-${operationNumber++}`,
+      resolveAction: actionId => ({ actionId, title: 'Retry install', operation: {
+        version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
+      } }),
+    });
+    let executions = 0;
+    const request = { actionId: 'machines.managed.bootstrap.retry', scope, requestId: 'stable-retry', input: { managedId: 'managed' },
+      execute: async () => ++executions === 1
+        ? { ok: false as const, errorCode: 'action_outcome_unknown', error: 'Outcome unknown' }
+        : { ok: true as const, result: { managedId: 'managed', operation: { operationId: 'bootstrap-retry-1' } } },
+    };
+
+    await expect(runner.observe(request)).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
+    expect(store.get(scope, 'bootstrap-retry-0')).toMatchObject({ state: 'running', observation: { kind: 'outcome_uncertain' } });
+    await expect(runner.observe(request)).resolves.toMatchObject({ ok: true });
+    expect(executions).toBe(2);
+    expect(store.get(scope, 'bootstrap-retry-1')).toMatchObject({ state: 'succeeded' });
+  });
+
   it.each([
     { ok: true, result: { outcome: 'accepted', operationCredentialUses: [{ label: 'forged plugin actor' }] } },
     { ok: false, errorCode: 'external_write_failed', error: 'Write failed' },
