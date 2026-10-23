@@ -10,6 +10,91 @@ import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './
 const scope = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation canonical execution observer', () => {
+  it('continues an arbitrary tracked Action past its deferred approval receipt', async () => {
+    const store = createActionOperationStore();
+    let operationNumber = 0;
+    let executionCount = 0;
+    const action = {
+      actionId: 'plugin.example.publish',
+      title: 'Publish example',
+      operation: {
+        version: 1 as const,
+        visibility: 'activity' as const,
+        progress: 'reported' as const,
+        presentation: { onStart: 'detail' as const },
+      },
+    };
+    const runner = createActionOperationRunner({
+      store,
+      generateOperationId: () => `arbitrary-approval-${operationNumber++}`,
+      resolveAction: () => action,
+    });
+    const terminalResult = { published: true };
+    const request = {
+      actionId: action.actionId,
+      scope,
+      requestId: 'approved-plugin-request',
+      input: { itemId: 'item-1' },
+      execute: async () => ++executionCount === 1
+        ? { ok: true as const, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: action.actionId } }
+        : { ok: true as const, result: terminalResult },
+    };
+
+    await expect(runner.observe(request)).resolves.toMatchObject({
+      ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: action.actionId },
+    });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+
+    expect(executionCount).toBe(2);
+    expect(store.list(scope).items).toHaveLength(2);
+  });
+
+  it.each([
+    'machines.managed.delete',
+    'machines.managed.power.set',
+    'machines.managed.rebuild',
+    'machines.managed.bootstrap.retry',
+    'machines.managed.acquire',
+  ] as const)('continues approved %s exactly once past its deferred approval receipt', async actionId => {
+    const store = createActionOperationStore();
+    let operationNumber = 0;
+    let executionCount = 0;
+    const spec = getActionSpec(actionId);
+    const runner = createActionOperationRunner({
+      store,
+      generateOperationId: () => `${actionId}-${operationNumber++}`,
+      resolveAction: () => ({
+        actionId,
+        title: spec.title,
+        operation: spec.operation!,
+        ...(spec.operationReentry ? { operationReentry: spec.operationReentry } : {}),
+      }),
+    });
+    const terminalResult = { managedId: 'managed', status: 'completed' };
+    const request = {
+      actionId,
+      scope,
+      requestId: 'approved-request',
+      input: { managedId: 'managed' },
+      execute: async () => ++executionCount === 1
+        ? { ok: true as const, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId } }
+        : { ok: true as const, result: terminalResult },
+    };
+
+    await expect(runner.observe(request)).resolves.toMatchObject({
+      ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId },
+    });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+
+    expect(executionCount).toBe(2);
+    expect(store.list(scope).items).toHaveLength(2);
+    expect(store.get(scope, `${actionId}-1`)).toMatchObject({ state: 'succeeded', result: terminalResult });
+  });
+
   it('applies declaration-owned re-entry behavior to a new Action without runner changes', async () => {
     const store = createActionOperationStore();
     let operationNumber = 0;

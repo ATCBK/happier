@@ -9,6 +9,7 @@ import { ActionOperationDomainRefV1Schema, ActionOperationFailureV1Schema, Actio
   canRetainProjectSetupReviewV1, ManagedControllerRequestFailureDetailsV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { ProjectPrepareNoLaunchResultV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { normalizeSessionCreationSelectionIdentityV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
@@ -346,7 +347,15 @@ export function createActionOperationRunner(deps: Readonly<{
         return { ok: true, result: { operation: existing } };
       }
       const settled = terminalResult(existing);
-      const reentry = action.operationReentry?.(existing) ?? (settled ? 'replay' : 'refuse');
+      // Deferred approval is an intermediate result from the generic Action
+      // executor, not the tracked Action's terminal effect. Retain its receipt as
+      // history, but never let it preempt the approved continuation or delegate
+      // that generic distinction to per-Action re-entry policy.
+      const pendingApproval = existing.state === 'succeeded'
+        && ActionApprovalRequestCreatedResultSchema.safeParse(existing.result).success;
+      const reentry = pendingApproval
+        ? 'fresh'
+        : action.operationReentry?.(existing) ?? (settled ? 'replay' : 'refuse');
       if (reentry === 'replay' && settled) return settled;
       if (reentry === 'reinvoke') return await invoke(existing.operationId, existing.cancellation);
       if (reentry === 'resume') return await invoke(existing.operationId, existing.cancellation, true);
