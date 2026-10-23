@@ -600,6 +600,13 @@ send an expired action. The action reuses the scoped RPC timeout budget across
 preparation and dispatch. That budget is not an Android execution guarantee and
 does not resume background sync or change the active server.
 
+iOS permission callbacks use that same URL-bound executor while retaining their
+foreground and cold-start eligibility. Generated Session destinations use the
+canonical Session navigator with the captured saved server profile, rather than
+inferring the server from a session cache after an asynchronous response. Explicit
+notification URLs retain their existing routing. Legacy pending decisions remain
+review-only and do not gain execution authority from navigation.
+
 The foreground listener and native task share one coordinator. Identical active
 decisions share work; conflicting active decisions cannot overwrite it. Only
 explicit application success confirms the response. Within the same JS runtime,

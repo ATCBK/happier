@@ -364,7 +364,7 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_123', expect.any(Object));
     });
 
     it('dedupes body taps within a mount and permits the same notification after remount', async () => {
@@ -396,14 +396,14 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.pushSpy).toHaveBeenCalledTimes(1);
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
+        expect(mockState.navigateSpy).toHaveBeenCalledTimes(1);
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_123', expect.any(Object));
         expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
 
         // A new live body tap remains navigation after the root hook remounts.
         await renderRootLayout();
-        expect(mockState.pushSpy).toHaveBeenCalledTimes(2);
-        expect(mockState.pushSpy).toHaveBeenLastCalledWith('/session/s_123');
+        expect(mockState.navigateSpy).toHaveBeenCalledTimes(2);
+        expect(mockState.navigateSpy).toHaveBeenLastCalledWith('/session/s_123', expect.any(Object));
     });
 
     it('switches server and navigates when a notification includes serverUrl', async () => {
@@ -439,7 +439,7 @@ describe('App RootLayout notifications', () => {
             scope: 'device',
             refreshAuth: expect.any(Function),
         });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_456');
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_456?serverId=server-2', expect.any(Object));
     });
 
     it('does not auto-switch to loopback serverUrl from notifications', async () => {
@@ -537,7 +537,7 @@ describe('App RootLayout notifications', () => {
             scope: 'device',
             refreshAuth: expect.any(Function),
         });
-        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_2', expect.any(Object));
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_2?serverId=server-2', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
 
@@ -565,7 +565,7 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_3');
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_3', expect.any(Object));
     });
 
     it('opens server settings when a permission notification targets an unsaved server', async () => {
@@ -668,7 +668,7 @@ describe('App RootLayout notifications', () => {
             scope: 'device',
             refreshAuth: expect.any(Function),
         });
-        expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_5');
+        expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_5', expect.any(Object));
     });
 
     it('routes to server settings with a prefilled url when a notification targets an unsaved server and servers already exist', async () => {

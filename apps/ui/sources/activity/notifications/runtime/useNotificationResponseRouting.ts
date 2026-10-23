@@ -70,22 +70,6 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
         };
 
-        const performPermissionAction = async (actionParams: {
-            sessionId: string;
-            requestId: string;
-            action: 'allow' | 'deny';
-            occurrenceId?: string;
-        }): Promise<void> => {
-            // Older notification payloads cannot identify the occurrence the
-            // user saw. Navigation still opens it for an in-app response.
-            if (!actionParams.occurrenceId) return;
-            const { dispatchSessionPermissionDecision, buildNotificationPermissionDecisionRequest } = await import('@/sync/ops/sessionPermissionDecision');
-            await dispatchSessionPermissionDecision({
-                sessionId: actionParams.sessionId,
-                request: { ...buildNotificationPermissionDecisionRequest(actionParams.action, actionParams.requestId), occurrenceId: actionParams.occurrenceId },
-            });
-        };
-
         const pendingAction = getPendingNotificationAction();
         if (pendingAction && Platform.OS === 'android') {
             // Old versions queued actions across server switches. Do not replay an
@@ -102,17 +86,10 @@ export function useNotificationResponseRouting(params: Readonly<{
             const active = normalizeServerUrl(getActiveServerUrl());
             if (normalizeServerUrl(pendingAction.serverUrl) === active) {
                 clearPendingNotificationAction();
+                // Legacy pending records have no occurrence identity and are review-only.
+                const saved = findSavedServerProfileForUrl(pendingAction.serverUrl);
                 fireAndForget((async () => {
-                    try {
-                        await performPermissionAction({
-                            sessionId: pendingAction.sessionId,
-                            requestId: pendingAction.requestId,
-                            action: pendingAction.action,
-                        });
-                    } catch {
-                        // best-effort; navigation still proceeds
-                    }
-                    navigateToSessionRoute({ router, sessionId: pendingAction.sessionId, refreshAuth: refreshAuthRef.current });
+                    navigateToSessionRoute({ router, sessionId: pendingAction.sessionId, serverId: saved?.id, refreshAuth: refreshAuthRef.current });
                 })(), { tag: 'RootLayout.pendingNotificationAction' });
                 return;
             }
@@ -160,17 +137,41 @@ export function useNotificationResponseRouting(params: Readonly<{
             if (!parsed.route) return;
 
             const route = parsed.route;
+            const routeSessionId = parsed.routeSessionId;
             const serverUrl = parsed.serverUrl;
+            const savedTarget = serverUrl ? findSavedServerProfileForUrl(serverUrl) : null;
+            const navigateToRoute = (serverId?: string) => {
+                if (routeSessionId) {
+                    navigateToSessionRoute({ router, sessionId: routeSessionId, serverId, refreshAuth: refreshAuthRef.current });
+                } else {
+                    router.push(route);
+                }
+            };
             const routeToServerSettingsForUrl = (url: string) => {
                 router.push(`/settings/server?url=${encodeURIComponent(url)}&source=notification`);
             };
+
+            if (routeSessionId && (!serverUrl || savedTarget)) {
+                if (parsed.permissionAction && serverUrl) {
+                    fireAndForget((async () => {
+                        try {
+                            await executeNotificationPermissionAction(parsed);
+                        } catch {
+                            // Navigation still opens the request for in-app review.
+                        }
+                        navigateToRoute(savedTarget?.id);
+                    })(), { tag: 'RootLayout.notificationAction.session' });
+                } else {
+                    navigateToRoute(savedTarget?.id);
+                }
+                return;
+            }
 
             // Permission action buttons are security-sensitive. Only perform allow/deny when:
             // - the server is already active, OR
             // - the server is already saved (we can switch safely), OR
             // - (otherwise) navigate only and let the user handle it in-app.
             if (parsed.permissionAction) {
-                const { action, sessionId: actionSessionId, requestId: actionRequestId, occurrenceId } = parsed.permissionAction;
                 if (!serverUrl) {
                     router.push(route);
                     return;
@@ -197,7 +198,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                         refreshAuth: refreshAuthRef.current,
                                     });
                                     clearPendingNotificationNav();
-                                    router.push(route);
+                                    navigateToRoute(findSavedServerProfileForUrl(serverUrl)?.id);
                                 } catch {
                                     // keep pending notification nav as fallback
                                 }
@@ -222,11 +223,11 @@ export function useNotificationResponseRouting(params: Readonly<{
                             });
                             clearPendingNotificationNav();
                             try {
-                                await performPermissionAction({ sessionId: actionSessionId, requestId: actionRequestId, occurrenceId, action });
+                                await executeNotificationPermissionAction(parsed);
                             } catch {
                                 // best-effort
                             }
-                            navigateToSessionRoute({ router, sessionId: actionSessionId, refreshAuth: refreshAuthRef.current });
+                            navigateToRoute(saved.id);
                         } catch {
                             // Keep navigation for in-app review after recovery.
                         }
@@ -249,7 +250,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                     refreshAuth: refreshAuthRef.current,
                                 });
                                 clearPendingNotificationNav();
-                                router.push(route);
+                                navigateToRoute(saved.id);
                             } catch {
                                 // keep pending notification nav as fallback
                             }
@@ -274,7 +275,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                     refreshAuth: refreshAuthRef.current,
                                 });
                                 clearPendingNotificationNav();
-                                router.push(route);
+                                navigateToRoute(findSavedServerProfileForUrl(serverUrl)?.id);
                             } catch {
                                 // keep pending notification nav as fallback
                             }
@@ -289,14 +290,13 @@ export function useNotificationResponseRouting(params: Readonly<{
             }
 
             if (parsed.permissionAction) {
-                const { action, sessionId: actionSessionId, requestId: actionRequestId, occurrenceId } = parsed.permissionAction;
                 fireAndForget((async () => {
                     try {
-                        await performPermissionAction({ sessionId: actionSessionId, requestId: actionRequestId, occurrenceId, action });
+                        await executeNotificationPermissionAction(parsed);
                     } catch {
                         // best-effort
                     }
-                    navigateToSessionRoute({ router, sessionId: actionSessionId, refreshAuth: refreshAuthRef.current });
+                    navigateToRoute(savedTarget?.id);
                 })(), { tag: 'RootLayout.notificationAction.activeServer' });
                 return;
             }

@@ -31,15 +31,15 @@ function extractServerUrlFromNotificationData(data: unknown): string | null {
     return normalized ? normalized : null;
 }
 
-function toRoute(data: unknown): string | null {
-    if (!isRecord(data)) return null;
+function toRoute(data: unknown): Readonly<{ route: string | null; routeSessionId: string | null }> {
+    if (!isRecord(data)) return { route: null, routeSessionId: null };
     if (typeof data.url === 'string' && data.url.trim()) {
-        return coerceRelativeRoute(data.url);
+        return { route: coerceRelativeRoute(data.url), routeSessionId: null };
     }
     if (typeof data.sessionId === 'string' && data.sessionId.trim()) {
-        return `/session/${encodeURIComponent(data.sessionId)}`;
+        return { route: `/session/${encodeURIComponent(data.sessionId)}`, routeSessionId: data.sessionId };
     }
-    return null;
+    return { route: null, routeSessionId: null };
 }
 
 function readSessionIdFromNotificationData(data: unknown): string {
@@ -96,6 +96,8 @@ export type ParsedNotificationTap = Readonly<{
     isDefaultTap: boolean;
     isOpenAction: boolean;
     route: string | null;
+    /** Present only when the route was generated from sessionId, never an explicit URL. */
+    routeSessionId: string | null;
     serverUrl: string | null;
     accountId?: string | null;
     permissionAction: Readonly<{ action: 'allow' | 'deny'; sessionId: string; requestId: string; occurrenceId?: string }> | null;
@@ -124,7 +126,7 @@ export function parseNotificationTap(params: Readonly<{
     if (!isKnownActionIdentifier) return null;
 
     const data = readNotificationData({ response: params.response });
-    const route = toRoute(data);
+    const { route, routeSessionId } = toRoute(data);
     const serverUrl = extractServerUrlFromNotificationData(data);
 
     const sessionId = readSessionIdFromNotificationData(data);
@@ -144,6 +146,7 @@ export function parseNotificationTap(params: Readonly<{
         isDefaultTap,
         isOpenAction,
         route,
+        routeSessionId,
         serverUrl,
         accountId: isRecord(data) && typeof data.accountId === 'string' ? data.accountId.trim() : null,
         permissionAction: resolvedPermissionAction,

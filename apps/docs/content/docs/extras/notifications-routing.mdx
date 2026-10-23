@@ -24,10 +24,7 @@ This avoids landing on the wrong server or silently approving a request on an un
 
 If the notification contains a session route, Happier opens that session.
 
-If the notification belongs to a different saved server than the one currently active:
-
-- Happier switches to that saved server first
-- then it opens the session
+If the notification belongs to a different saved server than the one currently active, Happier opens the session on that saved server. The destination keeps the notification's server even if you change servers while an action is running.
 
 This is the default behavior for normal notification taps and for the `Answer` action used by action-request notifications.
 
@@ -71,9 +68,10 @@ If the notification targets the server that is already active:
 
 If the notification targets a saved server profile that is not currently active:
 
-- Happier switches to that saved server
-- performs the action if applicable
-- opens the session
+- Happier sends the response to that saved server when applicable
+- opens the session with that server selected
+
+Generated session destinations use the notification's saved server. Explicit links to other app routes retain their existing routing behavior.
 
 ### 3) Server is not saved, and the device has no saved servers yet
 
