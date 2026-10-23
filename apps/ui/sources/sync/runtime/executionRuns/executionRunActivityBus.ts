@@ -108,6 +108,10 @@ export function subscribeRunningExecutionRunRoster(
         // one follow-up read rather than disappearing into the baseline gap.
         const unsubscribeActivity = subscribeExecutionRunActivity(address, () => refreshRoster(key, created));
         const unsubscribeCatchUp = subscribeHomeAccountChange((event) => {
+            // Exact unrelated pages cannot change this Session's admission.
+            // Own-Session and coarse wakes may change access/publication, even
+            // when live Run ephemerals are correctly suppressed for the reader.
+            if (event.entityIds !== undefined && !event.entityIds.includes(address.sessionId)) return;
             if (areServerProfileIdentifiersEquivalent(event.serverId, address.serverId)) refreshRoster(key, created);
         });
         const unsubscribeCredentials = subscribeHomeCredentialChange((event) => {

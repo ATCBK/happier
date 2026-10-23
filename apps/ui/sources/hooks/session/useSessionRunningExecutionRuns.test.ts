@@ -30,7 +30,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 import { resolveRunningExecutionRunsFromListResult, useSessionRunningExecutionRuns } from './useSessionRunningExecutionRuns';
-import { notifyExecutionRunActivity, notifyExecutionRunActivityFromUpdate } from '@/sync/runtime/executionRuns/executionRunActivityBus';
+import { notifyExecutionRunActivity, notifyExecutionRunActivityFromUpdate, notifyExecutionRunActivityReconnect } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 function run(runId = 'run_1', status: ExecutionRunPublicState['status'] = 'running'): ExecutionRunPublicState {
@@ -92,6 +92,44 @@ describe('useSessionRunningExecutionRuns', () => {
         expect(rpc).toHaveBeenCalledTimes(2);
     });
 
+    it('does not read demanded rosters for 1,000 detailed unrelated Account arrivals', async () => {
+        rpc.mockResolvedValue({ runs: [run()] });
+        const first = await roster();
+        const second = await roster('server-a', 's2');
+        const previous = first.getCurrent();
+        expect(rpc).toHaveBeenCalledTimes(2);
+        for (let index = 0; index < 1_000; index++) {
+            publishHomeAccountChange('server-a', [`artifact-${index}`, `session-${index}`], {
+                changeKinds: ['artifact', 'session', 'machine', 'account'],
+            });
+        }
+        await flushHookEffects({ advanceTimersMs: 60_000 });
+        expect(rpc).toHaveBeenCalledTimes(2);
+        expect(first.getCurrent()).toBe(previous);
+
+        // Own-Session pages can change access/publication admission. A secondary
+        // Home's coarse wake does not have enough detail to exclude that change.
+        publishHomeAccountChange('server-a', ['s1'], { changeKinds: ['session'] });
+        await flushHookEffects();
+        expect(rpc).toHaveBeenCalledTimes(3);
+        publishHomeAccountChange('server-a');
+        await flushHookEffects();
+        expect(rpc).toHaveBeenCalledTimes(5);
+
+        rpc.mockResolvedValueOnce({ runs: [] });
+        notifyExecutionRunActivityFromUpdate('server-a', {
+            type: 'execution-run-updated', sessionId: 's1', run: run('run_1', 'succeeded'),
+        });
+        await flushHookEffects();
+        expect(first.getCurrent()).toEqual([]);
+        expect(second.getCurrent().map(item => item.runId)).toEqual(['run_1']);
+        expect(rpc).toHaveBeenCalledTimes(6);
+
+        notifyExecutionRunActivityReconnect('server-a');
+        await flushHookEffects();
+        expect(rpc).toHaveBeenCalledTimes(8);
+    });
+
     it('keeps unchanged rows and snapshots stable and does not render siblings', async () => {
         rpc.mockResolvedValue({ runs: [run()] });
         const hook = await roster();
@@ -119,10 +157,10 @@ describe('useSessionRunningExecutionRuns', () => {
         expect(hook.getCurrent()).toBe(lastKnown);
         await flushHookEffects({ advanceTimersMs: 60_000 });
         expect(rpc).toHaveBeenCalledTimes(2);
-        publishHomeAccountChange('server-b');
+        notifyExecutionRunActivityReconnect('server-b');
         await flushHookEffects();
         expect(rpc).toHaveBeenCalledTimes(2);
-        publishHomeAccountChange('server-a');
+        notifyExecutionRunActivityReconnect('server-a');
         await flushHookEffects();
         expect(hook.getCurrent()).toEqual([]);
         expect(rpc).toHaveBeenCalledTimes(3);
@@ -133,7 +171,7 @@ describe('useSessionRunningExecutionRuns', () => {
         const hook = await roster();
         await flushHookEffects({ advanceTimersMs: 60_000 });
         expect(rpc).toHaveBeenCalledTimes(1);
-        publishHomeAccountChange('server-a');
+        notifyExecutionRunActivityReconnect('server-a');
         await flushHookEffects();
         expect(hook.getCurrent().map((item) => item.runId)).toEqual(['run_1']);
         expect(rpc).toHaveBeenCalledTimes(2);

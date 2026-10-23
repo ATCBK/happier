@@ -306,6 +306,24 @@ describe('apiSocket reconnect semantics', () => {
         expect(onReconnected).toHaveBeenCalledTimes(1);
     });
 
+    it('catches demanded Run activity up through the actual focused Home reconnect', async () => {
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { subscribeExecutionRunActivity } = await import('@/sync/runtime/executionRuns/executionRunActivityBus');
+        const activity = vi.fn();
+        ownedSubscriptions.push(subscribeExecutionRunActivity({
+            serverId: getActiveServerSnapshot().serverId, sessionId: 'roster-session',
+        }, activity));
+        const { socket, trigger } = await boot();
+        await connect(socket);
+        expect(activity).toHaveBeenCalledWith({ runId: null });
+        activity.mockClear();
+        trigger('disconnect', 'transport close');
+        emitReachability('offline');
+        await connect(socket);
+        expect(activity).toHaveBeenCalledTimes(1);
+        expect(activity).toHaveBeenCalledWith({ runId: null });
+    });
+
     it.each(['socket-drop', 'home-outage', 'first-connection', 'daemon-restart'] as const)('recovers a demanded retired inventory watch through the focused Home connection (%s)', async recovery => {
         const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
         const { socket, trigger } = await boot({ token });

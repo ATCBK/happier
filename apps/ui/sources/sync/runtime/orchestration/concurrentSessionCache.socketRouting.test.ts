@@ -19,6 +19,24 @@ const machines = () => h.storage.getState().machineListByServerId[h.homeB.id];
 const route = (serverId = h.homeB.id, remoteMachineId = 'machine-b') => ({ serverId, remoteMachineId });
 
 describe('concurrent session cache socket routing', () => {
+    it('catches demanded Run activity up through the actual concurrent Home reconnect', async () => {
+        const { subscribeExecutionRunActivity } = await import('@/sync/runtime/executionRuns/executionRunActivityBus');
+        const activeActivity = vi.fn();
+        const concurrentActivity = vi.fn();
+        const releaseActive = subscribeExecutionRunActivity({ serverId: h.homeA.id, sessionId: 'roster-session' }, activeActivity);
+        const releaseConcurrent = subscribeExecutionRunActivity({ serverId: h.homeB.id, sessionId: 'roster-session' }, concurrentActivity);
+        try {
+            await h.start(); await h.ready();
+            expect(concurrentActivity).toHaveBeenCalledWith({ runId: null });
+            concurrentActivity.mockClear();
+            h.socket().trigger('disconnect', 'transport close');
+            h.socket().trigger('connect');
+            expect(concurrentActivity).toHaveBeenCalledTimes(1);
+            expect(concurrentActivity).toHaveBeenCalledWith({ runId: null });
+            expect(activeActivity).not.toHaveBeenCalled();
+        } finally { releaseActive(); releaseConcurrent(); }
+    });
+
     it('keeps shared encrypted content cold while retaining Account-owned names and demanded per-Home metadata', async () => {
         // Observe the real owner so accidental content demand is visible at
         // every batch size, including batches below the Worker threshold.
