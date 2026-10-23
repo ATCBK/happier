@@ -8,6 +8,7 @@ export async function setSessionArchivedStateById(params: Readonly<{
   token: string;
   sessionId: string;
   archived: boolean;
+  originRunId?: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof archiveSession>[0]['resolveAuthorizationHeaders'];
 }>): Promise<Readonly<{ archivedAt: number | null }>> {
@@ -15,6 +16,7 @@ export async function setSessionArchivedStateById(params: Readonly<{
     ? await archiveSession({
         token: params.token,
         sessionId: params.sessionId,
+        ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
         ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       })

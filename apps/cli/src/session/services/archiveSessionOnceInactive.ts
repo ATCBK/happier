@@ -9,6 +9,7 @@ const DEFAULT_ARCHIVE_TIMEOUT_MS = 10_000;
 export async function archiveSessionOnceInactive(params: Readonly<{
   token: string;
   sessionId: string;
+  originRunId?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
@@ -26,6 +27,7 @@ export async function archiveSessionOnceInactive(params: Readonly<{
           token: params.token,
           sessionId: params.sessionId,
           archived: true,
+          ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
           ...(params.signal ? { signal: params.signal } : {}),
           ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         });

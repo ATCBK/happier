@@ -2,6 +2,8 @@ import axios, { type AxiosResponse } from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1, type ActionCredentialScopeDeniedFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
+import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol/plugins/installations/manifests';
+import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
 import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
@@ -1739,13 +1741,20 @@ async function postArchiveMutation(params: Readonly<{
   token: string;
   sessionId: string;
   op: 'archive' | 'unarchive';
+  originRunId?: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<{ archivedAt: number | null }> {
   params.signal?.throwIfAborted();
   const serverUrl = resolveServerHttpBaseUrl();
   const path = `/v2/sessions/${encodeSessionIdPathSegment(params.sessionId)}/${params.op}`;
-  const body = {};
+  const body = params.op === 'archive' && params.originRunId !== undefined ? { originRunId: params.originRunId } : {};
+  const publisherHeader = params.op === 'archive' && params.originRunId !== undefined
+    ? await createDefaultPluginInstallationPublisherHeader({ method: 'POST', path, body }) : null;
+  if (params.op === 'archive' && params.originRunId !== undefined && !publisherHeader) {
+    throw new Error('Session archive origin publisher unavailable');
+  }
+  params.signal?.throwIfAborted();
   const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'POST', path, body })
     ?? (params.resolveAuthorizationHeaders ? null : { Authorization: `Bearer ${params.token}` });
   if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
@@ -1756,6 +1765,7 @@ async function postArchiveMutation(params: Readonly<{
       headers: {
         ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
         ...authorizationHeaders,
+        ...(publisherHeader ? { [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader } : {}),
         'Content-Type': 'application/json',
       },
       // Archive can wait on the Home's transaction. The containing invocation
@@ -1804,6 +1814,7 @@ async function postArchiveMutation(params: Readonly<{
 
 export async function archiveSession(params: Readonly<{
   token: string; sessionId: string;
+  originRunId?: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
 }>): Promise<{ archivedAt: number }> {

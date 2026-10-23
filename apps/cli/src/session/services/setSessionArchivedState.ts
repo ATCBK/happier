@@ -24,6 +24,7 @@ export async function setSessionArchivedState(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   archived: boolean;
+  originRunId?: string;
   signal?: AbortSignal;
   externalAction?: Parameters<typeof requestSessionStop>[0]['externalAction'];
   resolveAuthorizationHeaders?: Parameters<typeof requestSessionStop>[0]['resolveAuthorizationHeaders'];
@@ -57,6 +58,7 @@ export async function setSessionArchivedState(params: Readonly<{
       token: params.credentials.token,
       sessionId: resolved.sessionId,
       archived: params.archived,
+      ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
       ...(signal ? { signal } : {}),
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     }));
@@ -80,6 +82,7 @@ export async function setSessionArchivedState(params: Readonly<{
     result = await archiveSessionOnceInactive({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
+      ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
       ...(signal ? { signal } : {}),
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });

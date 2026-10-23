@@ -8,6 +8,9 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { setSessionArchivedState } from './setSessionArchivedState';
+import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
+import { updateSettings } from '@/persistence';
+import { configuration } from '@/configuration';
 
 const boundary = vi.hoisted(() => ({ createSocket: vi.fn(), callMachineRpc: vi.fn() }));
 // Socket creation and machine RPC are network boundaries; admission and stop policy stay real.
@@ -58,6 +61,10 @@ describe('setSessionArchivedState', () => {
   });
 
   it('retains original authorization while stopping an active session and retrying archive', async () => {
+    await readOrCreateInstallationIdentity();
+    await updateSettings(settings => ({ ...settings, machineIdByServerId: {
+      ...settings.machineIdByServerId, [configuration.activeServerId]: 'archive-machine',
+    } }));
     active = true;
     const post = vi.spyOn(axios, 'post')
       .mockResolvedValueOnce({ status: 409, data: { error: 'session_active' } })
@@ -69,7 +76,7 @@ describe('setSessionArchivedState', () => {
     // lookup, Stop observations and the archive retry cannot borrow the bearer.
     const resolveAuthorizationHeaders = () => ({ 'X-Test-Original-Archive': 'signed' });
     await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true,
-      externalAction, resolveAuthorizationHeaders }))
+      originRunId: 'host-run', externalAction, resolveAuthorizationHeaders }))
       .resolves.toEqual({ ok: true, sessionId, archivedAt: 456 });
     expect(boundary.callMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'machine-1', method: RPC_METHODS.STOP_SESSION, request: { sessionId },
@@ -80,7 +87,8 @@ describe('setSessionArchivedState', () => {
       expect(config?.headers).toMatchObject({ 'X-Test-Original-Archive': 'signed' });
       expect(config?.headers).not.toHaveProperty('Authorization');
     }
-    for (const [, , config] of post.mock.calls) {
+    for (const [, body, config] of post.mock.calls) {
+      expect(body).toEqual({ originRunId: 'host-run' });
       expect(config?.headers).toMatchObject({ 'X-Test-Original-Archive': 'signed' });
       expect(config?.headers).not.toHaveProperty('Authorization');
     }
