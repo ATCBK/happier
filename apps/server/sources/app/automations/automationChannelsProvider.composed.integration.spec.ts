@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
+import { PluginMachineExecutionRoutingV1Schema } from "@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1";
 
 import {
     AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1,
@@ -77,6 +78,11 @@ const SOURCE_SELECTOR_ID = AutomationSourceSelectorIdV1Schema.parse(
 );
 const VERSION = "0.0.0";
 const CHANNELS_PLUGIN_ID = "happier.channels";
+const CHANNELS_EXECUTION_ROUTING = PluginMachineExecutionRoutingV1Schema.parse({
+    serverIdentityId: SERVER_IDENTITY_ID,
+    machineId: MACHINE_ID,
+    pluginId: CHANNELS_PLUGIN_ID,
+});
 const CHANNELS_GENERATION = "channels-provider-composed-generation";
 const PROVIDER_GENERATION = "provider-channels-composed-generation";
 const CHANNELS_OCCURRENCE_ID = "channels-provider-composed-occurrence";
@@ -587,7 +593,7 @@ function providerContributionProjection(scenario: ProviderScenario) {
     };
 }
 
-function pluginReleaseFacts(scenario: ProviderScenario) {
+function pluginReleaseFacts(scenario: Pick<ProviderScenario, "manifest" | "pluginId">) {
     const declaredAssets = readDeclaredPackageAssetsV1(scenario.manifest);
     if (declaredAssets === null) throw new Error("provider manifest package assets are invalid");
     return normalizePluginReleaseFactsV1({
@@ -971,6 +977,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                             qualifiedId: `${scenario.pluginId}/backgroundServices/provider-observer`,
                         },
                         materialization,
+                        executionOrigin: { serverIdentityId: SERVER_IDENTITY_ID, materializationRef: materialization },
                     },
                     signal: new AbortController().signal,
                     services: {
@@ -989,6 +996,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                             execute: async () => {
                                 throw new Error("unexpected generic Channels action");
                             },
+                            getCurrentExecutionRouting: async () => CHANNELS_EXECUTION_ROUTING,
                             executeAdmittedTargetedOperationWithExecutionOrigin: async (
                                 operation: JsonRecord,
                                 actionInput: unknown,
@@ -1041,6 +1049,14 @@ describe("Channels first-party provider Automation Event composition", () => {
                 if (provider === "telegram") {
                     await expect(ingressModule.runConversationCheckpointedPollForInvocation(
                         { connectionId: input.connectionId, waitMs: 0 },
+                        { ...channelsContext, services: { ...channelsContext.services, actions: {
+                            ...channelsContext.services.actions,
+                            getCurrentExecutionRouting: async () => ({ ...CHANNELS_EXECUTION_ROUTING, machineId: "other-machine" }),
+                        } } },
+                    )).resolves.toMatchObject({ kind: "ineligible" });
+                    expect(pollCalls).toBe(0);
+                    await expect(ingressModule.runConversationCheckpointedPollForInvocation(
+                        { connectionId: input.connectionId, waitMs: 0 },
                         channelsContext,
                     )).resolves.toMatchObject({ kind: "committed" });
                     await expect(ingressModule.runConversationCheckpointedPollForInvocation(
@@ -1048,6 +1064,13 @@ describe("Channels first-party provider Automation Event composition", () => {
                         channelsContext,
                     )).resolves.toMatchObject({ kind: "retry" });
                 } else if (scenario.connectionTransport.kind === "socket") {
+                    await expect(ingressModule.ingestConversationProviderObservationForInvocation(
+                        input,
+                        { ...channelsContext, caller: { ...channelsContext.caller, executionOrigin: {
+                            ...channelsContext.caller.executionOrigin, serverIdentityId: "srv_otherChannelsComposed01",
+                        } } },
+                    )).rejects.toMatchObject({ code: "channels_ingress_stale_authority" });
+                    expect(await db.automationRun.count({ where: { accountId: ACCOUNT_ID } })).toBe(0);
                     // The exact same-census retryDue record is durable socket
                     // custody, so acknowledgment need not wait for admission retry.
                     await expect(ingressModule.ingestConversationProviderObservationForInvocation(
@@ -1256,16 +1279,9 @@ describe("Channels first-party provider Automation Event composition", () => {
             "../../../../../packages/plugins/channels/src/manifest.ts",
             import.meta.url,
         ).href) as { PLUGIN_MANIFEST: JsonRecord };
-        const release = normalizePluginReleaseFactsV1({
-            ref: { pluginId: CHANNELS_PLUGIN_ID, version: VERSION },
-            archiveDigestSha256: `sha256:${"e".repeat(64)}`,
-            normalizedManifest: manifestModule.PLUGIN_MANIFEST as never,
-            collectionContracts: [],
-            uiSlots: [],
-            packageAssetArchive: {
-                archiveDigestSha256: `sha256:${"f".repeat(64)}`,
-                resources: [],
-            },
+        const release = pluginReleaseFacts({
+            pluginId: CHANNELS_PLUGIN_ID,
+            manifest: manifestModule.PLUGIN_MANIFEST,
         });
         await db.accountPluginIntent.create({
             data: {
@@ -1487,6 +1503,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                         qualifiedId: `${scenario.pluginId}/backgroundServices/provider-observer`,
                     },
                     materialization,
+                    executionOrigin: { serverIdentityId: SERVER_IDENTITY_ID, materializationRef: materialization },
                 },
                 signal: new AbortController().signal,
                 services: {
@@ -1505,6 +1522,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                         execute: async () => {
                             throw new Error("unexpected generic Channels action");
                         },
+                        getCurrentExecutionRouting: async () => CHANNELS_EXECUTION_ROUTING,
                         executeAdmittedTargetedOperationWithExecutionOrigin: async (
                             operation: JsonRecord,
                             actionInput: unknown,
@@ -2285,6 +2303,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                         qualifiedId: `${humanScenario.pluginId}/backgroundServices/provider-observer`,
                     },
                     materialization,
+                    executionOrigin: { serverIdentityId: SERVER_IDENTITY_ID, materializationRef: materialization },
                 },
                 signal: new AbortController().signal,
                 services: {
@@ -2303,6 +2322,7 @@ describe("Channels first-party provider Automation Event composition", () => {
                         execute: async () => {
                             throw new Error("unexpected generic Channels action");
                         },
+                        getCurrentExecutionRouting: async () => CHANNELS_EXECUTION_ROUTING,
                         executeAdmittedTargetedOperationWithExecutionOrigin: async (
                             operation: JsonRecord,
                             actionInput: unknown,
