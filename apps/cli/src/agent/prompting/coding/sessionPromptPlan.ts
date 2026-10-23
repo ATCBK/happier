@@ -219,7 +219,7 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
     }
     const unavailable = promptContributions.optionalPromptAssetsUnavailable === true
-      || plan.admittedEntries.some(entry => entry.outcome === 'unavailable');
+      || plan.admittedEntries.some(entry => entry.outcome === 'unavailable' && entry.reason === 'not_found');
     if (unavailable && !optionalLibraryUnavailable) {
       const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [
         { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },

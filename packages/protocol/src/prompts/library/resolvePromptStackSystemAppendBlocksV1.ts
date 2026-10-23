@@ -244,9 +244,9 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       args.signal?.throwIfAborted();
       if (!(error instanceof PromptStackPreparationError)) throw error;
       admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: error.reason, revision: observedRevision });
-      // Optional content may be omitted only after its selection and Account
-      // admission succeeded. Required entries preserve the typed refusal/retry.
-      if (!entry.required) continue;
+      // Only definitive absence permits optional omission. Other failures use
+      // the same typed refusal/retry as required entries; the host retains input.
+      if (!entry.required && error.reason === 'not_found') continue;
       throw Object.assign(new PromptStackPreparationError(error.reason, error.ref, admittedEntries),
         error.cause === undefined ? {} : { cause: error.cause });
     }

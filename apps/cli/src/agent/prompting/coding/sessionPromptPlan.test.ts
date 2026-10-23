@@ -86,6 +86,13 @@ describe('session prompt-plan producer', () => {
     ] } }]);
     expect(JSON.stringify(events)).not.toContain('private-document');
     expect(resolve.readStartupInstructions?.()).not.toBeNull();
+    status = 503;
+    await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    expect(resolve.readStartupInstructions?.()).toBeNull();
+    expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+    expect(resolve.readComposition?.()).toBeNull();
+    expect(events).toHaveLength(1);
+    status = 404;
     required = true;
     await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'not_found' });
     expect(resolve.readStartupInstructions?.()).toBeNull();
