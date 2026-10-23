@@ -385,6 +385,27 @@ describe('BrowserViewHost', () => {
         } finally { await screen.unmount(); }
     });
 
+    it.each([
+        { status: 404, error: 'preview_not_found', reasonCode: 'preview_ended' },
+        { status: 403, error: 'preview_access_denied', reasonCode: 'preview_ended' },
+        { status: 503, error: 'preview_transport_unavailable', reasonCode: 'preview_transport_unavailable' },
+    ])('reports the preview admission refusal rather than an unavailable desktop engine ($status)', async ({ status, error, reasonCode }) => {
+        const home = await upsertServerProfile({ serverUrl: 'https://refused-preview-home.example.test' });
+        const view = { ...createLocalPreviewView(), currentUrl: null, securityOrigin: null };
+        previewHttp.fetch.mockImplementation(async (url) => url.endsWith('/v1/local-services/preview/preview_1/access')
+            ? Response.json({ error }, { status }) : Response.json({ ok: true }));
+        const screen = await renderScreen(<BrowserViewHost view={view} localServicePreviewServerId={home.id}
+            testID="refused-preview" />);
+        try {
+            await flushHookEffects({ cycles: 40 });
+            const desktopDiagnostic = screen.findHostByTestId('refused-preview-unavailable-diagnostic-desktop_engine_unavailable');
+            expect(screen.findHostByTestId(`refused-preview-unavailable-diagnostic-${reasonCode}`),
+                `obsolete desktop diagnostic present: ${Boolean(desktopDiagnostic)}`).not.toBeNull();
+            expect(desktopDiagnostic).toBeNull();
+            expect(screen.findAllByType('iframe')).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
     it('fails closed when a hosted-plugin Browser view supplies only raw current or pending URLs', async () => {
         const view = {
             ...createHostedPluginView(),

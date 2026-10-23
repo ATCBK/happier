@@ -344,7 +344,7 @@ function LocalPreviewView(props: Readonly<{
             onLifecycle={props.onLifecycle}
             endedPreview={props.endedPreview}
         /> : noServerRoute ? <BrowserLocalPreviewElsewhere testID={testID} serviceTitle={title} machineId={target.machineId} />
-                : <BrowserFrameUnavailable testID={testID} reasonCode={resolveBrowserViewUnavailableReasonCode(view)} />}
+                : <BrowserFrameUnavailable testID={testID} reasonCode={access.reasonCode ?? resolveBrowserViewUnavailableReasonCode(view)} endedPreview={props.endedPreview} />}
         <BrowserLocalPreviewPublicLinkControls target={target} serviceTitle={title} serverId={props.serverId} testID={`${testID}-public-link`} />
     </View>;
 }

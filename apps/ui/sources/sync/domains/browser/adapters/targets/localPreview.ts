@@ -76,6 +76,6 @@ export function isBrowserPreviewRefusalReasonCode(value: string): value is Brows
 export function resolveBrowserPreviewRefusal(status: number, result: unknown): BrowserPreviewRefusalReasonCode | null {
     const error = result && typeof result === 'object' && 'error' in result ? result.error : undefined;
     if (status === 503 && error === 'preview_transport_unavailable') return 'preview_transport_unavailable';
-    if ((status === 404 && error === 'preview_not_found') || (status === 401 && error === 'preview_access_denied')) return 'preview_ended';
+    if ((status === 404 && error === 'preview_not_found') || ((status === 401 || status === 403) && error === 'preview_access_denied')) return 'preview_ended';
     return null;
 }
