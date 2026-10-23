@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   SPECIMEN_ANALYSIS_COMPLETE,
@@ -44,6 +44,39 @@ function walk(query: string) {
 }
 
 describe('Find across a walkthrough', () => {
+  it('admits a thousand captured files without publishing a snapshot per file', () => {
+    const file = reading.stops[0]!.files[0]!;
+    const fileCount = 1_000;
+    const largeReading = {
+      ...reading,
+      stops: [{ ...reading.stops[0]!, files: Array.from({ length: fileCount }, (_, index) => ({
+        ...file, path: `file-${index}.ts`, unifiedDiff: '@@ -1 +1 @@\n-old\n+needle\n',
+      })) }],
+      others: [],
+    };
+    const model = createChangedFilesReviewFind();
+    const iterate = Map.prototype[Symbol.iterator];
+    let copiedEntries = 0;
+    // Instrument the real native Map iteration; no projection or Find logic is substituted.
+    const iteration = vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function (this: Map<unknown, unknown>) {
+      copiedEntries += this.size;
+      return iterate.call(this);
+    });
+    let disconnect: (() => void) | undefined;
+    try {
+      disconnect = connectWalkthroughFind(model, largeReading, () => {});
+      expect(copiedEntries).toBeLessThanOrEqual(fileCount);
+    } finally {
+      iteration.mockRestore();
+      disconnect?.();
+    }
+    model.open();
+    const dispose = connectWalkthroughFind(model, largeReading, () => {});
+    model.setQuery('needle');
+    expect(model.getSnapshot().status).toMatchObject({ kind: 'results', files: fileCount, coverage: 'complete' });
+    dispose();
+  });
+
   it('enumerates matches through every stop in reading order and then the changes outside stops', () => {
     // "compact" is in stop 4 (SettingsModal hunk 3 and useModalLayout) and in en.ts, which no stop explains.
     const { status, visited } = walk('compact');

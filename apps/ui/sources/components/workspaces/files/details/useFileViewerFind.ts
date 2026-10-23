@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { reconcileCodeLineFindRanges } from '@/components/ui/code/model/reconcileCodeLineFindRanges';
 import { matchFindText, type FindController, type FindOptions, type FindStatus, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
@@ -63,7 +64,7 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent, ini
             else markdownRanges.push(...ranges);
         });
         const target = matches[current];
-        publish({ status, lineRanges, markdownRanges, lineTarget: target?.lineId ?? null,
+        publish({ status, lineRanges: reconcileCodeLineFindRanges(snapshot.lineRanges, lineRanges), markdownRanges, lineTarget: target?.lineId ?? null,
             markdownLineTarget: target && !target.lineId ? target.line : null,
             revealRevision: snapshot.revealRevision + 1 });
     };

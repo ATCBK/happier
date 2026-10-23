@@ -153,6 +153,15 @@ describe('mounted review Find', () => {
             await act(async () => { inputSetter.call(input, 'needle'); input!.dispatchEvent(new Event('input', { bubbles: true })); });
             expect(container.querySelector('[data-testid="find-match-current"]')?.textContent).toBe('needle');
             expect(container.querySelector('[data-testid="scm-review-find-count:a.ts"]')?.textContent).toBe('3');
+            await act(async () => { model.setOptions({ matchCase: true, regex: true }); model.step(1); });
+            for (const refreshed of [patch, patch.replace('+needle', '+needle refreshed')]) {
+                await act(async () => { source.setDiffState('a.ts', { status: 'loaded', diff: refreshed, error: null }); });
+                expect(container.querySelector('input')).toBe(input);
+                expect(input!.value).toBe('needle');
+                expect(document.activeElement).toBe(input);
+                expect(model.getSnapshot()).toMatchObject({ open: true, options: { matchCase: true, regex: true },
+                    status: { current: 2, total: 3 } });
+            }
             // A closing bar may still be settling out, but inert: hidden from assistive tech and never focused.
             const liveInput = () => Array.from(container.querySelectorAll('input')).find((element) => !element.closest('[aria-hidden="true"]')) ?? null;
             await key(input!, 'Escape', 'Escape');

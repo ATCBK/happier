@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import renderer from 'react-test-renderer';
+import type { TextProps } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installCodeViewCommonModuleMocks } from './codeViewTestHelpers';
@@ -8,11 +9,21 @@ import { installCodeViewCommonModuleMocks } from './codeViewTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+const rowTextCommits = new Map<string, number>();
+
 installCodeViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             View: ({ children, ...props }: any) => React.createElement('View', props, children),
+            // Count commits at the native text boundary; the code row and Find paint stay real.
+            Text: ({ children, ...props }: TextProps & { dataSet?: { codeText?: string } }) => {
+                const id = props.dataSet?.codeText;
+                React.useLayoutEffect(() => {
+                    if (id) rowTextCommits.set(id, (rowTextCommits.get(id) ?? 0) + 1);
+                });
+                return React.createElement('Text', props, children);
+            },
             Platform: {
                 OS: 'web',
                 select: (options: any) => options?.web ?? options?.default ?? options?.ios ?? options?.android,
@@ -83,6 +94,85 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it('commits only the two changed rows when Find moves in a thousand-line file', async () => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { createChangedFilesReviewDiffStateSource } = await import('@/components/workspaces/scm/review/ChangedFilesReviewDiffStore');
+        const { createChangedFilesReviewFind } = await import('@/components/workspaces/scm/review/useChangedFilesReviewFind');
+        const source = createChangedFilesReviewDiffStateSource();
+        source.setDiffState('large.ts', { status: 'loaded', error: null,
+            diff: ['@@ -1,1000 +1,1000 @@', ...Array.from({ length: 1000 }, (_, index) => ` needle ${index}`)].join('\n') });
+        const model = createChangedFilesReviewFind();
+        const disconnect = model.connect({ paths: ['large.ts'], diffStateSource: source, reveal() {} });
+        model.open(); model.setQuery('needle');
+        const render = () => {
+            const file = model.getFileSnapshot('large.ts');
+            return <CodeLinesViewCore lines={file.lines!} virtualized={false} findRangesByLineId={file.ranges} />;
+        };
+        const ids = [...model.getFileSnapshot('large.ts').ranges.keys()];
+        const screen = await renderScreen(render());
+        try {
+            expect(rowTextCommits.size).toBe(1001); // The hunk header plus 1,000 code rows.
+            rowTextCommits.clear();
+            model.step(1);
+            await screen.update(render());
+            expect(rowTextCommits.size).toBe(2);
+            expect([...rowTextCommits.keys()].sort()).toEqual(ids.slice(0, 2).sort());
+        } finally {
+            await screen.unmount(); rowTextCommits.clear(); disconnect();
+        }
+    });
+    it('keeps a Find landing through later row resizing until the reader scrolls', async () => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: 'before\nfolded match\nafter' });
+        const target = lines[1]!;
+        const scroller = document.createElement('div');
+        scroller.style.overflowY = 'auto';
+        Object.defineProperties(scroller, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+        const content = document.createElement('div');
+        const element = document.createElement('div');
+        content.append(element); scroller.append(content); document.body.append(scroller);
+        let rowTop = 800;
+        element.getBoundingClientRect = () => new DOMRect(0, rowTop - scroller.scrollTop, 400, 22);
+        scroller.getBoundingClientRect = () => new DOMRect(0, 0, 400, 600);
+        element.scrollIntoView = () => { scroller.scrollTop = rowTop - 289; };
+        const observers = new Set<{ callback: ResizeObserverCallback; nodes: Set<Element> }>();
+        class LayoutObserver {
+            nodes = new Set<Element>();
+            constructor(public callback: ResizeObserverCallback) { observers.add(this); }
+            observe(node: Element) { this.nodes.add(node); }
+            unobserve(node: Element) { this.nodes.delete(node); }
+            disconnect() { observers.delete(this); }
+        }
+        vi.stubGlobal('ResizeObserver', LayoutObserver);
+        const resize = async (node: Element) => renderer.act(async () => {
+            for (const observer of [...observers]) if (observer.nodes.has(node)) {
+                observer.callback([{ target: node } as ResizeObserverEntry], observer as unknown as ResizeObserver);
+            }
+        });
+        const ranges = new Map([[target.id, [{ start: 0, end: 6, current: true }]]]);
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} virtualized={false} scrollToLineId={target.id} findRangesByLineId={ranges} />);
+        const row = screen.tree.root.findAll(node => typeof node.type === 'string' && node.props.nativeID?.endsWith(`-${target.id}`))[0]!;
+        element.id = row.props.nativeID;
+        try {
+            await renderer.act(async () => { row.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: rowTop, width: 400, height: 22 } } }); });
+            expect(scroller.scrollTop).toBe(511);
+            rowTop += 62;
+            await resize(content);
+            expect(element.getBoundingClientRect().top + 11).toBe(300);
+            // An equivalent decoration publication does not reacquire a reader's scroll.
+            scroller.scrollTop += 100;
+            scroller.dispatchEvent(new Event('scroll'));
+            await screen.update(<CodeLinesViewCore lines={lines} virtualized={false} scrollToLineId={target.id} findRangesByLineId={new Map(ranges)} />);
+            rowTop += 22;
+            await resize(content);
+            expect(scroller.scrollTop).toBe(673);
+            await screen.update(<CodeLinesViewCore lines={lines} virtualized={false} />);
+            expect(observers.size).toBe(0);
+        } finally {
+            await screen.unmount(); scroller.remove(); vi.unstubAllGlobals();
+        }
+    });
     it.each([500, 5_000])('lands a revealed target when its row is measured after %i ms', async (mountDelay) => {
         const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
         const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');

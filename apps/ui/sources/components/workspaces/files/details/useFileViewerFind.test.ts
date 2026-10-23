@@ -4,6 +4,19 @@ import { createFileViewerFindModel, type FileViewerFindContent } from './useFile
 const options = { matchCase: false, regex: false };
 
 describe('file viewer Find', () => {
+    it('changes only the two affected line decorations when stepping through a thousand matches', () => {
+        const model = createFileViewerFindModel(() => ({ path: 'large.ts', mode: 'file',
+            text: Array.from({ length: 1000 }, (_, index) => `needle ${index}`).join('\n') }));
+        model.open(); model.setQuery('needle');
+        const previous = model.getSnapshot().lineRanges;
+        model.step(1);
+        const next = model.getSnapshot().lineRanges;
+        expect([...next.keys()].filter(id => next.get(id) !== previous.get(id))).toEqual(['f:1', 'f:2']);
+        expect(next.get('f:1')?.[0].current).toBe(false);
+        expect(next.get('f:2')?.[0].current).toBe(true);
+        model.close();
+        expect(model.getSnapshot().lineRanges.size).toBe(0);
+    });
     it('keeps closed surfaces inert and seeds the addressed CRLF/UTF-16 line before stepping', () => {
         let reads = 0;
         const content: FileViewerFindContent = { path: 'a.ts', mode: 'file', text: 'needle\r\n😀 needle needle\r\n' };

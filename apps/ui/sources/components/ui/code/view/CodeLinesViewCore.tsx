@@ -25,6 +25,10 @@ import { EditorAgentCaret } from '@/components/ui/motion/EditorAgentCaret';
 import { useCodeTextSelectionPaint } from './useCodeTextSelectionPaint';
 import { DiffLeadingContent } from '@/components/ui/code/diff/happier/DiffLeadingContent';
 
+// The list projects global decorations into row-local props. Unchanged code rows retain
+// their text/token tree when Find moves to another row in the same file.
+const MemoizedCodeLineRow = React.memo(CodeLineRow);
+
 /**
  * What renders under a line (an inline comment composer, a saved comment) spans the visible code column and
  * holds still while unwrapped code scrolls sideways, as change rows do, so its actions stay at the pane edge.
@@ -442,7 +446,7 @@ export function CodeLinesViewCore(
             }}
         >
             {/* A blanked header (a review separator with no hidden lines) keeps only its slot below. */}
-            {item.renderIsHeaderLine && item.renderCodeText === '' ? null : <CodeLineRow
+            {item.renderIsHeaderLine && item.renderCodeText === '' ? null : <MemoizedCodeLineRow
                 line={item}
                 lineNumberDigits={lineNumberDigits}
                 reviewLaneWidth={reviewLaneWidth}

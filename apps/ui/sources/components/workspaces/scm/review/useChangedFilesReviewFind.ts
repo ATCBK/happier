@@ -5,6 +5,7 @@ import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildC
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { expandUnifiedDiffContext } from '@/components/ui/code/model/expandUnifiedDiffContext';
+import { reconcileCodeLineFindRanges } from '@/components/ui/code/model/reconcileCodeLineFindRanges';
 
 export type ReviewFindTarget = Readonly<{ filePath: string; lineId: string }>;
 type FileSnapshot = Readonly<{ count: number; ranges: ReadonlyMap<string, readonly FindTextRange[]>; lines?: readonly CodeLine[] }>;
@@ -22,14 +23,7 @@ const EMPTY_FILE: FileSnapshot = { count: 0, ranges: new Map() };
 type Match = ReviewFindTarget & Readonly<{ start: number; end: number }>;
 
 function sameFile(left: FileSnapshot, right: FileSnapshot): boolean {
-    if (left.count !== right.count || left.ranges.size !== right.ranges.size || left.lines !== right.lines) return false;
-    for (const [id, ranges] of left.ranges) {
-        const other = right.ranges.get(id);
-        if (!other || ranges.length !== other.length || ranges.some((range, index) => (
-            range.start !== other[index].start || range.end !== other[index].end || range.current !== other[index].current
-        ))) return false;
-    }
-    return true;
+    return left.count === right.count && left.ranges === right.ranges && left.lines === right.lines;
 }
 
 /** Ephemeral projection of the review loader's bytes; the loader remains the only fetch owner. */
@@ -63,7 +57,8 @@ export function createChangedFilesReviewFind() {
             ranges.set(match.lineId, line);
         }
         for (const path of new Set([...files.keys(), ...(input?.paths ?? [])])) {
-            const ranges = rangesByPath.get(path) ?? EMPTY_FILE.ranges;
+            const draft = rangesByPath.get(path);
+            const ranges = draft ? reconcileCodeLineFindRanges((files.get(path) ?? EMPTY_FILE).ranges, draft) : EMPTY_FILE.ranges;
             const lines = snapshot.open ? parsed.get(path)?.lines : undefined;
             const next = ranges.size === 0 && !lines ? EMPTY_FILE : {
                 count: [...ranges.values()].reduce((sum, line) => sum + line.length, 0), ranges, ...(lines ? { lines } : {}),
