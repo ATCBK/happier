@@ -91,10 +91,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
         const f = await fixture(true);
         const transaction = db.$transaction.bind(db);
         let replaced = false;
+        let replacementFailure: unknown;
         db.$transaction = new Proxy(transaction, { async apply(target, receiver, args: unknown[]) {
             if (!replaced) {
                 replaced = true;
-                await transaction(async other => {
+                await inTx(async other => {
                     expect(await deleteSavedSecretResourceInTx(other, { accountId: f.caller.id, resourceId: f.ids.referenced,
                         expectedRevision: 1, expectedSettingsVersion: 0,
                         referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } },
@@ -103,7 +104,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
                         displayName: 'Replacement', kind: 'token', encryptionMode: 'plain', accountGrants: [f.caller.id],
                         storedContent: { t: 'plain', v: { v: 1, name: 'Replacement', kind: 'token', value: 'fixture' } },
                     })).toMatchObject({ ok: true });
-                }, { isolationLevel: 'Serializable' });
+                }, { isolationLevel: 'Serializable' }).catch(error => { replacementFailure = error; throw error; });
             }
             return Reflect.apply(target, receiver, args);
         } });
@@ -111,12 +112,64 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
         try {
             const response = await app.inject({ method: 'POST', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
                 headers: { 'x-test-user-id': f.caller.id }, payload: f.payload });
+            if (replacementFailure) throw replacementFailure;
             expect(response.statusCode, response.body).toBe(200);
             expect(ProviderConnectionsRowMutationResponseV1Schema.parse(response.json())).toEqual({ status: 'invalid-reference' });
             expect(await db.userKVStore.findUnique({ where: { accountId_key: {
                 accountId: f.caller.id, key: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
             } } })).toBeNull();
         } finally { db.$transaction = transaction; await app.close(); }
+    });
+
+    it('does not commit an own-resource reference alongside canonical deletion after capture', async () => {
+        const f = await fixture(true);
+        const transaction = db.$transaction;
+        let deletion: ReturnType<typeof deleteSavedSecretResourceInTx> | undefined;
+        let settled = false;
+        let captured = false;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== 'savedSecretResource') return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.savedSecretResource, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== 'findMany') return operation;
+                    return async (...parameters: unknown[]) => {
+                        const rows: unknown = await Reflect.apply(operation, delegate, parameters);
+                        if (!captured) {
+                            captured = true;
+                            const [{ pid }] = await inner.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                            deletion = inTx(other => deleteSavedSecretResourceInTx(other, {
+                                accountId: f.caller.id, resourceId: f.ids.referenced, expectedRevision: 1, expectedSettingsVersion: 0,
+                                referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } },
+                            })).finally(() => { settled = true; });
+                            while (!settled) {
+                                const [blocked] = await db.$queryRaw<Array<{ count: number }>>`
+                                    SELECT count(*)::int AS count FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`;
+                                if (blocked.count > 0) break;
+                            }
+                        }
+                        return rows;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        const app = createAuthenticatedTestApp(); registerProviderConnectionsRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+                headers: { 'x-test-user-id': f.caller.id }, payload: f.payload });
+            expect(captured).toBe(true);
+            expect(response.statusCode, response.body).toBe(200);
+            const catalog = ProviderConnectionsRowMutationResponseV1Schema.parse(response.json());
+            const deleted = await deletion;
+            expect(deleted).toBeDefined();
+            expect(catalog.status === 'updated' && deleted?.ok === true).toBe(false);
+        } finally {
+            db.$transaction = transaction;
+            if (deletion) await Promise.allSettled([deletion]);
+            await app.close();
+        }
     });
 
     it.each(['rotation', 'revocation', 'deletion'] as const)('refuses an own Secret capture after a fenced %s', async mutation => {
@@ -141,7 +194,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
                     const held = new Promise<void>(resolve => { locked = resolve; });
                     const released = new Promise<void>(resolve => { release = resolve; });
                     let peerPid = 0;
-                    const peer = transaction(async other => {
+                    const peer = inTx(async other => {
                         const [backend] = await other.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
                         peerPid = backend.pid;
                         const base = { accountId: f.caller.id, resourceId: f.ids.referenced, expectedRevision: 1 };

@@ -4,6 +4,7 @@ import type { Server, Socket as SocketIoSocket } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
+import { createMachineSocketOwnershipRegistry } from '@/app/api/socket/machineSocketOwnershipRegistry';
 import { resolveRedisAdapterValidationRedisUrl } from "../../../scripts/resolveRedisAdapterValidationRedisUrl";
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -139,11 +140,15 @@ describe("Redis client silent network partition recovery", () => {
                 emit: vi.fn(),
             })),
         } as unknown as Server;
+        // This one-process Redis-lifecycle fixture has a real local ownership claim.
+        const ownership = createMachineSocketOwnershipRegistry({ io, config: { enabled: false } });
+        await ownership.claimOwner({ accountId, machineId, socketId: machineSocketId, owner: {} });
         const coordinator = createPeerTcpTunnelRelayCoordinator({
             io,
             config: {
                 mode: "redis",
                 createRelayAdmissionRedis: createRedisSocketClusterRelayAdmissionClient,
+                readMachineSocketOwner: ownership.readOwner,
             },
         });
         cleanup.push(async () => {

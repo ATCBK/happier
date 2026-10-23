@@ -55,6 +55,11 @@ export async function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: 
 }
 
 export type TransactionReplayReason = "session-account-audience-changed"
+    | "session-initial-access-admission-changed"
+    | "discussion-participant-birth-admission-changed"
+    | "automation-assignment-admission-changed"
+    | "automation-event-source-status-conflict"
+    | "hosted-artifact-removal-mode-changed"
     | "username-admission-changed"
     | "session-input-reply-progress-changed"
     | "autonomous-exchange-root-changed"
@@ -63,6 +68,7 @@ export type TransactionReplayReason = "session-account-audience-changed"
     | "follow-relation-progress-conflict"
     | "pending-activation-target-changed"
     | "transaction-account-audience-changed"
+    | "directory-source-currentness-changed"
     | "usage-runtime-order-changed";
 
 /** Abort the current transaction when its fenced audience no longer matches its reads. */
