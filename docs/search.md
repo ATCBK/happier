@@ -54,8 +54,10 @@ An explicitly armed Replace mode accepts an empty replacement to delete the
 selected matches; an empty field alone does not arm replacement.
 
 Preview hashes cover raw bytes, including a UTF-8 BOM. Apply receives only
-reviewed files and their excluded match positions. Files whose hashes changed
-are reported individually without a write. Invalid UTF-8, UTF-16 and binary
+reviewed files and their excluded match positions. The writer prepares every
+target before changing any file. If a target changed after preview or its edits
+cannot be applied, the whole set is refused: affected targets report their
+refusal and the others report `skipped` with `edit_set_aborted`. Invalid UTF-8, UTF-16 and binary
 content are skipped; the transformation preserves a UTF-8 BOM and existing
 line endings. Every successful write uses the editor's guarded atomic writer.
 Returned inverse edits support hash-guarded Undo through the same replace Action
@@ -65,6 +67,8 @@ Machine, root and Account; another search scope cannot adopt them.
 The Universal Search composition owns draft exclusion, selection and preview
 freshness. Retained previews render with their captured matcher; a changed
 query, option or replacement disables Apply until a fresh preview succeeds.
+Files already dirty when previewed stay excluded until a new preview. A selected
+target that becomes dirty after preview refuses the whole Apply before dispatch.
 Apply covers only loaded, selected matches. Surface composition and loaded
 runtime acceptance are separate from these Machine contracts. Regex discovery
 inventories files through ripgrep's existing exclusions/ignore/hidden policy;
