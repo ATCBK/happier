@@ -321,10 +321,13 @@ describe('registerHappierBridgeTools', () => {
 
     const sendNotification = vi.fn(async () => undefined);
     await registered[0]?.handler({}, {
-      _meta: { progressToken: 'progress-1' },
+      _meta: { progressToken: 'progress-1', callId: 'codex-native-call', 'claudecode/toolUseId': 'claude-native-call' },
       sendNotification,
     });
 
+    expect(callHttpTool).toHaveBeenCalledWith('long_running', {}, expect.objectContaining({
+      requestMetadata: { progressToken: 'progress-1', callId: 'codex-native-call', 'claudecode/toolUseId': 'claude-native-call' },
+    }));
     expect(sendNotification).toHaveBeenCalledWith({
       method: 'notifications/progress',
       params: { progressToken: 'progress-1', progress: 1 },

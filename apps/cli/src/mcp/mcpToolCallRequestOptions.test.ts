@@ -175,7 +175,7 @@ describe('callMcpToolWithResolvedTimeout', () => {
       client,
       toolName: 'get_status',
       args: {},
-      requestMetadata: { progressToken: 'downstream-progress' },
+      requestMetadata: { progressToken: 'downstream-progress', callId: 'codex-native-call', 'claudecode/toolUseId': 'claude-native-call' },
       onprogress,
     });
 
@@ -183,7 +183,7 @@ describe('callMcpToolWithResolvedTimeout', () => {
       {
         name: 'get_status',
         arguments: {},
-        _meta: { progressToken: 'downstream-progress' },
+        _meta: { progressToken: 'downstream-progress', callId: 'codex-native-call', 'claudecode/toolUseId': 'claude-native-call' },
       },
       undefined,
       expect.objectContaining({

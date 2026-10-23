@@ -104,10 +104,16 @@ function buildSessionAgentApprovalOrigin(params: Readonly<{
         typeof rawRequestId === 'string' || typeof rawRequestId === 'number'
             ? String(rawRequestId).trim()
             : '';
+    const metadata = (params.extra as { _meta?: Record<string, unknown> } | null | undefined)?._meta;
+    // Codex sends the native call id (not its response itemId); Claude sends
+    // the tool_use id. The stdio bridge preserves both metadata fields.
+    const rawToolCallId = metadata?.callId ?? metadata?.['claudecode/toolUseId'];
+    const toolCallId = typeof rawToolCallId === 'string' ? rawToolCallId.trim() : '';
     return {
         kind: 'transcript_tool_call',
         sessionId: params.sessionId,
-        ...(requestId ? { toolCallId: requestId, mcpRequestId: requestId } : {}),
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(requestId ? { mcpRequestId: requestId } : {}),
         toolName: params.toolName,
     };
 }

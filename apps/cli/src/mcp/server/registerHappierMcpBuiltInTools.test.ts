@@ -737,7 +737,12 @@ describe('registerHappierMcpBuiltInTools', () => {
     }
   });
 
-  it('derives approval origin metadata from MCP tool call context for session-agent tools', async () => {
+  it.each([
+    { label: 'Codex 0.162.1', meta: { callId: 'exec-transcript-call', itemId: 'fc-response-item' }, toolCallId: 'exec-transcript-call' },
+    { label: 'Claude Code 2.1.304', meta: { 'claudecode/toolUseId': 'toolu-transcript-call' }, toolCallId: 'toolu-transcript-call' },
+    { label: 'uncorrelated client', meta: { progressToken: 1 }, toolCallId: undefined },
+    { label: 'malformed correlation', meta: { callId: 2, 'claudecode/toolUseId': '' }, toolCallId: undefined },
+  ])('derives honest approval origin metadata for $label', async ({ meta, toolCallId }) => {
     const handlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
     const executeActionByToolName = vi.fn(async () => ({ ok: true as const, result: { sessions: [] } }));
     const actionsSettings = ActionsSettingsV1Schema.parse({
@@ -768,7 +773,7 @@ describe('registerHappierMcpBuiltInTools', () => {
     const handler = handlers.get('session_list');
     if (!handler) throw new Error('Expected session_list to be registered');
 
-    await handler({ limit: 20, ignoredSecret: 'must-not-be-persisted-in-origin' }, { requestId: 'jsonrpc-request-1' });
+    await handler({ limit: 20, ignoredSecret: 'must-not-be-persisted-in-origin' }, { requestId: 'jsonrpc-request-1', _meta: meta });
 
     expect(executeActionByToolName).toHaveBeenCalledWith(
       'session_list',
@@ -779,7 +784,7 @@ describe('registerHappierMcpBuiltInTools', () => {
         approvalOrigin: {
           kind: 'transcript_tool_call',
           sessionId: 'sess-1',
-          toolCallId: 'jsonrpc-request-1',
+          ...(toolCallId ? { toolCallId } : {}),
           mcpRequestId: 'jsonrpc-request-1',
           toolName: 'session_list',
         },
