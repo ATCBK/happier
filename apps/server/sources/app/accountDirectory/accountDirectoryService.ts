@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import tweetnacl from "tweetnacl";
 import { db } from "@/storage/db";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { getOrCreateServerIdentityId, initializeServerIdentityCache, readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { getPublicUrl } from "@/storage/blob/files";
@@ -200,6 +200,9 @@ async function upsertAccountHomeDirectoryEntryInTx(
         connectionDescriptor: HomeConnectionDescriptorV1;
     }>,
 ): Promise<ReturnType<typeof mapHomeRow>> {
+    // All directory writers share this admission before reading descriptor
+    // revisions, first-Home predicates, or the current preference.
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
     const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { preferredHomeServerIdentityId: true } });
     if (!account) throw new AccountDirectoryError("not_found", "Account not found");
     const where = { accountId_homeServerIdentityId: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } };
@@ -283,30 +286,29 @@ export async function upsertAccountHomeDirectoryEntry(params: Readonly<{
         throw new AccountDirectoryError("invalid_request", "Home identity does not match descriptor");
     }
     return inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         return upsertAccountHomeDirectoryEntryInTx(tx, {
             accountId: params.accountId,
             homeServerIdentityId: params.homeServerIdentityId,
             label: body.label,
             connectionDescriptor: body.connectionDescriptor,
         });
-    }, { isolationLevel: 'Serializable' /* Descriptor revision and first-Home preference predicates must survive concurrent directory writes. */ });
+    });
 }
 
 export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ accountId: string; homeServerIdentityId: string }>): Promise<void> {
     await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
         await tx.accountHomeDirectoryEntry.deleteMany({ where: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } });
         await tx.account.updateMany({
             where: { id: params.accountId, preferredHomeServerIdentityId: params.homeServerIdentityId },
             data: { preferredHomeServerIdentityId: null },
         });
-    }, { isolationLevel: 'Serializable' /* Clearing preference and deleting its Home must serialize with the setter's existence check. */ });
+    });
 }
 
 export async function setPreferredAccountHome(params: Readonly<{ accountId: string; homeServerIdentityId: string | null }>): ReturnType<typeof listAccountHomeDirectory> {
     await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
         if (params.homeServerIdentityId !== null) {
             const exists = await tx.accountHomeDirectoryEntry.findUnique({
                 where: { accountId_homeServerIdentityId: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } },
@@ -315,7 +317,7 @@ export async function setPreferredAccountHome(params: Readonly<{ accountId: stri
             if (!exists) throw new AccountDirectoryError("preferred_home_not_found", "Home is not present in the directory");
         }
         await tx.account.updateMany({ where: { id: params.accountId }, data: { preferredHomeServerIdentityId: params.homeServerIdentityId } });
-    }, { isolationLevel: 'Serializable' /* The selected Home must still exist when its preference commits. */ });
+    });
     return listAccountHomeDirectory(params.accountId);
 }
 
@@ -349,6 +351,9 @@ async function upsertAccountDirectoryLinkInTx(
         relink?: boolean;
     }>,
 ): Promise<void> {
+    // Serialize replacement with deletion and approval invalidation before
+    // capturing the binding whose approvals must be retired.
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
     const existing = await tx.accountDirectoryLink.findFirst({
         where: { accountId: params.accountId, issuerServerIdentityId: params.issuerServerIdentityId },
         select: ACCOUNT_DIRECTORY_LINK_SELECT,
@@ -425,11 +430,12 @@ export async function upsertAccountDirectoryLink(params: Readonly<{
         issuerSigningKeyId: body.issuerSigningKeyId,
         issuerSigningPublicKey: storedPublicKey,
         relink: body.relink,
-    }), { isolationLevel: "Serializable" /* Issuer slot replacement and approval invalidation depend on the previously observed binding. */ });
+    }));
 }
 
 export async function deleteAccountDirectoryLink(params: Readonly<{ accountId: string; issuerServerIdentityId: string }>): Promise<void> {
     await inTx(async (tx) => {
+        await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
         const existing = await tx.accountDirectoryLink.findFirst({
             where: { accountId: params.accountId, issuerServerIdentityId: params.issuerServerIdentityId },
             select: ACCOUNT_DIRECTORY_LINK_SELECT,
@@ -440,7 +446,7 @@ export async function deleteAccountDirectoryLink(params: Readonly<{ accountId: s
         if (existing && deleted.count > 0) {
             await invalidateAccountAssertionApprovalsForLink(tx, existing);
         }
-    }, { isolationLevel: "Serializable" /* Link deletion and approval invalidation must observe the same issuer binding. */ });
+    });
 }
 
 export type SameServiceHomeEntryOutcome = Readonly<
@@ -550,6 +556,7 @@ export async function ensureSameServiceHomeEntryInTx(
 ): Promise<SameServiceHomeEntryOutcome> {
     if (params.preparation.status !== "ready") return params.preparation;
     const preparation = params.preparation;
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
     if (!(await isSameServiceSignInSelfInTx(tx, params.env ?? process.env))) {
         return { status: "not_dual_role", reason: "sign_in_service_not_self" };
     }
@@ -785,7 +792,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
     const issueHomeToken = params.issueHomeToken;
     if (!issueHomeToken) throw new AccountDirectoryError("home_redemption_unavailable", "Home token issuer is unavailable");
     const issuedAtMs = params.nowMs ?? Date.now();
-    const token = await inTx(async (tx) => {
+    const token = await inReadSnapshot(async (tx) => {
         const currentLink: AccountDirectoryLinkRow | null = await tx.accountDirectoryLink.findUnique({
             where: { issuerServerIdentityId_issuerSubjectId: { issuerServerIdentityId: assertion.issuerServerIdentityId, issuerSubjectId: assertion.issuerSubjectId } },
             select: ACCOUNT_DIRECTORY_LINK_SELECT,
@@ -865,7 +872,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
             if (error instanceof InactiveAccountError) throw new AccountDirectoryError("account_disabled");
             throw error;
         }
-    }, { isolationLevel: "Serializable" /* Issuer binding, approval and Account credential epoch must form one authentication snapshot. */ });
+    });
     const credentialPayload = HomeLoginCredentialPayloadV1Schema.safeParse({ token });
     if (!credentialPayload.success) {
         throw new AccountDirectoryError("home_redemption_unavailable", "Home token issuer returned invalid credentials");

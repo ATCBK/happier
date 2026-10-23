@@ -64,7 +64,7 @@ export type AccountLifecycleResult =
         | "home_owner_transfer_required" }>;
 
 /**
- * Changes lifecycle and revokes credentials in the caller's serializable
+ * Changes lifecycle and revokes credentials in the caller's admitted
  * transaction. The shared Account fence is deliberately key-neutral: security
  * offboarding must remain possible when encryption material is inconsistent.
  * Trusted replacement/erasure callers establish their own admission before

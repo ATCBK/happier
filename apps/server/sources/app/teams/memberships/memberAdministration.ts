@@ -801,7 +801,9 @@ export async function setTeamMemberManagementForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
-    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: [input.membershipId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    const recheckAdmission = await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: [input.membershipId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;

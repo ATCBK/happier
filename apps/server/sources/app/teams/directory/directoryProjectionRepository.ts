@@ -1,5 +1,6 @@
 import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
 import { publishTeamChangedInTx } from "../teamChanges";
+import { acquireTeamMutationLockInTx } from "../actorContext";
 import { inTx, type Tx } from "@/storage/inTx";
 import {
     acquireExternalSourceAccountAdmissionInTx,
@@ -334,7 +335,7 @@ export async function commitInitializingWorkosProjectionEvent(
             throw new StaleProjectionRunError();
         }
         return { applied: true };
-    }, { isolationLevel: "Serializable" /* Projection writes compose current source/run admission with child rows and policy. */ }).catch((error: unknown) => {
+    }, { isolationLevel: "ReadCommitted" /* The final full source/run/position CAS rolls back every child write when stale. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });
@@ -761,7 +762,10 @@ export async function commitActiveWorkosProjectionEvent(
     if (eventId.length === 0) throw new TypeError("WorkOS event ID must be non-empty");
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
-        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
+        const admission = await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
+        if (!admission) return { applied: false, reason: "stale_run" };
+        await acquireTeamMutationLockInTx(tx, admission.teamId);
+        await admission.recheck();
         if (!await isDirectorySourceAllowedInTx(tx, { id: params.sourceId, kind: "workos_directory" }, params.expectedCurrentness, params.env)) {
             return { applied: false, reason: "stale_run" };
         }
@@ -813,7 +817,7 @@ export async function commitActiveWorkosProjectionEvent(
         // change, not a timer, so wake the Team once for it.
         if (!published) await publishTeamChangedInTx(tx, { teamId: current.teamId });
         return { applied: true };
-    }, { isolationLevel: "Serializable" /* Active projection publication composes source/run currentness and effective contribution unions. */ }).catch((error: unknown) => {
+    }, { isolationLevel: "ReadCommitted" /* The outer Team guard owns the roster/binding union; the final source CAS rejects stale event positions. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });
@@ -872,7 +876,7 @@ export async function completeActiveWorkosEmptyPoll(params: Readonly<{
             });
         }
         return { applied: true };
-    }, { isolationLevel: "Serializable" /* Poll completion participates in manual-sync and source/run lifecycle admission. */ });
+    }, { isolationLevel: "ReadCommitted" /* The full state/run/manual-request/position CAS admits this source-only completion. */ });
 }
 
 /**
@@ -894,7 +898,10 @@ export async function completeDirectoryProjection(params: Readonly<{
 }>): Promise<DirectoryProjectionWriteResult> {
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
-        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
+        const admission = await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
+        if (!admission) return { applied: false, reason: "stale_run" };
+        await acquireTeamMutationLockInTx(tx, admission.teamId);
+        await admission.recheck();
         const current = await tx.teamDirectorySource.findFirst({
             where: {
                 id: params.sourceId,
@@ -981,7 +988,7 @@ export async function completeDirectoryProjection(params: Readonly<{
             });
         }
         return { applied: true };
-    }, { isolationLevel: "Serializable" /* Projection activation composes manual-sync state and native/external contribution unions. */ }).catch((error: unknown) => {
+    }, { isolationLevel: "ReadCommitted" /* The outer Team guard owns contribution effects; the final run CAS rejects pause/reset while preserving newer requests. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });

@@ -441,7 +441,7 @@ export async function createTeamIdentityConnectionForActor(
                         ? "identity_provider_unavailable"
                         : "identity_connection_invalid",
             );
-        }, { isolationLevel: "Serializable" /* Connection creation composes Home policy, provider namespace and current Team admission. */ });
+        }, { isolationLevel: "ReadCommitted" /* Complete exclusive provider admission precedes policy and namespace reads. */ });
     } catch (error) {
         if (error instanceof TeamIdentityConnectionCreateAbort) return { ok: false, error: error.code };
         throw error;
@@ -468,7 +468,7 @@ export async function updateTeamIdentityConnectionSettingsForActor(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
-    }, { isolationLevel: "Serializable" /* Connection settings participate in current Team policy and alternate-login viability. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission covers current policy and the connection revision CAS. */ });
 }
 
 type WorkosUpstreamObservation =
@@ -609,7 +609,7 @@ export async function setTeamIdentityConnectionEnabledForActor(
                 actorAccountId: input.actorAccountId, action: "identity_provider.enable",
             });
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
-        }, { isolationLevel: "Serializable" /* Connection enablement combines WorkOS observation, policy and alternate-login viability. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission precedes current runtime checks and observation writes. */ });
     }
 
     return await inTx(async (tx) => {
@@ -628,7 +628,7 @@ export async function setTeamIdentityConnectionEnabledForActor(
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
         }
         return { ok: false, error: mapLifecycleError(result.status) };
-    }, { isolationLevel: "Serializable" /* Connection enablement combines policy and alternate-login viability across connection rows. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission precedes the current policy check and revision CAS. */ });
 }
 
 export async function removeTeamIdentityConnectionForActor(
@@ -850,7 +850,7 @@ export async function consumeTeamIdentityConnectionTestForActor(
             };
         }
         return { ok: false, error: "identity_connection_test_invalid" };
-    }, { isolationLevel: "Serializable" /* Test consumption merges connection evidence with current provider and policy facts. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission covers the exact runtime check and observation merge. */ });
 }
 
 function mapLifecycleError(status: string): TeamIdentityErrorCodeV1 {

@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import { AccountStatus } from "@/storage/enums.generated";
-import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationLockInTx, resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
 import { resolveTeamMembershipContextInTx } from "../memberships/effectiveMembership";
 import { publishTeamChangedInTx } from "../teamChanges";
@@ -168,11 +168,13 @@ export async function setTeamCredentialAudienceInTx(
     const materializedRecipients = await tx.teamCredentialRecipientMaterial.findMany({
         where: { resourceId: input.resourceId }, select: { recipientAccountId: true }, distinct: ["recipientAccountId"],
     });
-    await acquireTeamMembershipAccountAdmissionInTx(tx, {
+    const recheckAdmission = await acquireTeamMembershipAccountAdmissionInTx(tx, {
         teamId: resourceIdentity.teamId,
         accountIds: [params.actorAccountId, resourceIdentity.custodianAccountId, ...materializedRecipients.map(row => row.recipientAccountId)],
         membershipIds: input.memberGrants.map(grant => grant.teamMembershipId),
     });
+    await acquireTeamMutationLockInTx(tx, resourceIdentity.teamId);
+    await recheckAdmission();
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId } });
     if (!resource) return { ok: false, error: "resource_not_found" };
     if (resource.custodianAccountId !== resourceIdentity.custodianAccountId) {

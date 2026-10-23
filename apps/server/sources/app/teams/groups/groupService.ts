@@ -31,6 +31,7 @@ import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { defaultRepeatKeyExpiresAt, fetchRepeatKey, saveRepeatKey } from "@/storage/queue/repeatKey";
 import {
+    acquireTeamMutationLockInTx,
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
     type TeamActorContext,
@@ -390,7 +391,9 @@ export async function createTeamGroupForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupV1>> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -718,7 +721,9 @@ export async function addTeamGroupMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupMemberMutationResultV1>> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -782,7 +787,9 @@ export async function removeTeamGroupMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupMemberMutationResultV1>> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;

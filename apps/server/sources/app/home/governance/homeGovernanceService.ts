@@ -521,7 +521,11 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
             ? sql`BTRIM(${identifier(column)}, ${whitespace})`
             : sql`TRIM(${identifier(column)}, ${whitespace})`;
     const label = sql`COALESCE(NULLIF(${trimmed("name")}, ''), NULLIF(${trimmed("username")}, ''), '')`;
-    const sortKeyExpression = sql`SUBSTR(LOWER(${label}), 1, ${HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS})`;
+    // Prisma binds this number as int8; PostgreSQL SUBSTR takes an int4 length.
+    const sortKeyLength = postgres
+        ? sql`${HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS}::integer`
+        : sql`${HOME_ACCOUNT_SORT_PRECISION_CODE_POINTS}`;
+    const sortKeyExpression = sql`SUBSTR(LOWER(${label}), 1, ${sortKeyLength})`;
     // Provider-native folding, with one bytewise comparison for both ordering
     // and the captured boundary (not a second JavaScript sort/normalizer).
     const orderedText = (expression: ReturnType<typeof sql>) => provider === "mysql"

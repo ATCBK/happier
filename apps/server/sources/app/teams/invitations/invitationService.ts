@@ -9,6 +9,7 @@ import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDispl
 import { projectTeamLogoRefV1 } from "../projections";
 import { publishTeamChangedInTx } from "../teamChanges";
 import {
+    acquireTeamMutationLockInTx,
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
     type TeamActorContext,
@@ -202,7 +203,9 @@ export async function createTeamInvitationForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamInvitationServiceResult<CreateTeamInvitationResult, CreateTeamInvitationError>> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await requireInvitationManagerInTx(tx, {
         teamId: input.teamId,
         actorAccountId: input.actorAccountId,
@@ -440,7 +443,9 @@ export async function reissueTeamInvitationForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamInvitationServiceResult<ReissueTeamInvitationResultValue, ReissueTeamInvitationError>> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await requireInvitationManagerInTx(tx, {
         teamId: input.teamId,
         actorAccountId: input.actorAccountId,

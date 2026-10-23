@@ -682,21 +682,27 @@ export async function readExternalSourceAccountIdsInTx(
 export async function acquireExternalSourceAccountAdmissionInTx(
     tx: Tx,
     input: Readonly<{ owner: ExternalFactOwner; actorAccountIds?: readonly string[] }>,
-): Promise<void> {
+): Promise<Readonly<{ teamId: string; recheck: () => Promise<void> }> | null> {
     const affectedAccountIds = await readExternalSourceAccountIdsInTx(tx, input);
     const accountIds = [...(input.actorAccountIds ?? []), ...affectedAccountIds];
     const source = input.owner.kind === "directory_source"
         ? await tx.teamDirectorySource.findUnique({ where: { id: input.owner.directorySourceId }, select: { teamId: true } })
         : await tx.teamIdentityConnection.findUnique({ where: { id: input.owner.teamIdentityConnectionId }, select: { teamId: true } });
+    let admission: Readonly<{ teamId: string; recheck: () => Promise<void> }> | null = null;
     if (source?.teamId) {
-        await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: source.teamId, accountIds, affectedAccountIds,
+        // Directory administration subsequently invokes the canonical identity
+        // authorizer, whose admission covers every Team-membership effect.
+        // Enter that same complete scope before an outer Team guard is taken.
+        const recheck = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: source.teamId, accountIds,
             membershipChange: { kind: "teamMembership", teamId: source.teamId } });
+        admission = { teamId: source.teamId, recheck };
     } else {
         await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
     }
     beforeAccountChangePublication(tx, accountIds, async () => {
         assertAccountChangePublicationAudienceInTx(tx, await readExternalSourceAccountIdsInTx(tx, input));
     });
+    return admission;
 }
 
 /**

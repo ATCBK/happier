@@ -213,7 +213,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             emailDeliveryAvailable,
             requestKey: request.body.requestKey,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Invitation creation composes current Team policy, actor authority and Account admission. */ });
+        }), { isolationLevel: "ReadCommitted" /* Complete Account admission and the Team guard precede fresh authority and replay reads. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
 
         // A replayed intent mints nothing and delivers nothing: the mail for this
@@ -295,7 +295,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             actorAccountId: request.userId,
             invitationId: request.body.invitationId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Invitation revocation participates in the same single-use Team admission family. */ });
+        }), { isolationLevel: "ReadCommitted" /* Existing Team admission and conditional invitation retirement own the single-use decision. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
         return reply.send(result.value);
     });
@@ -338,7 +338,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             requestKey: request.body.requestKey,
             emailDeliveryAvailable,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Invitation reissue depends on current invitation state and Team admission policy. */ });
+        }), { isolationLevel: "ReadCommitted" /* Team admission precedes current authority; conditional old-row retirement rolls back a losing replacement. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
 
         const { token, recipientEmailNormalized } = result.value;
@@ -481,7 +481,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             : acceptTeamInvitationInTx(tx, {
                 token: request.body.token,
                 accountId: request.userId,
-            }), { isolationLevel: "Serializable" /* Invitation acceptance composes single-use invitation state, Team policy and membership admission. */ });
+            }), { isolationLevel: "ReadCommitted" /* Existing Team admission precedes policy reads; conditional consume owns the single-use winner. */ });
         return reply.send(result);
     });
 }

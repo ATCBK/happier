@@ -67,7 +67,7 @@ export async function mintHomeClaimCode(
             create: { key: HOME_CLAIM_CODE_CACHE_KEY, value },
         });
         return { status: "minted" as const, code, expiresAt };
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export type HomeClaimCodeRedeemResult =

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { TeamDirectorySource } from "@prisma/client";
 import { db, isPrismaErrorCode } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { parseTeamIdentityConnectionDocuments } from "@/app/auth/providers/managed/identityProviderDocuments";
 import { resolveStoredGitHubDirectoryReadiness } from "@/app/integrations/github/githubManagedDirectory";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
@@ -22,6 +23,7 @@ import { acquireExternalSourceAccountAdmissionInTx, revokeExternalSourceFactsInT
 import { isDirectorySourceAllowedInTx, isDirectorySourceKindAllowedInTx } from "./directorySourcePolicy";
 import type { ExpectedDirectorySourceCurrentness } from "./directorySourcePolicy";
 import { publishTeamChangedInTx } from "../teamChanges";
+import { acquireTeamMutationLockInTx } from "../actorContext";
 
 export type CreateDirectorySourceInput =
     | Readonly<{
@@ -77,16 +79,32 @@ export type DirectorySourceLifecycleWriteResult =
     | Readonly<{ applied: true }>
     | Readonly<{ applied: false; reason: "stale_run" }>;
 
+type DirectorySourceDeletionCurrentness = Readonly<{
+    state: "active" | "initializing";
+    activeReconcileRunId: string | null;
+    manualSyncRequestedAt?: null;
+}> & (Readonly<{ eventCursor: string }> | Readonly<{ eventCursor: null; eventRangeStart: Date }>);
+
 export async function removeDirectorySourceInTx(
     tx: Tx,
     input: Readonly<{ teamId: string; sourceId: string }>,
+    currentness?: DirectorySourceDeletionCurrentness,
 ): Promise<Readonly<{ membershipsRemoved: number; contributionsRemoved: number }>> {
     await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: input.sourceId } });
     const revoked = await revokeExternalSourceFactsInTx(tx, {
         teamId: input.teamId,
         owner: { kind: "directory_source", directorySourceId: input.sourceId },
     });
-    await tx.teamDirectorySource.delete({ where: { id: input.sourceId } });
+    try {
+        await tx.teamDirectorySource.delete({ where: { ...currentness, id: input.sourceId } });
+    } catch (error) {
+        // Roll back native withdrawals before replaying a worker observation
+        // invalidated by a human pause or newly requested reconciliation.
+        if (currentness && isPrismaErrorCode(error, "P2025")) {
+            throw new TransactionReplayRequiredError("directory-source-currentness-changed");
+        }
+        throw error;
+    }
     await publishTeamChangedInTx(tx, { teamId: input.teamId });
     return revoked;
 }
@@ -103,6 +121,12 @@ export async function removeDirectorySourceForObservedDeletion(input: Readonly<{
     env?: NodeJS.ProcessEnv;
 }>): Promise<DirectorySourceLifecycleWriteResult> {
     return await inTx(async (tx) => {
+        const admission = await acquireExternalSourceAccountAdmissionInTx(tx, {
+            owner: { kind: "directory_source", directorySourceId: input.sourceId },
+        });
+        if (!admission) return { applied: false, reason: "stale_run" };
+        await acquireTeamMutationLockInTx(tx, admission.teamId);
+        await admission.recheck();
         if (!await isDirectorySourceAllowedInTx(tx, {
             id: input.sourceId, kind: "workos_directory",
         }, input.expectedCurrentness, input.env)) {
@@ -111,28 +135,29 @@ export async function removeDirectorySourceForObservedDeletion(input: Readonly<{
         const position = input.expectedPosition.eventCursor === null
             ? { eventCursor: null, eventRangeStart: input.expectedPosition.eventRangeStart }
             : { eventCursor: input.expectedPosition.eventCursor };
+        const sourceWhere = {
+            id: input.sourceId,
+            teamId: input.teamId,
+            kind: "workos_directory" as const,
+            state: input.expectedState,
+            activeReconcileRunId: input.reconcileRunId,
+            ...(input.expectedState === "active" ? { manualSyncRequestedAt: null } : {}),
+            ...position,
+        };
         const current = await tx.teamDirectorySource.findFirst({
-            where: {
-                id: input.sourceId,
-                teamId: input.teamId,
-                kind: "workos_directory",
-                state: input.expectedState,
-                activeReconcileRunId: input.reconcileRunId,
-                ...(input.expectedState === "active" ? { manualSyncRequestedAt: null } : {}),
-                ...position,
-            },
+            where: sourceWhere,
             select: { id: true },
         });
         if (!current) return { applied: false, reason: "stale_run" };
-        await removeDirectorySourceInTx(tx, input);
+        await removeDirectorySourceInTx(tx, input, sourceWhere);
         return { applied: true };
-    }, { isolationLevel: "Serializable" /* Source deletion withdraws membership and Group contribution unions after current-run checks. */ });
+    }, { isolationLevel: "ReadCommitted" /* The outer Team guard owns contribution effects; the final observed-source delete CAS rejects stale worker evidence. */ });
 }
 
 export async function createDirectorySource(
     input: CreateDirectorySourceInput,
 ): Promise<CreateDirectorySourceResult> {
-    return await inTx((tx) => createDirectorySourceInTx(tx, input), { isolationLevel: "Serializable" /* Source creation participates in connection/binding admission and directory-run lifecycle. */ });
+    return await inTx((tx) => createDirectorySourceInTx(tx, input), { isolationLevel: "ReadCommitted" /* Unique source identity and owner FKs cover this constructor without a native-fact census. */ });
 }
 
 export async function createDirectorySourceInTx(
@@ -354,6 +379,25 @@ export async function findNextDirectorySourceDueForSync(params: Readonly<{
     return { id: candidate.id, mode: full ? "full" : "incremental" };
 }
 
+/** Preserve the request, position and retry decision captured by either claim. */
+function directorySourceClaimWhere(current: Pick<TeamDirectorySource,
+    "id" | "kind" | "state" | "activeReconcileRunId" | "manualSyncRequestedAt"
+    | "eventCursor" | "eventRangeStart" | "consecutiveFailureCount" | "retryNotBefore" | "lastErrorCode"
+>) {
+    return {
+        id: current.id,
+        kind: current.kind,
+        state: current.state,
+        activeReconcileRunId: current.activeReconcileRunId,
+        manualSyncRequestedAt: current.manualSyncRequestedAt,
+        eventCursor: current.eventCursor,
+        eventRangeStart: current.eventRangeStart,
+        consecutiveFailureCount: current.consecutiveFailureCount,
+        retryNotBefore: current.retryNotBefore,
+        lastErrorCode: current.lastErrorCode,
+    };
+}
+
 /**
  * Claim one complete scan after the cluster-wide directory worker lease is
  * held. Replacing the source-local token fences an abandoned or stolen run;
@@ -413,12 +457,8 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
             // wrong-kind documents identically.
         }
         if (binding === null || binding.kind !== current.kind) {
-            await tx.teamDirectorySource.updateMany({
-                where: {
-                    id: current.id,
-                    state: current.state,
-                    activeReconcileRunId: current.activeReconcileRunId,
-                },
+            const quarantined = await tx.teamDirectorySource.updateMany({
+                where: directorySourceClaimWhere(current),
                 data: {
                     state: "needs_attention",
                     activeReconcileRunId: null,
@@ -431,6 +471,7 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
                     retryNotBefore: null,
                 },
             });
+            if (quarantined.count !== 1) throw new TransactionReplayRequiredError("directory-source-currentness-changed");
             await publishDirectorySourceStatusTransitionInTx(tx, {
                 teamId: current.teamId,
                 before: current,
@@ -439,11 +480,7 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
             return { ok: false, code: "directory_sync_needs_attention" } as const;
         }
         const updated = await tx.teamDirectorySource.updateMany({
-            where: {
-                id: current.id,
-                state: current.state,
-                activeReconcileRunId: current.activeReconcileRunId,
-            },
+            where: directorySourceClaimWhere(current),
             data: {
                 state: "initializing",
                 activeReconcileRunId: reconcileRunId,
@@ -458,7 +495,7 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
             },
         });
         if (updated.count !== 1) {
-            return { ok: false, code: "directory_sync_needs_attention" } as const;
+            throw new TransactionReplayRequiredError("directory-source-currentness-changed");
         }
         // The running attempt and the cleared failure are what a mounted
         // source detail shows next; entering it is a status transition.
@@ -483,7 +520,7 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
                 consecutiveFailureCount: current.consecutiveFailureCount,
             },
         } as const;
-    }, { isolationLevel: "Serializable" /* Run claims must participate in the same source lifecycle as child projection writes. */ });
+    }, { isolationLevel: "ReadCommitted" /* The source CAS preserves current request, position and retry decisions before returning a run. */ });
 }
 
 export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
@@ -531,15 +568,7 @@ export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
             return { ok: false, code: "directory_sync_needs_attention" } as const;
         }
         const claimed = await tx.teamDirectorySource.updateMany({
-            where: {
-                id: current.id,
-                state: "active",
-                kind: "workos_directory",
-                activeReconcileRunId: null,
-                manualSyncRequestedAt: null,
-                eventCursor: current.eventCursor,
-                eventRangeStart: current.eventRangeStart,
-            },
+            where: directorySourceClaimWhere(current),
             data: {
                 lastAttemptAt: now,
                 lastErrorCode: null,
@@ -548,7 +577,7 @@ export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
             },
         });
         if (claimed.count !== 1) {
-            return { ok: false, code: "directory_sync_needs_attention" } as const;
+            throw new TransactionReplayRequiredError("directory-source-currentness-changed");
         }
         // Clearing a shown failure is a status transition; a later empty poll
         // compares against the cleared row and would not announce it.
@@ -571,7 +600,7 @@ export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
                 consecutiveFailureCount: current.consecutiveFailureCount,
             },
         } as const;
-    }, { isolationLevel: "Serializable" /* Incremental run claims must participate in the same lifecycle as child projection writes. */ });
+    }, { isolationLevel: "ReadCommitted" /* The same source CAS owns incremental request, position and retry currentness. */ });
 }
 
 export async function markActiveWorkosDirectoryPollFailed(params: Readonly<{
@@ -640,7 +669,7 @@ export async function markActiveWorkosDirectoryPollFailed(params: Readonly<{
             after,
         });
         return { applied: true } as const;
-    }, { isolationLevel: "Serializable" /* Poll-failure recovery participates in source lifecycle and projection-run currentness. */ });
+    }, { isolationLevel: "ReadCommitted" /* The full state/run/manual-request/position CAS rejects stale poll failures. */ });
 }
 
 /**
@@ -733,7 +762,7 @@ export async function markDirectorySourceReconcileFailed(params: Readonly<{
             after: { state: "needs_attention", lastErrorCode: params.errorCode },
         });
         return { applied: true } as const;
-    }, { isolationLevel: "Serializable" /* Reconcile-failure recovery participates in source lifecycle and child-run currentness. */ });
+    }, { isolationLevel: "ReadCommitted" /* The current initializing run CAS owns this source-only failure transition. */ });
 }
 
 /**
@@ -777,7 +806,7 @@ export async function requestDirectorySourceSync(params: Readonly<{
     now?: Date;
 }>): Promise<DirectorySourceSyncRequestResult> {
     const now = params.now ?? new Date();
-    return await inTx((tx) => requestDirectorySourceSyncInTx(tx, { ...params, now }), { isolationLevel: "Serializable" /* Manual sync request admission must agree with reconcile completion and source lifecycle. */ });
+    return await inTx((tx) => requestDirectorySourceSyncInTx(tx, { ...params, now }), { isolationLevel: "ReadCommitted" /* Request markers are computed from, and guarded by, the current source lifecycle. */ });
 }
 
 /**
@@ -827,8 +856,14 @@ export async function requestDirectorySourceSyncInTx(
     ) {
         return { ok: true, status: "coalesced" } as const;
     }
-    await tx.teamDirectorySource.update({
-        where: { id: params.sourceId },
+    const requested = await tx.teamDirectorySource.updateMany({
+        where: {
+            id: params.sourceId,
+            state: current.state,
+            activeReconcileRunId: current.activeReconcileRunId,
+            manualSyncRequestedAt: current.manualSyncRequestedAt,
+            lastAttemptAt: current.lastAttemptAt,
+        },
         data: {
             // Preserve request-after-attempt ordering at database millisecond
             // precision without changing the source's one-request/one-claim
@@ -838,6 +873,7 @@ export async function requestDirectorySourceSyncInTx(
                 : now,
         },
     });
+    if (requested.count !== 1) throw new TransactionReplayRequiredError("directory-source-currentness-changed");
     return {
         ok: true,
         status: current.state === "initializing" ? "coalesced" : "requested",

@@ -158,10 +158,8 @@ export async function createTeamWorkosConnection(
             return { ok: false, error: "workos_platform_unavailable" };
         }
 
-        // Serialize concurrent creators on the already-authoritative Team row
-        // without changing its bytes: serializable PostgreSQL/MySQL transactions
-        // retry the loser from a fresh snapshot and SQLite already serializes the
-        // write, so two presses cannot both create a draft carrier.
+        // Keep the existing authoritative Team row fence after complete Account
+        // admission, then read the current draft census below that fence.
         if (team && input.teamId !== null) {
             await tx.team.update({
                 where: { id: input.teamId },
@@ -170,8 +168,8 @@ export async function createTeamWorkosConnection(
             });
         }
         await recheckAdmission();
-        // Home creators read the same scope predicate in the canonical
-        // serializable transaction; a competing writer retries with its draft.
+        // Home creators hold the complete exclusive Home audience while reading
+        // the same draft predicate.
         if (input.teamId === null && !input.displayName?.trim()) {
             return { ok: false, error: "identity_connection_invalid" };
         }
@@ -199,9 +197,15 @@ export async function createTeamWorkosConnection(
 
         // Each Team connection owns exactly one provider instance (unique per
         // Team). Reuse only a Team-owned WorkOS instance no connection carries.
-        const provider = unboundProvider
+        // The candidate was selected before admission. Another creator may have
+        // bound and activated it while this caller waited; only a still-unbound
+        // provider can be reused for the new draft namespace.
+        const reusableProvider = unboundProvider ? await tx.identityProviderInstance.findFirst({
+            where: { id: unboundProvider.id, connections: { none: {} } }, select: { id: true },
+        }) : null;
+        const provider = reusableProvider
             ? await readIdentityProviderInstanceInTx(tx, {
-                id: unboundProvider.id,
+                id: reusableProvider.id,
                 owner: identityConnectionOwner(input.teamId),
             })
             : await createIdentityProviderInstanceInTx(tx, {
@@ -252,7 +256,7 @@ export async function createTeamWorkosConnection(
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: created.connection }) };
         }
         return { ok: false, error: "identity_connection_invalid" };
-    }, { isolationLevel: "Serializable" /* Home draft uniqueness and Team provider admission span provider and connection rows. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive owner admission, current draft census and candidate recheck serialize creation. */ });
 }
 
 function mapConnectionMutationError(status: string): TeamIdentityErrorCodeV1 {
@@ -333,7 +337,7 @@ export async function createTeamWorkosAdminPortalLink(
             return updated.status === "applied"
                 ? { ok: true as const, value: { ...current.value, connection: updated.connection as WorkosConnectionPreflight["connection"] } }
                 : { ok: false as const, error: mapConnectionMutationError(updated.status) };
-        }, { isolationLevel: "Serializable" /* WorkOS configuration participates in the connection observation and policy family. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission precedes the fresh preflight and revision CAS. */ });
         if (!persisted.ok) return persisted;
         preflight = persisted;
         organizationId = organization.id;
@@ -509,7 +513,7 @@ export async function reconcileTeamWorkosConnection(
             return result.status === "applied"
                 ? { ok: true as const, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) }
                 : { ok: false as const, error: mapConnectionMutationError(result.status) };
-        }, { isolationLevel: "Serializable" /* WorkOS observation merges JSON from a previously read connection without advancing its revision. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission serializes observation JSON merges without a revision advance. */ });
         if (!observed.ok) return observed;
         return {
             ok: true,
@@ -534,7 +538,7 @@ export async function reconcileTeamWorkosConnection(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return result;
-    }, { isolationLevel: "Serializable" /* WorkOS candidate recording merges previously read connection observations and policy. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission precedes fresh candidate and policy reads. */ });
     if (!recorded.ok) return recorded;
     return {
         ok: true,
@@ -588,5 +592,5 @@ export async function setTeamWorkosConnection(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return result;
-    }, { isolationLevel: "Serializable" /* WorkOS candidate activation combines the observed connection with current policy and login routes. */ });
+    }, { isolationLevel: "ReadCommitted" /* Exclusive provider admission precedes the fresh preflight and namespace revision CAS. */ });
 }

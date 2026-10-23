@@ -15,6 +15,9 @@ import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, readPostgresTransactionSqlState, type Tx } from "@/storage/inTx";
 import { registerTeamRoutes } from "./registerTeamRoutes";
 import { registerTeamMemberRoutes } from "./memberships/registerTeamMemberRoutes";
+import { registerTeamGroupRoutes } from "./groups/registerTeamGroupRoutes";
+import { registerTeamInvitationRoutes } from "./invitations/registerTeamInvitationRoutes";
+import { digestTeamInvitationToken, mintTeamInvitationToken } from "./invitations/token";
 import { readWebLatencyRequestId } from "@/utils/webLatencyTrace";
 import { enableMonitoring } from "@/app/api/utils/enableMonitoring";
 
@@ -54,6 +57,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         enableMonitoring(app);
         registerTeamRoutes(app);
         registerTeamMemberRoutes(app);
+        registerTeamGroupRoutes(app);
+        registerTeamInvitationRoutes(app, {
+            resolveJoinLinkTarget: async () => ({ applicationOrigin: "https://app.example.test", homeTarget: "contention-home" }),
+            resolveJoinScreenHomeIdentity: async () => ({ serverId: "contention-home", displayName: "Contention Home", storageMode: "plain", hosting: null }),
+            email: { delivery: { isReady: async () => true, deliver: async () => ({ status: "sent" }) }, isDeliveryReady: () => true },
+        });
         await app.ready();
     });
 
@@ -79,7 +88,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         return row;
     }
 
-    async function fixture(kind: "create" | "member" | "provider_resource" | "pool_resource" | "archive" | "restore" | "resource_delete" | "key_revoke" | "keys_revoke_all" | "limit_delete" | "material_withdraw") {
+    async function fixture(kind: "create" | "update" | "policy" | "group_update" | "role" | "invitation_revoke" | "invitation_reissue" | "invitation_accept" | "member" | "provider_resource" | "pool_resource" | "archive" | "restore" | "resource_delete" | "key_revoke" | "keys_revoke_all" | "limit_delete" | "material_withdraw") {
         const owner = await account();
         if (kind === "create") return {
             owner, url: "/v1/teams/create", payload: { v: 1, name: "Contended Team", requestKey: randomUUID() },
@@ -93,6 +102,67 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         const team = await db.team.create({ data: { name: "Contended membership and credentials" } });
         teamIds.push(team.id);
         const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        if (kind === "update") return {
+            owner, url: "/v1/teams/update", payload: { v: 1, teamId: team.id, name: "Updated under contention" },
+            verify: async (body: { id: string }) => {
+                expect(body.id).toBe(team.id);
+                expect(await db.team.findUniqueOrThrow({ where: { id: team.id } }))
+                    .toMatchObject({ name: "Updated under contention" });
+            },
+        };
+        if (kind === "policy") return {
+            owner, url: "/v1/teams/policy/set", payload: { v: 1, teamId: team.id,
+                previousAuthenticationPolicy: null, authenticationPolicy: null, defaultSessionHistoryAccess: "all_existing" },
+            verify: async (body: { id: string }) => {
+                expect(body.id).toBe(team.id);
+                expect(await db.team.findUniqueOrThrow({ where: { id: team.id } }))
+                    .toMatchObject({ defaultSessionHistoryAccess: "all_existing" });
+            },
+        };
+        if (kind === "group_update") {
+            const group = await db.teamGroup.create({ data: { teamId: team.id, name: "Initial group", nameKey: "initial group" } });
+            return {
+                owner, url: "/v1/teams/groups/update", payload: { v: 1, teamId: team.id, groupId: group.id, name: "Updated group" },
+                verify: async () => {
+                    expect(await db.teamGroup.findUniqueOrThrow({ where: { id: group.id } })).toMatchObject({ name: "Updated group" });
+                },
+            };
+        }
+        if (kind === "role") {
+            const target = await account();
+            const member = await db.teamMembership.create({ data: { teamId: team.id, accountId: target.id, role: "member" } });
+            return {
+                owner, url: "/v1/teams/members/role/set", payload: { v: 1, teamId: team.id, membershipId: member.id, role: "admin" },
+                verify: async () => {
+                    expect(await db.teamMembership.findUniqueOrThrow({ where: { id: member.id } })).toMatchObject({ role: "admin" });
+                },
+            };
+        }
+        if (kind === "invitation_revoke" || kind === "invitation_reissue" || kind === "invitation_accept") {
+            const token = mintTeamInvitationToken();
+            const invitation = await db.teamInvitation.create({ data: { teamId: team.id, tokenHash: new Uint8Array(digestTeamInvitationToken(token)),
+                role: "member", historyAccess: "from_membership", expiresAt: new Date(Date.now() + 86_400_000) } });
+            if (kind === "invitation_accept") {
+                const recipient = await account();
+                return {
+                    owner: recipient, url: "/v1/team-invitations/accept", payload: { v: 1, token },
+                    verify: async () => {
+                        expect(await db.teamInvitation.findUniqueOrThrow({ where: { id: invitation.id } }))
+                            .toMatchObject({ acceptedByAccountId: recipient.id });
+                        expect(await db.teamMembership.count({ where: { teamId: team.id, accountId: recipient.id } })).toBe(1);
+                    },
+                };
+            }
+            return {
+                owner, url: kind === "invitation_revoke" ? "/v1/teams/invitations/revoke" : "/v1/teams/invitations/reissue",
+                payload: { v: 1, teamId: team.id, invitationId: invitation.id,
+                    ...(kind === "invitation_reissue" ? { recipientEmail: null, requestKey: randomUUID() } : {}) },
+                verify: async () => {
+                    expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: invitation.id } })).revokedAt).not.toBeNull();
+                    expect(await db.teamInvitation.count({ where: { teamId: team.id } })).toBe(kind === "invitation_reissue" ? 2 : 1);
+                },
+            };
+        }
         if (kind === "resource_delete" || kind === "key_revoke" || kind === "keys_revoke_all" || kind === "limit_delete" || kind === "material_withdraw") {
             const resource = await db.teamCredentialResource.create({ data: {
                 teamId: team.id, custodianAccountId: owner.id, displayName: "Contended deletion",
@@ -220,6 +290,54 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         expect(repeated.statusCode, repeated.body).toBe(200);
         expect(repeated.json().archivedAt).toBe(response.json().archivedAt);
     });
+
+    it.each(["update", "policy"] as const)("rechecks Team %s authority after a membership change wins the Team lock", async kind => {
+        const input = await fixture(kind);
+        if (!("teamId" in input.payload) || typeof input.payload.teamId !== "string") throw new Error("Team update fixture requires a Team");
+        const teamId = input.payload.teamId;
+        const post = async () => await app.inject({ method: "POST", url: input.url,
+            headers: { "x-test-user-id": input.owner.id }, payload: input.payload });
+        let release!: () => void;
+        let ready!: (pid: number) => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const started = new Promise<number>(resolve => { ready = resolve; });
+        const holder = db.$transaction(async tx => {
+            const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+            await tx.$queryRaw`SELECT "id" FROM "Team" WHERE "id" = ${teamId} FOR NO KEY UPDATE`;
+            await tx.teamMembership.update({ where: { teamId_accountId: {
+                teamId, accountId: input.owner.id,
+            } }, data: { role: "member" } });
+            ready(pid);
+            await held;
+        });
+        const holderOutcome = Promise.allSettled([holder]);
+        let response: ReturnType<typeof post> | undefined;
+        try {
+            const pid = await Promise.race([started, holder.then(() => { throw new Error("Authority holder missed rendezvous"); })]);
+            let finished = false;
+            response = post().finally(() => { finished = true; });
+            let blocked: Array<{ query: string }> = [];
+            while (!finished && blocked.length === 0) {
+                blocked = await db.$queryRaw<Array<{ query: string }>>`
+                    SELECT query FROM pg_stat_activity WHERE datname = current_database()
+                        AND ${pid}::int = ANY(pg_blocking_pids(pid))
+                `;
+            }
+            expect(blocked, "Team update must wait for the resource before deciding authority").toHaveLength(1);
+            expect(blocked[0].query).toMatch(/Team.*FOR NO KEY UPDATE/s);
+            release();
+            const result = await response;
+            expect(result.statusCode, result.body).toBe(403);
+            expect(result.json()).toMatchObject({ error: "team_forbidden" });
+            expect((await db.team.findUniqueOrThrow({ where: { id: teamId } })).name)
+                .toBe("Contended membership and credentials");
+        } finally {
+            release();
+            await holderOutcome;
+            await response;
+        }
+    });
+
 
     it("archives and restores retained Team access atomically without reviving invitations", async () => {
         const owner = await account();
@@ -392,7 +510,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
     });
 
     for (const competition of ["same-account-publication", "foreign-serializable"] as const) {
-        it.each(["create", "member", "provider_resource", "pool_resource", "archive", "restore", "resource_delete", "key_revoke", "keys_revoke_all", "limit_delete", "material_withdraw"] as const)(`%s commits with ${competition}`, async kind => {
+        it.each(["create", "update", "policy", "group_update", "role", "invitation_revoke", "invitation_reissue", "invitation_accept", "member", "provider_resource", "pool_resource", "archive", "restore", "resource_delete", "key_revoke", "keys_revoke_all", "limit_delete", "material_withdraw"] as const)(`%s commits with ${competition}`, async kind => {
             const input = await fixture(kind);
             const foreign = await account();
             await db.$executeRaw`ANALYZE "Account"`;
@@ -456,7 +574,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                 const method = "method" in input ? input.method : "POST" as const;
                 const response = await app.inject({ method, url: input.url,
                     headers: { "x-test-user-id": input.owner.id }, payload: input.payload });
-                expect(response.statusCode, response.body).toBe(200);
+                const diagnostic = kind.startsWith("invitation_")
+                    ? JSON.stringify({ statusCode: response.statusCode, error: response.json().error }) : response.body;
+                expect(response.statusCode, diagnostic).toBe(200);
                 await input.verify(response.json());
                 expect(competitions).toBeGreaterThan(0);
                 // A lost response can replay each public operation without a
@@ -468,7 +588,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                 } else if (kind === "limit_delete") {
                     expect(repeated.statusCode, repeated.body).toBe(409);
                 } else {
-                    expect(repeated.statusCode, repeated.body).toBe(200);
+                    const repeatedDiagnostic = kind.startsWith("invitation_")
+                        ? JSON.stringify({ statusCode: repeated.statusCode, error: repeated.json().error }) : repeated.body;
+                    expect(repeated.statusCode, repeatedDiagnostic).toBe(200);
                     expect(repeated.json().id).toBe(response.json().id);
                 }
             } finally {

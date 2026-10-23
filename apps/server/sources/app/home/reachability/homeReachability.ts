@@ -8,6 +8,7 @@ import { publishHomeGovernanceChangedInTx } from "@/app/home/governance/governan
 import { authorizeHomeGovernanceMutationInTx } from "@/app/home/governance/homeCapabilities";
 import { readHomeConfigValueSource } from "@/app/home/settings/homeConfigProvenance";
 import {
+    HomeSettingsMutationAbortError,
     REACHABILITY_ROUTED_SETTING_KEYS,
     readHomeSettingsInTx,
     setHomeSettingsInTx,
@@ -170,7 +171,10 @@ export async function setHomeIrohMode(params: Readonly<{
                 // This owner never asks for a discard.
                 throw new Error("Home Iroh mode write refused: invalid_input");
         }
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" }).catch((error: unknown) => {
+        if (error instanceof HomeSettingsMutationAbortError) return { status: error.status };
+        throw error;
+    });
     if (written.status !== "applied" || !composition) return written;
 
     const state = params.mode === "disabled" ? await retireHomeIrohEndpoint() : await resumeHomeIrohEndpoint();

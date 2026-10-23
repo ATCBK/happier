@@ -1,4 +1,4 @@
-import { withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
 import type {
     TeamDirectorySafeErrorCodeV1,
     TeamErrorCodeV1,
@@ -20,7 +20,7 @@ import {
 
 import { inTx, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationLockInTx, resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import {
     acquireExternalSourceAccountAdmissionInTx,
@@ -215,7 +215,13 @@ export async function setExternalGroupBindingForActor(
 ): Promise<Result<TeamExternalGroupBindingV1>> {
     try {
         return await inTx(async (tx) => {
-            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: input.owner, actorAccountIds: [input.actorAccountId] });
+            const admission = await acquireExternalSourceAccountAdmissionInTx(tx, { owner: input.owner, actorAccountIds: [input.actorAccountId] });
+            const recheckAdmission = admission?.teamId === input.teamId ? admission.recheck : await acquireTeamMutationAccountAdmissionInTx(tx, {
+                teamId: input.teamId, accountIds: [input.actorAccountId],
+                membershipChange: { kind: "teamMembership", teamId: input.teamId },
+            });
+            await acquireTeamMutationLockInTx(tx, input.teamId);
+            await recheckAdmission();
             const authorized = await authorizeInTx(tx, input);
             if (!authorized.ok) return authorized;
             const validOwner = await validateOwnerInTx(tx, {
@@ -354,7 +360,7 @@ export async function setExternalGroupBindingForActor(
                 await publishTeamChangedInTx(tx, { teamId: input.teamId });
                 return { ok: true, value: projectBinding(binding) };
             });
-        }, { isolationLevel: "Serializable" /* Binding replacement must observe the complete native/external contribution union. */ });
+        }, { isolationLevel: "ReadCommitted" /* The outer Team guard precedes the fresh projected roster, binding and contribution census. */ });
     } catch (error) {
         if (isPrismaErrorCode(error, "P2002")) {
             return { ok: false, error: "directory_group_mapping_invalid" };
@@ -370,11 +376,17 @@ export async function removeExternalGroupBindingForActor(
         const bindingOwner = await tx.teamExternalGroupBinding.findUnique({
             where: { id: input.bindingId }, select: { directorySourceId: true, teamIdentityConnectionId: true },
         });
-        if (bindingOwner?.directorySourceId) {
-            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: bindingOwner.directorySourceId }, actorAccountIds: [input.actorAccountId] });
-        } else if (bindingOwner?.teamIdentityConnectionId) {
-            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "identity_connection", teamIdentityConnectionId: bindingOwner.teamIdentityConnectionId }, actorAccountIds: [input.actorAccountId] });
-        }
+        const admission = bindingOwner?.directorySourceId
+            ? await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: bindingOwner.directorySourceId }, actorAccountIds: [input.actorAccountId] })
+            : bindingOwner?.teamIdentityConnectionId
+                ? await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "identity_connection", teamIdentityConnectionId: bindingOwner.teamIdentityConnectionId }, actorAccountIds: [input.actorAccountId] })
+                : null;
+        const recheckAdmission = admission?.teamId === input.teamId ? admission.recheck : await acquireTeamMutationAccountAdmissionInTx(tx, {
+            teamId: input.teamId, accountIds: [input.actorAccountId],
+            membershipChange: { kind: "teamMembership", teamId: input.teamId },
+        });
+        await acquireTeamMutationLockInTx(tx, input.teamId);
+        await recheckAdmission();
         const authorized = await authorizeInTx(tx, input);
         if (!authorized.ok) return authorized;
         const removed = await removeExternalGroupBindingInTx(tx, {
@@ -385,5 +397,5 @@ export async function removeExternalGroupBindingForActor(
             ok: true,
             value: { v: 1, outcome: removed.status === "removed" ? "removed" : "already_absent" },
         };
-    }, { isolationLevel: "Serializable" /* Binding removal must agree with the remaining native/external contribution union. */ });
+    }, { isolationLevel: "ReadCommitted" /* The outer Team guard precedes current authority and the remaining contribution union. */ });
 }

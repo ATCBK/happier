@@ -6,6 +6,7 @@ import { type ServerConfigEntry, type ServerConfigRegistry, type ServerConfigVal
 import { type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
 import { resolveFeatureDecisionsFromEnv } from "@/app/features/registry";
+import { beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 import { recordHomeAdministrationEventInTx, type HomeAdministrationActor } from "@/app/home/audit/homeAdministrationEvents";
 import { homeAuthenticationPolicyConfigValues } from "@/app/home/governance/homeAuthenticationPolicyEnv";
 import { findRetentionPolicyEnvProblem } from "@/app/retention/config/readRetentionPolicyFromEnv";
@@ -274,10 +275,11 @@ export type HomeSettingsSetResult =
     /** The write asked for a discard together with values or secrets (the route answers `invalid_home_input`). */
     | Readonly<{ status: "invalid_input" }>;
 
-class HomeSettingsCreateConflictError extends Error {
-    constructor() {
-        super("home_settings_create_conflict");
-        this.name = "HomeSettingsCreateConflictError";
+/** A settings composition must roll back before translating either refusal into its result. */
+export class HomeSettingsMutationAbortError extends Error {
+    constructor(readonly status: "forbidden" | "revision_conflict") {
+        super(`home_settings_${status}`);
+        this.name = "HomeSettingsMutationAbortError";
     }
 }
 
@@ -383,6 +385,16 @@ export async function setHomeSettingsInTx(
         }
     }
 
+    // Settings CAS owns concurrent merges. Current owner authority is decided again only after
+    // the existing ordered Account publication locks; the recheck acquires no resource locks.
+    beforeAccountChangePublication(tx, [input.actorAccountId], async transaction => {
+        const currentAuthorization = await authorizeHomeGovernanceMutationInTx(transaction, {
+            actorAccountId: input.actorAccountId,
+            request: { operation: "manage_home_settings" },
+        });
+        if (currentAuthorization.status === "rejected") throw new HomeSettingsMutationAbortError("forbidden");
+    });
+
     if (changes.length === 0) return { status: "applied", projection: await projectRecordInTx(tx, current, registry) };
 
     // The retention reader is strict (a deleting mode needs its days): refuse a write that would
@@ -397,7 +409,7 @@ export async function setHomeSettingsInTx(
         try {
             await tx.homeSettings.create({ data: { id: HOME_SETTINGS_ID, revision: 1, ...data }, select: { id: true } });
         } catch (error) {
-            if (isPrismaErrorCode(error, "P2002")) throw new HomeSettingsCreateConflictError();
+            if (isPrismaErrorCode(error, "P2002")) throw new HomeSettingsMutationAbortError("revision_conflict");
             throw error;
         }
     } else {
@@ -420,22 +432,29 @@ export async function setHomeSettingsInTx(
 }
 
 /**
- * The transport entry: one serializable transaction that writes, audits and wakes every Home
- * administrator. A concurrent first write that loses the create race is settled by rereading the
- * winning revision in a fresh transaction, which reports the normal CAS conflict.
+ * The transport entry: revision CAS and final owner authorization protect one transaction that
+ * writes, audits and wakes every Home administrator. A concurrent first write that loses the create
+ * race is settled by rereading the winning revision in a fresh transaction for the normal CAS conflict.
  */
 export async function setHomeSettings(
     input: Readonly<{ actorAccountId: string; write: HomeSettingsSetInputV1; registry?: ServerConfigRegistry }>,
 ): Promise<HomeSettingsSetResult> {
-    const attempt = async () => await inTx(async (tx) => {
-        const result = await setHomeSettingsInTx(tx, input);
-        if (result.status === "applied") await publishHomeGovernanceChangedInTx(tx);
-        return result;
-    }, { isolationLevel: "Serializable" });
+    const attempt = async (): Promise<HomeSettingsSetResult> => {
+        try {
+            return await inTx(async (tx) => {
+                const result = await setHomeSettingsInTx(tx, input);
+                if (result.status === "applied") await publishHomeGovernanceChangedInTx(tx);
+                return result;
+            }, { isolationLevel: "ReadCommitted" });
+        } catch (error) {
+            if (error instanceof HomeSettingsMutationAbortError && error.status === "forbidden") return { status: "forbidden" };
+            throw error;
+        }
+    };
     try {
         return await attempt();
     } catch (error) {
-        if (!(error instanceof HomeSettingsCreateConflictError)) throw error;
+        if (!(error instanceof HomeSettingsMutationAbortError) || error.status !== "revision_conflict") throw error;
         return await attempt();
     }
 }

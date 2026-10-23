@@ -26,7 +26,7 @@ import {
 import { signOutHomeAccountEverywhereInTx } from "@/app/home/governance/homeAccountSignOutEverywhere";
 import { deleteAccountForErasure } from "@/app/plugins/data/accountDataErase";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 
 import type { Fastify } from "../../types";
 import { registerHomeManagedIdentityProviderRoutes } from "./homeManagedIdentityProviderRoutes";
@@ -154,13 +154,13 @@ export function homeGovernanceRoutes(app: Fastify): void {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
             const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
-            const listing = await inTx(async (tx) => await listHomeAccountsInTx(tx, {
+            const listing = await inReadSnapshot(async (tx) => await listHomeAccountsInTx(tx, {
                 actorAccountId: request.userId,
                 env: requestHomeEnv,
                 emailDeliveryReady,
                 ...(request.body.cursor !== undefined ? { cursor: request.body.cursor } : {}),
                 ...(request.body.limit !== undefined ? { limit: request.body.limit } : {}),
-            }), { isolationLevel: "Serializable" /* The ordered Account ids and their projected rows must come from the same listing snapshot. */ });
+            }));
             if (listing.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(listing.code)).send({ error: listing.code });
             }
@@ -276,7 +276,7 @@ export function homeGovernanceRoutes(app: Fastify): void {
                 homeRole: request.body.homeRole,
                 env: requestHomeEnv,
                 emailDeliveryReady,
-            }), { isolationLevel: "Serializable" });
+            }), { isolationLevel: "ReadCommitted" });
             if (outcome.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(outcome.code)).send({ error: outcome.code });
             }
@@ -323,7 +323,7 @@ export function homeGovernanceRoutes(app: Fastify): void {
                             emailDeliveryReady,
                         }),
                     };
-                }, { isolationLevel: "Serializable" });
+                }, { isolationLevel: "ReadCommitted" });
                 if (outcome.status === "rejected") {
                     return await reply.code(homeGovernanceErrorHttpStatusV1(outcome.code)).send({ error: outcome.code });
                 }

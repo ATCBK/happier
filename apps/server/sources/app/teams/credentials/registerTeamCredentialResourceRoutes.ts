@@ -21,6 +21,7 @@ import { readHomeEffectiveEnv, resolveServerFeaturesForGating } from "@/app/feat
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { readTeamOperationAuthenticationFromRequest } from "../actorContext";
 import { publishTeamChangedInTx } from "../teamChanges";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonPresence";
 import {
     getMachinePoolCandidateSnapshot,
@@ -704,6 +705,12 @@ export function registerTeamCredentialResourceRoutes(
             if (resource?.teamId !== params.data.teamId) {
                 return { ok: false as const, error: "resource_not_found" as const };
             }
+            // Admit every batch recipient before the first tuple takes the
+            // Team guard; later unavailable recipients still need Account order.
+            await acquireTeamMutationAccountAdmissionInTx(tx, {
+                teamId: params.data.teamId,
+                accountIds: [request.userId, ...body.data.items.map(item => item.recipientAccountId)],
+            });
             const itemResults: z.infer<typeof TeamCredentialDirectMaterialUpsertResponseV1Schema>["results"] = [];
             let changedAnyTuple = false;
             for (const item of body.data.items) {
@@ -744,7 +751,7 @@ export function registerTeamCredentialResourceRoutes(
                 await publishTeamChangedInTx(tx, { teamId: params.data.teamId });
             }
             return { ok: true as const, results: itemResults };
-        }, { isolationLevel: "Serializable" /* Material writes depend on the same resource/audience and recipient epoch snapshot. */ });
+        }, { isolationLevel: "ReadCommitted" /* Complete batch Account admission precedes the Team guard and fresh tuple currentness checks. */ });
         if (!results.ok) return fail(reply, results.error);
         return reply.send(TeamCredentialDirectMaterialUpsertResponseV1Schema.parse({ results: results.results }));
     });
@@ -1562,7 +1569,7 @@ export function registerTeamCredentialResourceRoutes(
             return changed.ok
                 ? { resourceId: changed.resourceId, revision: changed.revision }
                 : changed;
-        }, { isolationLevel: "Serializable" /* Audience mutation participates in recipient material and entitlement admission. */ });
+        }, { isolationLevel: "ReadCommitted" /* The canonical Team guard serializes fresh audience authority and recipient cleanup with material production. */ });
         if ('ok' in result && !result.ok) return fail(reply, result.error);
         return reply.send(TeamCredentialResourceMutationResultV1Schema.parse(result));
     });
@@ -1585,7 +1592,7 @@ export function registerTeamCredentialResourceRoutes(
             return changed.ok
                 ? { resourceId: changed.resourceId, revision: changed.revision }
                 : changed;
-        }, { isolationLevel: "Serializable" /* Resource revision changes participate in recipient/source currentness and quota admission. */ });
+        }, { isolationLevel: "ReadCommitted" /* The canonical Team guard and resource CAS precede fresh authority and material withdrawal. */ });
         let result = await attempt();
         if ("ok" in result && !result.ok && result.error === "update_required"
             && proposedRequestPolicy !== undefined && proposedRequestPolicy !== null) {

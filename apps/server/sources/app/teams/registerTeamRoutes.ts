@@ -159,7 +159,7 @@ export function registerTeamRoutes(
             ...(request.body.description === undefined ? {} : { description: request.body.description }),
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "Serializable" /* Team mutation authority composes actor membership, Account status and Team authentication policy. */ });
+        }), { isolationLevel: "ReadCommitted" /* Ordered Account admission and the Team lock precede fresh authority reads and the audience recheck. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });
@@ -177,7 +177,7 @@ export function registerTeamRoutes(
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
             ...request.body,
-        }), { isolationLevel: "Serializable" /* Team policy viability spans current memberships, identity connections and credential authority. */ });
+        }), { isolationLevel: "ReadCommitted" /* Team lock and admitted Account cohort cover current policy, provider viability and actor authority. */ });
         if (!result.ok) return sendTeamError(reply, result.error, result.details);
         return reply.send(result.team);
     });

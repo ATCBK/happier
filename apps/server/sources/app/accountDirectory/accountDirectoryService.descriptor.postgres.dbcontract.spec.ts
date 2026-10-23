@@ -23,6 +23,7 @@ vi.mock("node:fs/promises", async importOriginal => {
 });
 
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
+import { auth } from "@/app/auth/auth";
 import { inTx } from "@/storage/inTx";
 import { createHomeApprovalGate } from "@/app/api/routes/auth/homeApprovalGate";
 import { mintHomeLoginAssertion, accountDirectorySigningKeyMetadata, resolveAccountDirectorySigningKeyPair } from "./accountDirectorySigner";
@@ -39,13 +40,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("H
         const url = new URL(supplied);
         url.searchParams.set("application_name", applicationName);
         process.env.DATABASE_URL = url.toString();
+        vi.stubEnv("HANDY_MASTER_SECRET", "ovbfix-fixture-only");
         initDbPostgres();
         await db.$connect();
+        await auth.init();
     });
     afterAll(async () => {
         fileBoundary.observe = null;
         await db.$disconnect();
         if (originalDatabaseUrl !== undefined) process.env.DATABASE_URL = originalDatabaseUrl;
+        vi.unstubAllEnvs();
     });
 
     it.each([false, true])("prepares outside the token transaction and validates the live destination (changed during admission: %s)", async changeDuringAdmission => {
@@ -95,9 +99,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("H
             let issued = false;
             redemption = redeemHomeLoginAssertion({ assertion, env, homeApprovalGate: createHomeApprovalGate(env),
                 issueHomeToken: async (tx, accountId) => {
-                    await tx.account.update({ where: { id: accountId }, data: { seq: { increment: 1 } } });
                     issued = true;
-                    return "fixture-home-token";
+                    return auth.createTokenInTx(tx, accountId, undefined, { kind: "account", authority: "present_user" });
                 } });
             const outcome = Promise.allSettled([redemption]);
             if (changeDuringAdmission) {

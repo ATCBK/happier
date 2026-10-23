@@ -8,7 +8,7 @@ import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAcco
 import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { admitTeamCredentialWithdrawalInTx } from "./resourceWithdrawalAdmission";
 import { readSessionAccountCursorAudienceInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
-import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationLockInTx, resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialEntitlementInTx } from "./resourceAccess";
 import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
 import {
@@ -731,12 +731,20 @@ export async function upsertTeamCredentialRecipientMaterialInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamCredentialRecipientMaterialUpsertResult> {
+    const identity = await tx.teamCredentialResource.findUnique({
+        where: { id: input.resourceId },
+        select: { teamId: true },
+    });
+    if (!identity) return { ok: false, reason: "resource_not_found" };
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: identity.teamId, accountIds: [input.actorAccountId, input.recipientAccountId] });
+    await acquireTeamMutationLockInTx(tx, identity.teamId);
+    await recheckAdmission();
     const resource = await tx.teamCredentialResource.findUnique({
         where: { id: input.resourceId },
         select: { id: true, teamId: true, custodianAccountId: true, enabled: true, revision: true, sourceBindingJson: true, directSourceVersionsJson: true },
     });
     if (!resource) return { ok: false, reason: "resource_not_found" };
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resource.teamId, accountIds: [input.actorAccountId, input.recipientAccountId] });
+    if (resource.teamId !== identity.teamId) throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     if (resource.custodianAccountId !== input.actorAccountId) return { ok: false, reason: "source_owner_required" };
     const qualification = await qualifyCurrentTeamCredentialSourceCustodianInTx(tx, {
         teamId: resource.teamId,

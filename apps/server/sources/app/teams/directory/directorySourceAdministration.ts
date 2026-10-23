@@ -34,7 +34,8 @@ import {
     type WorkosPlatformConfigResolution,
     type WorkosPlatformRequestPolicy,
 } from "@/app/integrations/workos/workosPlatform";
-import type { TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationLockInTx, type TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import { publishTeamChangedInTx } from "../teamChanges";
 import { acquireExternalSourceAccountAdmissionInTx } from "../memberships/externalFacts";
@@ -817,7 +818,7 @@ export async function createDirectorySourceForActor(
         });
         await publishTeamChangedInTx(tx, { teamId: input.teamId });
         return { ok: true, value: projectSource(source, input.now) } as const;
-    }, { isolationLevel: "Serializable" /* Source creation composes current actor/connection authority with directory lifecycle. */ });
+    }, { isolationLevel: "ReadCommitted" /* Existing Team admission covers authority and provider reads; unique keys and FKs own source identity. */ });
     // Initial creation enters `initializing` with a durable run token. Wake the
     // local worker only after that transaction commits; other worker processes
     // discover the same source through the durable due predicate.
@@ -848,7 +849,7 @@ export async function syncDirectorySourceForActor(input: Partial<TeamOperationAu
             ok: true,
             value: { v: 1, status: requested.status, source: projectSource(source, input.now) },
         } as const;
-    }, { isolationLevel: "Serializable" /* Manual sync request admission must agree with reconcile completion and source lifecycle. */ });
+    }, { isolationLevel: "ReadCommitted" /* Existing actor admission plus the source request CAS replays stale marker decisions. */ });
     if (result.ok) requestEnterpriseIdentitySyncNudge();
     return result;
 }
@@ -920,7 +921,7 @@ export async function setDirectorySourcePausedForActor(input: Partial<TeamOperat
         });
         await publishTeamChangedInTx(tx, { teamId: input.teamId });
         return { ok: true, value: projectSource(committed, input.now) } as const;
-    }, { isolationLevel: "Serializable" /* Pause/reset participates in source lifecycle and child projection currentness. */ });
+    }, { isolationLevel: "ReadCommitted" /* The source update owns pause/reset; Resume reads request state after that row is held. */ });
     // Resume records a durable repair request in the transaction above. Wake
     // the local worker after commit so an in-process worker observes it
     // immediately; another process still discovers the same request through
@@ -960,7 +961,7 @@ export async function preflightDirectorySourceRemovalForActor(input: Partial<Tea
                 }),
             },
         };
-    }, { isolationLevel: "Serializable" /* Source removal withdraws membership and Group contribution unions after impact checks. */ });
+    }, { isolationLevel: "ReadCommitted" /* Advisory impact only; the removal transaction repeats its deciding census. */ });
 }
 
 export async function removeDirectorySourceForActor(input: Partial<TeamOperationAuthenticationContext> & Readonly<{
@@ -969,9 +970,15 @@ export async function removeDirectorySourceForActor(input: Partial<TeamOperation
     actorAccountId: string;
 }>): Promise<DirectoryAdministrationResult<TeamDirectorySourceRemoveResultV1>> {
     return await inTx(async (tx) => {
-        await acquireExternalSourceAccountAdmissionInTx(tx, {
+        const admission = await acquireExternalSourceAccountAdmissionInTx(tx, {
             owner: { kind: "directory_source", directorySourceId: input.sourceId }, actorAccountIds: [input.actorAccountId],
         });
+        const recheckAdmission = admission?.teamId === input.teamId ? admission.recheck : await acquireTeamMutationAccountAdmissionInTx(tx, {
+            teamId: input.teamId, accountIds: [input.actorAccountId],
+            membershipChange: { kind: "teamMembership", teamId: input.teamId },
+        });
+        await acquireTeamMutationLockInTx(tx, input.teamId);
+        await recheckAdmission();
         const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({

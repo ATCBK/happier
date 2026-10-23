@@ -13,6 +13,7 @@ import { projectForActorInTx } from "./lifecycle";
 import { TEAM_PROJECTION_SELECT, readStoredTeamLogo, type StoredTeamLogo } from "./projections";
 import { publishTeamChangedInTx } from "./teamChanges";
 import {
+    acquireTeamMutationLockInTx,
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
     type TeamOperationAuthenticationContext,
@@ -121,7 +122,7 @@ export async function setTeamLogo(input: Readonly<{
                 logo,
                 authentication: input.authentication,
             });
-        }, { isolationLevel: "Serializable" /* Logo mutation admission combines current Team lifecycle, actor membership and authentication policy. */ });
+        }, { isolationLevel: "ReadCommitted" /* The Team guard precedes fresh authority and displaced-logo capture. */ });
     } catch (error) {
         await deleteTeamLogoObject(input.teamId, path);
         throw error;
@@ -159,7 +160,7 @@ export async function removeTeamLogo(input: Readonly<{
             logo: null,
             authentication: input.authentication,
         });
-    }, { isolationLevel: "Serializable" /* Logo removal admission combines current Team lifecycle, actor membership and authentication policy. */ });
+    }, { isolationLevel: "ReadCommitted" /* The Team guard precedes fresh authority and displaced-logo capture. */ });
     if (!committed.ok) return committed;
 
     if (committed.displacedPath !== null) {
@@ -182,7 +183,9 @@ async function authorizeLogoMutationInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamLogoError | null> {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return "teams_unavailable";
     const context = await resolveTeamActorContextInTx(tx, input);
     const viewer = toTeamViewer(context);
