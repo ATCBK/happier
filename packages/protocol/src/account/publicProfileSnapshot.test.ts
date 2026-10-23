@@ -76,6 +76,23 @@ describe('public-profile snapshot computation from canonical Usage', () => {
     ]) expect(buildPublicProfileSnapshot({ queryResult, policy, nowMs: endMs }).kind).toBe('unavailable');
   });
 
+  it('distinguishes no eligible personal facts from admitted facts without an observation clock', () => {
+    const slice = result();
+    for (const { empty, asOfMs } of [{ empty: true }, { empty: true, asOfMs: endMs }, { empty: false }]) {
+      const accounting = UsageAnalyticsQueryResponseSchema.parse({ ...slice.accounting,
+        contributions: empty ? [] : slice.accounting!.contributions,
+        ...(empty ? { totals: { eventCount: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }, activity: undefined } : {}),
+        coverage: { ...slice.accounting!.coverage, sources: [] },
+      });
+      const queryResult = resolveUsagePageAggregation({ queries: [query],
+        accounting: [{ query, status: 'available', asOfMs, value: accounting }] }).results[0]!;
+      expect(buildPublicProfileSnapshot({ queryResult, policy, nowMs: endMs })).toEqual({ kind: 'unavailable',
+        reason: empty ? 'no_eligible_personal_usage' : 'source_time_unavailable' });
+    }
+  });
+
   it('does not turn absent event observations into known-empty days even with a complete history range', () => {
     const slice = result();
     const accounting = UsageAnalyticsQueryResponseSchema.parse({ ...slice.accounting, activity: undefined,

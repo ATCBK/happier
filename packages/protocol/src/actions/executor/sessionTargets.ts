@@ -1,5 +1,4 @@
 import { normalizeSessionTargetV1, type SessionTargetV1, type SessionTargetSelectorV1, type ActionResolvedSessionTargetsV1, type SessionTargetPreviewV1 } from '../sessionTargetV1.js';
-import { parseSessionListQueryActionResultV1 } from '../../sessions/awareness/action.js';
 import { FollowRulePreviewResultV1Schema } from '../../sessions/follow/sessionFollowRulePreviewV1.js';
 import { parseSessionFollowActionResponse } from '../../sessions/follow/actionTransport.js';
 import { OpenedSessionFollowRuleV1Schema, type OpenedSessionFollowRuleV1 } from '../../sessions/follow/actions.js';
@@ -7,6 +6,8 @@ import { DiscussionParticipantsListResponseV1Schema } from '../../discussions/pa
 import type { ActionId } from '../actionIds.js';
 import type { ActionExecuteFailure } from '../actionExecutionResult.js';
 import type { ActionExecutorContext, ActionExecutorDeps, ActionSessionAddress, ActionSessionReferenceResolution } from './types.js';
+import { readActionCallerLedSubtreeSessions } from './sessionLedSubtree.js';
+import { readSessionManagerSessionIdV1 } from '../../sessions/follow/sessionManagerV1.js';
 
 function id(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -25,6 +26,14 @@ export async function resolveActionSessionAddress(
   const serverId = id(context.serverId);
   if (sessionId && serverId && !resolveReference) return { kind: 'unique', address: { serverId, sessionId } };
   if (!sessionId && !sessionTitle) return { kind: 'none' };
+  if (resolveReference && context.sessionListAccess === 'current_session' && sessionId
+    && sessionId !== id(context.defaultSessionId)) {
+    const root = await resolveActionSessionAddress(deps, { sessionId: context.defaultSessionId }, context, actionId, true);
+    if (root.kind !== 'unique') return root;
+    const sessions = await readActionCallerLedSubtreeSessions(deps, { ...context, serverId: root.address.serverId });
+    if (!sessions) return { kind: 'incomplete' };
+    return sessions.has(sessionId) ? { kind: 'unique', address: { serverId: root.address.serverId, sessionId } } : { kind: 'none' };
+  }
   if (!deps.resolveSessionReference) return { kind: 'incomplete' };
   return deps.resolveSessionReference({ context, ...(sessionId ? { sessionId } : {}),
     ...(sessionTitle ? { sessionTitle } : {}), ...(actionId ? { actionId } : {}),
@@ -39,43 +48,21 @@ function unavailable(cause: string): ActionExecuteFailure {
 async function workers(
   deps: ActionExecutorDeps, base: ActionSessionAddress, target: Extract<SessionTargetSelectorV1, { selector: 'workers' }>, context: ActionExecutorContext,
 ): Promise<readonly ActionSessionAddress[] | ActionExecuteFailure> {
+  const sessions = await readActionCallerLedSubtreeSessions(deps, { ...context, serverId: base.serverId }, base.sessionId);
+  if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+  if (!sessions) return unavailable('incomplete_session_corpus');
   const targets: ActionSessionAddress[] = [];
-  const seenTargets = new Set<string>();
-  // Archive retains the manager edge. Both storage partitions belong to the
-  // selected subtree; archived targets get their own ordinary operation result.
-  for (const storage of ['active', 'archived'] as const) {
-    const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    do {
-      if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
-      const raw = await deps.sessionList({ context, serverId: base.serverId,
-        query: { v: 1, storage, includeInactive: true, scope: 'all_accessible', attention: 'any',
-          audiences: [], tagIds: [], underSessionId: base.sessionId, includeAttention: false,
-          ...(cursor ? { cursor } : {}),
-        }, ...(context.signal ? { signal: context.signal } : {}),
-      });
-      const page = parseSessionListQueryActionResultV1(raw);
-      if (!page || page.metadataUpgradeRequiredCount || page.botFilterUnavailableCount
-        || page.attentionHasNext || page.hasNext === undefined) return unavailable('incomplete_session_corpus');
-      for (const row of page.sessions) {
-        // Summary rows preserve the canonical manager projection. Awareness rows
-        // cannot prove direct membership and are not a substitute for that read.
-        if (!('id' in row) || typeof row.id !== 'string') return unavailable('manager_projection_unavailable');
-        if (row.id === base.sessionId) continue;
-        if (target.recursive !== true) {
-          if (!('manager' in row)) return unavailable('manager_projection_unavailable');
-          const manager = row.manager;
-          if (!manager || typeof manager !== 'object' || !('sessionId' in manager) || manager.sessionId !== base.sessionId) continue;
-        }
-        if (seenTargets.has(row.id)) continue;
-        seenTargets.add(row.id);
-        targets.push({ serverId: base.serverId, sessionId: row.id });
-      }
-      if (!page.hasNext) break;
-      if (!page.nextCursor || seenCursors.has(page.nextCursor)) return unavailable('incomplete_session_corpus');
-      seenCursors.add(page.nextCursor);
-      cursor = page.nextCursor;
-    } while (cursor);
+  for (const row of sessions.values()) {
+    // Summary rows preserve the canonical manager projection. Awareness rows
+    // cannot prove direct membership and are not a substitute for that read.
+    if (!('id' in row) || typeof row.id !== 'string') return unavailable('manager_projection_unavailable');
+    if (row.id === base.sessionId) continue;
+    if (target.recursive !== true) {
+      if (!('manager' in row)) return unavailable('manager_projection_unavailable');
+      const manager = row.manager;
+      if (!manager || typeof manager !== 'object' || !('sessionId' in manager) || manager.sessionId !== base.sessionId) continue;
+    }
+    targets.push({ serverId: base.serverId, sessionId: row.id });
   }
   return targets;
 }
@@ -330,10 +317,19 @@ async function readActionSessionTargets(
   } else if (!base) return unavailable('session_context_unavailable');
   else if (target.selector === 'self') targets = [base.address];
   else if (target.selector === 'manager' || target.selector === 'siblings') {
-    if (!deps.readSessionManager) return unavailable('manager_reader_unavailable');
-    const relation = await deps.readSessionManager({ address: base.address, context, actionId,
-      ...(context.signal ? { signal: context.signal } : {}),
-    });
+    const relation = await (async () => {
+      if (context.sessionListAccess === 'current_session') {
+        const sessions = await readActionCallerLedSubtreeSessions(deps, { ...context, serverId: base.address.serverId });
+        const row = sessions?.get(base.address.sessionId);
+        if (!row || !('manager' in row)) return { kind: 'unavailable' } as const;
+        const managerId = readSessionManagerSessionIdV1(row);
+        if (managerId && !sessions?.has(managerId)) return { kind: 'unavailable' } as const;
+        return { kind: 'manager', address: managerId ? { serverId: base.address.serverId, sessionId: managerId } : null } as const;
+      }
+      return await deps.readSessionManager?.({ address: base.address, context, actionId,
+        ...(context.signal ? { signal: context.signal } : {}),
+      }) ?? { kind: 'unavailable' } as const;
+    })();
     if (relation.kind === 'unavailable') return unavailable('manager_reader_unavailable');
     if (!relation.address) targets = [];
     else if (target.selector === 'manager') targets = [relation.address];

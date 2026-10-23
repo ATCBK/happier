@@ -75,12 +75,23 @@ describe('session.list execution', () => {
         active: true, activeAt: 1, encryptionMode: 'plain', encryption: null }] : [],
       nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
     }) });
+    const caller = { kind: 'session', sessionId: 'coordinator', starterDepth: 0, turnDepth: 0 } as const;
     const context = { surface: 'agent', authority: 'account_automation', bypassApprovals: true,
-      defaultSessionId: 'coordinator', sessionListAccess: 'current_session' } as const;
+      defaultSessionId: 'coordinator', sessionListAccess: 'current_session', actionCaller: caller,
+      agentStartContext: { caller, baseline: { machineId: 'machine', directory: '/repo' }, roles: {},
+        ledSubtreeSessionIds: [], workDepthLimit: 4, callerPermissionCeiling: 'default' } } as const;
     await expect(executor.execute('session.list', { underSessionId: 'coordinator' }, context))
       .resolves.toMatchObject({ ok: true, result: { sessions: [{ id: 'worker' }] } });
     await expect(executor.execute('session.list', { underSessionId: 'another-coordinator' }, context))
       .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    await expect(executor.execute('session.list', { query: { ...canonicalQuery, underSessionId: 'another-coordinator' } }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    await expect(executor.execute('session.list', { underSessionId: 'coordinator' }, {
+      ...context, actionCaller: undefined, agentStartContext: undefined,
+    })).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    await expect(executor.execute('session.list', { underSessionId: 'another-coordinator' }, {
+      ...context, defaultSessionId: 'another-coordinator',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
   });
   it.each(['srv_widget_home', 'local-profile'])('keeps %s Session pins comparable to options across proven Home aliases', async selectedHome => {
     const surface = { serverId: 'srv_widget_home', accountId: 'viewer', owner: { kind: 'home' as const } };

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod/mini';
 
 import { ACTION_ID_FAMILIES_V1, ActionIdSchema, type ActionId } from './actionIds.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import {
   getActionSpec,
   PluginInvocableActionIdSchema,
@@ -35,6 +36,19 @@ import {
 type AutomationActionIdV1 = Extract<ActionId, `automation.${string}`>;
 
 describe('Event Automation ActionSpecs', () => {
+  it('admits source telemetry by default while preserving explicit approval policy and event-admission confirmation', () => {
+    const actionId = 'automation.event.source.status.report';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'plugin', authority: 'account_automation' } as const;
+    expect(resolveActionApprovalRouting({ actionId, spec, context }).required).toBe(false);
+    expect(resolveActionApprovalRouting({ actionId, spec, context,
+      settings: { v: 1, actions: {} } }).required).toBe(false);
+    expect(resolveActionApprovalRouting({ actionId, spec, context,
+      settings: { v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['plugin'] } } } }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ actionId: 'automation.event.admit',
+      spec: getActionSpec('automation.event.admit'), context }).required).toBe(true);
+  });
+
   it('keeps the legacy Automation exports on the exact browser-safe Action packet', () => {
     expect(legacyAutomationEventActionIds).toBe(AUTOMATION_EVENT_ACTION_IDS_V1);
     expect(legacyAutomationConversationActionIds).toBe(AUTOMATION_CONVERSATION_ACTION_IDS_V1);

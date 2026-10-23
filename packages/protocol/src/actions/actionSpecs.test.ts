@@ -29,6 +29,7 @@ import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { resolveMachineRpcGovernance } from '../machines/peer/mediation/rpc/governanceV1.js';
 import { evaluateInputPredicate } from '../inputs/inputPredicates.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
@@ -41,6 +42,35 @@ import {
   type ActionId,
   type RuntimeActionIdV1,
 } from './actionIds.js';
+
+it('classifies Machine RPC reads from Action effects and exact internal read facts, not route or safe labels', async () => {
+  const owner = await import('./actionSpecs.js');
+  expect(owner).toHaveProperty('isReadOnlyMachineRpcMethod', expect.any(Function));
+  const readOnly = owner.isReadOnlyMachineRpcMethod;
+  for (const method of [RPC_METHODS.MACHINES_VITALS_GET, RPC_METHODS.MACHINES_VITALS_HISTORY_GET,
+    RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT, RPC_METHODS.DAEMON_SESSION_GOAL_GET,
+    RPC_METHODS.CAPABILITIES_DESCRIBE, RPC_METHODS.CAPABILITIES_DETECT,
+    RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+    RPC_METHODS.DAEMON_VITALS_WATCH, RPC_METHODS.DAEMON_PROCESSES_WATCH, RPC_METHODS.DAEMON_STORAGE_WATCH,
+    RPC_METHODS.DAEMON_GUARD_WATCH]) {
+    expect(readOnly(method), method).toBe(true);
+  }
+  // These existing Actions are user-safe but still have effects.
+  for (const actionId of ['session.stop', 'session.spawn_new', 'machines.resources.policy.set'] as const) {
+    const spec = getActionSpec(actionId);
+    expect(spec.safety).toBe('safe');
+    expect(spec.sideEffectClass).toBe('write');
+    expect(readOnly(spec.bindings!.rpcMethod!), actionId).toBe(false);
+  }
+  for (const method of [RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE, RPC_METHODS.CAPABILITIES_INVOKE,
+    RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE, RPC_METHODS.DAEMON_SESSION_GOAL_SET, RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR,
+    RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET, SESSION_RPC_METHODS.SESSION_NOTES_SET,
+    'unknown.method', 'unknown.read.get', 'constructor', `machine:${RPC_METHODS.MACHINES_VITALS_GET}`]) {
+    expect(readOnly(method), method).toBe(false);
+  }
+  expect(resolveMachineRpcGovernance(RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT).rpcClassification).toBe('internal_only');
+  expect(resolveMachineRpcGovernance(RPC_METHODS.DAEMON_SESSION_GOAL_GET).rpcClassification).toBe('advisory_unclassified');
+});
 
 it('publishes receiver mute and autonomous exchange controls to the Voice catalog', () => {
   const voiceActions = listVoiceToolActionSpecs().map(spec => spec.id);
@@ -3553,6 +3583,14 @@ describe('Action Spec Registry', () => {
         expect.objectContaining({ value: 'canceled' }),
       ]),
     );
+  });
+
+  it('validates approval-list cursors and Action filters at the input boundary', () => {
+    const spec = getActionSpec('approval.request.list');
+    expect(spec.inputSchema.safeParse({ status: 'open', actionId: 'session.message.send', cursor: 'opaque-artifact-cursor', limit: 100 }).success).toBe(true);
+    for (const input of [{ actionId: 'unknown.action' }, { cursor: '' }, { cursor: 42 }, { limit: 101 }]) {
+      expect(spec.inputSchema.safeParse(input).success).toBe(false);
+    }
   });
 
   it('admits typed pet selection from automation while retaining empty chooser navigation', () => {

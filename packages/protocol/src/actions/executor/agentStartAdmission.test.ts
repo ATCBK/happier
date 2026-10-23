@@ -1,14 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { admitActionAgentStartV1, resolveActionAgentStartRequestsV1, resolveRunStartModelAndConfig, stampAgentStartSelectionV1 } from './agentStartAdmission.js';
+import { admitActionAgentStartV1, resolveActionAgentStartContextV1, resolveActionAgentStartRequestsV1, resolveRunStartModelAndConfig, stampAgentStartSelectionV1 } from './agentStartAdmission.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { ExecutionRunStartRequestSchema } from '../../execution/runs/startRequest.js';
 import type { AgentStartContextV1 } from '../../account/settings/admitAgentStartV1.js';
+import { markSessionListQueryResultV1 } from '../../sessions/awareness/action.js';
 
 const nativeTarget = { kind: 'agent' as const, identity: { pluginId: 'native.agent', localId: 'agent' } };
 const roleTarget = { kind: 'agent' as const, identity: { pluginId: 'role.agent', localId: 'agent' } };
 
 describe('canonical Action agent-start adapter', () => {
+  it('keeps current-Session start authority narrower than a readable led Session', async () => {
+    const agentStartContext: AgentStartContextV1 = {
+      caller: { kind: 'session', sessionId: 'lead', starterDepth: 0, turnDepth: 0 },
+      baseline: { machineId: 'machine', directory: '/repo' }, roles: {}, callerPermissionCeiling: 'default',
+      ledSubtreeSessionIds: ['child'], workDepthLimit: 4,
+    };
+    const deps = { sessionList: async () => markSessionListQueryResultV1({
+      sessions: [{ id: 'child', active: false, presence: 'offline', updatedAt: 1 }],
+      nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    }) };
+    for (const sessionListAccess of ['current_session', 'led_subtree', 'unavailable'] as const) {
+      const context = { agentStartContext, sessionListAccess, defaultSessionId: 'lead' };
+      const resolved = await resolveActionAgentStartContextV1(deps, context, 'child');
+      expect(admitActionAgentStartV1(context, { kind: 'session_target', targetSessionId: 'child' }, resolved))
+        .toMatchObject(sessionListAccess === 'led_subtree' ? { ok: true } : { ok: false, refusal: { code: 'subtree_denied' } });
+      const own = await resolveActionAgentStartContextV1(deps, context, 'lead');
+      expect(admitActionAgentStartV1(context, { kind: 'session_target', targetSessionId: 'lead' }, own)).toMatchObject({ ok: true });
+    }
+  });
+
   it('admits real managed-acquire continuations before spend while bare compute has no Agent request', () => {
     const baseline = { machineId: 'machine', directory: '/repo', configuration: { agentTarget: nativeTarget } };
     const resolve = (input: Readonly<Record<string, unknown>>) => resolveActionAgentStartRequestsV1({

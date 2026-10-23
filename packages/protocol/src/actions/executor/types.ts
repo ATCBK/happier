@@ -21,7 +21,8 @@ import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
 import type { SessionModelMutationExpectedV1 } from '../../sessions/control/modelTransitionV1.js';
 import type { SessionGoalSetRequestV1 } from '../../sessions/work/state/sessionWorkStateRpc.js';
 import type { SessionNeedsYouRaiseInputV1 } from '../../sessions/permissions/questionV1.js';
-import type { SessionMessageExplicitReplyV1, SessionMessageDiscussionReplyReturnV1, SessionMessageReplyAccountMutationV1 } from '../../sessions/messages/sessionMessageReplyV1.js';
+import type { SessionMessageExplicitReplyV1, SessionMessageReplyAccountMutationV1 } from '../../sessions/messages/sessionMessageReplyV1.js';
+import type { DiscussionReplyReturnV1 } from '../../workflows/workflowDiscussionPublicationV1.js';
 import type { AutonomousExchangeControlRequestV1 } from '../../sessions/messages/autonomousExchangeV1.js';
 import type { SessionResumeRequestV1 } from '../../sessions/control/sessionResumeRequestV1.js';
 import type { AcpCatalogSnapshotV1, AcpCatalogRowMutationV1 } from '../../acp/catalog/catalogRowsV1.js';
@@ -388,7 +389,11 @@ export type ScmActionExecute = (args: Readonly<{
   executeCanonicalAction: (
     actionId: Extract<ActionId, 'execution.run.start' | 'execution.run.get' | 'execution.run.send' | 'execution.run.ensure' | 'session.message.send' | 'action.invoke' | 'scm.pullRequest.openCompose'>,
     input: unknown,
-    options?: Readonly<{ requiredContributedActionDangerLevel?: 'safe' }>,
+    options?: Readonly<{
+      requiredContributedActionDangerLevel?: 'safe';
+      /** Host-composed question shown instead of its evidence-bearing Agent prompt. */
+      sessionMessageDisplayText?: string;
+    }>,
   ) => Promise<ActionExecuteResult>;
 }>) => Promise<unknown>;
 
@@ -413,7 +418,6 @@ export type ActionPluginCaller = Readonly<{
   sourceCustody?: PluginSourceCustodyV1;
   /** Live Account declaration correspondence; durable approvals project their own closed caller shape. */
   pluginVersion?: DaemonPluginStructuredMessageActionMountedBinding['pluginVersion'];
-  declarationDigest?: DaemonPluginStructuredMessageActionMountedBinding['declarationDigest'];
   /**
    * Exact host-stamped materialization for a live plugin Action edge. Durable
    * approval replay carries only the persisted plugin/contribution identity;
@@ -448,6 +452,8 @@ export type ActionWorkflowRunCaller = Readonly<{
   kind: 'workflowRun';
   runId: string;
   authorization: WorkflowAcceptedAuthorizationV1;
+  /** Host-owned contained invitation; the Workflow retains ordinary Session startup. */
+  discussionModelReservation?: Readonly<{ discussionId: string; participantSlotId: string; policySurface?: keyof ActionSurfaces }>;
 }>;
 
 export type ActionCaller =
@@ -584,6 +590,8 @@ export type ActionExecutorContext = Readonly<{
   usageQueryReadiness?: 'coach_evidence' | 'public_profile';
   /** Exact prepared public disclosure, retained only by the live host invocation. Never wire input. */
   publicProfilePreparedAction?: import('./publicProfileActions.js').PreparedPublicProfileAction;
+  /** Host-local disclosure review of this exact effect before approval; never Action input or execution authority. */
+  reviewPublicProfilePreparedAction?: (effect: import('./publicProfileActions.js').PreparedPublicProfileAction) => Promise<boolean>;
   /** Prepared local public preview, under the same exact live invocation custody. */
   publicProfilePreviewResult?: ActionExecuteResult;
   /** Content-free observer installed by the host; never parsed from Action/RPC input. */
@@ -668,6 +676,8 @@ export type ActionExecutorContext = Readonly<{
   onWaitSnapshot?: (snapshot: unknown) => void | Promise<void>;
   /** Host-only issuance witness for callers retaining uncertain mutation custody. */
   onTransportIssued?: () => void;
+  /** Host-only display projection for this Session message; never Action input. */
+  sessionMessageDisplayText?: string;
   /** In-process observation for the caller's existing retry intent; never serialized or execution authority. */
   onSessionTargetsResolved?: (resolution: Readonly<{
     actionId: ActionId;
@@ -868,7 +878,7 @@ export type ActionExecutorContext = Readonly<{
     origin?: Pick<ApprovalExecutionOriginV1, 'surface' | 'caller' | 'sessionId'> }>;
 
   /** Host-bound original Discussion obligation, including failures before any turn was accepted. */
-  discussionReplyReturn?: SessionMessageDiscussionReplyReturnV1;
+  discussionReplyReturn?: DiscussionReplyReturnV1;
 
   /**
    * Exact target-path evidence recovered only from an approved
@@ -1006,6 +1016,7 @@ export type ApprovalQueueQueryPlanV1 = Readonly<{
 
 export type ApprovalQueueListResultV1 = Readonly<{
   items: readonly ApprovalQueueListItemV1[];
+  nextCursor?: string | null;
   queryPlan: ApprovalQueueQueryPlanV1;
 }>;
 
@@ -1124,6 +1135,12 @@ export type PluginSettingsAdministrationActionRequest = Readonly<{
 }>;
 
 export type ActionExecutorDeps = Readonly<{
+  /** Host-private placement port. Null means this process already owns the Machine effect. */
+  routeHostChildAction?: (args: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<ActionExecuteResult | null>;
   /** The receiving native Service owner reviews without copying, setup or Start. */
   prepareLocalServiceStartApproval?: (args: Readonly<{
     input: DaemonLocalServiceLauncherStartRequestV1;
@@ -2219,6 +2236,8 @@ export type ActionExecutorDeps = Readonly<{
   // Approval queue (optional)
   approvalsList?: (args: Readonly<{
     status?: ApprovalRequest['status'] | null;
+    actionId?: ActionId | null;
+    cursor?: string | null;
     limit?: number | null;
     serverId?: string | null;
   }>) => Promise<ApprovalQueueListResultV1>;
@@ -2257,11 +2276,13 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<{ resolved: boolean }>;
   /**
    * Private host factory port for one actual containing operation or exact
-   * CLI/UI invocation holding prompted material in memory. It changes
+   * CLI/UI invocation holding prompted material in memory, or an exact live
+   * plugin report with its source owner's currentness check. It changes
    * approval custody, never policy or consent, and is not an Action input.
    */
   hostActionApprovalLifetime?: Readonly<{ operationId: string; signal: AbortSignal }>
-    | Readonly<{ actionId: ActionId; signal: AbortSignal; surface?: 'cli' | 'ui' }>;
+    | Readonly<{ actionId: ActionId; signal: AbortSignal; surface?: 'cli' | 'ui' }>
+    | Readonly<{ actionId: ActionId; signal: AbortSignal; surface: 'plugin'; isCurrent(): boolean | Promise<boolean> }>;
   approvalsWaitForDecision?: (args: Readonly<{
     artifactId: string;
     request: ApprovalRequest;

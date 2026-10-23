@@ -76,6 +76,34 @@ function harness() {
 }
 
 describe('SessionTarget at the Actions front door', () => {
+  it('binds restricted selector roots to the proved caller before enumerating workers', async () => {
+    const h = harness();
+    const caller = { kind: 'session', sessionId: 'parent', starterDepth: 0, turnDepth: 0 } as const;
+    const restricted = { ...context, surface: 'agent', sessionListAccess: 'current_session', actionCaller: caller,
+      agentStartContext: { caller, baseline: { machineId: 'machine', directory: '/repo' }, roles: {},
+        ledSubtreeSessionIds: [], workDepthLimit: 4, callerPermissionCeiling: 'default' },
+    } as const;
+    const input = { actionId: 'session.messages.recent.get', target: { selector: 'workers' } };
+    expect(await h.executor.execute('session.targets.resolve', input, restricted))
+      .toMatchObject({ ok: true, result: { coverage: 'complete', addresses: [
+        { serverId: 'home', sessionId: 'a' }, { serverId: 'home', sessionId: 'b' },
+      ] } });
+    // Focus is not authority: a contextual default cannot replace the host caller.
+    expect(await h.executor.execute('session.targets.resolve', input, { ...restricted, defaultSessionId: 'other-root' }))
+      .toMatchObject({ ok: true, result: { coverage: 'complete', addresses: [
+        { serverId: 'home', sessionId: 'a' }, { serverId: 'home', sessionId: 'b' },
+      ] } });
+    for (const [target, callerContext] of [
+      [input.target, { ...restricted, actionCaller: undefined, agentStartContext: undefined }],
+      [{ selector: 'workers', of: 'other-root' }, { ...restricted, defaultSessionId: 'other-root' }],
+      [input.target, { ...restricted, agentStartContext: { ...restricted.agentStartContext,
+        caller: { ...caller, sessionId: 'other-root' } } }],
+    ] as const) {
+      expect(await h.executor.execute('session.targets.resolve', { ...input, target }, callerContext), JSON.stringify({ target, callerContext }))
+        .toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    }
+  });
+
   it('resolves operational selectors once before exact handler parsing, retaining manager CAS identities', async () => {
     const h = harness();
     const effects: unknown[] = [];

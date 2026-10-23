@@ -12,9 +12,10 @@ import type { UsageAnalyticsContribution } from '../usage/usageAnalyticsContract
 import { PublicProfileSnapshotV1Schema, type PublicCoverage, type PublicProfilePolicyV1,
   type PublicProfileSnapshotV1, type PublicUsageFactsV1 } from './publicProfile.js';
 import { projectPublicProfileSnapshot } from './projectPublicProfile.js';
+import type { PublicProfileSnapshotUnavailableReasonV1 } from './publicProfileIntents.js';
 
 export type PublicProfileSnapshotBuildResult = Readonly<{ kind: 'ready'; snapshot: PublicProfileSnapshotV1 }>
-  | Readonly<{ kind: 'unavailable'; reason: 'usage_unavailable' | 'query_mismatch' | 'period_unavailable' | 'source_time_unavailable' | 'invalid_snapshot' }>;
+  | Readonly<{ kind: 'unavailable'; reason: PublicProfileSnapshotUnavailableReasonV1 }>;
 type Accounting = NonNullable<UsageQueryResultSlice['accounting']>;
 type Period = PublicProfileSnapshotV1['period'];
 
@@ -126,10 +127,12 @@ export function buildPublicProfileSnapshot(input: Readonly<{ queryResult: UsageQ
   const range = 'relative' in query.period ? accounting.coverage?.range : query.period;
   if (range?.startMs === undefined || range.endMs === undefined || range.endMs <= range.startMs) return unavailable('period_unavailable');
   const period = { startMs: range.startMs, endMs: range.endMs, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes };
+  const rows = accounting.contributions;
+  if (!rows.length && !(accounting.coverage?.status === 'complete' && accounting.coverage.range.complete)) {
+    return unavailable('no_eligible_personal_usage');
+  }
   const asOfMs = source.asOfMs ?? resolveUsageAccountingAsOfMs(accounting);
   if (asOfMs === undefined) return unavailable('source_time_unavailable');
-  const rows = accounting.contributions;
-  if (!rows.length && !(accounting.coverage?.status === 'complete' && accounting.coverage.range.complete)) return unavailable('usage_unavailable');
   const detail = slice.howYouWork;
   const intervals = detail?.detailStatus !== 'unknown' ? detail?.intervals : undefined;
   const calendar = detail?.agentCalendar ?? projectUsageAgentCalendar({ period, timeZoneOffsetMinutes: period.timeZoneOffsetMinutes,

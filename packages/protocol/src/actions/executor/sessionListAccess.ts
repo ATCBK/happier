@@ -137,7 +137,9 @@ export async function resolveActionCurrentSessionScopeFailure(
     return refuse('default_session_unavailable');
   }
 
-  if (context.sessionListAccess === 'current_session') return refuse('current_session_only');
+  if (context.sessionListAccess === 'current_session' && getActionSpec(actionId).sideEffectClass !== 'read') {
+    return refuse('current_session_only');
+  }
   if (context.sessionListAccess === 'unavailable') return refuse('session_scope_unavailable');
   if (getActionSpec(actionId).sideEffectClass !== 'read' && !isSessionStateFieldActionId(actionId)
     && !ledLifecycleAction) {

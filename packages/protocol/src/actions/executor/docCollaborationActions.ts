@@ -101,7 +101,9 @@ function readPassageRootContent(message: DiscussionOpenedMessageV1): DocPassageR
 }
 
 /** Reads the exact committed message through C3's existing paging owner. */
-export async function readCommittedDiscussionMessage(parent: DiscussionMessageRefV1, context: ActionExecutorContext,
+export async function readCommittedDiscussionMessage(parent: DiscussionMessageRefV1 | Readonly<{
+  kind: 'discussion'; discussion: DiscussionMessageRefV1['discussion']; localId: string;
+}>, context: ActionExecutorContext,
   discussionAction: NonNullable<ActionExecutorDeps['discussionAction']>, options?: Readonly<{ throughSeq: number }>,
   sameHome: SameHome = areServerProfileIdentifiersEquivalent): Promise<
     { ok: true; message: DiscussionOpenedMessageV1 } | ActionExecuteFailure> {
@@ -117,7 +119,7 @@ export async function readCommittedDiscussionMessage(parent: DiscussionMessageRe
     const page = DiscussionReadResultV1Schema.safeParse(result);
     if (!page.success || !sameHome(page.data.serverId, context.serverId)
       || page.data.discussionId !== parent.discussion.discussionId) return refuse('invalid_action_output');
-    const message = page.data.messages.find(item => item.id === parent.messageId);
+    const message = page.data.messages.find(item => 'messageId' in parent ? item.id === parent.messageId : item.localId === parent.localId);
     if (message) {
       if (options && message.seq > options.throughSeq
         || message.discussionId !== parent.discussion.discussionId

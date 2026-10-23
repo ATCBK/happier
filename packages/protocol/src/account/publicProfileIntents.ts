@@ -35,12 +35,18 @@ export const PublicProfileUpdateIntentV1Schema = lazyZodSchema(() => z.strictObj
 }).check(z.refine(value => Object.values(value).some(member => member !== undefined))));
 export type PublicProfileUpdateIntentV1 = z.infer<typeof PublicProfileUpdateIntentV1Schema>;
 
+export const PublicProfileSnapshotUnavailableReasonV1Schema = z.enum([
+  'usage_unavailable', 'query_mismatch', 'period_unavailable', 'source_time_unavailable', 'no_eligible_personal_usage', 'invalid_snapshot',
+]);
+export type PublicProfileSnapshotUnavailableReasonV1 = z.infer<typeof PublicProfileSnapshotUnavailableReasonV1Schema>;
+
 // Lazy: publicProfilePublication participates in an import cycle with the widget
 // snapshot schema, so its enum options are not readable at module evaluation.
 export const PublicProfilePreparationUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
-  ...PublicProfileUnavailableReasonV1Schema.options, 'usage_unavailable', 'usage_query_result_invalid',
+  ...PublicProfileUnavailableReasonV1Schema.options, ...PublicProfileSnapshotUnavailableReasonV1Schema.options, 'usage_query_result_invalid',
   'project_visibility_unavailable', 'preparation_unavailable',
 ]));
+export type PublicProfilePreparationUnavailableReasonV1 = z.infer<typeof PublicProfilePreparationUnavailableReasonV1Schema>;
 export const PublicProfilePreviewResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('ready'), view: PublicProfileLocalPreviewViewV1Schema }),
   z.strictObject({ kind: z.literal('unavailable'), reason: PublicProfilePreparationUnavailableReasonV1Schema }),

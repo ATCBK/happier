@@ -4,8 +4,10 @@ import { getUsageQueryKey, normalizeUsageQuery, type UsageQuery } from '../../in
 import { PublicProfilePolicyV1Schema, type PublicProfilePolicyV1,
   type PublicProfileMetadataV1, PublicProfileLinkV1Schema } from '../../account/publicProfile.js';
 import { PublicProfileOwnerReadV1Schema, PublicProfilePreparedRequestV1Schema, PublicProfileMutationResultV1Schema,
-  type PublicProfileOwnerReadV1, type PublicProfilePreparedRequestV1, type PublicProfileOwnerRecordV1 } from '../../account/publicProfilePublication.js';
+  type PublicProfileOwnerReadV1, type PublicProfilePreparedRequestV1, type PublicProfileOwnerRecordV1,
+  type PublicProfileContextV1 } from '../../account/publicProfilePublication.js';
 import { PublicProfilePreviewIntentV1Schema, PublicProfilePublishIntentV1Schema, PublicProfileUpdateIntentV1Schema,
+  PublicProfilePreparationUnavailableReasonV1Schema, type PublicProfilePreparationUnavailableReasonV1,
   type PublicProfileMetadataSelectionV1 } from '../../account/publicProfileIntents.js';
 import { type PublicProfilePreparationActionIdV1 } from '../../account/publicProfileActionIds.js';
 import { projectPublicProfilePreview } from '../../account/projectPublicProfile.js';
@@ -59,6 +61,8 @@ export function bindPublicProfileActionPorts(input: Readonly<{
 export type PreparedPublicProfileAction = Readonly<{
   actionId: PublicProfilePreparationActionIdV1;
   request: PublicProfilePreparedRequestV1;
+  /** The same admitted owner read supplies this host-local review identity and destination. */
+  publicationContext: PublicProfileContextV1;
   /** The exact selected effect is retained by the host's existing live approval continuation. */
   requiresRefresh: boolean;
 }>;
@@ -118,18 +122,19 @@ async function recheckProjects(record: PublicProfileOwnerRecordV1, ports: Public
     && observation.repository.url === link.url));
 }
 
-async function snapshot(query: UsageQuery, policy: PublicProfilePolicyV1, ports: PublicProfileActionPorts, context: ActionExecutorContext) {
-  if (!ports.usage || !ports.buildSnapshot) return null;
+async function snapshot(query: UsageQuery, policy: PublicProfilePolicyV1, ports: PublicProfileActionPorts,
+  context: ActionExecutorContext): Promise<PublicProfileSnapshotBuildResult> {
+  if (!ports.usage || !ports.buildSnapshot) return { kind: 'unavailable', reason: 'usage_unavailable' };
   const queried = await ports.usage.query({ queries: [query] }, { ...context, usageQueryReadiness: 'public_profile' });
   await check(ports, context);
-  if (readActionFailureEnvelope(queried)) return null;
+  if (readActionFailureEnvelope(queried)) return { kind: 'unavailable', reason: 'usage_unavailable' };
   const batch = UsageQueryBatchResultSchema.safeParse(queried);
   const slice = batch.success && batch.data.results.length === 1 ? batch.data.results[0] : undefined;
   if (!slice || getUsageQueryKey(slice.requestedQuery) !== getUsageQueryKey(query)
-    || getUsageQueryKey(slice.shownQuery) !== getUsageQueryKey(query)) return null;
+    || getUsageQueryKey(slice.shownQuery) !== getUsageQueryKey(query)) return { kind: 'unavailable', reason: 'usage_unavailable' };
   const built = ports.buildSnapshot({ queryResult: slice, policy, nowMs: Date.now() });
   await check(ports, context);
-  return built.kind === 'ready' ? built.snapshot : null;
+  return built;
 }
 
 /** Public preparation never inherits the ordinary private-history population. */
@@ -142,7 +147,7 @@ function publicQuery(query: UsageQuery) {
 /** Intent preparation always precedes approval and generic Home-domain dispatch. */
 export async function preparePublicProfileAction(actionId: PublicProfilePreparationActionIdV1, value: unknown,
   ports: PublicProfileActionPorts | undefined, context: ActionExecutorContext): Promise<PublicProfileActionPreparation> {
-  const unavailable = (reason: string): PublicProfileActionPreparation => ({ kind: 'settled', result: actionId === 'account.public_profile.preview'
+  const unavailable = (reason: PublicProfilePreparationUnavailableReasonV1): PublicProfileActionPreparation => ({ kind: 'settled', result: actionId === 'account.public_profile.preview'
     ? { ok: true, result: { kind: 'unavailable', reason } }
     : { ok: false, errorCode: 'public_profile_preparation_unavailable', error: 'public_profile_preparation_unavailable', details: { reason } },
   });
@@ -164,7 +169,8 @@ export async function preparePublicProfileAction(actionId: PublicProfilePreparat
     const metadata = intent.metadataSelection ? await resolveMetadata(intent.metadataSelection, policy, ports, context) : undefined;
     if (metadata === null) return unavailable('project_visibility_unavailable');
     await check(ports, context);
-    return { kind: 'prepared', effect: { actionId, requiresRefresh: intent.policy !== undefined || intent.query !== undefined,
+    return { kind: 'prepared', effect: { actionId, publicationContext: owner.context,
+      requiresRefresh: intent.policy !== undefined || intent.query !== undefined,
       request: PublicProfilePreparedRequestV1Schema.parse({ operation: 'update', body: {
         ...(intent.policy ? { policy: intent.policy } : {}), ...(metadata ?? {}),
         ...(intent.query ? { query: publicQuery(intent.query) } : {}),
@@ -185,12 +191,12 @@ export async function preparePublicProfileAction(actionId: PublicProfilePreparat
     }
     const query = publicQuery(record.query);
     const built = await snapshot(query, record.policy, ports, context);
-    if (!built) return unavailable('usage_unavailable');
+    if (built.kind === 'unavailable') return unavailable(built.reason);
     const projectLinks = await recheckProjects(record, ports, context);
     await check(ports, context);
-    return { kind: 'prepared', effect: { actionId, requiresRefresh: false,
+    return { kind: 'prepared', effect: { actionId, publicationContext: owner.context, requiresRefresh: false,
       request: PublicProfilePreparedRequestV1Schema.parse({ operation: actionId === 'account.public_profile.resume' ? 'resume' : 'refresh',
-        body: { query, snapshot: built, ...(projectLinks ? { projectLinks } : {}) } }),
+        body: { query, snapshot: built.snapshot, ...(projectLinks ? { projectLinks } : {}) } }),
     } };
   }
   const intent = actionId === 'account.public_profile.preview'
@@ -200,16 +206,16 @@ export async function preparePublicProfileAction(actionId: PublicProfilePreparat
   if (!metadata) return unavailable('project_visibility_unavailable');
   const query = publicQuery(intent.query);
   const built = await snapshot(query, policy, ports, context);
-  if (!built) return unavailable('usage_unavailable');
+  if (built.kind === 'unavailable') return unavailable(built.reason);
   if (actionId === 'account.public_profile.preview') {
     const view = projectPublicProfilePreview({ context: owner.context, policy, metadata: metadata.metadata,
-      snapshot: built, layout: intent.layout, appearance: intent.appearance });
+      snapshot: built.snapshot, layout: intent.layout, appearance: intent.appearance });
     return view ? { kind: 'settled', result: { ok: true, result: { kind: 'ready', view } } } : unavailable('preparation_unavailable');
   }
   await check(ports, context);
-  return { kind: 'prepared', effect: { actionId, requiresRefresh: false,
+  return { kind: 'prepared', effect: { actionId, publicationContext: owner.context, requiresRefresh: false,
     request: PublicProfilePreparedRequestV1Schema.parse({ operation: 'publish', body: { policy, ...metadata, query,
-      snapshot: built, layout: intent.layout, appearance: intent.appearance } }),
+      snapshot: built.snapshot, layout: intent.layout, appearance: intent.appearance } }),
   } };
 }
 
@@ -228,8 +234,13 @@ export async function executePublicProfileAction(effect: PreparedPublicProfileAc
   try {
     await check(ports, context);
     const followOn = await refresh();
-    if (!followOn.ok) return { ok: true, result: { ...acknowledged,
-      refresh: followOn.errorCode === 'public_profile_preparation_unavailable' ? 'unavailable' : 'failed', refreshReason: followOn.errorCode } };
+    if (!followOn.ok) {
+      const preparationUnavailable = followOn.errorCode === 'public_profile_preparation_unavailable';
+      const reason = PublicProfilePreparationUnavailableReasonV1Schema.safeParse(preparationUnavailable
+        && followOn.details && typeof followOn.details === 'object' && 'reason' in followOn.details ? followOn.details.reason : undefined);
+      return { ok: true, result: { ...acknowledged,
+        refresh: preparationUnavailable ? 'unavailable' : 'failed', refreshReason: reason.success ? reason.data : followOn.errorCode } };
+    }
     const value = followOn.result;
     if (value && typeof value === 'object' && 'kind' in value && value.kind === 'approval_request_created') {
       return { ok: true, result: { ...acknowledged, refresh: 'pending_approval' } };

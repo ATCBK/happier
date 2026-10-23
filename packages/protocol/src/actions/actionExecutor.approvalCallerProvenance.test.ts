@@ -17,6 +17,7 @@ import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types
 import type { ExternalActionExecutionAuthorizationV1, ExternalActionTargetV1 } from './externalActionApi.js';
 import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { SessionAgentSpawnPolicyV1Schema } from '../account/settings/accountSettings.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
 import type { AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
 import {
   signExternalActionApprovalInputV1,
@@ -36,6 +37,41 @@ const sessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (durable plugin approval caller provenance)', () => {
+  it('replays an omitted Session operand against the approval origin on another focused device', async () => {
+    let stored: ApprovalRequest | null = null;
+    const renamedSessions: string[] = [];
+    // Artifact persistence, current-origin authorization and the Session write
+    // adapter are boundaries; proposal admission and replay remain real.
+    const executor = createActionExecutor({
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request)));
+        return { artifactId: 'origin-session-proposal' };
+      },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async () => true,
+      sessionStateFieldSet: async ({ sessionId }) => { renamedSessions.push(sessionId); return { ok: true }; },
+    });
+    expect(await executor.execute('session.title.set', { title: 'Review the API' }, {
+      surface: 'agent', authority: 'account_automation', serverId: 'creator-profile',
+      serverIdentityId: 'same-home', runtimeAccountId: 'account', actionRequestId: 'title-proposal',
+      defaultSessionId: 'origin-session', defaultSessionMachineId: 'machine',
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+        'session.title.set': { approvalRequiredSurfaces: ['agent'] },
+      } }),
+      actionCaller: { kind: 'session', sessionId: 'origin-session', starterDepth: 0, turnDepth: 0 },
+    })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(stored).toMatchObject({ actionArgs: { title: 'Review the API' } });
+    expect(ApprovalRequestV2Schema.parse(stored).actionArgs).not.toHaveProperty('sessionId');
+    expect(renamedSessions).toEqual([]);
+    expect(await executor.execute('approval.request.decide', {
+      artifactId: 'origin-session-proposal', decision: 'approve',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'approver-profile',
+      serverIdentityId: 'same-home', runtimeAccountId: 'account', defaultSessionId: 'other-focused-session' }))
+      .toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(renamedSessions).toEqual(['origin-session']);
+  });
+
   it.each(['ui', 'cli'] as const)('retains an unsigned %s Settings invocation target independently of Account storage', surface => {
     const actionId = 'plugins.settings.set' as const;
     const input = { pluginId: 'happier.agent.claude', localId: 'claudeRemoteAgentSdkEnabled',

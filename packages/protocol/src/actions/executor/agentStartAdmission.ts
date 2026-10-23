@@ -447,7 +447,9 @@ export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutor
         return resolved;
     // Captured start facts preserve caller identity and depth, not a continuing
     // grant to a Session that has since been detached or revoked.
-    const ids = deps.sessionList
+    // Readable led Sessions do not widen an explicitly current-Session-only
+    // start corpus, including when captured caller facts named them earlier.
+    const ids = context.sessionListAccess !== 'current_session' && deps.sessionList
         ? await readActionCallerLedSubtreeSessionIds({ sessionList: deps.sessionList }, { ...context, defaultSessionId: origin }) : null;
     return { ...resolved, ledSubtreeSessionIds: !context.signal?.aborted && ids ? [...ids] : [] };
 }

@@ -84,7 +84,7 @@ export const WORKFLOW_ACTION_IDS_V1 = [
   'workflow.run.invocations.publish_draft', 'workflow.run.invocations.complete_review',
   'workflow.definition.list', 'workflow.definition.get', 'workflow.definition.create',
   'workflow.definition.update', 'workflow.definition.edit', 'workflow.definition.delete',
-  'workflow.definition.import', 'workflow.definition.export',
+  'workflow.definition.import', 'workflow.definition.export', 'workflow.definition.capture',
   'workflow.trigger.list', 'workflow.trigger.add', 'workflow.trigger.update', 'workflow.trigger.remove',
   'workflow.trigger.run_now',
   'session.trigger.list', 'session.trigger.add', 'session.trigger.update', 'session.trigger.remove',

@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { resolveMachineRpcGovernance } from '../machines/peer/mediation/rpc/governanceV1.js';
 import { EXECUTION_RUN_INTENT_OPTIONS } from '../execution/runs/intentPolicyMatrix.js';
 import { CODE_INTELLIGENCE_ACTION_SPECS } from './codeIntelligenceActionFamily.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
@@ -3199,6 +3200,8 @@ const PluginSurfaceApprovalRequestCreateInputSchema = lazyZodSchema(() => z.exte
 
 const ApprovalRequestListInputSchema = lazyZodSchema(() => z.looseObject({
   status: z.optional(ApprovalRequestV2StatusSchema),
+  actionId: z.optional(ActionIdSchema),
+  cursor: z.optional(z.string().check(z.minLength(1))),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(100))),
 }));
 
@@ -4240,7 +4243,9 @@ function createAutomationEventActionSpec(actionId: AutomationEventActionIdV1): P
     id: actionId, approval: { result: 'none' },
     title: AUTOMATION_EVENT_ACTION_TITLES[actionId],
     description: 'Read or update Event Automation state through the canonical Automation owner.',
-    safety: readOnly ? 'safe' : 'danger',
+    // Source telemetry records the admitted runtime's health, not a user
+    // effect. Event admission retains its ordinary configurable confirmation.
+    safety: readOnly || actionId === 'automation.event.source.status.report' ? 'safe' : 'danger',
     placements: [],
     surfaces: {
       ui: false,
@@ -4922,6 +4927,7 @@ const WORKFLOW_ACTION_TITLES: Readonly<Record<WorkflowActionIdV1, string>> = {
   'workflow.definition.delete': 'Delete workflow definition',
   'workflow.definition.import': 'Import workflow document',
   'workflow.definition.export': 'Export saved workflow document',
+  'workflow.definition.capture': 'Prepare an editable pattern',
   'workflow.trigger.list': 'List workflow triggers',
   'workflow.trigger.add': 'Add workflow trigger',
   'workflow.trigger.update': 'Update workflow trigger',
@@ -4948,6 +4954,7 @@ const WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<WorkflowActi
 };
 
 const WORKFLOW_ACTION_DESCRIPTIONS: Readonly<Partial<Record<WorkflowActionIdV1, string>>> = {
+  'workflow.definition.capture': 'Prepare an editable draft from explicitly selected authorized Discussion messages. Review inferred steps, exact dependencies and per-run question/participant inputs; use choices to resolve unlinked messages. Workflow-backed exchanges reuse their authored definition and source provenance. Capture does not save, share or start work; open the draft in the ordinary editor and save with workflow.definition.create.',
   'workflow.run.start': `Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. For an inline definition, put model and effort on defaults.engine or a step execution.engine, for example {agentTarget,modelSelection,effort:"low"}; do not place reasoning_effort in sessionConfigOptionOverrides. Validate the definition with ${'workflow.validate' satisfies WorkflowActionIdV1} before starting. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.`,
   'workflow.trigger.remove': 'Remove one trigger by automationId and triggerId; the last child removal leaves a Manual set. Omit triggerId to delete the whole Account trigger set, including an empty Manual set. Past Runs are kept.',
   'workflow.definition.list': 'List saved workflows in this Home Account and available plugin workflows. Returns definitions with metadata, content availability and trigger summaries, plus pluginWorkflows when available. Follow nextCursor to read later pages; use workflow.definition.get to read a saved definition.',
@@ -4973,7 +4980,7 @@ function bindWorkflowInvocationRetryCliInputV1(value: unknown): unknown {
 const WORKFLOW_READ_ACTION_IDS: ReadonlySet<WorkflowActionIdV1> = new Set([
   'workflow.validate', 'workflow.run.list', 'workflow.run.summaries', 'workflow.run.get', 'workflow.run.wait',
   'workflow.run.invocations.list', 'workflow.run.invocations.get',
-  'workflow.definition.list', 'workflow.definition.get', 'workflow.definition.import', 'workflow.definition.export',
+  'workflow.definition.list', 'workflow.definition.get', 'workflow.definition.import', 'workflow.definition.export', 'workflow.definition.capture',
   'workflow.trigger.list', 'session.trigger.list',
 ]);
 
@@ -5961,7 +5968,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     },
   },
   {
-    id: 'action.spec.search', approval: {result: 'required'},
+    id: 'action.spec.search', originalExecution: { accountRoot: 'allowed' }, approval: {result: 'required'},
     title: 'Search action specs',
     sideEffectClass: 'read',
     description: 'Search available Happier action specs by name, description, bindings, and field hints.',
@@ -6016,7 +6023,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     inputSchema: ActionSpecSearchInputSchema,
   },
   {
-    id: 'action.spec.get', approval: {result: 'required'},
+    id: 'action.spec.get', originalExecution: { accountRoot: 'allowed' }, approval: {result: 'required'},
     title: 'Get action spec',
     sideEffectClass: 'read',
     description: 'Get a Happier action spec, hints, examples and invoking Session context. Agent, MCP and CLI results reference named schemaSections: retrieve any section with the same id and schemaPath. Nothing is truncated. Section-local # references resolve against the original inputSchema or outputSchema root. Set includeOutputSchema:true for outputs. UI/API keep full schemas. Session Board actions fill omitted sessionId from the invoking Session; widget Actions require a qualified surface: use invocationContext.widgetSurface for this Session Board, changing only owner to {kind:"home"} for Home. Never guess serverId/accountId.',
@@ -12715,6 +12722,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       title: 'List approval requests',
       description: 'Reads bounded approval queue metadata from artifact headers without transcript hydration.',
       fields: [
+        { path: 'actionId', title: 'Action id', widget: 'text' },
+        { path: 'cursor', title: 'Cursor', widget: 'text' },
         {
           path: 'status',
           title: 'Status',
@@ -15417,6 +15426,16 @@ export { describeActionForVoiceTool } from './actionVoiceToolSummary.js';
  */
 export function isVoiceSdkSafeActionSpec(spec: Pick<ActionSpec, 'sideEffectClass'>): boolean {
   return spec.sideEffectClass === 'none' || spec.sideEffectClass === 'read';
+}
+
+/** Effect projection only: it grants no authority and never admits a replay. */
+export function isReadOnlyMachineRpcMethod(method: string): boolean {
+  const governance = resolveMachineRpcGovernance(method);
+  if (governance.rpcClassification === 'action_spec_bound') {
+    const actionId = ActionIdSchema.safeParse(governance.actionSpecId);
+    return actionId.success && isVoiceSdkSafeActionSpec(getActionSpec(actionId.data));
+  }
+  return governance.readOnly === true;
 }
 
 export function listVoiceSdkSafeToolActionSpecs(): readonly ActionSpec[] {

@@ -41,6 +41,8 @@ import { getUsageQueryKey, normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { readUsagePeriodOptions } from '../inputs/usageQuery.js';
 import { createWorkflowDefinitionActions } from './executor/workflowDefinitions.js';
 import { WorkflowActionInputSchemasV1 } from '../workflows/actionsV1.js';
+import { resolveBuiltinWorkflowDefinitionV1 } from '../workflows/builtins/catalog.js';
+import { workflowInputToFieldHint } from '../workflows/workflowV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
@@ -584,8 +586,29 @@ describe('createActionExecutor (inventory/discovery)', () => {
       ok: true, result: { options: [{ value: 'push', label: 'Phone' }] },
     });
   });
-  it('returns no options source for an admitted picker-only Action field without reading a Resource', async () => {
-    const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
+  it.each(['participants', 'synthesizer'])('resolves the builtin %s picker through the real consumer without inventing an inventory', async fieldPath => {
+    const definition = resolveBuiltinWorkflowDefinitionV1('fresh-opinions')!.definition;
+    const input = definition.inputs.find(input => input.name === fieldPath)!;
+    const field = workflowInputToFieldHint(input);
+    const request = getActionSpec('action.options.resolve').inputSchema.parse({
+      consumer: { kind: 'workflow', workflow: 'builtin:fresh-opinions' }, fieldPath: field.path,
+      draftInput: { machineId: 'selected-machine' },
+    });
+    const executor = createActionExecutor(createDeps());
+    const result = await executor.execute('action.options.resolve', request);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    // The UI consumes this strict output before enabling the participant picker.
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result)).toEqual({
+      actionId: 'workflow.run.start', fieldPath, optionsSourceId: null, options: [],
+    });
+    // A consumer bound to the wrong Action must not bypass its owner admission.
+    expect(await executor.execute('action.options.resolve', { ...request, actionId: 'widgets.catalog.list' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+  });
+  it.each(['plugin', 'host'] as const)('returns no options source for an admitted %s picker-only Action field without reading a Resource', async kind => {
+    const inputType = kind === 'plugin' ? { pluginId: 'com.acme.inputs', localId: 'repository' }
+      : { hostType: 'agentParticipant' as const };
     const definition: ActionDefinitionV1 = {
       kindVersion: 1, id: 'com.acme.inputs/actions/check', title: 'Check', description: 'Check repository',
       safety: 'safe', placements: [], slash: null, bindings: null, examples: null,
@@ -595,7 +618,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     };
     const reads: unknown[] = [];
     const executor = createActionExecutor({ ...createDeps(), listContributedActionDefinitions: () => [definition],
-      resolveInputType: async () => ({ identity: inputType, occurrenceId: 'serving-1', definition: {
+      resolveInputType: async identity => ({ identity, occurrenceId: 'serving-1', definition: {
         id: 'repository', title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' }, picker: 'picker',
       } }),
       readInputTypeResource: async request => { reads.push(request); return []; },
@@ -603,6 +626,18 @@ describe('createActionExecutor (inventory/discovery)', () => {
     await expect(executor.execute('action.options.resolve', { actionId: definition.id, fieldPath: 'repository' }))
       .resolves.toMatchObject({ ok: true, result: { options: [], optionsSourceId: null } });
     expect(reads).toEqual([]);
+    if (kind === 'host') {
+      const constrained: ActionDefinitionV1 = { ...definition, inputHints: { fields: [{
+        ...definition.inputHints!.fields[0]!, optionsSourceId: 'session.modes.available',
+      }] } };
+      const constrainedExecutor = createActionExecutor({ ...createDeps(),
+        listContributedActionDefinitions: () => [constrained],
+        sessionModesList: async () => ({ ok: false, errorCode: 'session_access_denied', error: 'session_access_denied' }),
+      });
+      await expect(constrainedExecutor.execute('action.options.resolve', {
+        actionId: constrained.id, fieldPath: 'repository', draftInput: { sessionId: 'session-1' },
+      })).resolves.toMatchObject({ ok: false, errorCode: 'session_access_denied' });
+    }
   });
   it('does not reinterpret a refused dynamic inventory as an empty successful selection', async () => {
     const executor = createActionExecutor({
