@@ -1010,6 +1010,15 @@ names and system, Fastify or Axios error codes, a closed failed phase and an
 application request id. Private broker requests also carry the host-generated
 broker request id used for Home admission, distinguishing Home admission,
 source opening and upstream forwarding without logging URLs, headers or bodies.
+In 0.3 development, the existing `[provider-broker-application]` file records
+also distinguish fresh carrier admission, target HTTP receipt, phase settlement,
+upstream HTTP status and completed responses. A context record joins the target
+HTTP request id to the existing broker request id used by Home admission and source forwarding;
+the Home-generated grant UUID and consumer id join carrier admission to target
+receipt. Non-UUID grant ids and arbitrary exception codes are omitted. A carrier
+admission success proves a fresh witness, not successful native forwarding;
+a missing target receipt still needs native transport evidence. These diagnostics
+perform no additional admission, source or upstream requests.
 In development, broker resource reads and Home admissions follow the containing
 request's cancellation rather than a separate ten-second HTTP cutoff.
 In 0.3 development, the Test
