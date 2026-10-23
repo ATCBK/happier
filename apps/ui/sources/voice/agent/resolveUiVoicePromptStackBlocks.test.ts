@@ -14,7 +14,7 @@ import { readPromptLibraryCatalogProjectionInContext } from '@/sync/api/account/
 import { readProfileCatalogProjectionInContext } from '@/sync/api/account/apiProfileCatalog';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
@@ -161,7 +161,11 @@ describe('qualified UI Voice prompt preparation', () => {
         });
         fixture = await createPlainArtifactHomeFixture('https://voice-failed-inventory.example', { handleRequest: async (path, init) => {
             if (path === '/v1/artifacts/private-second' && (init?.method ?? 'GET') === 'GET' && retireOnFailure) {
-                retireActiveServerAccountScopeLifetime();
+                // Captured Action authority follows this Home's credentials,
+                // independently of the focused Sync transport lifetime.
+                if (!fixture) throw new Error('Expected Home fixture before retirement');
+                expect(await TokenStorage.removeCredentialsForServerUrl(fixture.home.serverUrl,
+                    { serverId: fixture.home.id })).toBe(true);
                 retirementObserved = true;
                 return response({ error: 'unavailable' }, 503);
             }
@@ -184,6 +188,7 @@ describe('qualified UI Voice prompt preparation', () => {
                 scope: { serverId: account.serverId, accountId: account.accountId } }).then(() => null, (reason: unknown) => reason);
             expect(fixture.requests).toContainEqual({ path: '/v1/artifacts/private-first', method: 'GET' });
             expect(retirementObserved).toBe(true);
+            expect(account.accountLifetime.isCurrent()).toBe(false);
             expect(error).toBeInstanceOf(PromptStackPreparationError);
             expect(error).toMatchObject({ status: 'preparation_pending', reason: 'unavailable', admittedEntries: [] });
         } finally { account.dispose(); }
