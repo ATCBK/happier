@@ -88,21 +88,30 @@ export function resolveTypeScriptCliInvocation(params) {
   const cacheSuffix = options ? '.tsrs' : '';
   const buildInfoPath = options && ts.getTsBuildInfoEmitOutputFilePath(options);
   const cacheArgs = buildInfoPath ? { argsSuffix: ['--tsBuildInfoFile', `${resolve(params.workspaceDir ?? process.cwd(), buildInfoPath)}.tsrs`] } : {};
+  const admissionClass = params.admissionClass ?? resolveRemoteCommandPolicy(
+    ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.admissionArgs ?? params.args ?? [])],
+    { cwd: relative(params.repoRoot ?? REPO_ROOT, params.workspaceDir ?? process.cwd()) || '.',
+      repoRoot: params.repoRoot ?? REPO_ROOT },
+  ).heavyClass;
+  // Preparation is a phase of this compilation, inside its authenticated
+  // admission. Microsoft emission and the consumer never reserve twice.
+  const prepare = params.prepareWorkspaceDeclarations && Array.isArray(params.args)
+    && params.invocationKind !== 'build' && typecheckCompilerOptions(params.args, params.workspaceDir ?? process.cwd());
+  const compilerArgs = prepare
+    ? [resolve(REPO_ROOT, 'scripts/workspaces/prepareReferencedTypecheckDeclarations.mjs'), '--prepare-for-typecheck',
+      dirname(typecheckCompilerOptions(params.admissionArgs ?? params.args, params.workspaceDir ?? process.cwd())?.configFilePath
+        ?? resolve(params.workspaceDir ?? process.cwd(), 'tsconfig.json')), admissionClass, '--', processExecPath, compilerPath]
+    : [compilerPath];
   // Match the native local admission owner's ordinary CI exemption. Placed
   // workers, explicit local overrides and admitted descendants retain guards.
   if (requiresTypeScriptAdmission({ env, platform: params.platform ?? process.platform })) {
-    const admissionClass = params.admissionClass ?? resolveRemoteCommandPolicy(
-      ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.admissionArgs ?? params.args ?? [])],
-      { cwd: relative(params.repoRoot ?? REPO_ROOT, params.workspaceDir ?? process.cwd()) || '.',
-        repoRoot: params.repoRoot ?? REPO_ROOT },
-    ).heavyClass;
     // Routing markers select transport; only the native admission owner can
     // validate/reuse an admitted ancestor or wait for compilation headroom.
     return {
       command: resolve(REPO_ROOT, 'apps/stack/bin/hstack-exec'),
       argsPrefix: ['--heavyweight-admission', `--class=${admissionClass}`,
         `--machine=${env.HAPPIER_DEV_TARGET_EXECUTION === '1' ? 'worker' : 'local'}`,
-        '--exec-admitted', '--', processExecPath, compilerPath],
+        '--exec-admitted', '--', processExecPath, ...compilerArgs],
       compilerPath,
       cacheSuffix,
       ...cacheArgs,
@@ -110,7 +119,7 @@ export function resolveTypeScriptCliInvocation(params) {
   }
   return {
     command: processExecPath,
-    argsPrefix: [compilerPath],
+    argsPrefix: compilerArgs,
     compilerPath,
     cacheSuffix,
     ...cacheArgs,
