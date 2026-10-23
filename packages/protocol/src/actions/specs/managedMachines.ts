@@ -79,5 +79,12 @@ export const MANAGED_MACHINE_ACTION_SPECS = MANAGED_MACHINE_ACTION_IDS_V1.map((a
     ...(effect ? { operation: {
       version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'detail' },
     } as const } : {}),
+    ...(actionId === 'machines.managed.acquire' ? { operationReentry: (snapshot) => (
+      snapshot.state === 'running' && snapshot.observation?.kind === 'outcome_uncertain' ? 'reinvoke'
+        : snapshot.state === 'succeeded' || snapshot.state === 'failed' || snapshot.state === 'cancelled' ? 'replay' : 'refuse'
+    ) } : actionId === 'machines.managed.bootstrap.retry' ? { operationReentry: (snapshot) => (
+      snapshot.observation?.kind === 'outcome_uncertain' || snapshot.state === 'failed' || snapshot.state === 'cancelled' ? 'fresh'
+        : snapshot.state === 'succeeded' ? 'replay' : 'refuse'
+    ) } : {}),
   };
 });

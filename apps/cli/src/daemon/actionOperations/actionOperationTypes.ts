@@ -28,6 +28,7 @@ export type ResolvedTrackedAction = Readonly<{
   actionId: string;
   title: string;
   operation?: ActionOperationDeclarationV1;
+  operationReentry?: import('@happier-dev/protocol/actions/operations/v1').ActionOperationReentryPolicyV1;
 }>;
 
 export type ActionOperationProgressUpdate = Readonly<{

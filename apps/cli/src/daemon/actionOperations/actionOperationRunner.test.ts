@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActionOperationRunner } from './actionOperationRunner';
 import { createActionOperationStore } from './actionOperationStore';
+import { getActionSpec } from '@happier-dev/protocol/actions';
 import { ActionOperationCredentialUseV1Schema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionOperationSnapshotV1Schema, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
 import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './testFixtures/predecessorActionOperationV1';
@@ -9,13 +10,37 @@ import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './
 const scope = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation canonical execution observer', () => {
+  it('applies declaration-owned re-entry behavior to a new Action without runner changes', async () => {
+    const store = createActionOperationStore();
+    let operationNumber = 0;
+    let executionCount = 0;
+    const runner = createActionOperationRunner({ store, generateOperationId: () => `declared-reentry-${operationNumber++}`,
+      resolveAction: actionId => ({ actionId, title: 'Declared re-entry', operation: {
+        version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'detail' },
+      }, operationReentry: (snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1) => (
+        snapshot.state === 'failed' ? 'fresh' : 'refuse'
+      ) }),
+    });
+    const request = { actionId: 'test.declared-reentry', scope, requestId: 'stable-request', input: { value: 'same' },
+      execute: async () => ++executionCount === 1
+        ? { ok: false as const, errorCode: 'first_attempt_failed', error: 'first_attempt_failed' }
+        : { ok: true as const, result: { completed: true } },
+    };
+
+    await expect(runner.observe(request)).resolves.toMatchObject({ ok: false, errorCode: 'first_attempt_failed' });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: { completed: true } });
+    expect(executionCount).toBe(2);
+    expect(store.get(scope, 'declared-reentry-0')).toMatchObject({ state: 'failed' });
+    expect(store.get(scope, 'declared-reentry-1')).toMatchObject({ state: 'succeeded' });
+  });
+
   it('starts a fresh managed bootstrap retry for the same explicit retry identity after an unconfirmed attempt', async () => {
     const store = createActionOperationStore();
     let operationNumber = 0;
     const runner = createActionOperationRunner({ store, generateOperationId: () => `bootstrap-retry-${operationNumber++}`,
       resolveAction: actionId => ({ actionId, title: 'Retry install', operation: {
         version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
-      } }),
+      }, operationReentry: getActionSpec('machines.managed.bootstrap.retry').operationReentry }),
     });
     let executions = 0;
     const request = { actionId: 'machines.managed.bootstrap.retry', scope, requestId: 'stable-retry', input: { managedId: 'managed' },
@@ -773,6 +798,7 @@ describe('action operation canonical execution observer', () => {
           version: 1, visibility: 'activity', progress: 'reported',
           presentation: { onStart: 'current' },
         },
+        operationReentry: getActionSpec('session.handoff').operationReentry,
       }),
       generateOperationId: () => 'operation-1',
     });
@@ -816,6 +842,7 @@ describe('action operation canonical execution observer', () => {
           version: 1, visibility: 'activity', progress: 'reported',
           presentation: { onStart: 'current' },
         },
+        operationReentry: getActionSpec('session.handoff').operationReentry,
       }),
       generateOperationId,
     });

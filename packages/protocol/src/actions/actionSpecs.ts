@@ -291,7 +291,7 @@ import {
 
 export { resolveActionSdkMethodName } from './actionSdkMethodNames.js';
 
-import { ActionOperationDeclarationV1Schema } from './operations/v1.js';
+import { ActionOperationDeclarationV1Schema, ActionOperationReentryPolicyV1Schema } from './operations/v1.js';
 import {
   ActionCliProjectionSchema,
   readActionSchemaTopLevelFieldNames,
@@ -1163,6 +1163,8 @@ export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
   toolExposure: z.optional(ActionToolExposureSchema),
   contextualDefaults: z.optional(ActionContextualDefaultsSchema),
   operation: z.optional(ActionOperationDeclarationV1Schema),
+  /** Host-local exact-request policy; intentionally omitted from serialized Action discovery. */
+  operationReentry: z.optional(ActionOperationReentryPolicyV1Schema),
   /** Host-owned admission floor; public callers never supply this in Action input. */
   requiredAuthority: z.optional(ActionRequiredAuthoritySchema),
   /** Host-owned routing placement; public callers never supply this in Action input. */
@@ -1191,6 +1193,13 @@ export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
   /** Not serialized; the bound domain adapter supplies encryption and Home identity. */
   serverTransport: z.optional(ActionServerTransportSchema),
 }).check(z.superRefine((value, ctx) => {
+  if (value.operationReentry && !value.operation) {
+    ctx.addIssue({
+      code: "custom",
+      message: 'operationReentry requires a tracked operation declaration',
+      path: ['operationReentry'],
+    });
+  }
   if ((value.placements?.length ?? 0) > 0 && !value.surfaces.ui) {
     ctx.addIssue({
       code: "custom",
@@ -1410,6 +1419,7 @@ export type ActionSpecWithoutApproval = Readonly<{
   contextualDefaults?: ParsedActionSpec['contextualDefaults'];
   sessionTarget?: ParsedActionSpec['sessionTarget'];
   operation?: ParsedActionSpec['operation'];
+  operationReentry?: ParsedActionSpec['operationReentry'];
   requiredAuthority?: ParsedActionSpec['requiredAuthority'];
   executionPlacement?: ParsedActionSpec['executionPlacement'];
   executionPlacementForInput?: ParsedActionSpec['executionPlacementForInput'];
@@ -7494,6 +7504,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
       progress: 'reported',
       presentation: { onStart: 'current' },
     },
+    operationReentry: snapshot => snapshot.state === 'running' ? 'reinvoke'
+      : snapshot.state === 'succeeded' || snapshot.state === 'failed' || snapshot.state === 'cancelled' ? 'replay' : 'refuse',
     title: 'Hand off session',
     description: 'Move the current session to another machine or another directory on the same machine while keeping the same session id. Select target storage and workspace transfer behavior explicitly when needed.',
     safety: 'safe',
@@ -7997,6 +8009,15 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       visibility: 'activity',
       progress: 'reported',
       presentation: { onStart: 'current' },
+    },
+    operationReentry: snapshot => {
+      if (snapshot.state === 'running') return 'resume';
+      if (snapshot.state === 'succeeded') {
+        const settlement = SessionSpawnNewResultV1Schema.safeParse(snapshot.result);
+        if (settlement.success && settlement.data.type === 'error' && settlement.data.retryable) return 'fresh';
+        return 'replay';
+      }
+      return snapshot.state === 'failed' || snapshot.state === 'cancelled' ? 'replay' : 'refuse';
     },
     title: 'Create session',
     description: 'Create a new session on the requested machine using the selected Agent. Pass directory {kind:"path",path} for a folder or {kind:"managed"} for no folder: Happier creates a private folder for this session.',

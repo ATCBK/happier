@@ -68,6 +68,21 @@ export const ActionOperationDeclarationV1Schema = lazyZodSchema(() => z.strictOb
 }));
 export type ActionOperationDeclarationV1 = Readonly<z.infer<typeof ActionOperationDeclarationV1Schema>>;
 
+/** Host-local Action declaration policy for an exact persisted request whose
+ * original in-memory invocation is no longer available. This function is not
+ * serialized into Action discovery or persisted operation snapshots. */
+export const ActionOperationReentryDecisionV1Schema = lazyZodSchema(() => z.enum([
+  'replay', 'reinvoke', 'resume', 'fresh', 'refuse',
+]));
+export type ActionOperationReentryDecisionV1 = z.infer<typeof ActionOperationReentryDecisionV1Schema>;
+export type ActionOperationReentryPolicyV1 = (
+  snapshot: ActionOperationSnapshotV1,
+) => ActionOperationReentryDecisionV1;
+export const ActionOperationReentryPolicyV1Schema = lazyZodSchema(() => z.custom<ActionOperationReentryPolicyV1>(
+  (value) => typeof value === 'function',
+  { message: 'Expected an Action operation re-entry policy' },
+));
+
 export const ActionOperationStateV1Schema = lazyZodSchema(() => z.enum([
   'accepted', 'running', 'succeeded', 'failed', 'cancelled',
 ]));

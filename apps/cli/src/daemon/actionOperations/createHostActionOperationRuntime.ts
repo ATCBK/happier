@@ -99,7 +99,8 @@ export function createHostActionOperationRuntime(deps: Readonly<{
       const parsed = ActionIdSchema.safeParse(rawActionId);
       const spec = parsed.success ? getActionSpec(parsed.data) : null;
       return spec?.operation
-        ? { actionId: spec.id, title: spec.title, operation: spec.operation }
+        ? { actionId: spec.id, title: spec.title, operation: spec.operation,
+            ...(spec.operationReentry ? { operationReentry: spec.operationReentry } : {}) }
         : null;
     },
     ...(deps.generateOperationId ? { generateOperationId: deps.generateOperationId } : {}),
