@@ -37,20 +37,20 @@ const detailLabels: Readonly<Record<string, string>> = {
 };
 
 /** ② what changed and the checks summary of a change request: the plain sentences. */
-const CHANGE_KEYS = ['inFilesPartial', 'filesPartial', 'noLineCounts', 'fileLines', 'notAllRead'] as const;
+const CHANGE_KEYS = ['inFilesPartial', 'filesPartial', 'noLineCounts', 'fileLines', 'notAllRead', 'showMore', 'showLess'] as const;
 const changeSummary: Readonly<Record<string, readonly string[]>> = {
-  en: ["in {count}+ files", "{count}+ files", "Line counts not reported", "{path}: {additions} added, {deletions} removed", "more checks not read"],
-  ru: ["в {count}+ файлах", "Файлов: {count}+", "Число строк не сообщается", "{path}: добавлено {additions}, удалено {deletions}", "не все проверки прочитаны"],
-  pl: ["w {count}+ plikach", "Pliki: {count}+", "Liczba wierszy nie jest podawana", "{path}: dodano {additions}, usunięto {deletions}", "nie odczytano wszystkich kontroli"],
-  es: ["en {count}+ archivos", "{count}+ archivos", "No se informa el número de líneas", "{path}: {additions} añadidas, {deletions} eliminadas", "quedan comprobaciones sin leer"],
-  fr: ["dans {count}+ fichiers", "{count}+ fichiers", "Nombre de lignes non communiqué", "{path} : {additions} ajoutées, {deletions} supprimées", "certaines vérifications non lues"],
-  it: ["in {count}+ file", "{count}+ file", "Numero di righe non indicato", "{path}: {additions} aggiunte, {deletions} rimosse", "alcuni controlli non letti"],
-  pt: ["em {count}+ arquivos", "{count}+ arquivos", "Contagem de linhas não informada", "{path}: {additions} adicionadas, {deletions} removidas", "há verificações não lidas"],
-  ca: ["en {count}+ fitxers", "{count}+ fitxers", "No s'informa del nombre de línies", "{path}: {additions} afegides, {deletions} eliminades", "queden comprovacions sense llegir"],
-  "zh-Hans": ["涉及 {count}+ 个文件", "{count}+ 个文件", "未提供行数", "{path}：新增 {additions} 行，删除 {deletions} 行", "还有检查未读取"],
-  "zh-Hant": ["涉及 {count}+ 個檔案", "{count}+ 個檔案", "未提供行數", "{path}：新增 {additions} 行，刪除 {deletions} 行", "還有檢查未讀取"],
-  ja: ["{count}+ 個のファイル", "{count}+ 個のファイル", "行数は報告されていません", "{path}: {additions} 行追加、{deletions} 行削除", "未読のチェックがあります"],
-  de: ["in {count}+ Dateien", "{count}+ Dateien", "Keine Zeilenzahlen gemeldet", "{path}: {additions} hinzugefügt, {deletions} entfernt", "nicht alle Prüfungen gelesen"],
+  en: ["in {count}+ files", "{count}+ files", "Line counts not reported", "{path}: {additions} added, {deletions} removed", "more checks not read", "Show more", "Show less"],
+  ru: ["в {count}+ файлах", "Файлов: {count}+", "Число строк не сообщается", "{path}: добавлено {additions}, удалено {deletions}", "не все проверки прочитаны", "Показать больше", "Показать меньше"],
+  pl: ["w {count}+ plikach", "Pliki: {count}+", "Liczba wierszy nie jest podawana", "{path}: dodano {additions}, usunięto {deletions}", "nie odczytano wszystkich kontroli", "Pokaż więcej", "Pokaż mniej"],
+  es: ["en {count}+ archivos", "{count}+ archivos", "No se informa el número de líneas", "{path}: {additions} añadidas, {deletions} eliminadas", "quedan comprobaciones sin leer", "Mostrar más", "Mostrar menos"],
+  fr: ["dans {count}+ fichiers", "{count}+ fichiers", "Nombre de lignes non communiqué", "{path} : {additions} ajoutées, {deletions} supprimées", "certaines vérifications non lues", "Afficher plus", "Afficher moins"],
+  it: ["in {count}+ file", "{count}+ file", "Numero di righe non indicato", "{path}: {additions} aggiunte, {deletions} rimosse", "alcuni controlli non letti", "Mostra altro", "Mostra meno"],
+  pt: ["em {count}+ arquivos", "{count}+ arquivos", "Contagem de linhas não informada", "{path}: {additions} adicionadas, {deletions} removidas", "há verificações não lidas", "Mostrar mais", "Mostrar menos"],
+  ca: ["en {count}+ fitxers", "{count}+ fitxers", "No s'informa del nombre de línies", "{path}: {additions} afegides, {deletions} eliminades", "queden comprovacions sense llegir", "Mostra’n més", "Mostra’n menys"],
+  "zh-Hans": ["涉及 {count}+ 个文件", "{count}+ 个文件", "未提供行数", "{path}：新增 {additions} 行，删除 {deletions} 行", "还有检查未读取", "显示更多", "收起"],
+  "zh-Hant": ["涉及 {count}+ 個檔案", "{count}+ 個檔案", "未提供行數", "{path}：新增 {additions} 行，刪除 {deletions} 行", "還有檢查未讀取", "顯示更多", "收合"],
+  ja: ["{count}+ 個のファイル", "{count}+ 個のファイル", "行数は報告されていません", "{path}: {additions} 行追加、{deletions} 行削除", "未読のチェックがあります", "さらに表示", "表示を減らす"],
+  de: ["in {count}+ Dateien", "{count}+ Dateien", "Keine Zeilenzahlen gemeldet", "{path}: {additions} hinzugefügt, {deletions} entfernt", "nicht alle Prüfungen gelesen", "Mehr anzeigen", "Weniger anzeigen"],
 };
 
 /**

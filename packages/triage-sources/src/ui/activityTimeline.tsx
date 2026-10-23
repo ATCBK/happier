@@ -5,6 +5,7 @@ import {
   Button,
   Icon,
   Markdown,
+  Row,
   Stack,
   Surface,
   Text,
@@ -14,6 +15,8 @@ import {
   type TimelineItemContent,
 } from '@happier-dev/plugin-ui';
 import { formatTriageTimestampV1 } from '@happier-dev/triage-protocol/v1';
+
+import { TriageTextPreview } from './textPreview.js';
 
 /**
  * What kind of thing happened. It picks the event's marker; the sentence says the rest.
@@ -154,7 +157,7 @@ function activityEventContent(
       <>
         {quote === null || quote === ''
           ? null
-          : <Surface tone="muted" padding="small"><Markdown value={quote} /></Surface>}
+          : <Surface tone="muted" padding="small"><TriageTextPreview><Markdown value={quote} /></TriageTextPreview></Surface>}
         {event.inset ?? null}
       </>
     ),
@@ -175,15 +178,18 @@ function ContinuationButtons({ continuations }: Readonly<{
 }>): React.ReactElement {
   return (
     <>
+      {/* A quiet text control at the rail's edge, not a full-width block: paging is a rare reach, the events lead. */}
       {continuations.map((continuation) => (
-        <Button
-          key={continuation.key}
-          title={continuation.title}
-          {...(continuation.titleKey === undefined ? {} : { titleKey: continuation.titleKey })}
-          variant="secondary"
-          busy={continuation.pending}
-          onPress={continuation.onLoadMore}
-        />
+        <Row key={continuation.key}>
+          <Button
+            title={continuation.title}
+            {...(continuation.titleKey === undefined ? {} : { titleKey: continuation.titleKey })}
+            variant="plain"
+            size="small"
+            busy={continuation.pending}
+            onPress={continuation.onLoadMore}
+          />
+        </Row>
       ))}
     </>
   );

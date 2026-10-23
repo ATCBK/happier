@@ -4,6 +4,7 @@ import { formatTriageTimestampV1 } from '@happier-dev/triage-protocol/v1';
 
 import { summarizeTriageChangesV1, type TriageChangedFileV1, type TriageChangeTotalsV1 } from './changeSummary.js';
 import { TriageStatusRow } from './statusRow.js';
+import { TriageTextPreview } from './textPreview.js';
 
 /** Composition only: the source retains ownership of evidence and its read lifecycle. */
 const STORY_TITLES = Object.freeze({
@@ -30,7 +31,7 @@ export function TriageDetailStory({ kind, children, changes, checks, trailing }:
     <Step marker={{ kind: 'number', value: 1 }}
       title={STORY_TITLES[kind].fallback}
       titleKey={STORY_TITLES[kind].key} trailing={trailing}>
-      <Stack gap="large">{children}</Stack>
+      <TriageTextPreview testID="triage-story-ask-body">{children}</TriageTextPreview>
     </Step>
     {changes}
     {checks}
@@ -106,8 +107,10 @@ export function TriageDetailChangeSummary({ rows, more, totals, titleKey, childr
         <Stack grow><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
         {file.note === undefined ? null : <Text variant="micro" tone="secondary" value={file.note} />}
       </Row>
+      // The counts sit before the bar so every bar ends on the same edge and starts in one column (lab `heat`).
       : <Row key={file.path} gap="medium" align="center">
         <Stack grow><Text variant="code" numberOfLines={1} value={file.path} /></Stack>
+        <Text variant="micro" tone="secondary" value={`+${String(file.lines.additions)} −${String(file.lines.deletions)}`} />
         <Stack style={{ width: '25%', maxWidth: 120 }}>
           <Progress label={text('plugins.triage.detailStory.fileLines', '{path}: {additions} added, {deletions} removed', {
             path: file.path, additions: String(file.lines.additions), deletions: String(file.lines.deletions),
@@ -116,7 +119,6 @@ export function TriageDetailChangeSummary({ rows, more, totals, titleKey, childr
             { value: file.lines.deletions / summary.scale, tone: 'danger' },
           ]} />
         </Stack>
-        <Text variant="micro" tone="secondary" value={`+${String(file.lines.additions)} −${String(file.lines.deletions)}`} />
       </Row>)}
     {summary.restCount === 0 ? null : <Text variant="micro" tone="secondary" value={summary.sortedBySize
       ? count('smallerFiles', summary.restCount, { one: '{count} smaller file', other: '{count} smaller files' })
