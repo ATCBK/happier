@@ -1338,6 +1338,9 @@ export type GeneratedActions = Readonly<{
         readonly set: (input: PublicActionInputById["discussion.access.grants.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.access.grants.set">>;
       }> ;
     }> ;
+    readonly attachment: Readonly<{
+      readonly read: (input: PublicActionInputById["discussion.attachment.read"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.attachment.read">>;
+    }> ;
     readonly candidates: Readonly<{
       readonly list: (input: PublicActionInputById["discussion.candidates.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.candidates.list">>;
     }> ;
@@ -3799,6 +3802,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
           remove: (input: PublicActionInputById["discussion.access.grants.remove"], options?: ActionExecutionOptions) => execute("discussion.access.grants.remove", input, options),
           set: (input: PublicActionInputById["discussion.access.grants.set"], options?: ActionExecutionOptions) => execute("discussion.access.grants.set", input, options),
         },
+      },
+      attachment: {
+        read: (input: PublicActionInputById["discussion.attachment.read"], options?: ActionExecutionOptions) => execute("discussion.attachment.read", input, options),
       },
       candidates: {
         list: (input: PublicActionInputById["discussion.candidates.list"], options?: ActionExecutionOptions) => execute("discussion.candidates.list", input, options),

@@ -160,6 +160,23 @@ export type SessionFollowActionInputById = {
             kind: 'session';
             sessionId: SessionTargetV1<true>;
         };
+        source?: {
+            kind: 'session';
+            sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
+            kind: 'execution_run';
+            sessionId: string;
+            runId: string;
+        } | {
+            kind: 'workflow_run';
+            runId: string;
+        } | {
+            kind: 'rule';
+            ruleId: string;
+        } | undefined;
         cursor?: string | undefined;
         limit?: number | undefined;
     } | {

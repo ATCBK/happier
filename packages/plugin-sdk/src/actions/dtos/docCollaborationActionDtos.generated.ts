@@ -49,6 +49,46 @@ export type DocCollaborationActionInputById = {
                     kind: 'session';
                     sessionId: string;
                 };
+            } | {
+                t: 'reference';
+                reference: {
+                    kind: string;
+                    ref: string;
+                    token: string;
+                    label?: string | undefined;
+                    composerReference?: {
+                        pluginId: string;
+                        localId: string;
+                    } | undefined;
+                    composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                };
+            } | {
+                t: 'attachment';
+                attachment: {
+                    kind: 'file';
+                    id: string;
+                    name: string;
+                    file: {
+                        blobId: string;
+                        mime: string;
+                        sizeBytes: number;
+                        sha256: string;
+                    };
+                } | {
+                    kind: 'folder';
+                    id: string;
+                    name: string;
+                    entries: {
+                        relativePath: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    }[];
+                    directories: string[];
+                };
             })[];
         };
         discussionRef?: {
@@ -206,6 +246,46 @@ export type DocCollaborationActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -249,6 +329,46 @@ export type DocCollaborationActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -470,6 +590,46 @@ export type DocCollaborationActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -513,6 +673,46 @@ export type DocCollaborationActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };

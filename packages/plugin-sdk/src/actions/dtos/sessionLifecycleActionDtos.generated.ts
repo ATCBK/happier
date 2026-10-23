@@ -2849,7 +2849,7 @@ export type SessionLifecycleActionResultById = {
             kind: 'launch_error';
             code: string;
             message: string;
-            rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_OUTCOME_UNKNOWN' | undefined;
+            rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_TRANSPORT_UNAVAILABLE' | 'RPC_OUTCOME_UNKNOWN' | undefined;
             connectionPhase?: 'reachability-start' | 'reachability-wait' | 'socket-connect' | undefined;
         } | undefined;
     } | {

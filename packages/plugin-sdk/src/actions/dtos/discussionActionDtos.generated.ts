@@ -539,6 +539,12 @@ export type DiscussionActionInputById = {
         throughSeq?: number | undefined;
         limit?: number | undefined;
     };
+    readonly "discussion.attachment.read": {
+        discussionId: string;
+        messageId: string;
+        blobId: string;
+        throughSeq?: number | undefined;
+    };
     readonly "discussion.create": {
         title: string;
         firstMessage: {
@@ -555,6 +561,46 @@ export type DiscussionActionInputById = {
                     } | {
                         kind: 'session';
                         sessionId: string;
+                    };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
                     };
                 })[];
             } | {
@@ -599,6 +645,46 @@ export type DiscussionActionInputById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -718,6 +804,46 @@ export type DiscussionActionInputById = {
                     kind: 'session';
                     sessionId: string;
                 };
+            } | {
+                t: 'reference';
+                reference: {
+                    kind: string;
+                    ref: string;
+                    token: string;
+                    label?: string | undefined;
+                    composerReference?: {
+                        pluginId: string;
+                        localId: string;
+                    } | undefined;
+                    composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                };
+            } | {
+                t: 'attachment';
+                attachment: {
+                    kind: 'file';
+                    id: string;
+                    name: string;
+                    file: {
+                        blobId: string;
+                        mime: string;
+                        sizeBytes: number;
+                        sha256: string;
+                    };
+                } | {
+                    kind: 'folder';
+                    id: string;
+                    name: string;
+                    entries: {
+                        relativePath: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    }[];
+                    directories: string[];
+                };
             })[];
         } | {
             kind: 'workflow_result';
@@ -761,6 +887,46 @@ export type DiscussionActionInputById = {
                     } | {
                         kind: 'session';
                         sessionId: string;
+                    };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
                     };
                 })[];
             };
@@ -884,6 +1050,46 @@ export type DiscussionActionInputById = {
                     kind: 'session';
                     sessionId: string;
                 };
+            } | {
+                t: 'reference';
+                reference: {
+                    kind: string;
+                    ref: string;
+                    token: string;
+                    label?: string | undefined;
+                    composerReference?: {
+                        pluginId: string;
+                        localId: string;
+                    } | undefined;
+                    composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                };
+            } | {
+                t: 'attachment';
+                attachment: {
+                    kind: 'file';
+                    id: string;
+                    name: string;
+                    file: {
+                        blobId: string;
+                        mime: string;
+                        sizeBytes: number;
+                        sha256: string;
+                    };
+                } | {
+                    kind: 'folder';
+                    id: string;
+                    name: string;
+                    entries: {
+                        relativePath: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    }[];
+                    directories: string[];
+                };
             })[];
         } | {
             kind: 'workflow_result';
@@ -927,6 +1133,46 @@ export type DiscussionActionInputById = {
                     } | {
                         kind: 'session';
                         sessionId: string;
+                    };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
                     };
                 })[];
             };
@@ -2405,6 +2651,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -2448,6 +2734,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -2523,6 +2849,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -2534,7 +2861,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -2567,6 +2893,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -2611,6 +2977,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -2929,6 +3335,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -2972,6 +3418,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -3047,6 +3533,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -3058,7 +3545,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -3091,6 +3577,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -3135,6 +3661,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -3374,6 +3940,46 @@ export type DiscussionActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -3417,6 +4023,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -3616,6 +4262,13 @@ export type DiscussionActionResultById = {
         v: 1;
         serverId: string;
     };
+    readonly "discussion.attachment.read": {
+        bytesBase64: string;
+        blobId: string;
+        mime: string;
+        sizeBytes: number;
+        sha256: string;
+    };
     readonly "discussion.create": {
         discussion: {
             title: string | null;
@@ -3723,6 +4376,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -3766,6 +4459,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -3841,6 +4574,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -3852,7 +4586,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -3885,6 +4618,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -3929,6 +4702,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -4158,6 +4971,46 @@ export type DiscussionActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -4201,6 +5054,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -4421,6 +5314,46 @@ export type DiscussionActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -4464,6 +5397,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -4768,6 +5741,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -4811,6 +5824,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -4886,6 +5939,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -4897,7 +5951,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -4930,6 +5983,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -4974,6 +6067,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -5295,6 +6428,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -5338,6 +6511,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -5413,6 +6626,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -5424,7 +6638,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -5457,6 +6670,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -5501,6 +6754,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -5822,6 +7115,46 @@ export type DiscussionActionResultById = {
                             kind: 'session';
                             sessionId: string;
                         };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
+                        };
                     })[];
                 } | {
                     kind: 'workflow_result';
@@ -5865,6 +7198,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -5940,6 +7313,7 @@ export type DiscussionActionResultById = {
                 };
             } | null;
             creationLocalId: string | null;
+            id: string;
             lastReadSeq: number | null;
             capabilities: {
                 postMessages: boolean;
@@ -5951,7 +7325,6 @@ export type DiscussionActionResultById = {
                 manageAccess: boolean;
                 leave: boolean;
             };
-            id: string;
             ownerAccountId: string;
             encryptionMode: 'plain' | 'e2ee';
             access: 'view' | 'edit' | 'admin' | 'owner';
@@ -5984,6 +7357,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 } | {
@@ -6028,6 +7441,46 @@ export type DiscussionActionResultById = {
                             } | {
                                 kind: 'session';
                                 sessionId: string;
+                            };
+                        } | {
+                            t: 'reference';
+                            reference: {
+                                kind: string;
+                                ref: string;
+                                token: string;
+                                label?: string | undefined;
+                                composerReference?: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | undefined;
+                                composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                            };
+                        } | {
+                            t: 'attachment';
+                            attachment: {
+                                kind: 'file';
+                                id: string;
+                                name: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            } | {
+                                kind: 'folder';
+                                id: string;
+                                name: string;
+                                entries: {
+                                    relativePath: string;
+                                    file: {
+                                        blobId: string;
+                                        mime: string;
+                                        sizeBytes: number;
+                                        sha256: string;
+                                    };
+                                }[];
+                                directories: string[];
                             };
                         })[];
                     };
@@ -6275,6 +7728,46 @@ export type DiscussionActionResultById = {
                         kind: 'session';
                         sessionId: string;
                     };
+                } | {
+                    t: 'reference';
+                    reference: {
+                        kind: string;
+                        ref: string;
+                        token: string;
+                        label?: string | undefined;
+                        composerReference?: {
+                            pluginId: string;
+                            localId: string;
+                        } | undefined;
+                        composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                    };
+                } | {
+                    t: 'attachment';
+                    attachment: {
+                        kind: 'file';
+                        id: string;
+                        name: string;
+                        file: {
+                            blobId: string;
+                            mime: string;
+                            sizeBytes: number;
+                            sha256: string;
+                        };
+                    } | {
+                        kind: 'folder';
+                        id: string;
+                        name: string;
+                        entries: {
+                            relativePath: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        }[];
+                        directories: string[];
+                    };
                 })[];
             } | {
                 kind: 'workflow_result';
@@ -6318,6 +7811,46 @@ export type DiscussionActionResultById = {
                         } | {
                             kind: 'session';
                             sessionId: string;
+                        };
+                    } | {
+                        t: 'reference';
+                        reference: {
+                            kind: string;
+                            ref: string;
+                            token: string;
+                            label?: string | undefined;
+                            composerReference?: {
+                                pluginId: string;
+                                localId: string;
+                            } | undefined;
+                            composerReferenceTrigger?: '@' | '$' | '/' | undefined;
+                        };
+                    } | {
+                        t: 'attachment';
+                        attachment: {
+                            kind: 'file';
+                            id: string;
+                            name: string;
+                            file: {
+                                blobId: string;
+                                mime: string;
+                                sizeBytes: number;
+                                sha256: string;
+                            };
+                        } | {
+                            kind: 'folder';
+                            id: string;
+                            name: string;
+                            entries: {
+                                relativePath: string;
+                                file: {
+                                    blobId: string;
+                                    mime: string;
+                                    sizeBytes: number;
+                                    sha256: string;
+                                };
+                            }[];
+                            directories: string[];
                         };
                     })[];
                 };
@@ -7419,7 +8952,7 @@ export type DiscussionActionResultById = {
                 kind: 'launch_error';
                 code: string;
                 message: string;
-                rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_OUTCOME_UNKNOWN' | undefined;
+                rpcErrorCode?: 'MACHINE_RPC_TIMEOUT' | 'RPC_TRANSPORT_UNAVAILABLE' | 'RPC_OUTCOME_UNKNOWN' | undefined;
                 connectionPhase?: 'reachability-start' | 'reachability-wait' | 'socket-connect' | undefined;
             } | undefined;
         } | {
