@@ -1,6 +1,7 @@
 import axios, { type Method } from 'axios';
 import { randomUUID } from 'node:crypto';
 import { ApprovalRequestOriginV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildDiscussionAttachmentBindingsV1 } from '@happier-dev/protocol/discussions/api';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { bindDiscussionActionHttpRequestV1, discussionActionOutputSchemaV1, hasProtectedDiscussionActionContextV1, readDiscussionCandidatesV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
@@ -37,6 +38,15 @@ import { isSessionTargetPreparationAction, SignedRootActionIdSchema } from '@hap
 import { DiscussionSettingsResponseV1Schema } from '@happier-dev/protocol/discussions/settings';
 import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/references';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResponseV1Schema, DiscussionAttachmentReadResultV1Schema } from '@happier-dev/protocol/discussions/attachments';
+import { readDiscussionAttachmentReferencesV1 } from '@happier-dev/protocol/discussions/content';
+import type { BinaryBlobReferenceV1 } from '@happier-dev/protocol/storage/binaryBlobV1';
+import { openResourceBinaryContent } from '@/api/encryption/resourceBinaryContent';
+import { encodeBase64 } from '@/api/encryption';
+import { Readable } from 'node:stream';
+import { DISCUSSION_UPLOAD_CONTENT_TYPE_V1, DISCUSSION_UPLOAD_PATH_V1 } from '@happier-dev/transfers';
+import { prepareDiscussionAttachmentUpload, type DiscussionAttachmentSourceReader } from './discussionAttachmentUpload';
+import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 
 function failure(code: string) {
   return { ok: false as const, errorCode: code, error: code };
@@ -60,6 +70,15 @@ function openPayload(crypto: SessionStoredContentCryptoContext | null, content: 
 type DiscussionActionFixedHome =
   | Readonly<{ serverId?: undefined; serverHttpBaseUrl?: undefined }>
   | Readonly<{ serverId: string; serverHttpBaseUrl: string }>;
+
+/** Process-local reuse of content already opened by the same admitted hydration. */
+type OpenedDiscussionAttachment = Readonly<{
+  discussionId: string; messageId: string; reference: BinaryBlobReferenceV1; key: ResourceDataKey;
+}>;
+type DiscussionActionDeps = Pick<ActionExecutorDeps, 'discussionAction'> & Readonly<{
+  readOpenedAttachment: (input: OpenedDiscussionAttachment & Readonly<{ throughSeq: number; signal: AbortSignal }>) => Promise<unknown>;
+  readAttachmentContext: (input: Readonly<{ discussionId: string; signal: AbortSignal }>) => Promise<ResourceDataKey>;
+}>;
 
 /** C2 consumes one captured Home/Account settings observation, never a second check-in policy. */
 export function createDiscussionAutonomousCheckInReader(options: Parameters<typeof createDiscussionActionDeps>[0] & Readonly<{
@@ -90,6 +109,8 @@ export function createDiscussionAutonomousCheckInReader(options: Parameters<type
  */
 export function createDiscussionActionDeps(options: Readonly<{
   credentials: StoredCredentials;
+  /** Invoking-host capture only; public Action operands never choose a local path. */
+  readAttachmentSource?: DiscussionAttachmentSourceReader;
   serverHttpBaseUrl?: string;
   resolveServerFeaturesSnapshot?: () => CliServerFeaturesSnapshot | undefined | Promise<CliServerFeaturesSnapshot | undefined>;
   /** Actual current Session publisher, supplied by the host's custody owner. */
@@ -101,7 +122,7 @@ export function createDiscussionActionDeps(options: Readonly<{
   postWorkflowMessage?: (request: Readonly<{ discussionId: string; request: import('@happier-dev/protocol/discussions/api').DiscussionPostRequestV1 }>,
     options: Readonly<{ signal?: AbortSignal; context: ActionExecutorContext;
       content: import('@happier-dev/protocol/discussions/content').DiscussionMessageContentV1 }>) => Promise<import('@happier-dev/protocol/discussions/api').DiscussionAgentPostResponseV1>;
-}> & ExternalActionHomeBinding & DiscussionActionFixedHome): Pick<ActionExecutorDeps, 'discussionAction'> {
+}> & ExternalActionHomeBinding & DiscussionActionFixedHome): DiscussionActionDeps {
   if ((options.serverId === undefined) !== (options.serverHttpBaseUrl === undefined)
     || (options.serverId !== undefined && !options.serverId.trim())
     || (options.serverHttpBaseUrl !== undefined && !options.serverHttpBaseUrl.trim())) {
@@ -126,7 +147,57 @@ export function createDiscussionActionDeps(options: Readonly<{
     });
   }
 
-  return { discussionAction: async ({ actionId, input, context, signal }) => {
+  function createTransport({ actionId, context, signal }: Pick<Parameters<NonNullable<ActionExecutorDeps['discussionAction']>>[0], 'actionId' | 'context' | 'signal'>) {
+    const root = SignedRootActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
+    // Roster preparation remains signed under its admitted containing operation.
+    const effectActionId = actionId === 'discussion.participants.list' && root.success
+      && (isSessionTargetPreparationAction(root.data) || root.data === 'discussion.post' || root.data === 'discussion.reply')
+      ? root.data : actionId;
+    const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
+      context, effectActionId, method, path, ...(body === undefined ? {} : { body }),
+      daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
+      ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
+      ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),
+    });
+    async function rawRequest(method: string, path: string, body?: unknown, binary?: Readonly<{ body: AsyncIterable<Uint8Array>; contentType: string }>) {
+      if (signal?.aborted) throw new DiscussionRequestError('cancelled');
+      const authorization = authorizationFor(method, path, body);
+      if (!authorization.ok) throw new DiscussionRequestError('not_authenticated');
+      try {
+        return await axios.request<unknown>({ url: serverUrl + path, method: method as Method,
+          ...(binary ? { data: Readable.from(binary.body) } : body === undefined ? {} : { data: JSON.stringify(body) }),
+          headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...authorization.headers,
+            'Content-Type': binary?.contentType ?? 'application/json' },
+          timeout: configuration.sessionControlHttpTimeoutMs, validateStatus: () => true, signal,
+        });
+      } catch {
+        throw new DiscussionRequestError(method === 'GET'
+          ? signal?.aborted ? 'cancelled' : 'discussions_unavailable' : 'outcome_unknown');
+      }
+    }
+    async function request(bound: ReturnType<typeof bindDiscussionActionHttpRequestV1>, body = bound.body,
+      binary?: Readonly<{ body: AsyncIterable<Uint8Array>; contentType: string }>): Promise<unknown> {
+      const response = await rawRequest(bound.method, bound.path, body, binary);
+      if (response.status !== 200) {
+        if (response.status === 403 && response.data && typeof response.data === 'object'
+          && 'error' in response.data && response.data.error === 'present_user_required') throw new DiscussionRequestError('present_user_required');
+        const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+        const error = DiscussionErrorResponseV1Schema.safeParse(response.data);
+        throw new DiscussionRequestError(rollback?.code ?? (error.success ? error.data.error
+          : bound.method === 'GET' ? 'discussions_unavailable' : 'outcome_unknown'));
+      }
+      return response.data;
+    }
+    async function getSummary(discussionId: string) {
+      const value = DiscussionDetailsResponseV1Schema.parse(await request(bindDiscussionActionHttpRequestV1('discussion.get', { discussionId })));
+      if (value.discussion.id !== discussionId) throw new DiscussionRequestError('discussion_content_unavailable');
+      return value.discussion;
+    }
+    return { authorizationFor, rawRequest, request, getSummary };
+  }
+
+  const discussionAction = async ({ actionId, input, context, signal }: Parameters<NonNullable<ActionExecutorDeps['discussionAction']>>[0],
+    openedAttachment?: OpenedDiscussionAttachment): Promise<unknown> => {
     if (context.serverId && context.serverId !== serverId) return failure('server_target_mismatch');
     const parsed = DISCUSSION_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(input);
     if (!parsed.success) return failure('discussion_invalid_content');
@@ -170,58 +241,26 @@ export function createDiscussionActionDeps(options: Readonly<{
       return DiscussionOpenedSummaryV1Schema.parse({ ...row, ...first, title: title.success ? title.data.title : null });
     }
 
-    const root = SignedRootActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
-    // Roster reads prepare the original operation, including the current
-    // answer-policy check before an addressed post/reply. Home admits their
-    // exact route under that root; they never become a second signed effect.
-    const effectActionId = actionId === 'discussion.participants.list' && root.success
-      && (isSessionTargetPreparationAction(root.data) || root.data === 'discussion.post' || root.data === 'discussion.reply')
-      ? root.data : actionId;
-    const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
-      context, effectActionId, method, path, ...(body === undefined ? {} : { body }),
-      daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
-      ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
-      ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),
-    });
-    async function rawRequest(method: string, path: string, body?: unknown) {
-      if (signal?.aborted) throw new DiscussionRequestError('cancelled');
-      const authorization = authorizationFor(method, path, body);
-      if (!authorization.ok) throw new DiscussionRequestError('not_authenticated');
-      try {
-        return await axios.request<unknown>({
-          url: serverUrl + path, method: method as Method,
-          ...(body === undefined ? {} : { data: JSON.stringify(body) }),
-          headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...authorization.headers, 'Content-Type': 'application/json' },
-          timeout: configuration.sessionControlHttpTimeoutMs, validateStatus: () => true, signal,
-        });
-      } catch {
-        // A lost preparation read cannot have published a message. Mutations
-        // still retain uncertainty when their acknowledgement is unavailable.
-        throw new DiscussionRequestError(method === 'GET'
-          ? signal?.aborted ? 'cancelled' : 'discussions_unavailable'
-          : 'outcome_unknown');
+    const { authorizationFor, rawRequest, request, getSummary } = createTransport({ actionId, context, signal });
+    async function writeMutation(bound: ReturnType<typeof bindDiscussionActionHttpRequestV1>, operation: 'create' | 'post' | 'reply',
+      body: unknown, content: DiscussionMessageContentV1, key: ResourceDataKey, discussionId?: string): Promise<unknown> {
+      const references = readDiscussionAttachmentReferencesV1(content);
+      if (references.length === 0) return await request(bound, body);
+      if (context.externalActionExecutionAuthorization || context.externalActionCredential) {
+        throw new DiscussionRequestError('discussion_attachment_upload_authority_unavailable');
       }
+      const uploadRequest = operation === 'create' ? body : body && typeof body === 'object' ? { ...body, discussionId } : body;
+      const prepared = prepareDiscussionAttachmentUpload({ operation, request: uploadRequest, key, references,
+        readAttachmentSource: options.readAttachmentSource, signal });
+      return await request({ method: 'POST', path: DISCUSSION_UPLOAD_PATH_V1, body: prepared.metadata }, prepared.metadata,
+        { body: prepared.body, contentType: DISCUSSION_UPLOAD_CONTENT_TYPE_V1 });
     }
-    async function request(bound: ReturnType<typeof bindDiscussionActionHttpRequestV1>, body = bound.body): Promise<unknown> {
-      const response = await rawRequest(bound.method, bound.path, body);
-      if (response.status !== 200) {
-        // The shared route authority guard refuses before the domain mutation.
-        // Its definite refusal is separate from the Discussion error union.
-        if (response.status === 403 && response.data && typeof response.data === 'object'
-          && 'error' in response.data && response.data.error === 'present_user_required') {
-          throw new DiscussionRequestError('present_user_required');
-        }
-        const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
-        const error = DiscussionErrorResponseV1Schema.safeParse(response.data);
-        throw new DiscussionRequestError(rollback?.code ?? (error.success ? error.data.error
-          : bound.method === 'GET' ? 'discussions_unavailable' : 'outcome_unknown'));
-      }
-      return response.data;
-    }
-    async function getSummary(discussionId: string) {
-      const value = DiscussionDetailsResponseV1Schema.parse(await request(bindDiscussionActionHttpRequestV1('discussion.get', { discussionId })));
-      if (value.discussion.id !== discussionId) throw new DiscussionRequestError('discussion_content_unavailable');
-      return value.discussion;
+    function narrowRead<T extends Readonly<{ discussionId: string; throughSeq?: number }>>(args: T): T {
+      const addressed = protectedDiscussionContext ? DiscussionAddressingV1Schema.safeParse(source?.discussionAddressing) : null;
+      if (addressed && (!addressed.success || source?.sourceSessionId !== addressed.data.participantSessionId
+        || admittedSessionId !== addressed.data.participantSessionId)) throw new DiscussionRequestError('discussion_read_denied');
+      const cutoff = addressed?.success && addressed.data.discussionId === args.discussionId ? addressed.data.throughSeq : undefined;
+      return cutoff === undefined ? args : { ...args, throughSeq: Math.min(args.throughSeq ?? cutoff, cutoff) };
     }
     async function recoverCreation(creationLocalId: string) {
       for (const state of ['active', 'archived'] as const) {
@@ -333,6 +372,7 @@ export function createDiscussionActionDeps(options: Readonly<{
         const mentions = readDiscussionMentionedParticipantIdsV1(args.firstMessage.content);
         const firstMessage = { localId, content: args.firstMessage.content, mentionedAccountIds: args.firstMessage.mentionedAccountIds ?? mentions.mentionedAccountIds,
           mentionedSessionIds: args.firstMessage.mentionedSessionIds ?? mentions.mentionedSessionIds,
+          ...buildDiscussionAttachmentBindingsV1(args.firstMessage.content, key.mode === 'plain' ? 'plain' : 'encrypted'),
           ...(args.firstMessage.replyTarget === undefined ? {} : { replyTarget: args.firstMessage.replyTarget }) };
         const equality = (canonicalIntent: string) => key.mode === 'e2ee'
           ? { kind: 'e2eeTag' as const, tag: deriveDiscussionMutationEqualityTagV1({ dataKey: key.dataKey, canonicalIntent }) } : undefined;
@@ -349,6 +389,7 @@ export function createDiscussionActionDeps(options: Readonly<{
         });
         let value;
         if (agentOrigin) {
+          if (readDiscussionAttachmentReferencesV1(firstMessage.content).length) return failure('discussion_attachment_source_unavailable');
           if (!options.postAgentMessage || !admittedSessionId) return failure('discussion_post_denied');
           const toolCallId = origin.success ? origin.data.toolCallId : context.actionRequestId;
           let response;
@@ -360,7 +401,7 @@ export function createDiscussionActionDeps(options: Readonly<{
           } catch { return failure('outcome_unknown'); }
           if (!response.ok) return failure(response.error);
           value = response.value;
-        } else value = DiscussionCreateResponseV1Schema.parse(await request(bound, body));
+        } else value = DiscussionCreateResponseV1Schema.parse(await writeMutation(bound, 'create', body, firstMessage.content, key));
         // The create transaction already includes every chosen grant. Key
         // delivery then uses the admitted resource census, never a fake one.
         if (key.mode === 'e2ee' && participants?.some(participant => participant.kind === 'account')) {
@@ -372,12 +413,8 @@ export function createDiscussionActionDeps(options: Readonly<{
       }
       if (actionId === 'discussion.read') {
         const args = DiscussionReadInputV1Schema.parse(parsed.data);
-        const addressed = protectedDiscussionContext
-          ? DiscussionAddressingV1Schema.safeParse(source?.discussionAddressing) : null;
-        if (addressed && (!addressed.success || source?.sourceSessionId !== addressed.data.participantSessionId
-          || admittedSessionId !== addressed.data.participantSessionId)) return failure('discussion_read_denied');
-        const cutoff = addressed?.success && addressed.data.discussionId === args.discussionId ? addressed.data.throughSeq : undefined;
-        const boundedArgs = cutoff === undefined ? args : { ...args, throughSeq: Math.min(args.throughSeq ?? cutoff, cutoff) };
+        const boundedArgs = narrowRead(args);
+        const cutoff = boundedArgs.throughSeq;
         const key = await openKey(await getSummary(args.discussionId));
         const value = DiscussionMessagesResponseV1Schema.parse(await request(bindDiscussionActionHttpRequestV1('discussion.read', boundedArgs)));
         if (cutoff !== undefined && (value.messageSeq > cutoff || value.messages.some(message => message.seq > cutoff))) {
@@ -387,12 +424,48 @@ export function createDiscussionActionDeps(options: Readonly<{
         return DiscussionReadResultV1Schema.parse({ ...envelope, discussionId: args.discussionId, messages,
           hasMoreOlder: value.hasMoreOlder, messageSeq: value.messageSeq, incomplete: messages.some(row => row.content === null) });
       }
+      if (actionId === 'discussion.attachment.read') {
+        const args = narrowRead(DiscussionAttachmentReadInputV1Schema.parse(parsed.data));
+        const summary = openedAttachment ? null : await getSummary(args.discussionId);
+        const key = openedAttachment?.key ?? await openKey(summary!);
+        let reference: BinaryBlobReferenceV1 | undefined;
+        if (openedAttachment) {
+          if (openedAttachment.discussionId !== args.discussionId || openedAttachment.messageId !== args.messageId
+            || openedAttachment.reference.blobId !== args.blobId) throw new DiscussionRequestError('discussion_content_unavailable');
+          reference = openedAttachment.reference;
+        } else {
+          const value = DiscussionMessagesResponseV1Schema.parse(await request(bindDiscussionActionHttpRequestV1('discussion.read', {
+            discussionId: args.discussionId, messageId: args.messageId,
+            ...(args.throughSeq === undefined ? {} : { throughSeq: args.throughSeq }),
+          })));
+          const row = value.messages.find(row => row.id === args.messageId && row.discussionId === args.discussionId
+            && (args.throughSeq === undefined || row.seq <= args.throughSeq));
+          const opened = row ? projectMessage(key, args.discussionId, row) : null;
+          reference = opened?.content ? readDiscussionAttachmentReferencesV1(opened.content).find(file => file.blobId === args.blobId) : undefined;
+        }
+        if (!reference) throw new DiscussionRequestError('discussion_content_unavailable');
+        const response = DiscussionAttachmentReadResponseV1Schema.parse(await request(bindDiscussionActionHttpRequestV1(actionId, args)));
+        if (response.blobId !== reference.blobId) throw new DiscussionRequestError('discussion_content_unavailable');
+        let bytes: Uint8Array;
+        try { bytes = await openResourceBinaryContent(key, reference, response.content); }
+        catch { throw new DiscussionRequestError('discussion_content_unavailable'); }
+        if (summary) {
+          const current = await getSummary(args.discussionId);
+          if (!current.keyReadiness || current.encryptionMode !== summary.encryptionMode || current.dataEncryptionKey !== summary.dataEncryptionKey) {
+            throw new DiscussionRequestError('discussion_content_unavailable');
+          }
+        }
+        signal?.throwIfAborted();
+        return DiscussionAttachmentReadResultV1Schema.parse({ blobId: reference.blobId, bytesBase64: encodeBase64(bytes),
+          mime: reference.mime, sizeBytes: reference.sizeBytes, sha256: reference.sha256 });
+      }
       if (isPost) {
         const args = DiscussionPostInputV1Schema.parse(parsed.data);
         const key = await openKey(await getSummary(args.discussionId));
         const mentions = readDiscussionMentionedParticipantIdsV1(args.content);
         const intent = { content: args.content, mentionedAccountIds: args.mentionedAccountIds ?? mentions.mentionedAccountIds,
           mentionedSessionIds: args.mentionedSessionIds ?? mentions.mentionedSessionIds,
+          ...buildDiscussionAttachmentBindingsV1(args.content, key.mode === 'plain' ? 'plain' : 'encrypted'),
           ...(args.replyTarget === undefined ? {} : { replyTarget: args.replyTarget }) };
         const postRequest = buildDiscussionMutationRequestBodyV1({
           kind: 'post', ...intent, localId: args.localId ?? omittedLocalId('post'),
@@ -404,6 +477,7 @@ export function createDiscussionActionDeps(options: Readonly<{
         });
         let value;
         if (options.postWorkflowMessage && workflowReturn) {
+          if (readDiscussionAttachmentReferencesV1(args.content).length) return failure('discussion_attachment_source_unavailable');
           let response;
           try { response = DiscussionAgentPostResponseV1Schema.parse(await options.postWorkflowMessage({
             discussionId: args.discussionId, request: postRequest }, { context, content: args.content, ...(signal ? { signal } : {}) })); }
@@ -411,6 +485,7 @@ export function createDiscussionActionDeps(options: Readonly<{
           if (!response.ok) return failure(response.error);
           value = response.value;
         } else if (agentOrigin) {
+          if (readDiscussionAttachmentReferencesV1(args.content).length) return failure('discussion_attachment_source_unavailable');
           if (!options.postAgentMessage || !admittedSessionId) return failure('discussion_post_denied');
           const toolCallId = origin.success ? origin.data.toolCallId : context.actionRequestId;
           let response;
@@ -423,7 +498,8 @@ export function createDiscussionActionDeps(options: Readonly<{
           } catch { return failure('outcome_unknown'); }
           if (!response.ok) return failure(response.error);
           value = response.value;
-        } else value = DiscussionPostResponseV1Schema.parse(await request(bound, postRequest));
+        } else value = DiscussionPostResponseV1Schema.parse(await writeMutation(bound,
+          actionId === 'discussion.reply' ? 'reply' : 'post', postRequest, args.content, key, args.discussionId));
         return DiscussionPostResultV1Schema.parse({ ...envelope, message: projectMessage(key, args.discussionId, value.message), messageSeq: value.messageSeq });
       }
       if (actionId === 'discussion.rename') {
@@ -459,5 +535,12 @@ export function createDiscussionActionDeps(options: Readonly<{
       if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return failure(error.code);
       return failure('outcome_unknown');
     }
-  } };
+  };
+  return { discussionAction, readAttachmentContext: async input => {
+    const { getSummary } = createTransport({ actionId: 'discussion.attachment.read',
+      context: { surface: 'cli', authority: 'account_automation', serverId }, signal: input.signal });
+    return await openKey(await getSummary(input.discussionId));
+  }, readOpenedAttachment: async input => await discussionAction({ actionId: 'discussion.attachment.read',
+    input: { discussionId: input.discussionId, messageId: input.messageId, blobId: input.reference.blobId, throughSeq: input.throughSeq },
+    context: { surface: 'cli', authority: 'account_automation', serverId }, signal: input.signal }, input) };
 }

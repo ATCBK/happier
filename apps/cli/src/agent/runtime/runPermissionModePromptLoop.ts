@@ -1398,6 +1398,8 @@ export async function runPermissionModePromptLoop(opts: {
           : null;
         const referenceServices = {
           sessionId: opts.session.sessionId,
+          materializeDiscussionAttachmentsForDispatch: (input: Parameters<ApiSessionClient['materializeDiscussionAttachmentsForDispatch']>[0]) =>
+            opts.session.materializeDiscussionAttachmentsForDispatch(input),
           catalogs: {
             readReferenceAction: opts.readReferenceAction,
             ...(typeof opts.runtime.listSkills === 'function' ? { listSkills: () => opts.runtime.listSkills!() } : {}),

@@ -1,4 +1,9 @@
 import { createSessionUsageLimitRecoveryRuntime } from '@/session/usageLimitRecoveryControls/createSessionUsageLimitRecoveryRuntime';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { materializeDiscussionInputAttachments, DiscussionAttachmentPreparationError,
+    type DiscussionAttachmentDispatchInput, type DiscussionAttachmentDispatchResult } from '@/discussions/materializeDiscussionInputAttachments';
+import { admitSessionStructuredInputV1 } from '@/session/services/admitSessionStructuredInputV1';
+import { readSessionAttachmentDescriptorsV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveUsageLimitRecoveryEnabled } from '@/features/usageLimitRecoveryFeatureGate';
@@ -3029,6 +3034,36 @@ export class ApiSessionClient extends EventEmitter {
             this.emit('pending-provider-input-retired', input.localId);
         }
         return result;
+    }
+
+    /** Hydrate only the original Discussion cutoff on the Machine actually dispatching this Session. */
+    async materializeDiscussionAttachmentsForDispatch(input: DiscussionAttachmentDispatchInput): Promise<DiscussionAttachmentDispatchResult> {
+        const assertCurrent = async () => {
+            if (this.closed || input.addressing.participantSessionId !== this.sessionId
+                || await this.reconcileSessionInputForProviderDispatch({ localId: input.localId,
+                    discussionAddressing: input.addressing, signal: input.signal }) !== 'admitted') {
+                throw new DiscussionAttachmentPreparationError();
+            }
+        };
+        input.signal.throwIfAborted();
+        await assertCurrent();
+        const credentials = await this.readCurrentOwnerCredentials();
+        if (!credentials) throw new DiscussionAttachmentPreparationError();
+        const projected = await this.runSessionFollowSourceRequest({ credentials, request: async () =>
+            await materializeDiscussionInputAttachments({ serverId: this.serverBinding.serverId,
+                addressing: input.addressing, signal: input.signal,
+                discussion: createDiscussionActionDeps({ credentials, serverId: this.serverBinding.serverId,
+                    serverHttpBaseUrl: this.serverBinding.serverUrl,
+                    resolveServerFeaturesSnapshot: () => this.getServerFeaturesSnapshot() }),
+                target: { sessionId: this.sessionId, messageLocalId: input.localId, rpc: this.rpcHandlerManager,
+                    resolveSessionAttachment: handle => this.sessionHandlersRegistration.resolveSessionAttachment(handle) },
+            }) });
+        input.signal.throwIfAborted();
+        await assertCurrent();
+        if (!projected) return null;
+        const admitted = admitSessionStructuredInputV1({ ...projected,
+            admissionPolicy: { allowedLocalImagePaths: projected.allowedLocalImagePaths } });
+        return { structuredInput: admitted.structuredInput, attachments: readSessionAttachmentDescriptorsV1(admitted.meta) };
     }
 
     /** Exact committed row lookup for host reply publication and native final outcomes. */

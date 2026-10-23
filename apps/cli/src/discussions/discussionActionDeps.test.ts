@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { decodeDiscussionUploadMetadataV1, readBinaryUploadFrameV1, DISCUSSION_UPLOAD_PATH_V1,
+  DISCUSSION_UPLOAD_CONTENT_TYPE_V1 } from '@happier-dev/transfers';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { openResourceBinaryContent } from '@/api/encryption/resourceBinaryContent';
+import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import tweetnacl from 'tweetnacl';
 import { createActionExecutor, FeaturesResponseSchema, accountSettingsParse, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema, DiscussionAgentPostRequestV1Schema } from '@happier-dev/protocol/discussions/api';
@@ -25,7 +31,7 @@ vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet, post:
 
 import { createDiscussionActionDeps, createDiscussionAutonomousCheckInReader } from './discussionActionDeps';
 import { DiscussionAgentPublisherRequestV1Schema } from './discussionAgentPublisher';
-import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
+import { createResourceDataKey, openResourceDataKey, type ResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
 import { openSessionStoredContent, sealSessionStoredContent, type SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionStoredContentCodec';
@@ -719,6 +725,27 @@ describe('Home Discussion resource transport', () => {
     expect(new URL(humanRead.url).searchParams.has('throughSeq')).toBe(false);
   });
 
+  it('intersects exact attachment reads with the protected original cutoff', async () => {
+    const blobId = '8578de54-3f59-4d6d-8293-ff6e4682fd10';
+    const reference = { blobId, mime: 'text/plain', sizeBytes: 5, sha256: createHash('sha256').update('bytes').digest('hex') };
+    axiosRequest.mockImplementation(async request => new URL(request.url).pathname.includes('/attachments/')
+      ? { status: 200, data: { blobId, content: { t: 'plain', v: 'Ynl0ZXM=' } } }
+      : new URL(request.url).pathname.endsWith('/messages') ? { status: 200, data: {
+        messages: [{ ...wireMessage(), id: 'ancestor', content: { t: 'plain', v: { v: 1, parts: [
+          { t: 'attachment', attachment: { kind: 'file', id: blobId, name: 'notes.txt', file: reference } },
+        ] } } }], messageSeq: 2, hasMoreOlder: false,
+      } }
+      : { status: 200, data: { discussion: wireSummary() } });
+    const discussionAddressing = { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 2, participantSessionId: 'receiver' };
+    const result = await action()({ actionId: 'discussion.attachment.read',
+      input: { discussionId: 'discussion-1', messageId: 'ancestor', blobId, throughSeq: 99 },
+      context: { ...context, surface: 'agent', defaultSessionId: 'receiver',
+        sessionInputSource: { sourceSessionId: 'receiver', sourceTurnId: 'turn', sourceInputId: 'input', via: 'action', discussionAddressing } } });
+    expect(result).toMatchObject({ ...reference, bytesBase64: 'Ynl0ZXM=' });
+    const request = axiosRequest.mock.calls.find(([request]) => new URL(request.url).pathname.includes('/attachments/'))![0];
+    expect(new URL(request.url).searchParams.get('throughSeq')).toBe('2');
+  });
+
   it('preserves owned Session archive operands when opening the archived Discussion', async () => {
     const ownedSessions = [{ discussionId: 'discussion-1', participantSlotId: 'model-slot', sessionId: 'owned-reviewer' }];
     axiosRequest.mockResolvedValueOnce({ status: 200, data: {
@@ -740,6 +767,64 @@ describe('Home Discussion resource transport', () => {
       creationLocalId: 'creation-1', titleContent: { t: 'plain' }, firstMessage: { localId: 'message-1', content: { t: 'plain' } },
     });
     expect(axiosRequest.mock.calls.some(([request]) => request.url.includes('/sessions/'))).toBe(false);
+  });
+
+  it.each(['plain', 'e2ee'] as const)('composes captured %s file bytes with the original atomic create', async mode => {
+    const bytes = Buffer.from([0, 255, 1, 0, 128]);
+    const reference = { blobId: '7578de54-3f59-4d6d-8293-ff6e4682fd10', mime: 'application/octet-stream', sizeBytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex') };
+    const attached = { v: 1 as const, parts: [{ t: 'attachment' as const,
+      attachment: { kind: 'file' as const, id: reference.blobId, name: 'evidence.bin', file: reference } }] };
+    const captured: { key: ResourceDataKey | null; bytes: Uint8Array[] } = { key: null, bytes: [] };
+    const caller = mode === 'plain' ? keyless : credentials;
+    axiosRequest.mockImplementation(async (request: { url: string; method: string; data?: unknown; headers?: Record<string, string> }) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith('/encryption/currentness')) return { status: 200, data: currentness(mode) };
+      if (request.method === 'GET') return { status: 200, data: { discussions: [], nextCursor: null } };
+      expect(path).toBe(DISCUSSION_UPLOAD_PATH_V1);
+      expect(request.headers?.['Content-Type']).toBe(DISCUSSION_UPLOAD_CONTENT_TYPE_V1);
+      if (!request.data || typeof request.data !== 'object' || !(Symbol.asyncIterator in request.data)) throw new Error('Expected streamed mutation');
+      // Axios stream is the external HTTP boundary; all framing and crypto stay real.
+      const metadata = await readBinaryUploadFrameV1(request.data as AsyncIterable<Uint8Array>, {
+        metadataMaxBytes: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1, decodeMetadata: decodeDiscussionUploadMetadataV1,
+        onMetadata: async metadata => {
+          if (metadata.operation !== 'create') throw new Error('Expected create');
+          captured.key = await openResourceDataKey({ credentials: caller, mode, dataEncryptionKey: metadata.input.dataEncryptionKey ?? null });
+          if (captured.key.mode === 'e2ee') {
+            const crypto = { mode: 'e2ee' as const, ctx: { encryptionKey: captured.key.dataKey, encryptionVariant: 'dataKey' as const } };
+            const opened = openSessionStoredContent({ ...crypto, content: metadata.input.firstMessage.content });
+            expect(metadata.input.firstMessage.requestEqualityEvidenceV1).toEqual({ kind: 'e2eeTag',
+              tag: deriveDiscussionMutationEqualityTagV1({ dataKey: captured.key.dataKey,
+                canonicalIntent: serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content: opened as typeof attached,
+                  mentionedAccountIds: metadata.input.firstMessage.mentionedAccountIds,
+                  mentionedSessionIds: metadata.input.firstMessage.mentionedSessionIds,
+                  attachments: metadata.input.firstMessage.attachments }) }) });
+          }
+          return metadata.attachments;
+        },
+        onSegment: async (_index, chunks) => {
+          const parts: Uint8Array[] = [];
+          for await (const chunk of chunks) parts.push(chunk);
+          if (!captured.key) throw new Error('Missing resource key');
+          const stored = Buffer.concat(parts);
+          captured.bytes.push(await openResourceBinaryContent(captured.key, reference, mode === 'plain'
+            ? { t: 'plain', v: stored.toString('base64') } : { t: 'encrypted', c: stored.toString('base64') }));
+        },
+      });
+      if (metadata.operation !== 'create' || !captured.key) throw new Error('Expected admitted create');
+      const crypto: SessionStoredContentCryptoContext = captured.key.mode === 'plain' ? plain
+        : { mode: 'e2ee', ctx: { encryptionKey: captured.key.dataKey, encryptionVariant: 'dataKey' } };
+      return { status: 200, data: {
+        discussion: { ...wireSummary(crypto, captured.key.dataEncryptionKey), titleContent: metadata.input.titleContent },
+        firstMessage: { ...wireMessage(crypto), content: metadata.input.firstMessage.content },
+      } };
+    });
+    const result = await action({ credentials: caller, readAttachmentSource: async blobId => {
+      expect(blobId).toBe(reference.blobId); return bytes;
+    } })({ actionId: 'discussion.create', input: { ...createInput, firstMessage: { ...createInput.firstMessage, content: attached } }, context });
+    expect(result).toMatchObject({ firstMessage: { content: attached } });
+    expect(captured.bytes.map(file => Buffer.from(file))).toEqual([bytes]);
+    expect(axiosRequest.mock.calls.filter(([request]) => request.method === 'POST')).toHaveLength(1);
   });
 
   it('previews only source routing and actual audiences without sending quote or question plaintext', async () => {

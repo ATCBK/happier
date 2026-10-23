@@ -9,6 +9,8 @@ import { logger } from '@/ui/logger';
 import { normalizePermissionModeQueuedPromptLocalIds, type PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
 import type { SessionClientInteractionApi } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
+import { DiscussionAttachmentPreparationError, type DiscussionAttachmentDispatchInput,
+  type DiscussionAttachmentDispatchResult } from '@/discussions/materializeDiscussionInputAttachments';
 import {
   resolveStructuredInputProviderDispatchContext,
   ResolvedMentionContextTooLargeError,
@@ -57,6 +59,7 @@ export function projectSessionComposerAttachmentDispatchInput(
 export type SessionInputDispatchServices = Readonly<{
   sessionId?: string;
   reconcileSessionInputForProviderDispatch?: SessionClientInteractionApi['reconcileSessionInputForProviderDispatch'];
+  materializeDiscussionAttachmentsForDispatch?: (input: DiscussionAttachmentDispatchInput) => Promise<DiscussionAttachmentDispatchResult>;
   catalogs?: StructuredInputCatalogReaders;
   resolveComposerReference?: StructuredInputComposerReferenceResolver['resolve'];
   resolveComposerAttachmentForDispatch?: ComposerAttachmentDispatchResolver;
@@ -78,9 +81,30 @@ export async function resolveSessionInputForProviderDispatch(input: Readonly<{
   const services = input.services;
   const sessionId = services?.sessionId;
   const attachmentResolver = services?.resolveComposerAttachmentForDispatch;
+  let structuredInput = input.prompt.structuredInput;
+  let attachments = input.prompt.attachments;
+  if (input.prompt.discussionAddressing) {
+    const materialize = services?.materializeDiscussionAttachmentsForDispatch;
+    if (!materialize || !input.localId || sessionId !== input.prompt.discussionAddressing.participantSessionId) {
+      throw new DiscussionAttachmentPreparationError();
+    }
+    try {
+      const materialized = await materialize({ addressing: input.prompt.discussionAddressing,
+        localId: input.localId, signal: input.signal });
+      if (materialized) {
+        attachments = [...attachments ?? [], ...materialized.attachments];
+        const images = materialized.structuredInput?.imageInputs;
+        if (images?.length) structuredInput = { ...structuredInput, v: 1,
+          imageInputs: [...structuredInput?.imageInputs ?? [], ...images] };
+      }
+    } catch (error) {
+      if (isAbortLikeError(error) || error instanceof DiscussionAttachmentPreparationError) throw error;
+      throw new DiscussionAttachmentPreparationError();
+    }
+  }
   return await resolveStructuredInputProviderDispatchContext({
-    structuredInput: input.prompt.structuredInput,
-    attachments: input.prompt.attachments,
+    structuredInput,
+    attachments,
     sessionMedia: input.prompt.sessionMedia,
     catalogs: services?.catalogs,
     signal: input.signal,
@@ -220,6 +244,7 @@ class SessionInputDispatchAdmissionError extends Error {
 }
 
 export function readStructuredInputPreparationFailure(error: unknown): Readonly<{ code: string; message: string; retryable: boolean }> | null {
+  if (error instanceof DiscussionAttachmentPreparationError) return { code: error.code, message: error.message, retryable: error.retryable };
   if (error instanceof SessionInputDispatchAdmissionError) return { code: error.code, message: error.message, retryable: error.retryable };
   if (error instanceof StructuredInputComposerAttachmentResolutionError) {
     return {

@@ -2266,6 +2266,7 @@ export async function runHostSessionRuntime(
       const targetSession = currentLifecycleSession;
       return {
         sessionId: targetSession.sessionId,
+        materializeDiscussionAttachmentsForDispatch: input => targetSession.materializeDiscussionAttachmentsForDispatch(input),
         reconcileSessionInputForProviderDispatch: input => targetSession.reconcileSessionInputForProviderDispatch(input),
         retainPromptComposition: async composition => {
           await targetSession.enqueueSessionEventCommitted({ type: 'prompt-composition', composition });
