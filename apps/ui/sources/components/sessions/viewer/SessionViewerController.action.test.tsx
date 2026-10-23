@@ -169,11 +169,13 @@ describe('Session viewer semantic Action ingress', () => {
     const onlineMachine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
     storage.getState().applyMachines([onlineMachine], true, { sourceServerId: serverId });
     observeMachinePresenceForTest({ serverId, accountId: 'alice' }, ['machine-1']);
-    let pane: ReturnType<typeof useAppPaneScope> | null = null;
-    let openFromWatch: ReturnType<typeof useOpenSessionComputerScreen> = null;
+    const ingress: {
+      pane: ReturnType<typeof useAppPaneScope> | null;
+      openFromWatch: ReturnType<typeof useOpenSessionComputerScreen>;
+    } = { pane: null, openFromWatch: null };
     function IngressProbe() {
-      pane = useAppPaneScope(createSessionPaneScopeId('session-a', serverId));
-      openFromWatch = useOpenSessionComputerScreen({ sessionId: 'session-a', serverId });
+      ingress.pane = useAppPaneScope(createSessionPaneScopeId('session-a', serverId));
+      ingress.openFromWatch = useOpenSessionComputerScreen({ sessionId: 'session-a', serverId });
       return null;
     }
     function Wrapper(props: React.PropsWithChildren) {
@@ -258,20 +260,20 @@ describe('Session viewer semantic Action ingress', () => {
       await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }); });
       await act(async () => { await hook.getCurrent().apply({ kind: 'viewer.dock' }); });
       expect(hook.getCurrent().state.mode).toBe('docked');
-      expect(pane!.scopeState!.details.isOpen).toBe(false);
+      expect(ingress.pane!.scopeState!.details.isOpen).toBe(false);
       stage = 'docked header source handoff';
       await pressHeader();
       expect(hook.getCurrent().state).toMatchObject({ mode: 'docked', source: 'computer' });
-      expect(pane!.scopeState!.details.isOpen).toBe(true);
+      expect(ingress.pane!.scopeState!.details.isOpen).toBe(true);
       stage = 'docked semantic Browser source handoff';
       await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.source.select', source: 'browser' }); });
-      expect(pane!.scopeState!.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
-      await act(async () => { pane!.closeDetails(); });
+      expect(ingress.pane!.scopeState!.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
+      await act(async () => { ingress.pane!.closeDetails(); });
       stage = 'docked transcript Watch source handoff';
-      expect(openFromWatch).toBeTypeOf('function');
-      await act(async () => { openFromWatch!(); });
+      expect(ingress.openFromWatch).toBeTypeOf('function');
+      await act(async () => { ingress.openFromWatch!(); });
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'docked', source: 'computer' }));
-      expect(pane!.scopeState!.details.isOpen).toBe(true);
+      expect(ingress.pane!.scopeState!.details.isOpen).toBe(true);
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       stage = 'Ask policy';
       await home.requireUiApproval(serverId, 'session.presentation.apply');

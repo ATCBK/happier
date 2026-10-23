@@ -92,7 +92,10 @@ export function SessionViewerControllerProvider(
     });
     if (next.result.status === 'applied') {
       setState(next.state);
-      if (!phone && intent.kind === 'viewer.dock' && next.state.source)
+      if (!phone && next.state.mode === 'docked' && next.state.source && (
+        intent.kind === 'viewer.dock' || intent.kind === 'viewer.open' ||
+        intent.kind === 'viewer.source.select' || intent.kind === 'viewer.restore'
+      ))
         openDocked(next.state.source);
       // A phone's dock is Chat's reading flow: there is no pane to release.
       if (!phone && intent.kind === 'viewer.float' && next.state.source)
