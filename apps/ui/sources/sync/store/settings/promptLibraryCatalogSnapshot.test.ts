@@ -1,11 +1,28 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue, getPromptLibraryCatalogSnapshot,
-    publishPromptLibrarySkillRulesDraft, resetPromptLibraryCatalogSnapshotsForTests } from './promptLibraryCatalogSnapshot';
+    publishPromptLibrarySkillRulesDraft, resetPromptLibraryCatalogSnapshotsForTests, beginPromptLibraryCatalogRowsLoad,
+    subscribePromptLibraryCatalogSnapshots } from './promptLibraryCatalogSnapshot';
 afterEach(resetPromptLibraryCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('publishes a pending row transition once while repeated wakes await that same read', () => {
+        const record = { key: 'skill-rules' as const, value: { v: 1 as const,
+            rules: Array.from({ length: 139 }, (_, i) => ({ id: `rule-${i}`, skillId: `skill-${i}`,
+                target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 })) } };
+        applyPromptLibraryCatalogSnapshot(scope, { catalog: { ...catalog, rows: [{ record, revision: 1 }] },
+            rawSettings: {}, sourceSettingsVersion: 1 }, true);
+        beginPromptLibraryCatalogRowsLoad(scope, ['skill-rules']);
+        const pending = getPromptLibraryCatalogValue(scope, 'skill-rules');
+        let publications = 0;
+        const off = subscribePromptLibraryCatalogSnapshots(() => { publications++; });
+        try {
+            for (let i = 0; i < 10; i++) beginPromptLibraryCatalogRowsLoad(scope, ['skill-rules']);
+            expect(publications).toBe(0);
+            expect(getPromptLibraryCatalogValue(scope, 'skill-rules')).toBe(pending);
+        } finally { off(); }
+    });
     it('keeps an acknowledged row in both projections when an older read finishes after the write', () => {
         applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
         const record = { key: 'folders' as const, value: { v: 1 as const, folders: [{ id: 'folder', name: 'New' }] } };

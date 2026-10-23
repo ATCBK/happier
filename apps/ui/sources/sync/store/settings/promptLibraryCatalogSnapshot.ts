@@ -154,10 +154,14 @@ export function beginPromptLibraryCatalogRowsLoad(scope: ServerAccountScope, key
     const previous = snapshots.get(scopeKey);
     if (!previous) return;
     const values = new Map(previous.values);
+    let changed = false;
     for (const key of keys) {
         const old = values.get(key);
-        if (old) values.set(key, { ...old, status: 'loading', stale: true, reason: 'loading' });
+        if (!old || old.status === 'loading' && old.stale && old.reason === 'loading') continue;
+        values.set(key, { ...old, status: 'loading', stale: true, reason: 'loading' });
+        changed = true;
     }
+    if (!changed) return;
     snapshots.set(scopeKey, withSkillRuleDrafts({ ...previous, values }));
     for (const listener of [...listeners]) listener();
 }
