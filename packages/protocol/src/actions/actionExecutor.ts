@@ -4784,12 +4784,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ctx = { ...ctx, bypassApprovals: true };
     }
     let dispatchedPluginSessionInputLocalId: string | null = null;
+    let executionRunStartDispatched = false;
 
     try {
       if (approvalRouting.required && !isApprovalAction) {
         // A person is asked to approve only an add whose inputs this host's input owner already admits.
         if (actionId === 'widgets.item.add' && !existingAdmission && widgetTarget && deps.widgetInputs) {
-    let executionRunStartDispatched = false;
           const added = WidgetInstanceActionInputSchemasV1['widgets.item.add'].safeParse(admittedInput);
           const refusal = added.success ? await admitWidgetInstanceConfigurationV1(deps,
             { surface: widgetTarget, instanceId: added.data.instance.id }, added.data.instance, ctx) : null;
@@ -7964,12 +7964,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           let rawStartResult: unknown;
           if (ctx.agentStartWorkDepth !== undefined) dispatchOpts = { ...dispatchOpts, workDepth: ctx.agentStartWorkDepth, agentStartContext: ctx.agentStartContext, workspaceWrites: ctx.agentStartWorkspaceWrites, sessionAgentSpawnPolicyV1: ctx.sessionAgentSpawnPolicyV1 };
           try {
+            executionRunStartDispatched = true;
             rawStartResult = await deps.executionRunStart(sessionId, request, dispatchOpts);
           } catch (error) {
             const failure = normalizeActionExecutorThrownError(error);
             const details = readFailureEnvelopeDetails(readRecord(error));
             return classifyExecutionRunStartFailure(
-            executionRunStartDispatched = true;
               { ok: false, errorCode: failure.errorCode, error: failure.error, ...(details !== undefined ? { details } : {}) },
               readExecutionRunStartRunCreation(details),
             );
@@ -12015,6 +12015,22 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     };
   };
 
+  const prepareInvocation = async (
+    actionId: ActionId,
+    input: unknown,
+    context?: ActionExecutorContext,
+    hostInternal = false,
+    confirmUiDefault = false,
+  ): Promise<ActionPrepareResult> => {
+    try {
+      return await prepareInvocationCore(actionId, input, context, hostInternal, confirmUiDefault);
+    } catch (error) {
+      // Preparation never enters the Run transport; only the ready invocation can do so.
+      if (actionId !== 'execution.run.start') throw error;
+      return settlePrepareResult(actionId, { ok: false, ...normalizeActionExecutorThrownError(error) });
+    }
+  };
+
   const executeInvocation = async (
     actionId: ActionId,
     input: unknown,
@@ -12033,22 +12049,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const result = prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
     // Admission may cancel before this read-only Action's observation arm runs.
     if (actionId === 'wait' && !result.ok && result.errorCode === 'cancelled') {
-  const prepareInvocation = async (
-    actionId: ActionId,
-    input: unknown,
-    context?: ActionExecutorContext,
-    hostInternal = false,
-    confirmUiDefault = false,
-  ): Promise<ActionPrepareResult> => {
-    try {
-      return await prepareInvocationCore(actionId, input, context, hostInternal, confirmUiDefault);
-    } catch (error) {
-      // Preparation never enters the Run transport; only the ready invocation can do so.
-      if (actionId !== 'execution.run.start') throw error;
-      return settlePrepareResult(actionId, { ok: false, ...normalizeActionExecutorThrownError(error) });
-    }
-  };
-
       const request = WaitActionInputV1Schema.safeParse(input);
       if (request.success) return settleActionOutput(actionId, { ok: true, result: {
         target: request.data.target, condition: request.data.condition, disposition: 'cancelled',

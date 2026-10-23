@@ -3344,10 +3344,10 @@ export function createCliActionDeps(params: Readonly<{
               }
               return await executeScmDiffSummaryAction({
                 request: summary, machineId, credentials: params.credentials,
+                ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
                 ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
                 backendTarget: resolveScmBackendTarget(metadata), executeCanonicalAction,
                 ...(context.signal ? { signal: context.signal } : {}),
-                ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
               });
             },
           });
@@ -8517,6 +8517,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       const effectActionId = archived ? 'session.archive' : 'session.unarchive';
       return await setSessionArchivedState({ credentials: params.credentials, idOrPrefix: sessionId, archived: archived === true,
+        ...(archived && context?.actionCaller?.kind === 'workflowRun' ? { originRunId: context.actionCaller.runId } : {}),
         ...(context?.signal ? { signal: context.signal } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, effectActionId, request),
         ...(context?.externalActionExecutionAuthorization && params.externalActionMachineRequestPrivateKey
@@ -8526,7 +8527,6 @@ export function createCliActionDeps(params: Readonly<{
     },
 
     sessionStatusGet: async ({ sessionId, live, readiness, operation, credentialPurpose, credentialTeamSelection, context, signal, serverId }) => {
-        ...(archived && context?.actionCaller?.kind === 'workflowRun' ? { originRunId: context.actionCaller.runId } : {}),
       const operationSignal = signal ?? context?.signal;
       operationSignal?.throwIfAborted();
       if (!params.credentials) {
