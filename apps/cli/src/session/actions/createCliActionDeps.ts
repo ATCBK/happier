@@ -12,8 +12,6 @@ import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/re
 import { createReviewedSecondOpinionSessionCreationAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { setModelFavoriteV1 } from '@happier-dev/protocol/providers/modelFavoritesV1';
 import { updateAccountSettingsV2OnceAgainstLatest } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { inspectSessionContinuation } from '@/session/agentTransition/sessionContinuationInspection';
-import { runSessionAgentTransition } from '@/session/agentTransition/sessionAgentTransitionCoordinator';
 import { rejectUndispatchedSessionAgentTransition } from '@happier-dev/protocol/sessions/agentTransitionEffectStage';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectCurrentSessionPresentationActionResult } from '@/session/presentation/currentSessionPresentationService';
@@ -7392,8 +7390,11 @@ export function createCliActionDeps(params: Readonly<{
     },
     sessionContinuationInspect: async ({ input }) => {
       if (!params.credentials) return { status: 'answered', inspection: { type: 'unavailable', reason: 'operation_unavailable' } };
-      return { status: 'answered', inspection: await inspectSessionContinuation({ credentials: params.credentials,
-        request: { v: 1, sourceSessionId: input.sessionId, selection: input.selection } }) };
+      const invocation: Parameters<typeof import('@/session/agentTransition/sessionContinuationInspection').inspectSessionContinuation>[0] = {
+        credentials: params.credentials, request: { v: 1, sourceSessionId: input.sessionId, selection: input.selection },
+      };
+      const { inspectSessionContinuation } = await import('@/session/agentTransition/sessionContinuationInspection');
+      return { status: 'answered', inspection: await inspectSessionContinuation(invocation) };
     },
     sessionAgentTransition: async ({ request, context, sessionInputSource }) => {
       if (!params.credentials || !context.actionCaller || !context.authority) return rejectUndispatchedSessionAgentTransition('forbidden');
@@ -7440,7 +7441,8 @@ export function createCliActionDeps(params: Readonly<{
           ...inputAdmission.request.permission, requestedPermissionCeiling: ceiling,
         } } };
       }
-      return await runSessionAgentTransition({ credentials: params.credentials, request,
+      const invocation: Parameters<typeof import('@/session/agentTransition/sessionAgentTransitionCoordinator').runSessionAgentTransition>[0] = {
+        credentials: params.credentials, request,
         ...(context.signal ? { signal: context.signal } : {}),
         ...(restrictedAdmission ? { inputAdmission: restrictedAdmission } : {}),
         ...(context.callerInputConstraints ? { callerInputConstraints: context.callerInputConstraints } : {}),
@@ -7450,7 +7452,10 @@ export function createCliActionDeps(params: Readonly<{
           effectActionId: root.binding.actionId, installationId: params.externalActionMachineInstallationId!,
           privateKey: params.externalActionMachineRequestPrivateKey! } } : {}),
         ...(params.actionsSettingsProvider?.getAccountSettings ? { deps: { readAccountSettings: () => params.actionsSettingsProvider!.getAccountSettings!() ?? null } } : {}),
-        ...(params.machineAdmissionTransport ? { machineAdmissionTransport: params.machineAdmissionTransport } : {}) });
+        ...(params.machineAdmissionTransport ? { machineAdmissionTransport: params.machineAdmissionTransport } : {}),
+      };
+      const { runSessionAgentTransition } = await import('@/session/agentTransition/sessionAgentTransitionCoordinator');
+      return await runSessionAgentTransition(invocation);
     },
     sessionSendMessage: async ({
       callerInputConstraints,

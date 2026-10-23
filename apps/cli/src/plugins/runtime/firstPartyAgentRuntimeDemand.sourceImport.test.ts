@@ -9,21 +9,7 @@ import { projectPath } from '@/projectPath';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { spawnTestProcess } from '@/testkit/process/spawn';
 import { resolveCliTsxTsconfigPath } from '@/utils/spawnHappyCLI';
-
-async function writeModuleLoadObserver(observerPath: string, observationsPath: string): Promise<void> {
-  await writeFile(observationsPath, '', 'utf8');
-  // Observe the real Node loader without redirecting or substituting modules.
-  await writeFile(observerPath, [
-    'import { appendFileSync } from "node:fs";',
-    'let output;',
-    'export function initialize(data) { output = data.output; }',
-    'export async function load(url, context, nextLoad) {',
-    '  const result = await nextLoad(url, context);',
-    '  appendFileSync(output, JSON.stringify(url) + "\\n");',
-    '  return result;',
-    '}',
-  ].join('\n'), 'utf8');
-}
+import { writeModuleLoadObserver } from '@/testkit/process/moduleLoadObserver';
 
 describe('first-party Agent runtime demand', () => {
   it.each([

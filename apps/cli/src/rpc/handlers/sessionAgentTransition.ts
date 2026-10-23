@@ -4,11 +4,6 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { StoredCredentials } from '@/persistence';
-import { previewSessionAgentTransitionBrief } from '@/session/agentTransition/previewSessionAgentTransitionBrief';
-import {
-    inspectSessionContinuation,
-    inspectSessionContinuations,
-} from '@/session/agentTransition/sessionContinuationInspection';
 
 /**
  * Machine-scoped read-only continuation operations. Mutation enters through
@@ -54,6 +49,7 @@ export function registerSessionAgentTransitionRpcHandlers(
         if (!credentials) {
             return SessionContinuationInspectionV1Schema.parse(CREDENTIALS_UNAVAILABLE_INSPECTION);
         }
+        const { inspectSessionContinuation } = await import('@/session/agentTransition/sessionContinuationInspection');
         const inspection = await inspectSessionContinuation({
             credentials,
             request: parsed.data,
@@ -73,6 +69,7 @@ export function registerSessionAgentTransitionRpcHandlers(
                 inspections: parsed.data.selections.map(() => CREDENTIALS_UNAVAILABLE_INSPECTION),
             });
         }
+        const { inspectSessionContinuations } = await import('@/session/agentTransition/sessionContinuationInspection');
         return SessionContinuationInspectionBatchResultV1Schema.parse(
             await inspectSessionContinuations({ credentials, request: parsed.data }),
         );
@@ -90,6 +87,7 @@ export function registerSessionAgentTransitionRpcHandlers(
         if (!credentials) {
             return SessionAgentTransitionBriefPreviewV1Schema.parse(CREDENTIALS_UNAVAILABLE_BRIEF_PREVIEW);
         }
+        const { previewSessionAgentTransitionBrief } = await import('@/session/agentTransition/previewSessionAgentTransitionBrief');
         const preview = await previewSessionAgentTransitionBrief({
             credentials,
             request: parsed.data,
