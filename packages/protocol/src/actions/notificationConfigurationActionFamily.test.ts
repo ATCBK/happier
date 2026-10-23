@@ -9,6 +9,20 @@ import {
 } from './notificationConfigurationActionFamily.js';
 
 describe('notification signing secret Action input', () => {
+  it('admits an explicit local-notifications permission purpose without changing the default push request', () => {
+    const schema = NotificationConfigurationActionInputSchemas['notifications.push.permission.request'];
+    expect(schema.parse({})).toEqual({});
+    expect(schema.parse({ purpose: 'local_notifications' })).toEqual({ purpose: 'local_notifications' });
+    expect(schema.safeParse({ purpose: 'remote_push_override' }).success).toBe(false);
+  });
+  it('declares native sound Preview in the existing notification family with a strict receipt', () => {
+    expect(NOTIFICATION_CONFIGURATION_ACTION_IDS).toContain('notifications.sounds.preview');
+    const input = Object.entries(NotificationConfigurationActionInputSchemas).find(([id]) => id === 'notifications.sounds.preview')?.[1];
+    const output = Object.entries(NotificationConfigurationActionOutputSchemas).find(([id]) => id === 'notifications.sounds.preview')?.[1];
+    expect(input?.safeParse({}).success).toBe(true);
+    expect(input?.safeParse({ sound: 'caller-selected.wav' }).success).toBe(false);
+    expect(output?.parse({ notificationId: 'native-preview' })).toEqual({ notificationId: 'native-preview' });
+  });
   it('admits waived OS permission requests without turning the waiver into an OS grant', async () => {
     for (const actionId of ['notifications.desktop.permission.request', 'notifications.push.permission.request'] as const) {
       const result = actionId === 'notifications.desktop.permission.request' ? { status: 'notGranted' }

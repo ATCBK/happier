@@ -205,6 +205,7 @@ const ACTION_TITLE_KEYS = {
     'notifications.webhooks.signingSecret.set': 'actionPresentation.titles.notifications_webhooks_signingSecret_set',
     'notifications.webhooks.signingSecret.clear': 'actionPresentation.titles.notifications_webhooks_signingSecret_clear',
     'notifications.expoPush.update': 'actionPresentation.titles.notifications_expoPush_update',
+    'notifications.sounds.preview': 'settingsNotifications.sounds.previewTitle',
     'notifications.desktop.permission.read': 'actionPresentation.titles.notifications_desktop_permission_read',
     'notifications.desktop.permission.request': 'actionPresentation.titles.notifications_desktop_permission_request',
     'notifications.push.tokens.list': 'actionPresentation.titles.notifications_push_tokens_list',

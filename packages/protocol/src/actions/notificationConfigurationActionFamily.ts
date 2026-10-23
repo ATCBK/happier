@@ -30,12 +30,13 @@ export const NotificationConfigurationActionInputSchemas = {
   'notifications.webhooks.signingSecret.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ChannelTargetSchema, { secret: z.string().check(z.minLength(1)) }))),
   'notifications.webhooks.signingSecret.clear': ChannelTargetSchema,
   'notifications.expoPush.update': z.strictObject({ patch: ExpoPushPatchSchema }),
+  'notifications.sounds.preview': z.strictObject({}),
   'notifications.desktop.permission.read': z.strictObject({}),
   'notifications.desktop.permission.request': z.strictObject({}),
   'notifications.push.tokens.list': z.strictObject({}),
   'notifications.push.tokens.remove': z.strictObject({ tokenId: ChannelIdSchema }),
   'notifications.push.permission.read': z.strictObject({}),
-  'notifications.push.permission.request': z.strictObject({}),
+  'notifications.push.permission.request': z.strictObject({ purpose: z.optional(z.literal('local_notifications')) }),
   'notifications.push.register': z.strictObject({}),
 } as const;
 const MutationOutputSchema = lazyZodSchema(() => z.strictObject({ channelId: ChannelIdSchema }));
@@ -55,6 +56,7 @@ export const NotificationConfigurationActionOutputSchemas = {
   'notifications.webhooks.signingSecret.set': MutationOutputSchema,
   'notifications.webhooks.signingSecret.clear': MutationOutputSchema,
   'notifications.expoPush.update': MutationOutputSchema,
+  'notifications.sounds.preview': z.strictObject({ notificationId: ChannelIdSchema }),
   'notifications.desktop.permission.read': z.strictObject({ status: z.enum(['granted', 'notGranted']) }),
   'notifications.desktop.permission.request': z.strictObject({ status: z.enum(['granted', 'notGranted']) }),
   'notifications.push.tokens.list': z.strictObject({ tokens: z.array(PushTokenRegistrationDiagnosticsSchema) }),
@@ -80,6 +82,7 @@ export const NOTIFICATION_CONFIGURATION_ACTION_SPECS = NOTIFICATION_CONFIGURATIO
     'notifications.webhooks.signingSecret.set': 'Set notification webhook signing secret',
     'notifications.webhooks.signingSecret.clear': 'Clear notification webhook signing secret',
     'notifications.expoPush.update': 'Configure built-in push notifications',
+    'notifications.sounds.preview': 'Preview notification sound',
     'notifications.desktop.permission.read': 'Read desktop notification permission',
     'notifications.desktop.permission.request': 'Request desktop notification permission',
     'notifications.push.tokens.list': 'List push notification registrations',
@@ -90,16 +93,18 @@ export const NOTIFICATION_CONFIGURATION_ACTION_SPECS = NOTIFICATION_CONFIGURATIO
   }[id],
   description: id === 'notifications.expoPush.update'
     ? 'Update the existing built-in Expo push endpoint and its corresponding Account attention preferences together. Topic and preview delivery still intersect global topic and privacy rules; absent or deleted endpoints are not recreated.'
+    : id === 'notifications.sounds.preview' ? 'Send one native local preview notification using the captured Account sound preset and this device’s current sound preference. Available on native mobile clients only.'
     : id.startsWith('notifications.desktop.') ? 'Read or request this desktop’s operating-system notification permission. Automation asks first by default; the OS still owns the permission decision.'
     : id.startsWith('notifications.push.tokens.') ? 'Read or remove the addressed captured Account push registration. Native token material is resolved privately and is never an Action operand or receipt.'
     : id === 'notifications.push.register' ? 'Run the existing device-wide push reconciler for all locally credentialed Homes. Reconciled means the recovery attempt settled; unsupported, denied and unreachable registrations retain the reconciler’s existing skip behavior.'
-    : id.startsWith('notifications.push.permission.') ? 'Read or request this device’s native push permission through the existing OS access and priming flow. Automation asks first by default; the OS still owns the permission decision.'
+    : id.startsWith('notifications.push.permission.') ? 'Read or request this device’s native push permission through the existing OS access and priming flow. The local_notifications purpose requests device permission independently of remote push consent without changing that consent. Automation asks first by default; the OS still owns the permission decision.'
     : 'Configure notification webhooks through the captured Account notification catalog. Signing secret values are write-only.',
   safety: id === 'notifications.webhooks.list' || id === 'notifications.push.tokens.list' || id.startsWith('notifications.desktop.')
-    || id.startsWith('notifications.push.permission.') || id === 'notifications.push.register' ? 'safe' : 'danger',
+    || id.startsWith('notifications.push.permission.') || id === 'notifications.push.register' || id === 'notifications.sounds.preview' ? 'safe' : 'danger',
   sideEffectClass: id === 'notifications.webhooks.list' || id === 'notifications.push.tokens.list' || id === 'notifications.desktop.permission.read'
     || id === 'notifications.push.permission.read' ? 'read'
-    : id === 'notifications.desktop.permission.request' || id === 'notifications.push.permission.request' || id === 'notifications.push.register' ? 'write' : 'danger',
+    : id === 'notifications.desktop.permission.request' || id === 'notifications.push.permission.request' || id === 'notifications.push.register'
+      || id === 'notifications.sounds.preview' ? 'write' : 'danger',
   requiredAuthority: 'account_automation', executionPlacement: 'client', placements: [],
   bindings: { mcpToolName: id.replace(/[.]/g, '_').replace('signingSecret', 'signing_secret') },
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },

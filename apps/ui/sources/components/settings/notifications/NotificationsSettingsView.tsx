@@ -3,7 +3,6 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-import { sendExpoLocalNotification } from '@/activity/notifications/channels/sendExpoLocalNotification';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
@@ -11,18 +10,16 @@ import { useFeatureDetails } from '@/hooks/server/useFeatureDetails';
 import { useLocalSettings, useSettingsSelector } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
-import { sync } from '@/sync/sync';
 import { schedulePushTokenReconciliation } from '@/sync/engine/account/syncAccount';
-import { runPushNotificationPermissionPriming } from '@/activity/notifications/permission/pushNotificationPermissionPriming';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
-import { fireAndForget } from '@/utils/system/fireAndForget';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS, type LiveActivityRemoteUpdateCapabilityDiagnostics } from '@happier-dev/protocol/activity/live/remoteUpdateCapabilities';
-import { PUSH_NOTIFICATION_SOUND_IDS, resolveExpoNotificationSoundName } from '@happier-dev/protocol/push/pushNotificationActions';
 import { BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID } from '@happier-dev/protocol/account/settings/notificationChannels';
 import type { WebhookNotificationChannelRecordV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { NotificationConfigurationActionOutputSchemas,
-    type NotificationChannelConfigurationPatch } from '@happier-dev/protocol/actions/notificationConfigurationActionFamily';
+    type NotificationChannelConfigurationPatch, type NotificationConfigurationActionId } from '@happier-dev/protocol/actions/notificationConfigurationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useNotificationChannelCatalog } from '@/sync/store/useNotificationChannelCatalog';
@@ -62,22 +59,28 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     const scope = useAccountSettingsScope();
     const channelCatalog = useNotificationChannelCatalog(scope);
     const execution = useMountedActionExecution(scope);
-    const { execute: executeAction, ready: actionReady, approval } = execution;
+    const { execute: executeAction, ready: actionReady, approval, isCurrent } = execution;
     const writeSetting = useDeclaredSettingsWrite(execution);
-    const executeMutation = React.useCallback<ExecuteNotificationConfigurationMutation>(async mutation => {
+    const executeNotificationAction = React.useCallback(async (actionId: NotificationConfigurationActionId, input: unknown) => {
         if (!actionReady) return null;
         try {
-            const result = await executeAction(mutation.actionId, mutation.input);
+            const result = await executeAction(actionId, input);
+            if (!isCurrent()) return null;
             if (!result.ok) {
-                if (result.errorCode === 'action_account_scope_changed') return null;
+                if (result.errorCode === 'action_account_scope_changed' || isActionApprovalDeclinedErrorCode(result.errorCode)) return null;
+                if (presentActionTurnedOffNoticeIfOff(result, actionId)) return null;
                 throw new Error(result.error);
             }
-            return NotificationConfigurationActionOutputSchemas[mutation.actionId].parse(result.result);
+            return result.result;
         } catch (error) {
-            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+            if (isCurrent()) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
             return null;
         }
-    }, [actionReady, executeAction]);
+    }, [actionReady, executeAction, isCurrent]);
+    const executeMutation = React.useCallback<ExecuteNotificationConfigurationMutation>(async mutation => {
+        const result = await executeNotificationAction(mutation.actionId, mutation.input);
+        return result === null ? null : NotificationConfigurationActionOutputSchemas[mutation.actionId].parse(result);
+    }, [executeNotificationAction]);
     const activeServer = useActiveServerSnapshot();
     useServerProfilesGeneration();
     // The canonical Home naming owner: the published or user-given name, else "this Home" in a sentence
@@ -134,12 +137,8 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
         // Enabling push here is the user's demonstrated intent, so it is the right moment to ask
         // the OS — framed in-app first. Registration itself never prompts, so without this the
         // setting could be on while the OS permission was never requested.
-        void runPushNotificationPermissionPriming({
-            pushEnabled: true,
-            trigger: 'user_action',
-            onGranted: () => sync.onPushPermissionGranted(),
-        });
-    }, [updateBuiltin]);
+        await executeNotificationAction('notifications.push.permission.request', {});
+    }, [updateBuiltin, executeNotificationAction]);
 
     const setExpoPushEventEnabled = React.useCallback(async (event: NotificationTypeEventId, enabled: boolean) => {
         if (event === 'follow_update') { await writeSetting(NOTIFICATIONS_SETTINGS.settings.following, enabled); return; }
@@ -164,20 +163,8 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     }, [writeSetting]);
 
     const previewSound = React.useCallback(() => {
-        const sound = (
-            localSettings.attentionDeviceOverridesV1.sounds.enabled === false
-            || attentionPolicy.sounds.defaultSoundId === PUSH_NOTIFICATION_SOUND_IDS.none
-        )
-            ? null
-            : resolveExpoNotificationSoundName(attentionPolicy.sounds.defaultSoundId);
-        fireAndForget(Promise.resolve(sendExpoLocalNotification({
-            title: t('settingsNotifications.sounds.previewNotificationTitle'),
-            body: t('settingsNotifications.sounds.previewNotificationBody'),
-            sound,
-        })), {
-            tag: 'NotificationsSettingsView.previewSound',
-        });
-    }, [attentionPolicy.sounds.defaultSoundId, localSettings.attentionDeviceOverridesV1.sounds.enabled]);
+        void executeNotificationAction('notifications.sounds.preview', {});
+    }, [executeNotificationAction]);
 
     const showIosActivitySurfaceSections = settingRendersOnHost(NOTIFICATIONS_SETTINGS.settings.liveActivitiesEnabled);
     const showSharedDesktopActivitySurfaceSettings = !showIosActivitySurfaceSections

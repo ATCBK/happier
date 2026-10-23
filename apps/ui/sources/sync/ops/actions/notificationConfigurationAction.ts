@@ -15,6 +15,12 @@ import { requireOneShotAccountSettingsMutationApplied, syncSettings } from '@/sy
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { randomUUID } from '@/platform/randomUUID';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import { Platform } from 'react-native';
+import { isDesktopHost } from '@/utils/platform/desktopHost';
+import { sendExpoLocalNotification } from '@/activity/notifications/channels/sendExpoLocalNotification';
+import { storage } from '@/sync/domains/state/storage';
+import { t } from '@/text';
+import { PUSH_NOTIFICATION_SOUND_IDS, resolveExpoNotificationSoundName } from '@happier-dev/protocol/push/pushNotificationActions';
 
 function patchChannel(channel: NotificationChannelRecordV1, patch: NotificationChannelConfigurationPatch): NotificationChannelRecordV1 {
     const topics = { ...channel.topics };
@@ -85,7 +91,6 @@ export function createNotificationConfigurationAction(account: LazyActionAccount
         }
         if (actionId === 'notifications.desktop.permission.read' || actionId === 'notifications.desktop.permission.request') {
             NotificationConfigurationActionInputSchemas[actionId].parse(input);
-            const { isDesktopHost } = await import('@/utils/platform/desktopHost');
             if (!isDesktopHost()) return { ok: false, errorCode: 'desktop_host_required', error: 'desktop_host_required' };
             const { isPermissionGranted, requestPermission } = await import('@/activity/notifications/channels/tauriNotificationPlugin');
             if (actionId === 'notifications.desktop.permission.request') await requestPermission();
@@ -95,13 +100,34 @@ export function createNotificationConfigurationAction(account: LazyActionAccount
         if (!account) return { ok: false, errorCode: 'action_account_scope_unavailable', error: 'action_account_scope_unavailable' };
         account.assertCurrent();
         if (actionId === 'notifications.push.permission.request') {
-            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const { purpose } = NotificationConfigurationActionInputSchemas[actionId].parse(input);
             const { isExpoPushNotificationChannelEnabled } = await import('@happier-dev/protocol/account/settings/accountSettings');
-            const pushEnabled = isExpoPushNotificationChannelEnabled(await account.readSettings());
+            const pushEnabled = purpose === 'local_notifications' || isExpoPushNotificationChannelEnabled(await account.readSettings());
             account.assertCurrent();
             context.signal?.throwIfAborted();
             const { runPushNotificationPermissionPriming } = await import('@/activity/notifications/permission/pushNotificationPermissionPriming');
-            return runPushNotificationPermissionPriming({ pushEnabled, trigger: 'user_action' });
+            return runPushNotificationPermissionPriming({ pushEnabled, trigger: 'user_action', onGranted: async () => {
+                const { sync } = await import('@/sync/sync');
+                sync.onPushPermissionGranted();
+            } });
+        }
+        if (actionId === 'notifications.sounds.preview') {
+            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            if (Platform.OS === 'web' || isDesktopHost()) return {
+                ok: false, errorCode: 'native_notification_preview_unsupported', error: 'native_notification_preview_unsupported',
+            };
+            const settings = await account.readSettings();
+            account.assertCurrent();
+            context.signal?.throwIfAborted();
+            const soundId = settings.attentionDeliveryPolicyV1.sounds.defaultSoundId;
+            const sound = storage.getState().localSettings.attentionDeviceOverridesV1.sounds.enabled === false
+                || soundId === PUSH_NOTIFICATION_SOUND_IDS.none ? null : resolveExpoNotificationSoundName(soundId);
+            const notificationId = await sendExpoLocalNotification({
+                title: t('settingsNotifications.sounds.previewNotificationTitle'),
+                body: t('settingsNotifications.sounds.previewNotificationBody'),
+                sound,
+            });
+            return { notificationId };
         }
         if (actionId === 'notifications.push.register') {
             NotificationConfigurationActionInputSchemas[actionId].parse(input);

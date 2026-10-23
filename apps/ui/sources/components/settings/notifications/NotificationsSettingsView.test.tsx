@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
     DEFAULT_ATTENTION_DELIVERY_POLICY_V1,
@@ -38,6 +38,8 @@ const modalAlertMock = vi.fn();
 const routerPushMock = vi.fn();
 const translateMock = vi.fn((key: string, _params?: Record<string, unknown>) => key);
 const scheduleExpoNotificationMock = vi.hoisted(() => vi.fn());
+const getPushPermissionsMock = vi.hoisted(() => vi.fn());
+const requestPushPermissionsMock = vi.hoisted(() => vi.fn());
 const tauriIsPermissionGrantedMock = vi.hoisted(() => vi.fn(async () => true));
 const tauriRequestPermissionMock = vi.hoisted(() => vi.fn(async () => 'granted'));
 const enabledLegacyNotificationTopics = { ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1 };
@@ -255,6 +257,8 @@ vi.mock('@/utils/platform/desktopHost', async importOriginal => ({
 vi.mock('expo-notifications', async importOriginal => ({
     ...(await importOriginal<Record<string, unknown>>()),
     scheduleNotificationAsync: scheduleExpoNotificationMock,
+    getPermissionsAsync: getPushPermissionsMock,
+    requestPermissionsAsync: requestPushPermissionsMock,
 }));
 
 vi.mock('@/activity/notifications/channels/tauriNotificationPlugin', () => ({
@@ -277,8 +281,12 @@ async function selectFromMenu(screen: { findAll: (predicate: (node: any) => bool
 }
 
 
-let storage: typeof import('@/sync/domains/state/storage').storage;
-let disposeActionBridge: (() => void) | undefined;
+// Load the real runtime graph outside behavior-hook deadlines, as the adjacent catalog suite does.
+const storage = (await import('@/sync/domains/state/storage')).storage;
+await loadSyncSingletonForTests();
+const disposeActionBridge = (await loadNotificationsSettingsActionExecutorForTests()).dispose;
+await import('@/components/onboarding/personalize/PersonalizeStepBody');
+await import('@/components/onboarding/personalize/usePersonalizeFlow');
 let fixture: Awaited<ReturnType<typeof restoreNotificationsSettingsCatalog>> | undefined;
 let rawBeforeControl: Readonly<Record<string, unknown>> = {};
 let settingsWritesBeforeControl: readonly unknown[] = [];
@@ -286,13 +294,17 @@ let localBeforeControl: ReturnType<typeof storage.getState>['localSettings'];
 let disposeScreen: (() => Promise<void>) | undefined;
 let declaredSettingActionsDisabled = false;
 let declaredSettingActionsApprovalRequired = false;
+let disabledNotificationAction: string | undefined;
 const defaultLocalSettings = structuredClone(localSettingsState);
-beforeAll(async () => {
-    storage = (await import('@/sync/domains/state/storage')).storage;
-    await loadSyncSingletonForTests();
-    disposeActionBridge = (await loadNotificationsSettingsActionExecutorForTests()).dispose;
-});
-afterAll(() => { disposeActionBridge?.(); });
+function disableRemotePush() {
+    settingsState.notificationChannelsV1 = settingsState.notificationChannelsV1.map(channel => ({ ...channel, enabled: false }));
+    settingsState.attentionDeliveryPolicyV1 = {
+        ...DEFAULT_ATTENTION_DELIVERY_POLICY_V1,
+        channels: { ...DEFAULT_ATTENTION_DELIVERY_POLICY_V1.channels,
+            expo_push: { ...DEFAULT_ATTENTION_DELIVERY_POLICY_V1.channels.expo_push, enabled: false } },
+    };
+}
+afterAll(() => { disposeActionBridge(); });
 afterEach(async () => {
     await disposeScreen?.();
     disposeScreen = undefined;
@@ -302,7 +314,7 @@ afterEach(async () => {
     storage.getState().clearProfileScope();
 });
 let fixtureHomeName: string | undefined = 'Studio Home';
-async function openNotificationsScreen() {
+async function openNotificationsScreen(entry: 'settings' | 'personalize' = 'settings', automaticPriming = false) {
     const source = prepareLegacyNotificationChannelCatalogV1({
         accountId: 'notification-adjacent', raw: settingsState, settingsSecretsReadKeys: [],
     });
@@ -313,6 +325,8 @@ async function openNotificationsScreen() {
             v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
         } } : declaredSettingActionsApprovalRequired ? { actionsSettingsV1: {
             v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } },
+        } } : disabledNotificationAction ? { actionsSettingsV1: {
+            v: 1, actions: { [disabledNotificationAction]: { disabledSurfaces: ['ui'] } },
         } } : {}) }, localSettings: localSettingsState,
         catalog: { status: 'present', record: source.record },
         features: createRootLayoutFeaturesResponse({
@@ -321,7 +335,22 @@ async function openNotificationsScreen() {
         }),
     });
     const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
-    const screen = await renderSettingsView(<NotificationsSettingsView />);
+    let content = <NotificationsSettingsView />;
+    if (entry === 'personalize') {
+        const { PersonalizeStepBody } = await import('@/components/onboarding/personalize/PersonalizeStepBody');
+        const { usePersonalizeFlow } = await import('@/components/onboarding/personalize/usePersonalizeFlow');
+        function PersonalizeNotifications() {
+            const flow = usePersonalizeFlow({ initialPage: 'notifications', onExit: () => {} });
+            return <PersonalizeStepBody flow={flow} phone={false} testID="personalize-notifications" />;
+        }
+        content = <PersonalizeNotifications />;
+    }
+    if (automaticPriming) {
+        const { PushNotificationPermissionPrimingRuntime } = await import('@/activity/notifications/permission/PushNotificationPermissionPrimingRuntime');
+        storage.getState().applyReady();
+        content = <><PushNotificationPermissionPrimingRuntime />{content}</>;
+    }
+    const screen = await renderSettingsView(content);
     disposeScreen = screen.unmount;
     const { refreshNotificationChannelCatalog } = await import('@/sync/engine/settings/notificationChannelCatalogEngine');
     await act(async () => { await refreshNotificationChannelCatalog(fixture!.scope); });
@@ -335,6 +364,7 @@ describe('NotificationsSettingsView', () => {
     beforeEach(() => {
         declaredSettingActionsDisabled = false;
         declaredSettingActionsApprovalRequired = false;
+        disabledNotificationAction = undefined;
         clearActiveUnsavedChangesGuard();
         Object.assign(localSettingsState, structuredClone(defaultLocalSettings));
         settingsState.experiments = false;
@@ -351,6 +381,10 @@ describe('NotificationsSettingsView', () => {
         translateMock.mockClear();
         scheduleExpoNotificationMock.mockReset();
         scheduleExpoNotificationMock.mockResolvedValue('preview-notification-id');
+        getPushPermissionsMock.mockReset();
+        getPushPermissionsMock.mockResolvedValue({ status: 'undetermined', granted: false, canAskAgain: true });
+        requestPushPermissionsMock.mockReset();
+        requestPushPermissionsMock.mockResolvedValue({ status: 'granted', granted: true, canAskAgain: true });
         tauriIsPermissionGrantedMock.mockReset();
         tauriRequestPermissionMock.mockReset();
         tauriIsPermissionGrantedMock.mockResolvedValue(true);
@@ -1189,6 +1223,97 @@ describe('NotificationsSettingsView', () => {
             body: 'settingsNotifications.sounds.previewNotificationBody',
             sound: 'happier_soft.wav',
         }), trigger: null })); });
+    });
+
+    it('refuses the exact permission operation after allowing the Enable channel mutation', async () => {
+        disabledNotificationAction = 'notifications.push.permission.request';
+        disableRemotePush();
+        modalConfirmMock.mockResolvedValue(true);
+        const screen = await openNotificationsScreen('settings', true);
+        await act(async () => {
+            await requireRow(screen, 'settings-notifications-push-enabled').props.rightElement.props.onValueChange(true);
+        });
+        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'actionConfirmations.turnedOffTitle', 'actionConfirmations.turnedOffMessage', expect.any(Array),
+        ));
+        expect(fixture!.catalogWrites).toHaveLength(1);
+        expect(requestPushPermissionsMock).not.toHaveBeenCalled();
+        expect(modalConfirmMock).not.toHaveBeenCalled();
+        await act(async () => {
+            await requireRow(screen, 'settings-notifications-push-enabled').props.rightElement.props.onValueChange(false);
+        });
+        expect(fixture!.catalogWrites).toHaveLength(2);
+        expect(fixture!.readRecord().channels[0]?.enabled).toBe(false);
+    });
+
+    it('requests native permission from Enable through the admitted permission owner', async () => {
+        disableRemotePush();
+        modalConfirmMock.mockResolvedValue(true);
+        const screen = await openNotificationsScreen();
+        await act(async () => {
+            await requireRow(screen, 'settings-notifications-push-enabled').props.rightElement.props.onValueChange(true);
+        });
+        await vi.waitFor(() => expect(requestPushPermissionsMock).toHaveBeenCalledOnce());
+        expect(fixture!.catalogWrites).toHaveLength(1);
+    });
+
+    it('refuses the exact permission operation from onboarding Allow', async () => {
+        disabledNotificationAction = 'notifications.push.permission.request';
+        disableRemotePush();
+        modalConfirmMock.mockResolvedValue(true);
+        const screen = await openNotificationsScreen('personalize');
+        await vi.waitFor(() => expect(screen.findByTestId('personalize-notifications-allow')).toBeTruthy());
+        await act(async () => { screen.pressRow('personalize-notifications-allow'); });
+        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'actionConfirmations.turnedOffTitle', 'actionConfirmations.turnedOffMessage', expect.any(Array),
+        ));
+        expect(requestPushPermissionsMock).not.toHaveBeenCalled();
+        expect(modalConfirmMock).not.toHaveBeenCalled();
+        expect(screen.findByTestId('personalize-notifications-allow')).toBeTruthy();
+    });
+
+    it('requests local native permission from onboarding Allow while remote push stays disabled', async () => {
+        disableRemotePush();
+        modalConfirmMock.mockResolvedValue(true);
+        const screen = await openNotificationsScreen('personalize');
+        const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+        const execute = createFrontDoorActionExecute();
+        expect(await execute('notifications.push.permission.request', {}, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId: fixture!.scope.serverId, expectedAccountId: fixture!.scope.accountId,
+        })).toEqual({ ok: true, result: { decision: 'skip_push_disabled', granted: false } });
+        expect(requestPushPermissionsMock).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(screen.findByTestId('personalize-notifications-allow')).toBeTruthy());
+        await act(async () => { screen.pressRow('personalize-notifications-allow'); });
+        await vi.waitFor(() => expect(requestPushPermissionsMock).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(screen.findByTestId('personalize-notifications-allow')).toBeNull());
+        expect(fixture!.readRaw()).toEqual(rawBeforeControl);
+        expect(fixture!.catalogWrites).toEqual([]);
+    });
+
+    it('refuses native sound Preview while the neighboring sound preference remains editable', async () => {
+        disabledNotificationAction = 'notifications.sounds.preview';
+        const screen = await openNotificationsScreen();
+        await act(async () => { requireRow(screen, 'settings-notifications-sounds-preview').props.onPress(); });
+        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'actionConfirmations.turnedOffTitle', 'actionConfirmations.turnedOffMessage', expect.any(Array),
+        ));
+        expect(scheduleExpoNotificationMock).not.toHaveBeenCalled();
+        await act(async () => {
+            requireRow(screen, 'settings-notifications-sounds-device-enabled').props.rightElement.props.onValueChange(false);
+        });
+        expect(storage.getState().localSettings.attentionDeviceOverridesV1.sounds.enabled).toBe(false);
+    });
+
+    it('previews without sound when the device sound preference is disabled', async () => {
+        localSettingsState.attentionDeviceOverridesV1 = {
+            ...DEFAULT_ATTENTION_DEVICE_OVERRIDES_V1,
+            sounds: { ...DEFAULT_ATTENTION_DEVICE_OVERRIDES_V1.sounds, enabled: false },
+        };
+        const screen = await openNotificationsScreen();
+        await act(async () => { requireRow(screen, 'settings-notifications-sounds-preview').props.onPress(); });
+        await vi.waitFor(() => expect(scheduleExpoNotificationMock).toHaveBeenCalledOnce());
+        expect(scheduleExpoNotificationMock.mock.calls[0]?.[0].content).not.toHaveProperty('sound');
     });
 
 
