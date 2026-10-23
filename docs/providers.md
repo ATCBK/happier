@@ -746,6 +746,21 @@ Home, Account, initiator, target, consumer and application, while the target
 daemon admits the current private catalog and purpose bindings. Unsupported
 negotiation or hub failure cannot fall back to local execution. These are
 development-source contracts; composed live validation remains pending.
+The requester may execute its Session on another Account's currently granted
+Machine. Both source arms read that initiator's endpoint and presence under its
+actual Machine custodian while retaining the requester as the signed Account;
+the personal hub must still belong to the requester. Exact Session/AccessKey
+admission (or Machine Use admission for a sessionless Run) remains current at
+open, refresh and request admission, including after presence discovery.
+In 0.3 development, personal opens and refreshes sign inside that final
+authorizing transaction; request admission also finishes there. The requester
+Account's existing publication fence orders this result against Machine-grant
+withdrawal: a signature may be delivered after withdrawal if it was already
+created while admitted, but signing cannot follow completed withdrawal.
+Both personal and Team opens apply one shared topology rule to the resolved
+Machines and endpoints. Coinciding identities return `resource_unavailable`
+before signing (and before Team model projection); strict signing schemas remain
+unchanged.
 
 The consumer's published loopback base path comes from the admitted hub runtime
 endpoint, through the same signed application's private metadata operation. It
@@ -921,6 +936,10 @@ Resource access has two intentionally different privacy contracts:
   can configure that Machine directly or choose a personal Machine Pool. For a genuinely new
   Pool-backed open, the source-owning daemons return only current eligibility status, the Home
   applies the canonical Pool selector once, and the ordinary exact-Machine broker path continues.
+  In 0.3 development, same-host recipients use distinct daemon Machine and endpoint
+  identities. If the resolved target (including a Pool-selected target) coincides with
+  the initiator Machine or endpoint, open returns `resource_unavailable` before model
+  projection or signing.
   An external API key's retained operation must stay on its selected exact Machine. Pool tier
   reordering, disabling and removal affect future opens only. Lost presence, unavailable source
   readiness or a failed RPC is not proof of retirement and must not trigger reselection.
