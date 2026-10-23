@@ -652,7 +652,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             parentSessionId: f.destination.id, intent: 'voice_agent' as const, runtimeState: 'active_turn' as const };
         const policy: FollowPolicyV1 = { preset: 'custom', events: {
             update_posted: { delivery: 'quiet', voice: true }, goal_changed: { delivery: 'quiet', voice: false },
-            message: { delivery: 'off', voice: true },
+            message: { delivery: 'off', voice: false },
         } };
         expect(await setAccountSessionFollow({ accountId: f.account.id, sessionId: f.source.id,
             authentication: f.authentication, preferences: { policy } })).toMatchObject({ ok: true });
@@ -1122,6 +1122,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         // primary. Its 'wake' probe is only for no-original context-only input.
         const prepared = await original.prepare('natural', 16384, true, 'admitted');
         expect(prepared?.representedFollowLocalInputIds).toEqual(expect.arrayContaining(rows.map(row => row.localId)));
+        expect(prepared?.updates).toEqual(expect.arrayContaining([expect.objectContaining({
+            edge: { sourceSessionId: f.source.id, destinationSessionId: f.destination.id },
+            recentMessages: expect.arrayContaining([expect.objectContaining({ seq: messageSeq, text: finalText })]),
+        })]));
         const prompt = renderSessionInputContextPromptV1({ transformedUserText: '',
             sessionFollowUpdates: prepared!.updates, workerUpdates: prepared!.workerUpdates });
         expect(prompt).toContain(finalText);
@@ -1324,7 +1328,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect(await original.prepare('natural')).toBeNull();
     });
 
-    it('withdraws an overlapping preparation if a covered route changes before native dispatch', async () => {
+    it('retains an overlapping preparation while a route survives and withdraws it after the last route is removed', async () => {
         const f = await fixture();
         await f.follow();
         const original = await f.originals();
@@ -1334,11 +1338,16 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         await db.sessionFollowEdge.delete({ where: { destinationSessionId_sourceSessionId_relation: {
             destinationSessionId: f.destination.id, sourceSessionId: f.source.id, relation: 'follower',
         } } });
+        expect(await prepared!.recheckAdmission(new AbortController().signal)).toBe(true);
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
+            .toMatchObject({ deliveredTranscriptSeq: 1 });
+        await db.sessionFollowEdge.delete({ where: { destinationSessionId_sourceSessionId_relation: {
+            destinationSessionId: f.destination.id, sourceSessionId: f.source.id, relation: 'manager',
+        } } });
         expect(await prepared!.recheckAdmission(new AbortController().signal)).toBe(false);
         expect(f.acceptedPrompts).toEqual([]);
         expect(f.acknowledgements).toEqual([]);
-        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
-            .toMatchObject({ deliveredTranscriptSeq: 1 });
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toBeNull();
     });
 
     it.each([
