@@ -24,7 +24,7 @@ export function DiscussionWorkflowResult(props: WorkflowRunAddress & Readonly<{ 
     </View>;
 }
 
-/** The quiet Open run action every Workflow-attributed message carries, its one-line outcome included. */
+/** The quiet Open run action every message a Workflow published carries, its one-line outcome included. */
 export function DiscussionWorkflowRunOpen(props: WorkflowRunAddress) {
     const router = useRouter();
     const { runId, serverId } = props;

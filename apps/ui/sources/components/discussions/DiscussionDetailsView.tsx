@@ -1626,7 +1626,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                     message.content ? textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel).trim() : '',
                     ].filter(Boolean).join(' · ')}
                 </Text>
-                {workflow ? <DiscussionWorkflowRunOpen messageId={message.id} runId={workflow.runId} serverId={props.serverId} /> : null}
+                {workflow && message.producerV1?.kind === 'workflow' ? <DiscussionWorkflowRunOpen messageId={message.id} runId={workflow.runId} serverId={props.serverId} /> : null}
             </View> : <>
             {props.repeatsPassage ? null : passage || message.replyTarget?.kind === 'doc_passage'
                         ? <ArtifactPassageQuote testID={`discussion-reply-quote-${message.id}`} passage={passage} />
@@ -1651,7 +1651,9 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                         : message.producerV1 === null && message.authorAccountId ? { label: speaker, mention: { accountId: message.authorAccountId } } : null} />
                 : <DiscussionMessageContent message={message} serverId={props.serverId}
                     resolveAccountLabel={props.resolveAccountLabel} resolveSessionLabel={props.resolveSessionLabel} textStyle={styles.messageText} />}
-            {workflow ? <DiscussionWorkflowResult messageId={message.id} runId={workflow.runId} serverId={props.serverId}
+            {/* Open run belongs to the Run: its fold and its own messages carry it. A Session's answer in a
+                round is that Session's words and does not repeat it. */}
+            {workflow && message.producerV1?.kind === 'workflow' ? <DiscussionWorkflowResult messageId={message.id} runId={workflow.runId} serverId={props.serverId}
                 detail={readDiscussionWorkflowResultDetail(message.content)} /> : null}
             {/* One quiet line under an answer (lab T2-A): who asked, and that it read the conversation only up to
                 that question (C3 cutoff). Explicit and final-return replies share it. */}
