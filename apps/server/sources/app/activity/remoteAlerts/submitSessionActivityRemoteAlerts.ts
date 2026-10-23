@@ -94,7 +94,7 @@ export type SubmitSessionActivityRemoteAlertsParams = Readonly<{
     event: SessionPersonalEventKindV1;
     /** Required for sequence-backed events: the committed sequence and its canonical owner. */
     committedMessage?: ActivityRemoteAlertCommittedMessageV2;
-    /** Required for committed terminal turn events. */
+    /** Captured source turn for a committed request or terminal turn event. */
     committedTurnId?: string;
     /**
      * The Agent-allocated request id of a committed permission/user-action

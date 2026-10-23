@@ -30,6 +30,7 @@ vi.mock("expo-server-sdk", () => {
 });
 
 const { resolveSessionActivityRemoteAlertDisposition, submitSessionActivityRemoteAlerts } = await import("./submitSessionActivityRemoteAlerts");
+const { updateSessionAgentState } = await import("@/app/session/sessionWriteService");
 
 const DEVICE_POLICY: DeviceRemoteAlertPolicyV1 = {
     v: 1,
@@ -195,6 +196,32 @@ describe("Home remote alert submission (SQLite)", () => {
         expect(submittedAlertPayloads()).toEqual([expect.objectContaining({ to: token,
             data: expect.objectContaining({ event: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: 1 } }),
         })]);
+    });
+
+    it('retains the committed request turn from the Agent-state writer through the Home push transport', async () => {
+        const { owner, follower, session } = await fixture();
+        // The real occurrence writer admits Account encryption currentness.
+        await db.account.update({ where: { id: owner.id }, data: { encryptionMode: 'plain' } });
+        await db.session.update({ where: { id: session.id }, data: { encryptionMode: 'plain' } });
+        const token = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
+        let expectedVersion = session.agentStateVersion;
+        for (const turnId of ['turn-a', 'turn-b']) {
+            sendPushNotificationsAsyncSpy.mockClear();
+            await db.sessionTurn.create({ data: { sessionId: session.id, turnId, status: 'in_progress', startedAt: 1, updatedAt: 1 } });
+            await db.session.update({ where: { id: session.id }, data: { latestTurnId: turnId, latestTurnStatus: 'in_progress' } });
+            const occurredAt = Date.now();
+            expect(await updateSessionAgentState({ actorUserId: owner.id, sessionId: session.id,
+                expectedVersion, agentStateCiphertext: '{}', pendingPermissionRequestCount: 1,
+                pendingRequestNewestCreatedAt: occurredAt,
+                userActionRequiredOccurrences: [{ requestId: 'reused-request', sourceTurnId: turnId,
+                    requestKind: 'permission', occurredAt }],
+            })).toMatchObject({ ok: true, version: expectedVersion + 1 });
+            expectedVersion += 1;
+            await vi.waitFor(() => expect(submittedAlertPayloads()).toHaveLength(1));
+            expect(submittedAlertPayloads()).toEqual([expect.objectContaining({ to: token,
+                data: expect.objectContaining({ event: { type: 'permission_request', requestId: 'reused-request', turnId } }),
+            })]);
+        }
     });
 
     it('keeps a manager-handled one-shot quiet even when there is no persistent policy', async () => {

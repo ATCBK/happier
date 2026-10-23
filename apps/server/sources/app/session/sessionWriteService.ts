@@ -2430,6 +2430,7 @@ async function publishCommittedSessionRequestOccurrencesInTx(tx: Tx, input: Read
         });
         afterTx(tx, () => scheduleSessionActivityRemoteAlerts({
             sessionId: input.sessionId, event, committedRequestId: occurrence.requestId,
+            committedTurnId: occurrence.sourceTurnId,
             followEvent: occurrence.followEvent, onceOccurrence, acceptedOnceAccountIds,
             ...(input.runtimeComposition ? { runtimeComposition: input.runtimeComposition } : {}),
         }));
