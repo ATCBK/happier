@@ -33,7 +33,7 @@ test('synced mirror runtime build dispatches requested components without upload
   const transfers = [];
   await assert.rejects(buildRuntimeArtifactComponentsAtPlacement({ rootDir: root, stackBaseDir,
     selection: { components: { server: true } }, target: { platform: process.platform, arch: process.arch },
-    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root }, transport: {
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '2' }, transport: {
       spawnController: () => {
         dispatched++;
         return spawn(process.execPath, ['--input-type=module', '-e', `
@@ -53,6 +53,7 @@ input.once('close', () => process.exit(0));
   assert.deepEqual(transfers, []);
   const request = JSON.parse(await readFile(requestPath, 'utf8'));
   assert.deepEqual(request.selection.components, { server: true });
+  assert.equal(request.env.HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS, '2');
   assert.equal(request.files, undefined);
   assert.equal(request.captureDir, undefined);
   assert.equal(request.requestPath, undefined);

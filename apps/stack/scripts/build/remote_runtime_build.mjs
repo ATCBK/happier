@@ -7,7 +7,7 @@ import { writeRuntimeAdmissionPhase } from '../utils/proc/service_memory.mjs';
 import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 const WORKER_ENTRY = 'apps/stack/scripts/build/remote_runtime_build.mjs';
-const BUILD_ENV_KEYS = ['HAPPIER_CLI_BUN_EXTERNALS', 'HAPPIER_SERVER_BUN_EXTERNALS', 'HAPPIER_BUILD_DB_PROVIDERS', 'HAPPY_BUILD_DB_PROVIDERS', 'HAPPIER_SERVER_REQUIRE_IROH_NATIVE', 'HAPPIER_STACK_EXPO_CLEAR_CACHE'];
+const BUILD_ENV_KEYS = ['HAPPIER_CLI_BUN_EXTERNALS', 'HAPPIER_SERVER_BUN_EXTERNALS', 'HAPPIER_BUILD_DB_PROVIDERS', 'HAPPY_BUILD_DB_PROVIDERS', 'HAPPIER_SERVER_REQUIRE_IROH_NATIVE', 'HAPPIER_STACK_EXPO_CLEAR_CACHE', 'HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS'];
 
 /** Native AUTO owns mirror synchronization, worker capability and admission. */
 export async function withAdmittedRuntimeBuildPlacement({

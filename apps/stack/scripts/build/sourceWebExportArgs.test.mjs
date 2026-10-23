@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sourceWebExportArgs } from './sourceWebExportArgs.mjs';
+import { sourceWebExportArgs, sourceWebExportDiagnosticEnv } from './sourceWebExportArgs.mjs';
+
+test('explicit export worker counts survive the remote source export boundary', () => {
+  const env = sourceWebExportDiagnosticEnv({ HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '2' });
+  const args = sourceWebExportArgs(env, '/owned/web');
+  assert.equal(args[args.indexOf('--max-workers') + 1], '2');
+  const disabled = sourceWebExportArgs(sourceWebExportDiagnosticEnv({ HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '0' }));
+  assert.equal(disabled.includes('--max-workers'), false);
+  assert.deepEqual(sourceWebExportArgs({ ...env, ...sourceWebExportDiagnosticEnv({}) }), sourceWebExportArgs({}),
+    'withdrawing a caller override clears the previously projected remote value');
+});
 
 test('diagnostic source maps participate in both export construction and reuse options', () => {
   const env = { HAPPIER_UI_EXPORT_SOURCE_MAPS: '1' };
