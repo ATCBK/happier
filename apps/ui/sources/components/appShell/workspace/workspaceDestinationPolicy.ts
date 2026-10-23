@@ -1,4 +1,6 @@
 import type { CompactAppDestination, DestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { matchWorkspaceDestinationRoute, workspaceMachinePageRouteKey } from './workspaceRoutes';
 import { pruneWorkspaceTabPairs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
 import { createWorkspaceEmptyTab, reduceWorkspaceState, type WorkspaceState } from './workspaceState';
 import { collectSplitCanvasLeaves } from '../splitCanvas/model/splitCanvasTree';
@@ -12,11 +14,21 @@ export function isWorkspaceSingletonDestination(catalog: readonly CompactAppDest
     return workspaceSingletonDestinationIds(catalog).includes(target.kind);
 }
 
+/** Keep the door in the URL, while the catalog's Machine policy owns its resource identity. */
+function navigationResourceTarget(target: DestinationRef, catalog: readonly CompactAppDestination[]): DestinationRef {
+    if (target.kind !== 'settings') return target;
+    const href = hrefForDestinationRef(catalog, target);
+    const route = href ? matchWorkspaceDestinationRoute(href) : null;
+    return route && workspaceMachinePageRouteKey(route.routeKey)
+        ? { kind: 'machines', params: { ...target.params, ...route.params } } : target;
+}
+
 /** Qualify a catalog-addressed resource once, at admission, so later Home changes cannot retarget it. */
 export function resolveWorkspaceDestinationScope(target: DestinationRef, catalog: readonly CompactAppDestination[], scope?: ServerAccountScope | null): DestinationRef {
-    const destination = catalog.find(item => item.id === target.kind);
+    const resourceTarget = navigationResourceTarget(target, catalog);
+    const destination = catalog.find(item => item.id === resourceTarget.kind);
     const policy = destination?.kind === 'builtin' ? destination.workspaceNavigationIdentity : undefined;
-    if (!policy || target.params[policy.resourceParam] === undefined || !policy.scopeParams.includes('serverId')
+    if (!policy || resourceTarget.params[policy.resourceParam] === undefined || !policy.scopeParams.includes('serverId')
         || target.params.serverId !== undefined || !scope?.serverId) return target;
     return { ...target, params: { ...target.params, serverId: scope.serverId } };
 }
@@ -24,6 +36,7 @@ export function resolveWorkspaceDestinationScope(target: DestinationRef, catalog
 /** Catalog-declared resource identity; an index has no resource or Home qualifier. */
 export function workspaceDestinationNavigationIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[], scope?: ServerAccountScope | null): string | null {
     target = resolveWorkspaceDestinationScope(target, catalog, scope);
+    target = navigationResourceTarget(target, catalog);
     const destination = catalog.find(item => item.id === target.kind);
     const policy = destination?.kind === 'builtin' ? destination.workspaceNavigationIdentity : undefined;
     if (!policy) return null;

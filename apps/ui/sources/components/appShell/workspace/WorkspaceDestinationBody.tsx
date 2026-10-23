@@ -6,7 +6,8 @@ import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShel
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 import { loadWorkspaceRouteLayout, workspaceRouteBodies } from './workspaceRouteBodies';
-import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
+import { matchWorkspaceDestinationRoute, workspaceMachinePageRouteKey, workspaceRouteFiles } from './workspaceRoutes';
+import { MachinesDoorProvider } from '@/components/machines/page/machinesDoor';
 import { workspaceSettingsLayoutKeys } from './workspaceRouteContext';
 import { WorkspaceRouteOutlet } from './WorkspaceRouteOutlet';
 
@@ -62,12 +63,17 @@ export function WorkspaceDestinationBody(props: Readonly<{
     }
     if (!Body) return <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} />;
     let content: React.ReactNode = <Body />;
-    const contextKey = match ? workspaceRouteFiles[match.routeKey] : undefined;
+    const machineKey = match ? workspaceMachinePageRouteKey(match.routeKey) : null;
+    // Keep the page below the same providers when only its door changes. The collection
+    // draws its rail only in Settings; the app shell owns the rail door's column.
+    const contextKey = match ? workspaceRouteFiles[machineKey ? `settings/${machineKey}` : match.routeKey] : undefined;
     for (const key of [...(contextKey ? workspaceSettingsLayoutKeys(contextKey) : [])].reverse()) {
         const Layout = hostedLayout(key);
         content = <WorkspaceRouteOutlet.Provider key={key} value={content}><Layout /></WorkspaceRouteOutlet.Provider>;
     }
     return <React.Suspense fallback={<DestinationBodyLoading />}>
-        {content}
+        {machineKey ? <MachinesDoorProvider door={props.pathname.startsWith('/settings/') ? 'settings' : 'rail'}>
+            {content}
+        </MachinesDoorProvider> : content}
     </React.Suspense>;
 }

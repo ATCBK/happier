@@ -6,7 +6,7 @@ import { isWorkspaceSingletonDestination, resolveWorkspaceDestinationScope, work
 import { createWorkspaceDestinationSplit } from './workspaceSplit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { matchWorkspaceDestinationRoute } from './workspaceRoutes';
+import { matchWorkspaceDestinationRoute, workspaceMachinePageRouteKey } from './workspaceRoutes';
 import { parseSessionPaneUrlState, serializeSessionPaneUrlState, SESSION_PANE_URL_PARAM_KEYS } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 export type WorkspaceOpenOptions = Readonly<{
@@ -204,8 +204,20 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             if (options.tabId && !state.tabs[options.tabId]) return false;
             if (options.groupId && !state.groups[options.groupId]) return false;
             if (options.tabId && options.groupId && !state.groups[options.groupId].tabIds.includes(options.tabId)) return false;
-            const openingGroupId = options.groupId ?? state.focusedGroupId;
+            const openingGroupId = options.groupId ?? (options.tabId
+                ? Object.values(state.groups).find(group => group.tabIds.includes(options.tabId!))?.id : undefined) ?? state.focusedGroupId;
             const mode = options.mode ?? 'preview';
+            const sourceTab = state.tabs[options.tabId ?? state.groups[openingGroupId].activeTabId];
+            const sourceHref = sourceTab?.preview ? hrefForDestinationRef(input.getCatalog(), sourceTab.target) : null;
+            const sourceRoute = sourceHref ? matchWorkspaceDestinationRoute(sourceHref) : null;
+            // Going through Settings replaces intermediate previews. Keep the Machine page itself
+            // as an ordinary unpinned tab, so returning by either door retains its draft and viewport.
+            const keepSourceMachine = !options.replace && sourceRoute?.params.id && workspaceMachinePageRouteKey(sourceRoute.routeKey)
+                && workspaceDestinationNavigationIdentity(sourceTab.target, input.getCatalog(), input.getScope?.())
+                    !== workspaceDestinationNavigationIdentity(target, input.getCatalog(), input.getScope?.());
+            const retainSourceMachine = () => {
+                if (keepSourceMachine) input.dispatch({ type: 'promoteTab', tabId: sourceTab.id });
+            };
             const admittedSingleton = singletonActions(state, target);
             const resourcePreview = mode === 'preview' && options.reuseExisting !== false
                 && workspaceDestinationNavigationIdentity(target, input.getCatalog()) !== null;
@@ -223,6 +235,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                     options.tabId ?? state.groups[openingGroupId].activeTabId) : null)
                     ?? findOpenDestination(target, state, options.reuseExisting ? undefined : options.groupId) : null;
             if (reusable && !admittedSingleton) {
+                retainSourceMachine();
                 const retained = state.tabs[reusable.tabId].target;
                 // Reuse retains pane state, but an explicitly selected Session
                 // address must qualify a legacy tab before it is projected again.
@@ -249,9 +262,10 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 input.dispatch({ type: 'activateTab', groupId: reusable.groupId, tabId: reusable.tabId });
             } else if (admittedSingleton) {
                 if (admittedSingleton.length === 0) return false;
+                retainSourceMachine();
                 for (const action of admittedSingleton) input.dispatch(action);
                 if (mode === 'newTab') input.dispatch({ type: 'promoteTab', tabId: focusedEntry().tabId });
-            } else if (options.tabId && state.tabs[options.tabId]) {
+            } else if (options.tabId && state.tabs[options.tabId] && !keepSourceMachine) {
                 const group = Object.values(state.groups).find((item) => item.tabIds.includes(options.tabId!));
                 if (!group) return false;
                 input.dispatch({ type: 'setTarget', tabId: options.tabId, target });
@@ -265,6 +279,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 if (existing) {
                     const group = Object.values(state.groups).find((item) => item.tabIds.includes(existing.id));
                     if (!group) return false;
+                    retainSourceMachine();
                     if (mode === 'newTab') input.dispatch({ type: 'promoteTab', tabId: existing.id });
                     input.dispatch({ type: 'activateTab', groupId: group.id, tabId: existing.id });
                 } else {
@@ -279,8 +294,12 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                             availableSizePx: options.availableSizePx!, minimumExistingSizePx: options.minimumFirstSizePx!,
                         });
                         if (!action) return false;
+                        retainSourceMachine();
                         input.dispatch(action);
-                    } else input.dispatch(openAction);
+                    } else {
+                        retainSourceMachine();
+                        input.dispatch(openAction);
+                    }
                 }
             }
             visit(options.replace, projectUrl, true);

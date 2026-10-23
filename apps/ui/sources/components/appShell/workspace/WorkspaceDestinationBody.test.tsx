@@ -42,6 +42,12 @@ function WorkflowBody() {
 }
 function BoardsBody() { return React.createElement('HostedBoards'); }
 function RunSettingsBody() { return React.createElement('HostedRunSettings', { params: useLocalSearchParams() }); }
+function MachineBody() {
+    const [draft, setDraft] = React.useState('');
+    const [scroll, setScroll] = React.useState(0);
+    const [mount] = React.useState(() => ({}));
+    return React.createElement('HostedMachine', { draft, setDraft, scroll, setScroll, mount, params: useLocalSearchParams() });
+}
 
 // Expo's context/module loader is the boundary. Fixture modules retain real React providers,
 // route adapters and local editor state beneath that boundary.
@@ -55,7 +61,8 @@ beforeAll(async () => {
         './(app)/settings/server/_layout.tsx': { default: CollectionLayout },
         './(app)/settings/server/index.tsx': { WorkspaceRouteBody: Editor },
         './(app)/settings/machines/_layout.tsx': { default: CollectionLayout },
-        './(app)/settings/machines/[id]/index.tsx': { WorkspaceRouteBody: Editor },
+        './(app)/settings/machines/[id]/index.tsx': { WorkspaceRouteBody: MachineBody },
+        './(app)/machines/[id]/index.tsx': { WorkspaceRouteBody: MachineBody },
         './(app)/settings/connected-services/_layout.tsx': { default: CollectionLayout },
         './(app)/settings/connected-services/account.tsx': { WorkspaceRouteBody: Editor },
         './(app)/settings/embeds/_layout.tsx': { default: CollectionLayout },
@@ -96,6 +103,19 @@ function hosted(pathname: string, params: Record<string, string> = {}) {
 }
 
 describe('workspace destination route composition', () => {
+    it('retains the Machine page, unsent composer and scroll through either door', async () => {
+        const screen = await renderScreen(hosted('/settings/machines/machine-a?serverId=home-a&tab=processes'));
+        const machine = screen.root.findByType('HostedMachine');
+        const mount = machine.props.mount;
+        await act(async () => { machine.props.setDraft('Review this machine'); machine.props.setScroll(150); });
+        await screen.update(hosted('/machines/machine-a?serverId=home-a&tab=processes&sort=memory'));
+        expect(screen.root.findByType('HostedMachine').props).toMatchObject({ mount, draft: 'Review this machine', scroll: 150,
+            params: { id: 'machine-a', tab: 'processes', sort: 'memory' } });
+        expect(screen.root.findByType('HostedMachine').props.mount).toBe(mount);
+        await screen.update(hosted('/settings/machines/machine-a?serverId=home-a&tab=processes'));
+        expect(screen.root.findByType('HostedMachine').props).toMatchObject({ draft: 'Review this machine', scroll: 150 });
+        expect(screen.root.findByType('HostedMachine').props.mount).toBe(mount);
+    });
     // A lazy body that is still loading says it once: beside a column, the column already speaks for the
     // destination ("Opening Boards"), so the page waits quietly; without a column the page says it.
     it.each([
@@ -156,7 +176,6 @@ describe('workspace destination route composition', () => {
     it.each([
         ['/settings/agents/custom', {}],
         ['/settings/server', {}],
-        ['/settings/machines/machine%201', { id: 'machine 1', serverId: 'home-a' }],
         ['/settings/connected-services/account', { accountId: 'account-a', pluginId: 'happier.agent.claude', localId: 'anthropic' }],
     ] as const)('hosts %s through its route layouts and destination params', async (pathname, params) => {
         const screen = await renderScreen(hosted(pathname, params));

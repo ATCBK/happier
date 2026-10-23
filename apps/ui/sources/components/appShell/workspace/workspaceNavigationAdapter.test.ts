@@ -103,6 +103,32 @@ function harness(
 }
 
 describe('workspace navigation adapter', () => {
+  it('retains the unpinned Machine page while the person goes through Settings to its other door', () => {
+    const h = harness([], { serverId: 'home-a', accountId: 'alice' });
+    h.adapter.openHref('/machines/machine-a?tab=processes');
+    const retainedId = h.active().id;
+    h.adapter.openHref('/settings');
+    h.adapter.openHref('/settings/machines');
+    h.adapter.openHref('/settings/machines/machine-a');
+    expect(h.active().id).toBe(retainedId);
+    expect(h.active().pinned).toBe(false);
+  });
+
+  it.each([
+    ['/settings/machines/machine-a', '/machines/machine-a?tab=processes&sort=memory'],
+    ['/machines/machine-a?tab=processes', '/settings/machines/machine-a'],
+  ])('keeps one mounted Machine destination across the two doors: %s → %s', (first, second) => {
+    const h = harness([], { serverId: 'home-a', accountId: 'alice' });
+    h.adapter.openHref(first);
+    const retainedId = h.active().id;
+    h.adapter.openHref(second);
+    expect(h.active().id).toBe(retainedId);
+    expect(hrefForDestinationRef(h.catalog, h.active().target)).toBe(`${second}${second.includes('?') ? '&' : '?'}serverId=home-a`);
+    expect(Object.values(h.state().tabs).filter(tab => tab.id !== 'A')).toHaveLength(1);
+    h.adapter.openHref('/settings/machines/machine-a?serverId=home-b');
+    expect(h.active().id).not.toBe(retainedId);
+  });
+
   it.each([
     ['/machines/machine-a', '/machines/machine-a?serverId=home-a'],
     ['/machines/machine-a?serverId=home-a', '/machines/machine-a'],

@@ -113,6 +113,12 @@ export function matchWorkspaceDestinationRoute(pathname: string) {
     return matchDestinationRoute(pathname);
 }
 
+/** The two doors address one Machine page; configuration and managed creations remain distinct. */
+export function workspaceMachinePageRouteKey(routeKey: string): string | null {
+    const key = routeKey.startsWith('settings/') ? routeKey.slice('settings/'.length) : routeKey;
+    return key === 'machines' || key === 'machines/[id]' || key === 'machines/[id]/[page]' ? key : null;
+}
+
 /** Expo search params include path params; only the remaining params belong in the URL query. */
 export function workspaceRouteHref(pathname: string, params: Readonly<Record<string, string | string[] | undefined>>): string {
     const route = matchWorkspaceDestinationRoute(pathname);
