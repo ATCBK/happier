@@ -286,12 +286,13 @@ export const THEME_COLOR_TOKEN_CLASSIFICATIONS = [
         reason: 'Raised twin of a border role: the role\'s border with the theme\'s edge ink (effect.surfaceHighlight) composited over it (theme/raisedEdge.ts).',
     } as const)),
     { path: ['edge', 'gloss'], status: 'derived', reason: 'Gloss line of a filled accent control, derived from the theme\'s lightest ink (theme/raisedEdge.ts).' },
-    ...(['finishGradient', 'primaryFinishGradient', 'secondaryFinishGradient'] as const).flatMap((gradient) => [0, 1].map((stop) => ({
+    ...(['finishGradient', 'cardFinishGradient', 'primaryFinishGradient', 'secondaryFinishGradient'] as const).flatMap((gradient) => [0, 1].map((stop) => ({
         path: ['edge', gradient, 'colors', String(stop)],
         status: 'derived',
         reason: 'Translucent soft finish overlay derived from effect.surfaceFinish by theme/raisedEdge.ts; never an opaque fill.',
     } as const))),
     { path: ['edge', 'finishGradient', 'band', 'edge'], status: 'derived', reason: 'The edge the surface finish band sits on (bottom on light, top on dark), set by theme/raisedEdge.ts.' },
+    { path: ['edge', 'cardFinishGradient', 'band', 'edge'], status: 'derived', reason: 'The edge an in-flow card\'s finish band sits on (bottom on light, top on dark), set by theme/raisedEdge.ts.' },
     ...(['rimHi', 'rimMid', 'sheen'] as const).map((leaf) => ({
         path: ['edge', leaf],
         status: 'derived',
@@ -311,8 +312,12 @@ export const THEME_COLOR_TOKEN_CLASSIFICATIONS = [
     } as const)),
     { path: ['feed', 'card', 'background'], status: 'derived', reason: 'Tool feed card surface derived from surface.elevated so private transcript chrome follows active theme profiles.' },
     { path: ['shadow', 'color'], status: 'internal', reason: 'Legacy tint helper for computed shadows, not a standalone editable color token.' },
+    { path: ['shadowCard', 'boxShadow'], status: 'internal', reason: 'In-flow card grounding recipe string, not a standalone editable color token.' },
+    { path: ['shadowCard', 'shadowColor'], status: 'internal', reason: 'Native in-flow card grounding color, not a standalone editable color token.' },
     { path: ['shadowPopoverArrowBoxShadow'], status: 'internal', reason: 'Popover arrow shadow recipe string, not a standalone editable color token.' },
     { path: ['shadowSeamCastBoxShadow'], status: 'internal', reason: 'Sideways cast from the page sheet onto the navigation plane beside it; internal chrome recipe rather than a standalone editable color token.' },
+    { path: ['shadowPaneHeaderShade'], status: 'internal', reason: 'Start colour of the scroll-linked shade under a pane header; internal chrome recipe rather than a standalone editable color token.' },
+    { path: ['shadowSeamCastBothBoxShadow'], status: 'internal', reason: 'The page sheet\'s seam cast on both edges, when the right panel stands on the canvas beside it; internal chrome recipe rather than a standalone editable color token.' },
     { path: ['glass', 'border'], status: 'internal', reason: 'Floating glass surface rim recipe (GlassPanel); V1 exposes shared border tokens rather than feature-specific chrome details.' },
     { path: ['glass', 'innerShadow'], status: 'internal', reason: 'Floating glass surface inner shadow recipe string (GlassPanel), not a standalone editable color token.' },
     { path: ['glass', 'composerInnerShadow'], status: 'internal', reason: 'Reduced-opacity inner shadow recipe for the opt-in glass composer surface only; internal chrome recipe rather than a standalone editable color token.' },

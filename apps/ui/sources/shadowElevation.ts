@@ -51,7 +51,7 @@ function token(
  *
  * | Level | Shape (CSS)       | Role                                                            |
  * |-------|-------------------|-----------------------------------------------------------------|
- * | 1     | xs: 0 1px 2px     | controls (field boxes, outline buttons, chips) and in-flow cards |
+ * | 1     | xs: 0 1px 2px     | controls (field boxes, outline buttons, chips); dark in-flow cards |
  * | 2     | sm: 0 1px 3px     | tooltips, compact menus, small floating marks                   |
  * | 3     | md: 0 4px 6px     | headers and notices that float over content, larger menus        |
  * | 4     | lg: 0 10px 15px   | popovers, dialogs, sheets                                        |
@@ -107,6 +107,17 @@ export function buildDarkShadowLevels(): ShadowLevels {
         5: token(box[5], '#000000', { width: 0, height: 6 }, 0.14, 10, 10),
         6: token('0 24px 90px rgba(0, 0, 0, 0.22), 0 8px 30px rgba(0, 0, 0, 0.12)', '#000000', { width: 0, height: 12 }, 0.26, 36, 16),
     };
+}
+
+/**
+ * The grounding under an in-flow card (grouped and page sheets, widgets, `SurfaceCard`). Light cards take
+ * W3's hair (calm surfaces R2·1, owner ruling R6-1): the level-1 shape at 2%, below a control's 5%, so a
+ * page of cards reads grounded rather than lifted. Dark cards keep their level-1 ground.
+ */
+export function buildCardShadow(dark: boolean): ShadowElevationToken {
+    return dark
+        ? buildDarkShadowLevels()[1]
+        : token('0 1px 2px rgba(0, 0, 0, 0.02)', '#000000', { width: 0, height: 1 }, 0.02, 1, 1);
 }
 
 /** Rotated popover arrow on web: keep a dedicated token (RN-web shadow + transforms are finicky). */
@@ -177,6 +188,15 @@ export function buildSeamCastShadow(dark: boolean, side: 'leading' | 'trailing' 
     return dark
         ? `${sign}6px 0 32px rgba(0, 0, 0, 0.34), ${sign}1px 0 2px rgba(0, 0, 0, 0.42)`
         : `${sign}6px 0 30px rgba(0, 0, 0, 0.055), ${sign}1px 0 2px rgba(0, 0, 0, 0.035)`;
+}
+
+/**
+ * The shade under a pane header (calm-shell `cshead.H1`): the start colour of a short vertical fade
+ * that appears as the body scrolls under the header, in place of a bottom hairline. Ink that fades to
+ * nothing; position-linked opacity is applied by the header's shade leaf.
+ */
+export function buildPaneHeaderShade(dark: boolean): string {
+    return dark ? 'rgba(0, 0, 0, 0.32)' : 'rgba(0, 0, 0, 0.045)';
 }
 
 /**

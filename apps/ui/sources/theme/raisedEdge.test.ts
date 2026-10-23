@@ -90,10 +90,11 @@ describe('raised edge colours', () => {
     it('keeps existing paint exact when finish strength is transparent and honors profile ink without clamping', () => {
         const flat = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceFinish': 'transparent' }) });
         expect(flat.colors.edge.finishGradient).toBeNull();
+        expect(flat.colors.edge.cardFinishGradient).toBeNull();
         expect(flat.colors.edge.primaryFinishGradient).toBeNull();
         expect(flat.colors.edge.secondaryFinishGradient).toBeNull();
-        const { finishGradient, primaryFinishGradient, secondaryFinishGradient, ...existingPaint } = flat.colors.edge;
-        const { finishGradient: ignoredFinish, primaryFinishGradient: ignoredPrimary, secondaryFinishGradient: ignoredSecondary, ...oldPaint } = lightTheme.colors.edge;
+        const { finishGradient, cardFinishGradient, primaryFinishGradient, secondaryFinishGradient, ...existingPaint } = flat.colors.edge;
+        const { finishGradient: ignoredFinish, cardFinishGradient: ignoredCard, primaryFinishGradient: ignoredPrimary, secondaryFinishGradient: ignoredSecondary, ...oldPaint } = lightTheme.colors.edge;
         expect(existingPaint).toEqual(oldPaint);
         const strong = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceFinish': 'rgba(122, 162, 247, 0.5)' }) });
         expect(strong.colors.edge.finishGradient?.colors[1]).toBe('rgba(122, 162, 247, 0.5)');
@@ -101,9 +102,9 @@ describe('raised edge colours', () => {
         expect(darkStrong.colors.edge.finishGradient?.colors[0]).toBe('rgba(122, 162, 247, 0.5)');
         expect(darkStrong.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0.5 * (8 / 9), 0]);
         const darkFlat = resolveThemeProfile({ mode: 'dark', profile: profile('dark', { 'effect.surfaceFinish': 'transparent' }) });
-        const { finishGradient: darkFinish, primaryFinishGradient: darkPrimary, secondaryFinishGradient: darkSecondary, ...darkExistingPaint } = darkFlat.colors.edge;
-        const { finishGradient: oldDarkFinish, primaryFinishGradient: oldDarkPrimary, secondaryFinishGradient: oldDarkSecondary, ...darkOldPaint } = darkTheme.colors.edge;
-        expect([darkFinish, darkPrimary, darkSecondary]).toEqual([null, null, null]);
+        const { finishGradient: darkFinish, cardFinishGradient: darkCardFinish, primaryFinishGradient: darkPrimary, secondaryFinishGradient: darkSecondary, ...darkExistingPaint } = darkFlat.colors.edge;
+        const { finishGradient: oldDarkFinish, cardFinishGradient: oldDarkCardFinish, primaryFinishGradient: oldDarkPrimary, secondaryFinishGradient: oldDarkSecondary, ...darkOldPaint } = darkTheme.colors.edge;
+        expect([darkFinish, darkCardFinish, darkPrimary, darkSecondary]).toEqual([null, null, null, null]);
         expect(darkExistingPaint).toEqual(darkOldPaint);
     });
 
@@ -146,12 +147,12 @@ describe('raised edge colours', () => {
         expect(floating.lightness() - card.lightness()).toBeGreaterThan(1.5);
         expect(floating.lightness() - card.lightness()).toBeLessThan(4);
     });
-    it('layers dark surfaces by small steps of light — navigation < page < card < floating — and keeps one paper on light', () => {
+    it('layers dark surfaces by small steps of light — navigation < page < card < floating — and keeps floating surfaces on the page paper on light', () => {
         const step = (color: string) => luminance(color, darkTheme.colors.background.canvas);
         expect(step(darkTheme.colors.surface.base)).toBeGreaterThan(step(darkTheme.colors.background.canvas));
         expect(step(darkTheme.colors.edge.cardFill)).toBeGreaterThan(step(darkTheme.colors.surface.base));
         expect(step(darkTheme.colors.edge.floatingFill)).toBeGreaterThan(step(darkTheme.colors.edge.cardFill));
-        expect(lightTheme.colors.edge.cardFill).toBe(lightTheme.colors.surface.base);
+        // Light cards take W3's breath of ink (see "W3 light card material"); floating surfaces keep the paper.
         expect(lightTheme.colors.edge.floatingFill).toBe(lightTheme.colors.surface.base);
     });
 
@@ -163,5 +164,45 @@ describe('raised edge colours', () => {
         const flat = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceHighlight': 'transparent' }) });
         expect(flat.colors.effect.surfaceHighlight).toBe('transparent');
         expect(flat.colors.edge.strong).toBe(compositeRaisedEdgeColor(flat.colors.border.strong, 'transparent'));
+    });
+});
+
+// W3 (owner R6-1, plan P7): light in-flow cards carry the faintest trace of each cue; controls, floating
+// surfaces, the composer and every dark value keep their own treatment.
+describe('W3 light card material', () => {
+    const inkAt = (theme: typeof lightTheme, a: number) => {
+        const [r, g, b] = Color(theme.colors.text.primary).rgb().array();
+        return `rgba(${r}, ${g}, ${b}, ${a})`;
+    };
+    const bottomAlpha = (gradient: { colors: readonly [string, string] } | null | undefined) => (gradient ? alpha(gradient.colors[1]) : null);
+
+    it('grounds a light card on the page with a breath of its own ink, foot band and lip, leaving controls and floating surfaces as they were', () => {
+        const page = lightTheme.colors.surface.base;
+        // Fill: the page under 0.4% of the theme ink (#FEFEFE on the default white page).
+        expect(Color(lightTheme.colors.edge.cardFill).hex()).toBe(Color(compositeRaisedEdgeColor(page, inkAt(lightTheme, 0.004))).hex());
+        expect(Color(lightTheme.colors.edge.cardFill).hex()).toBe('#FEFEFE');
+        // Foot band: the card finish at 0.6%; floating surfaces and the composer keep the theme finish (2.4%).
+        expect(bottomAlpha(lightTheme.colors.edge.cardFinishGradient)).toBe(0.006);
+        expect(lightTheme.colors.edge.cardFinishGradient?.band).toEqual({ edge: 'bottom', height: 32 });
+        expect(bottomAlpha(lightTheme.colors.edge.finishGradient)).toBe(0.024);
+        // Lip: 1.2% ink over the card's 8% hairline; a control keeps its 4% edge.
+        expect(lightTheme.colors.edge.surface).toBe(compositeRaisedEdgeColor(lightTheme.colors.border.surface, inkAt(lightTheme, 0.012)));
+        expect(lightTheme.colors.edge.strong).toBe(compositeRaisedEdgeColor(lightTheme.colors.border.strong, inkAt(lightTheme, 0.04)));
+        // Floating surfaces keep one paper.
+        expect(lightTheme.colors.edge.floatingFill).toBe(page);
+    });
+
+    it('keeps every dark card value, and scales a profile\'s own finish and edge ink for its light cards', () => {
+        expect(darkTheme.colors.edge.cardFinishGradient).toEqual(darkTheme.colors.edge.finishGradient);
+        expect(darkTheme.colors.edge.surface).toBe(compositeRaisedEdgeColor(darkTheme.colors.border.surface, darkTheme.colors.effect.surfaceHighlight));
+        expect(darkTheme.colors.edge.cardFill).toBe(Color(darkTheme.colors.surface.elevated).rgb().string());
+
+        const strong = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceFinish': 'rgba(122, 162, 247, 0.048)' }) });
+        expect(bottomAlpha(strong.colors.edge.finishGradient)).toBe(0.048);
+        expect(bottomAlpha(strong.colors.edge.cardFinishGradient)).toBeCloseTo(0.012, 6);
+        const flat = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceFinish': 'transparent' }) });
+        expect(flat.colors.edge.cardFinishGradient).toBeNull();
+        const tinted = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'surface.base': '#F6F1E7', 'text.primary': '#3B2F2F' }) });
+        expect(tinted.colors.edge.cardFill).toBe(compositeRaisedEdgeColor('#F6F1E7', 'rgba(59, 47, 47, 0.004)'));
     });
 });

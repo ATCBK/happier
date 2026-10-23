@@ -17,8 +17,23 @@ const RAISED_EDGE_INK_ALPHA = { dark: 0.06, light: 0.04 } as const;
 /** How much light the gloss line of a filled accent control carries. */
 const RAISED_EDGE_GLOSS_ALPHA = 0.16;
 
-/** Material G: one translucent ink overlay, shared by solid and glass surfaces. */
+/**
+ * Material G: one translucent ink overlay, shared by solid and glass surfaces. This is the theme's finish
+ * ink (`effect.surfaceFinish`) at full strength: floating surfaces, the composer and the button finishes
+ * draw it as it is.
+ */
 const SOFT_SURFACE_ALPHA = { light: 0.024, dark: 0.025 } as const;
+
+/**
+ * W3 (calm surfaces R2·1, owner ruling R6-1): an in-flow card on light carries the faintest trace of each
+ * cue — a page fill under 0.4% of the theme's ink, a 0.6% foot band and a 1.2% lip over its 8% hairline —
+ * so grouped sheets, widgets and cards read as grounded rather than drawn. The band and the lip are a
+ * share of the theme's own finish and edge inks, so a profile that sets either keeps its colour and its
+ * relative strength. Dark cards keep their ladder (authored raised surface, full finish, full edge).
+ */
+const CARD_FILL_INK_ALPHA_LIGHT = 0.004;
+const CARD_FINISH_SHARE = { light: 0.006 / SOFT_SURFACE_ALPHA.light, dark: 1 } as const;
+const CARD_EDGE_SHARE = { light: 0.012 / RAISED_EDGE_INK_ALPHA.light, dark: 1 } as const;
 
 export type SurfaceFinishGradient = Readonly<{
     colors: readonly [string, string];
@@ -60,7 +75,7 @@ const RAISED_RIM_ALPHA = {
 export type RaisedEdgeColors = Readonly<{
     /** `border.default` raised: cards drawn with the default hairline (widgets, a read-only composer). */
     default: string;
-    /** `border.surface` raised: grouped sheets, cards, themed popovers, the composer. */
+    /** `border.surface` raised at the card's strength (W3 on light): grouped sheets, page sheets, widgets and cards. */
     surface: string;
     /** `border.strong` raised: bordered controls (field boxes, outline buttons, search fields). */
     strong: string;
@@ -77,7 +92,10 @@ export type RaisedEdgeColors = Readonly<{
      * of the theme's ink, so the control reads as standing on it; on light the page itself.
      */
     fill: string;
-    /** An in-flow card's fill (grouped sheets, widget cards): the page, one step of light up on dark. */
+    /**
+     * An in-flow card's fill (grouped sheets, page sheets, widget cards): one step of light up on dark; on
+     * light the page under a breath of its own ink (W3).
+     */
     cardFill: string;
     /** A floating surface's fill (menus, popovers, dialogs, toasts): two steps of light up on dark. */
     floatingFill: string;
@@ -87,7 +105,10 @@ export type RaisedEdgeColors = Readonly<{
     rimMid: string;
     /** The short soft sheen inside the lit corner. */
     sheen: string;
+    /** The finish of floating surfaces and the composer: the theme's finish ink as it is. */
     finishGradient: SurfaceFinishGradient | null;
+    /** An in-flow card's finish: the same band at the card's share of that ink (W3 on light). */
+    cardFinishGradient: SurfaceFinishGradient | null;
     primaryFinishGradient: SurfaceFinishGradient | null;
     secondaryFinishGradient: SurfaceFinishGradient | null;
 }>;
@@ -187,8 +208,19 @@ export function deriveSurfaceFinishInk(colors: RaisedEdgeThemeColors, dark: bool
     }
 }
 
+/** `color` with its own alpha scaled by `share` (a card's share of a theme ink). */
+function scaleAlpha(color: string, share: number): string {
+    if (share === 1) return color;
+    try {
+        return withAlpha(color, Color(color).alpha() * share);
+    } catch {
+        return color;
+    }
+}
+
 function buildSurfaceFinishGradients(colors: RaisedEdgeThemeColors, ink: string, dark: boolean) {
     let finishGradient: SurfaceFinishGradient | null = null;
+    let cardFinishGradient: SurfaceFinishGradient | null = null;
     let primaryFinishGradient: SurfaceFinishGradient | null = null;
     let secondaryFinishGradient: SurfaceFinishGradient | null = null;
     try {
@@ -203,6 +235,9 @@ function buildSurfaceFinishGradients(colors: RaisedEdgeThemeColors, ink: string,
             finishGradient = dark
                 ? { ...gradient(at(ink, strength), at(ink, 0), [0, 1]), band: { edge: 'top', height: SURFACE_FINISH_BAND_PX } }
                 : { ...gradient(at(ink, 0), at(ink, strength), [0, 1]), band: { edge: 'bottom', height: SURFACE_FINISH_BAND_PX } };
+            cardFinishGradient = dark
+                ? finishGradient
+                : { ...gradient(at(ink, 0), at(ink, strength * CARD_FINISH_SHARE.light), [0, 1]), band: { edge: 'bottom', height: SURFACE_FINISH_BAND_PX } };
             secondaryFinishGradient = dark
                 ? gradient(at(ink, strength * (8 / 9)), at(ink, 0), [0, 1])
                 : gradient(at(ink, 0), at(ink, 0.025 * scale), [0, 1]);
@@ -214,7 +249,7 @@ function buildSurfaceFinishGradients(colors: RaisedEdgeThemeColors, ink: string,
     } catch {
         // A malformed profile loses the finish, preserving its existing surface material.
     }
-    return { finishGradient, primaryFinishGradient, secondaryFinishGradient };
+    return { finishGradient, cardFinishGradient, primaryFinishGradient, secondaryFinishGradient };
 }
 
 /**
@@ -238,7 +273,7 @@ export function buildRaisedEdgeColors(colors: RaisedEdgeThemeColors, ink: string
         gloss = withAlpha(dark ? colors.text.primary : colors.surface.base, RAISED_EDGE_GLOSS_ALPHA);
         const lift = (alpha: number) => liftSurface(colors, alpha);
         fill = dark ? lift(RAISED_CONTROL_FILL_ALPHA_DARK) : colors.surface.base;
-        cardFill = dark ? darkCardFill(colors) : colors.surface.base;
+        cardFill = dark ? darkCardFill(colors) : lift(CARD_FILL_INK_ALPHA_LIGHT);
         floatingFill = dark ? darkFloatingFill(colors) : colors.surface.base;
     } catch {
         gloss = 'transparent';
@@ -248,7 +283,7 @@ export function buildRaisedEdgeColors(colors: RaisedEdgeThemeColors, ink: string
     }
     return {
         default: raise(colors.border.default),
-        surface: raise(colors.border.surface),
+        surface: compositeRaisedEdgeColor(colors.border.surface, scaleAlpha(ink, CARD_EDGE_SHARE[dark ? 'dark' : 'light'])),
         strong: raise(colors.border.strong),
         subtle: raise(colors.border.subtle),
         modal: raise(colors.border.modal),

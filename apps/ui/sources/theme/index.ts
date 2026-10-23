@@ -3,11 +3,13 @@ import Color from 'color';
 import { PLANET_ATTENTION_HEX } from '@happier-dev/brand/planet';
 import { HAPPIER_DEFAULT_SURFACE_COLORS } from '@happier-dev/plugin-ui/environment';
 import {
+    buildCardShadow,
     buildDarkShadowLevels,
     buildGlassBorderColor,
     buildGlassCastShadow,
     buildGlassInnerShadow,
     buildLightShadowLevels,
+    buildPaneHeaderShade,
     buildSeamCastShadow,
     buildShadowPopoverArrowBoxShadow,
 } from '../shadowElevation';
@@ -198,8 +200,12 @@ const lightThemeBase = {
             opacity: 0.1,
         },
         shadowLevels: buildLightShadowLevels(),
+        // An in-flow card's grounding (W3 on light), apart from the control ladder's level 1.
+        shadowCard: buildCardShadow(false),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(false),
         shadowSeamCastBoxShadow: buildSeamCastShadow(false),
+        shadowPaneHeaderShade: buildPaneHeaderShade(false),
+        shadowSeamCastBothBoxShadow: `${buildSeamCastShadow(false)}, ${buildSeamCastShadow(false, 'trailing')}`,
         glass: {
             border: buildGlassBorderColor(false),
             innerShadow: buildGlassInnerShadow(false),
@@ -555,8 +561,11 @@ const darkThemeBase = {
             opacity: 0.1,
         },
         shadowLevels: buildDarkShadowLevels(),
+        shadowCard: buildCardShadow(true),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(true),
         shadowSeamCastBoxShadow: buildSeamCastShadow(true),
+        shadowPaneHeaderShade: buildPaneHeaderShade(true),
+        shadowSeamCastBothBoxShadow: `${buildSeamCastShadow(true)}, ${buildSeamCastShadow(true, 'trailing')}`,
         glass: {
             border: buildGlassBorderColor(true),
             innerShadow: buildGlassInnerShadow(true),
