@@ -650,7 +650,11 @@ the existing dependency reader lease; the writer cannot miss a newly registered
 consumer. A live pending start refuses mutation with
 `HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS` before dependency admission is withdrawn;
 retry after its service readiness check completes. Runtime-state publication
-keeps that same pending marker until readiness or failure cleanup. Running
+keeps that same pending marker until readiness or failure cleanup. Worker source
+tests and typechecks wait for a foreign pending start, releasing both dependency
+custody and its writer-priority ticket before awaiting that existing transition.
+They recheck freshness under the original lock afterwards. An owning start
+retains the explicit refusal rather than waiting for itself. Running
 runtimes and retained server/daemon processes do not block refresh or retain an
 indefinite reader lease. After a successful refresh, output and dependency
 readiness record their Stack names as `stacksNeedingRestart`; owners restart
