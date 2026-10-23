@@ -1,6 +1,4 @@
-import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-
-import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
+import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { getSessionName, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 
@@ -10,11 +8,12 @@ import { getSessionName, readLockedSessionName } from '@/utils/sessions/sessionU
  * `status_only` is the Home's notification-preview ceiling, not a statement about this device, so
  * it governs off-app surfaces only.
  */
-export function isInboxSessionStatusOnly(session: Session, nowMs: number = Date.now()): boolean {
-    return !isSessionAwarenessContentReadableV1(projectUiSessionAwareness(session, nowMs).encryption);
+export function isInboxSessionStatusOnly(session: Session): boolean {
+    // Content visibility is already settled by decryption, independently of runtime/pending state.
+    return !isSessionContentReadable(readSessionContentAvailability(session));
 }
 
 /** The one Inbox name for a Session: its title, or the locked name when only its status may show. */
-export function readInboxSessionTitle(session: Session, serverId: string | null, nowMs: number = Date.now()): string {
-    return isInboxSessionStatusOnly(session, nowMs) ? readLockedSessionName() : getSessionName(session, serverId);
+export function readInboxSessionTitle(session: Session, serverId: string | null): string {
+    return isInboxSessionStatusOnly(session) ? readLockedSessionName() : getSessionName(session, serverId);
 }

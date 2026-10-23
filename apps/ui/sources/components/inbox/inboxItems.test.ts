@@ -12,7 +12,8 @@ import { buildApprovalRequestArtifactHeaderV1, buildTargetActionApprovalArtifact
 import { TargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
-import { readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
+import { isInboxSessionStatusOnly, readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
+import { SESSION_CONTENT_AVAILABILITIES } from '@/sync/domains/session/encryptedContentAvailability';
 import { countInbox, countInboxNeedsYou } from './inboxCounts';
 import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { createInboxItemRoute, readInboxItemFocus } from './inboxItemFocus';
@@ -38,6 +39,37 @@ async function input(overrides: Partial<Session> = {}): Promise<InboxItemsInput>
 }
 
 describe('one Inbox row projection', () => {
+    it.each(['plain', 'e2ee'] as const)('reads a %s Session title without visiting its 1,000 pending requests', async (encryptionMode) => {
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        let requestReads = 0;
+        const pending = Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`request-${index}`, {
+            tool: 'Bash', arguments: { command: 'true' }, createdAt: 1_000,
+        }]));
+        // Count actual request-row reads, keeping the real privacy/title and pending logic.
+        const requests = new Proxy(pending, {
+            get(target, key, receiver) {
+                if (typeof key === 'string' && Object.hasOwn(target, key)) requestReads++;
+                return Reflect.get(target, key, receiver);
+            },
+        });
+        const session = createSessionFixture({ encryptionMode, encryptedContentAvailability: 'ready', active: true,
+            metadata: { name: 'Question worker', path: '/project', host: 'qa-host' }, agentState: { requests },
+            pendingPermissionRequestCount: undefined, pendingUserActionRequestCount: undefined });
+        expect(readInboxSessionTitle(session, 'home-a')).toBe('Question worker');
+        expect(requestReads).toBe(0);
+    });
+
+    it.each(['plain', 'e2ee'] as const)('keeps %s Inbox title privacy tied to the decryption owner alone', async (encryptionMode) => {
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        for (const availability of [null, ...SESSION_CONTENT_AVAILABILITIES]) {
+            const session = createSessionFixture({ encryptionMode, encryptedContentAvailability: availability,
+                metadata: { name: 'Private cached title', path: '/private/path', host: 'private-host' } });
+            const readable = availability === 'ready' || availability === null && encryptionMode === 'plain';
+            expect(isInboxSessionStatusOnly(session)).toBe(!readable);
+            expect(readInboxSessionTitle(session, 'home-a') === 'Private cached title').toBe(readable);
+        }
+    });
+
     it('projects live Execution Runs once and removes settled Runs instead of retaining notices', () => {
         const run = ExecutionRunPublicStateSchema.parse({ runId: 'run-review', callId: 'call', sidechainId: 'sidechain',
             intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, display: { title: 'Review changes' },
