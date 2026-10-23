@@ -53,6 +53,7 @@ import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPol
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
 import { isPluginActionExecutionDispatchId } from './createDaemonPluginActionExecutor';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
@@ -1301,6 +1302,11 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     invocationSignal?: AbortSignal,
     approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'],
   ): CliActionExecutor => {
+    // Routing refusals precede Start transport. Dispatched failures retain the
+    // receiver's own evidence and must never be relabeled as an uncreated Run.
+    const routingFailure = (actionId: string, result: ActionExecuteResult): ActionExecuteResult =>
+      actionId === 'execution.run.start' && !result.ok
+        ? { ...result, details: withExecutionRunStartFailureDetails(result.details, 'noRunCreated') } : result;
     const routeHostChildAction = (credentials: StoredCredentials): NonNullable<ActionExecutorDeps['routeHostChildAction']> =>
       async ({ actionId, input, context }) => {
         if (params.pluginActionExecutionOwner === 'current_process') {
@@ -1309,8 +1315,20 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
           if (lease) { await lease.release(); return null; }
         }
+        if (!isOriginalCliActionContext(context)) {
+          // A receiving RPC already owns its host-stamped route. Keep its
+          // existing local dependency/Session transport after the same semantic
+          // selector proves that this child does not retarget that receiver.
+          const receiverMachineId = params.machineActionDirectTargetTransport?.machineId
+            ?? (context.externalActionTarget?.kind === 'machine' ? context.externalActionTarget.machineId : null);
+          if (!receiverMachineId) return routingFailure(actionId, actionFailure('target_unavailable'));
+          const selected = resolveExternalActionMachineTarget({ actionId, rawInput: input,
+            target: context.externalActionTarget, ownerMachineId: receiverMachineId });
+          if (selected.kind === 'rejected') return routingFailure(actionId, selected.execution);
+          return null;
+        }
         const prepared = await prepareOriginalCliActionInvocation(actionId, input, context, credentials, true);
-        return prepared.invocation ? await prepared.invocation.run() : actionFailure('target_unavailable');
+        return prepared.invocation ? await prepared.invocation.run() : routingFailure(actionId, actionFailure('target_unavailable'));
       };
     const readInputTypeOptions = (credentials: StoredCredentials): NonNullable<ActionExecutorDeps['readAdmittedInputTypeOptions']> =>
       async ({ input, context }) => {
@@ -1435,7 +1453,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           target: context.externalActionTarget, fallbackMachineId: params.machineId }) : null;
       if (selectedOriginalMachine && (selectedOriginalMachine.kind === 'rejected'
         || params.machineId && params.machineId !== selectedOriginalMachine.machineId)) return { context,
-          invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
+          invocation: createOneShotPatInvocation(async () => routingFailure(actionId, actionFailure('target_unavailable'))) };
       const pairedTerminal = originalCliCaller && provenance?.provenance.kind === 'terminal';
       let requiresSessionDaemonAdmission = false;
       let sessionDispatch: Readonly<{
