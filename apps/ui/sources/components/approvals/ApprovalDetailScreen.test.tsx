@@ -3001,6 +3001,39 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.actions')).toBeNull();
   });
 
+  it('decides a requester-bound request in place from its Discussion card through the same decision Action', async () => {
+    const actionArgs = { sessionId: 'session-1', title: 'Release 0.3' };
+    const base = JSON.parse((await createBuiltInApprovalArtifact({ actionId: 'session.title.set', actionArgs,
+      summary: 'Rename the session to Release 0.3', serverId: 'server-approval' })).body);
+    const request = ApprovalRequestV2Schema.parse({ ...base, requestedSurface: 'agent',
+      ...(await createSignedRequesterApprovalOrigin(base.actionId, base.actionArgs)) });
+    currentArtifact = { id: 'artifact-1', ownerAccountId: 'bot-owner', header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    daemonReply = { ok: true, result: { status: 'executed' } };
+    approvalHomeFixture = { kind: 'resolved', serverIdentityId: 'srv_approval_home_a',
+      profile: { id: 'server-approval', serverIdentityId: 'srv_approval_home_a', name: '' } };
+    const { ApprovalRequesterThreadCard } = await import('./ApprovalRequesterThreadCard');
+    const screen = await renderScreen(<ApprovalRequesterThreadCard serverId="server-approval" approval={{
+      artifact: { ...currentArtifact, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true } as DecryptedArtifact,
+      parsed: { family: 'built_in', request }, subject: request.requesterConfirmation!, requestRef: 'received-question', originMessageId: 'message-1',
+    }} />);
+
+    // The decision is offered on the card itself; the standalone page is only a link away.
+    expect(screen.findByTestId('approval-requester-thread-review')).toBeNull();
+    expect(screen.findByTestId('approval-requester-thread-open')).not.toBeNull();
+    await act(async () => {
+      await screen.pressByTestIdAsync('approval-requester-thread-approve');
+    });
+
+    const { Modal } = await import('@/modal');
+    expect(Modal.alert).not.toHaveBeenCalled();
+    expect(pushSpy).not.toHaveBeenCalled();
+    expect(daemonDecisions()).toEqual([expect.objectContaining({ method: `session-1:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`,
+      params: { artifactId: 'artifact-1', sessionId: 'session-1', decision: 'approve' } })]);
+    // The accepted answer settles the card in place as its receipt.
+    expect(screen.findByTestId('approval-requester-thread-receipt-confirmed_pending')).not.toBeNull();
+    expect(screen.findByTestId('approval-requester-thread-approve')).toBeNull();
+  });
+
   it('executes approval decisions even when the web confirm modal resolves false (ModalProvider unavailable)', async () => {
     modalConfirmResult = false;
     currentArtifact = await createCurrentApprovalArtifact('server-approval');

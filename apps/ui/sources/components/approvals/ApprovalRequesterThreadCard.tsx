@@ -7,14 +7,14 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
-import { useApprovalDecisionHandler } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
+import { ApprovalOpenButton } from '@/components/tools/shell/approvals/ApprovalOpenButton';
 import {
   workStatusGlyphColor,
   workStatusWordStyle,
 } from '@/components/work/status/workStatusTreatment';
 import type { DiscussionRequesterApproval } from '@/sync/domains/artifacts/approvalArtifacts';
 import { t } from '@/text';
-import { ApprovalDecisionBar } from './ApprovalDecisionBar';
+import { ApprovalInlineDecisionBar, ApprovalInlineFields, useInlineApprovalDecision } from './ApprovalInlineDecision';
 import { ApprovalOperationActorLine } from './ApprovalOperationActorLine';
 import {
   useApprovalAccountLabel,
@@ -29,9 +29,10 @@ import { resolveApprovalRequesterThreadState } from './approvalRequesterThreadSt
 
 /**
  * C7 "External write needs confirmation", in the thread that asked: a shared Bot's outward request,
- * the exact operation, and who confirms. A receipt adds "Using <credential>" only from the operation's admitted evidence. Only the person who asked gets
- * Decline and "Review and confirm…" (the existing request page, with its Who confirms section);
- * everyone else who can read the request sees who can act. Once decided the card is the receipt in
+ * the exact operation, and who confirms. A receipt adds "Using <credential>" only from the operation's admitted evidence. Only the person who asked decides:
+ * a request the shared review shows whole is approved or declined here, in the Session approval card's anatomy
+ * (declared verb, details behind a disclosure, the request page one tap away); anything the page must show
+ * (a specialized review, a withheld approval) keeps "Review and confirm…". Everyone else who can read the request sees who can act. Once decided the card is the receipt in
  * place: done only with effect evidence, and an unknown effect never reads as success.
  */
 export const ApprovalRequesterThreadCard = React.memo(
@@ -53,7 +54,6 @@ export const ApprovalRequesterThreadCard = React.memo(
     const [recordedDecision, setRecordedDecision] = React.useState<
       'approve' | 'reject' | null
     >(null);
-    const [isDeciding, setIsDeciding] = React.useState(false);
     const state = resolveApprovalRequesterThreadState(parsed, recordedDecision);
     const entitled = useApprovalRequesterViewer(subject);
     const viewerName = t('session.collaboration.discussion.attribution.you');
@@ -81,24 +81,17 @@ export const ApprovalRequesterThreadCard = React.memo(
       titleInput.previewSummary.trim() !== title
         ? titleInput.previewSummary.trim()
         : null;
-    // The same decision owner as the request page and the transcript card: a requester decision
-    // travels through the original Bot Session; nothing here grants or forwards authority.
-    const decide = useApprovalDecisionHandler(
+    // The same decision core the Session card uses; a requester decision travels through the original Bot
+    // Session and nothing here grants or forwards authority.
+    const decision = useInlineApprovalDecision(
       { id: artifact.id, header: artifact.header ?? null },
       parsed.request,
       personaSessionId,
       props.serverId,
+      setRecordedDecision,
     );
-    const decline = React.useCallback(async () => {
-      if (isDeciding) return;
-      setIsDeciding(true);
-      try {
-        if (await decide('reject')) setRecordedDecision('reject');
-      } finally {
-        setIsDeciding(false);
-      }
-    }, [decide, isDeciding]);
-    const review = React.useCallback(() => {
+    const decidesHere = state.kind === 'open' && entitled && decision.decidesHere;
+    const openPage = React.useCallback(() => {
       router.push(
         buildApprovalHref(
           artifact.id,
@@ -178,23 +171,13 @@ export const ApprovalRequesterThreadCard = React.memo(
               </Text>
             </View>
             <View style={phone ? styles.decisionStacked : styles.decision}>
-            <ApprovalDecisionBar
-              size="small"
+            <ApprovalInlineDecisionBar
+              decision={decision}
+              testIDPrefix="approval-requester-thread"
               layout={phone ? 'stacked' : 'inline'}
-              disabled={isDeciding}
-              approve={{
-                label: t('detailPages.approval.requester.thread.review'),
-                testID: 'approval-requester-thread-review',
-                onPress: review,
-              }}
-              reject={{
-                label: t('detailPages.approval.requester.thread.decline'),
-                testID: 'approval-requester-thread-decline',
-                busy: isDeciding,
-                onPress: () => {
-                  void decline();
-                },
-              }}
+              onOpenPage={openPage}
+              openPageLabel={t('detailPages.approval.requester.thread.review')}
+              declineLabel={t('detailPages.approval.requester.thread.decline')}
             />
             </View>
           </View>
@@ -254,8 +237,12 @@ export const ApprovalRequesterThreadCard = React.memo(
               : undefined
         }
         icon={state.kind === 'failed' ? 'warning-circle' : undefined}
+        headerAccessory={decidesHere ? (
+          <ApprovalOpenButton testID="approval-requester-thread-open" onPress={openPage} />
+        ) : null}
         footer={footer}
       >
+        {decidesHere ? <ApprovalInlineFields decision={decision} serverId={props.serverId} collapsed={phone} /> : null}
         {operationUses?.length ? (
           <ApprovalOperationActorLine
             uses={operationUses}
