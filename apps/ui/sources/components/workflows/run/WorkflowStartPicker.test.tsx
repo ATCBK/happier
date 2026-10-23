@@ -43,6 +43,7 @@ import type {
   Artifact,
   ArtifactCreateRequest,
 } from '@/sync/domains/artifacts/artifactTypes';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 let modals: ReturnType<typeof useModal>['state']['modals'] = [];
 function ObserveModals() {
@@ -338,6 +339,7 @@ beforeEach(async () => {
         const input = request.body as ArtifactCreateRequest;
         const artifact: Artifact = {
           ...input,
+          ...projectArtifactStoredKind(input.kind),
           ownerAccountId: request.accountId!,
           access: 'owner',
           encryptionMode: 'plain',

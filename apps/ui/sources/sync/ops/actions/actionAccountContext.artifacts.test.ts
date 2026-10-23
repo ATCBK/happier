@@ -44,7 +44,7 @@ import { executeDiscussionActionInAccountContext } from '@/sync/api/discussions/
 import { createArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createDeferred } from '@/dev/testkit';
-import { createArtifactListHttpResponse, createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactListHttpResponse, createArtifactReadBatchHttpResponse, projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decodeArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
@@ -154,7 +154,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v2/account/settings') return json({ content: null, version: 0 });
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode,
+                stored = { ...write, ...projectArtifactStoredKind(write.kind), ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode,
                     seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
@@ -920,7 +920,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
                 // Exact-id create may acknowledge an incumbent row after a same-id race.
-                committed = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+                committed = { ...write, ...projectArtifactStoredKind(write.kind), ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
                     header: encodePlainArtifactStoredContent({ title: 'Incumbent' }), body: encodePlainArtifactStoredContent({ body: 'incumbent body' }),
                     provenance: null, provenanceDataEncryptionKey: null,
                     headerVersion: 3, bodyVersion: 4, seq: 4, createdAt: 1, updatedAt: 2 };

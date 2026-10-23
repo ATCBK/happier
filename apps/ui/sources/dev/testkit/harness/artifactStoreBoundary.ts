@@ -1,6 +1,6 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
-    ArtifactKindWriteBatchResponseV1Schema, decodeArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+    ArtifactKindWriteBatchResponseV1Schema, type ArtifactCoarseKindV1, decodeArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema,
     ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
     type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -57,6 +57,17 @@ export type ArtifactStoreBoundary = Readonly<{
 }>;
 
 const ARTIFACTS_PATH = '/v1/artifacts';
+
+/**
+ * The Home's served classification for a stored kind write: an indexed exact
+ * hint projects `kind` and `kindHint`; a retained coarse or absent value stays
+ * unclassified (no `kindHint`). Fixtures that answer a create or update request
+ * with a row use this instead of spreading the request's write-side `kind`.
+ */
+export function projectArtifactStoredKind(storedKind: unknown): Readonly<{ kind: ArtifactCoarseKindV1 | null; kindHint?: string | null }> {
+    const decoded = decodeArtifactKindV1(storedKind);
+    return { kind: decoded.kind, ...(decoded.classified ? { kindHint: decoded.kindHint } : {}) };
+}
 
 function json(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -157,8 +168,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             stored = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
                 ? deriveArtifactStoredKindV1(decoded as Readonly<Record<string, unknown>>) : null;
         }
-        const decoded = decodeArtifactKindV1(stored);
-        return { kind: decoded.kind, ...(decoded.classified ? { kindHint: decoded.kindHint } : {}) };
+        return projectArtifactStoredKind(stored);
     };
 
     const accessFor = (row: Artifact, accountId: string): Artifact['access'] | null =>

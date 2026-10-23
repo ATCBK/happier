@@ -19,6 +19,7 @@ import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/
 import { createOperationAccountCurrentnessSource, getScopedSessionByIdEncryption } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
+import type { ServerFetchOptions, ServerResponseRequest } from '@/sync/http/client';
 
 const currentness = {
     mode: 'e2ee', version: 1, updatedAt: 1,
@@ -32,6 +33,18 @@ const initialStorageState = storage.getInitialState();
 
 function jsonResponse(body: unknown): Response {
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+function createResponseRequest(respond: (path: string, init?: RequestInit) => Promise<Response>): ServerResponseRequest {
+    function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+    function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined,
+        consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async function request<T>(path: string, init?: RequestInit, _options?: ServerFetchOptions,
+        consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
+        const response = await respond(path, init);
+        return consumeResponse ? await consumeResponse(response) : response;
+    }
+    return request;
 }
 
 async function createHydrationContext() {
@@ -89,11 +102,11 @@ describe('Session hydration publication', () => {
         const credentials = { token: 't' };
         const readTransport = createCapturedServerReadTransport({ serverId, credentials, prepared: {
             endpointUrl: 'https://home-publication.example', generation: 1,
-            request: async (path, init, _options, consume) => {
+            request: createResponseRequest(async (path, init) => {
                 requests.push({ path, ids: JSON.parse(String(init?.body)).sessionIds });
                 issued.resolve();
-                return await consume(await response.promise);
-            },
+                return await response.promise;
+            }),
         } });
         const directRequest = vi.fn(async () => { throw new Error('A captured Account read must use its batch transport'); });
         const publications: string[][] = [];
@@ -151,7 +164,7 @@ describe('Session hydration publication', () => {
         }));
         const readTransport = createCapturedServerReadTransport({ serverId, credentials: params.credentials, prepared: {
             endpointUrl: 'https://home-publication.example', generation: 1,
-            request: async (path, init, _options, consume) => await consume(await read(path, init)),
+            request: createResponseRequest(read),
         } });
         const publications: string[][] = [];
         const unsubscribe = storage.subscribe((next, previous) => {
@@ -190,13 +203,13 @@ describe('Session hydration publication', () => {
         const batches: string[][] = [];
         const readTransport = createCapturedServerReadTransport({ serverId: home, credentials, prepared: {
             endpointUrl: 'https://home-publication.example', generation: 1,
-            request: async (_path, init, _options, consume) => {
+            request: createResponseRequest(async (_path, init) => {
                 const selected = JSON.parse(String(init?.body)).sessionIds as string[];
                 batches.push(selected);
-                return await consume(jsonResponse({ results: selected.map(id => ({ sessionId: id,
+                return jsonResponse({ results: selected.map(id => ({ sessionId: id,
                     detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id }) } },
-                })) }));
-            },
+                })) });
+            }),
         } });
         const applySessionListRows = (rows: readonly SessionListRowPublication[]) => storage.getState().applyServerScopedSessionListRows(
             home, rows.map(entry => entry.row), { source: 'rowOnly', mode: 'append' },
@@ -298,14 +311,14 @@ describe('Session hydration publication', () => {
         const requests: string[][] = [];
         const readTransport = createCapturedServerReadTransport({ serverId, credentials: params.credentials, prepared: {
             endpointUrl: 'https://home-publication.example', generation: 1,
-            request: async (_path, init, _options, consume) => {
+            request: createResponseRequest(async (_path, init) => {
                 const ids = JSON.parse(String(init?.body)).sessionIds as string[];
                 requests.push(ids);
-                if (ids.includes(slowId)) { slowStarted.resolve(); return await consume(await slowResponse.promise); }
-                return await consume(jsonResponse({ results: ids.map(id => ({ sessionId: id,
+                if (ids.includes(slowId)) { slowStarted.resolve(); return await slowResponse.promise; }
+                return jsonResponse({ results: ids.map(id => ({ sessionId: id,
                     detail: { status: 200, body: { session: { ...row, id } } },
-                })) }));
-            },
+                })) });
+            }),
         } });
         const slow = fetchAndApplySessionById({
             ...params, sessionId: slowId, includeTurnsProjection: false, readTransport,

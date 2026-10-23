@@ -28,6 +28,7 @@ import { t } from '@/text';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -166,7 +167,7 @@ async function serveHome(): Promise<void> {
                 if (!header || typeof header !== 'object' || !('kind' in header) || header.kind !== 'approval_request.v1') {
                     return Response.json({ error: 'unsupported_artifact_kind' }, { status: 400 });
                 }
-                const artifact = { ...input, ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: 'plain' as const,
+                const artifact = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: 'plain' as const,
                     headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
                 host.approvalArtifacts.set(input.id, artifact);
                 return Response.json(artifact);

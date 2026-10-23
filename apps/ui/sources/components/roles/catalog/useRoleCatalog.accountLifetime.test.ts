@@ -7,6 +7,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { storage } from '@/sync/domains/state/storageStore';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -90,7 +91,8 @@ describe('role catalog Account lifetime', () => {
                         if (write.expectedHeaderVersion !== artifact.headerVersion || write.expectedBodyVersion !== artifact.bodyVersion)
                             return Response.json({ success: false, error: 'version-mismatch', currentHeaderVersion: artifact.headerVersion,
                                 currentBodyVersion: artifact.bodyVersion }, { status: 409 });
-                        artifact = { ...artifact, ...write, headerVersion: artifact.headerVersion + 1, bodyVersion: (artifact.bodyVersion ?? 0) + 1 };
+                        const { kind: storedKind, ...content } = write;
+                        artifact = { ...artifact, ...content, ...(storedKind === undefined ? {} : projectArtifactStoredKind(storedKind)), headerVersion: artifact.headerVersion + 1, bodyVersion: (artifact.bodyVersion ?? 0) + 1 };
                         return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
                     }
                     return Response.json(artifact);

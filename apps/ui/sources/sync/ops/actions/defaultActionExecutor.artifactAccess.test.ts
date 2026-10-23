@@ -28,7 +28,7 @@ import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/home';
 import { buildWidgetDefinitionArtifactHeaderV1, type WidgetDefinitionV1 } from '@happier-dev/protocol/widgets';
-import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactReadBatchHttpResponse, projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // Only HTTP, device credentials and native UI modules are substituted. Account,
 // Artifact, Action, kind-policy and cryptographic owners execute their real logic.
@@ -110,7 +110,7 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
             documentLimitBytes: null, revisionRetentionCount: 10 });
         if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
             const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-            stored = { ...input, ownerAccountId: 'owner', access, encryptionMode: mode, publicAudience: 'none',
+            stored = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: 'owner', access, encryptionMode: mode, publicAudience: 'none',
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
             return Response.json(stored);
         }

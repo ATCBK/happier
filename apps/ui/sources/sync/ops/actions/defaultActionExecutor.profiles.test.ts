@@ -53,6 +53,7 @@ import { useSaveLaunchProfile } from '@/components/profiles/edit/useSaveLaunchPr
 import { useProfilePromptStack } from '@/sync/store/useProfilePromptStack';
 import { Modal } from '@/modal';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary();
@@ -276,7 +277,7 @@ async function fixture() {
             if (init?.method === 'POST') {
                 // The genuine HTTP boundary carries this incumbent typed Artifact create DTO.
                 const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                const stored: Artifact = { ...input, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+                const stored: Artifact = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
                     headerVersion: 1, bodyVersion: 1, seq: artifacts.size + 1, createdAt: 1, updatedAt: 1 };
                 artifacts.set(stored.id, stored);
                 return Response.json(stored);

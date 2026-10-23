@@ -78,6 +78,7 @@ import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artif
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { buildKeepGoingTriggerAddRequest } from '@/components/sessions/workState/sessionGoalContinuation';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 let goalRpcBoundary: { reply: Promise<unknown>; issued: boolean } | null = null;
 
@@ -346,7 +347,7 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
         if (target.pathname === '/v1/artifacts') {
             if (init?.method !== 'POST') return json([...artifacts.values()]);
             const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-            const row: Artifact = { ...input, ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
+            const row: Artifact = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
                 publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
             artifacts.set(input.id, row);
             return json(row);

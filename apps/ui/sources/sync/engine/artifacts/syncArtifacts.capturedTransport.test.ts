@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createArtifactViaApi, createArtifactWithHeaderViaApi, fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi, type ArtifactDataKeyCache } from './syncArtifacts';
@@ -26,7 +27,7 @@ describe('artifact captured Home transport', () => {
             if (path === '/v1/account/encryption') return json({ mode: 'e2ee', updatedAt: 0 });
             if (path === '/v1/artifacts') {
                 const payload = JSON.parse(String(init?.body)) as ArtifactCreateRequest;
-                stored ??= { ...payload, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+                stored ??= { ...payload, ...projectArtifactStoredKind(payload.kind), ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
             if (stored && path.endsWith('/recipients')) return json({ artifactId: stored.id,
@@ -79,7 +80,7 @@ describe('artifact captured Home transport', () => {
             if (target.pathname === '/v1/account/encryption') return json({ mode, updatedAt: 0 });
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const body = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...body, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+                stored = { ...body, ...projectArtifactStoredKind(body.kind), ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
             if (stored && target.pathname.endsWith('/recipients')) return json({ artifactId: stored.id,

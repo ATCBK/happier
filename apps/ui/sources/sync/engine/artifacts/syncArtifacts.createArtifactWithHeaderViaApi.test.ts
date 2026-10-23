@@ -9,6 +9,7 @@ import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import { createDeferred } from '@/dev/testkit';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 describe('createArtifactWithHeaderViaApi', () => {
   it('derives coarse kind from the actual header for create and update', async () => {
@@ -73,7 +74,7 @@ describe('createArtifactWithHeaderViaApi', () => {
       if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 0 });
       if (path === '/v1/artifacts' && init?.method === 'POST') {
         const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-        stored = { ...input, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+        stored = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
           headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
         return Response.json(stored);
       }

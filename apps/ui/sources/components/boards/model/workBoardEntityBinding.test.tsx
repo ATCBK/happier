@@ -33,6 +33,7 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { WidgetSetupPopover } from '@/components/widgets/add/WidgetSetupPopover';
 import { describeAuthoredWidgetDefinitionV1 } from '@/components/widgets/widgetCatalog';
 import { Modal } from '@/modal';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // HTTP, device credential storage and native theme are system boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -108,7 +109,7 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
             if (offline) throw new Error('Connection lost after dispatch');
             if (path === '/v1/artifacts') {
                 const request = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                rows.set(request.id, { ...request, ownerAccountId: 'board-account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none', headerVersion: 1,
+                rows.set(request.id, { ...request, ...projectArtifactStoredKind(request.kind), ownerAccountId: 'board-account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none', headerVersion: 1,
                     bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
                 return json(rows.get(request.id));
             }

@@ -30,6 +30,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Artifact, ArtifactCreateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
+import { projectArtifactStoredKind } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // Only network, credentials and platform rendering/loading are replaced. The
 // saved Artifact writer/opener, front door, controller and admission stay real.
@@ -117,7 +118,7 @@ describe('saved editor Start through the real front door and Account admission',
                 if (path === '/v1/artifacts') {
                     if (init?.method !== 'POST') return json([...artifacts.values()]);
                     const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                    const row: Artifact = { ...input, ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
+                    const row: Artifact = { ...input, ...projectArtifactStoredKind(input.kind), ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
                         headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
                     artifacts.set(row.id, row);
                     return json(row);
