@@ -5735,6 +5735,17 @@ host; a caller must not put another yes/no dialog or two-step button before the 
 Dialogs that collect a different scope, choose recovery after a refusal, or discard an unsent
 local draft remain separate decisions.
 
+In unreleased 0.3 source, Action confirmation presentation has two independent
+declaration fields. `confirmVerb` is a short literal phrase or the existing
+localized-string shape `{ key, fallback }`; omission uses the host's localized
+“Approve”. `irreversible: true` declares that the effect cannot be undone;
+omission is not irreversible. The confirmation button and its destructive note
+read that fact directly, never infer it from `sideEffectClass` or
+`approvalPolicy.uiConfirmation`. Neither field changes who approves, whether
+approval is required, or the person's approval settings. Plugin Action
+declarations and the strict daemon Action projection carry the same optional
+fields, resolving plugin keys through the plugin's admitted translation bundle.
+
 An actual completed host confirmation can supply `presentUserConfirmation` for that exact
 Action on UI or CLI; opening a form or pressing its ordinary submit button is not a completed
 policy confirmation. Explicit per-surface Ask settings still win, and waivers suppress the
