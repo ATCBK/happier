@@ -6,11 +6,12 @@ import type { SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessi
 
 export type SessionFollowRuleCacheSnapshot = Readonly<{ status: 'available'; rules: readonly OpenedSessionFollowRuleV1[]; defaultPreferences?: SessionAutoFollowPreferencesV1 }>
   | Readonly<{ status: 'unavailable'; reason: string }>;
+export type SessionFollowRuleInvalidation = Readonly<{ full: boolean }>;
 
 /** The admitted daemon owns this cache for one captured Account lifetime. */
 export function createSessionFollowRuleCache(input: Readonly<{
   signal: AbortSignal; isCurrent: () => boolean;
-  subscribeInvalidation: (listener: () => void) => () => void;
+  subscribeInvalidation: (listener: (change?: SessionFollowRuleInvalidation) => void) => () => void;
   read: () => Promise<Readonly<{ mode: 'plain' | 'e2ee'; material: AccountScopedCryptoMaterial | null; rules: readonly SessionFollowRuleV1[]; defaultPreferences?: SessionAutoFollowPreferencesV1 }> | null>;
 }>) {
   type Observation = Readonly<{ snapshot: SessionFollowRuleCacheSnapshot; revision: number }>;
@@ -22,7 +23,9 @@ export function createSessionFollowRuleCache(input: Readonly<{
   const current = () => !retired && !input.signal.aborted && input.isCurrent();
   const unavailable = (reason: string): Observation => ({ revision, snapshot: { status: 'unavailable', reason } });
   const invalidate = () => { revision++; loaded = null; };
-  const unsubscribe = input.subscribeInvalidation(invalidate);
+  // Run/Discussion progress wakes consumers without changing rule configuration.
+  // Unqualified notifications still withdraw the snapshot, including requester resets.
+  const unsubscribe = input.subscribeInvalidation(change => { if (change?.full !== false) invalidate(); });
   const dispose = () => {
     if (retired) return;
     retired = true;

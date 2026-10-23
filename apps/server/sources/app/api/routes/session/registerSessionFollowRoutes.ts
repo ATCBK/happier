@@ -1,6 +1,6 @@
 import { GetOtherAccountFollowResponseV1Schema, SetOtherAccountFollowResponseV1Schema, GetSessionFollowResponseSchema, SetSessionFollowRequestSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, SessionFollowErrorResponseSchema, ReplaceSessionVoiceInclusionsRequestSchema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
 import { FollowPolicyV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import { parseOtherFollowSourceRefPathV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefPathV1';
+import { parseOtherFollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefTransportV1';
 import { SessionAutoFollowPreferencesV1Schema } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import {
     ChangeDeliveryMuteRequestV1Schema,
@@ -37,7 +37,7 @@ import { acceptAccountFollowPersonalProgress } from '@/app/session/follow/accoun
 import { readCurrentExecutionRunFollowSource } from '@/app/session/follow/executionRunFollowSource';
 
 const paramsSchema = z.strictObject({ sessionId: z.string().check(z.minLength(1)) });
-const otherSourceParamsSchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
+const otherSourceQuerySchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
 const FAILURE_STATUS: Readonly<Record<AccountFollowFailure, 400 | 403 | 404 | 409>> = {
     invalid_parameters: 400, account_inactive: 403, session_not_found: 404, session_archived: 409,
     source_not_found: 404, source_unavailable: 409,
@@ -72,10 +72,10 @@ export function registerSessionFollowRoutes(app: Fastify) {
     const ruleFeature = createServerFeatureGatePreHandler('sessions.following', process.env, { error: 'feature_unavailable' });
     app.get(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
         config: { ...ruleConfig, apiTokenSessionAction: 'follow.get' },
-        schema: { params: otherSourceParamsSchema, response: { 200: GetOtherAccountFollowResponseV1Schema, ...errorResponses } },
+        schema: { querystring: otherSourceQuerySchema, response: { 200: GetOtherAccountFollowResponseV1Schema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         if (!source) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await getOtherAccountFollow({ accountId: request.userId, source,
             authentication: readSessionAccessAuthenticationFromRequest(request) });
@@ -83,10 +83,10 @@ export function registerSessionFollowRoutes(app: Fastify) {
     });
     app.put(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
         config: { ...ruleConfig, apiTokenSessionAction: 'follow.set' },
-        schema: { params: otherSourceParamsSchema, response: { 200: SetOtherAccountFollowResponseV1Schema, ...errorResponses } },
+        schema: { querystring: otherSourceQuerySchema, response: { 200: SetOtherAccountFollowResponseV1Schema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         const body = z.strictObject({ policy: FollowPolicyV1Schema }).safeParse(request.body);
         if (!source || !body.success) return reply.code(400).send({ error: 'invalid_parameters' });
         const authentication = readSessionAccessAuthenticationFromRequest(request);
@@ -99,10 +99,10 @@ export function registerSessionFollowRoutes(app: Fastify) {
     });
     app.delete(SESSION_FOLLOW_HTTP_PATHS_V1.otherSource, { preHandler: [app.authenticate, ruleFeature],
         config: { ...ruleConfig, apiTokenSessionAction: 'follow.remove' },
-        schema: { params: otherSourceParamsSchema, response: { 200: RemoveSessionFollowResponseSchema, ...errorResponses } },
+        schema: { querystring: otherSourceQuerySchema, response: { 200: RemoveSessionFollowResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         if (!source) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await removeOtherAccountFollow({ accountId: request.userId, source,
             authentication: readSessionAccessAuthenticationFromRequest(request) });

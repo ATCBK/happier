@@ -17,6 +17,7 @@ import type { ApiMachineClient } from '@/api/apiMachine';
 import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
 import { SessionFollowObservePendingResponseV1Schema, type SessionFollowSessionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 it('routes a source-only Account change through the installed private rule cache and exact receiver admission without an edge', async () => {
   await withConfiguredDaemonTestHome({ prefix: 'follow-first-source-change-' }, async ({ homeDir }) => {
@@ -150,8 +151,21 @@ it('routes a source-only Account change through the installed private rule cache
 });
 
 it.each([
-  ['unavailable', 'ready'], ['available', 'ready'], ['unavailable', 'goal-changed'], ['available', 'goal-changed'],
-] as const)('defers an original-backed update to original admission (%s dispatcher, %s)', async (dispatcherState, eventType) => {
+  { dispatcherState: 'unavailable', eventType: 'ready', policy: { preset: 'everything' }, delivery: 'wake' },
+  { dispatcherState: 'available', eventType: 'ready', policy: { preset: 'everything' }, delivery: 'wake' },
+  { dispatcherState: 'unavailable', eventType: 'goal-changed', policy: { preset: 'everything' }, delivery: 'wake' },
+  { dispatcherState: 'available', eventType: 'goal-changed', policy: { preset: 'everything' }, delivery: 'wake' },
+  { dispatcherState: 'available', eventType: 'ready', policy: { preset: 'important' }, delivery: 'next_turn' },
+  { dispatcherState: 'available', eventType: 'goal-changed', policy: { preset: 'important' }, delivery: 'next_turn' },
+  { dispatcherState: 'available', eventType: 'ready', policy: { preset: 'quiet' }, delivery: 'next_turn' },
+  { dispatcherState: 'available', eventType: 'goal-changed', policy: { preset: 'quiet' }, delivery: 'next_turn' },
+  { dispatcherState: 'available', eventType: 'goal-changed', policy: { preset: 'custom', events: {
+    goal_changed: { delivery: 'interrupt' },
+  } }, delivery: 'wake' },
+  { dispatcherState: 'available', eventType: 'goal-changed', policy: { preset: 'custom', events: {} }, delivery: null },
+  { dispatcherState: 'available', eventType: 'cont28', policy: { preset: 'important' }, delivery: 'next_turn' },
+] satisfies ReadonlyArray<{ dispatcherState: 'available' | 'unavailable'; eventType: 'ready' | 'goal-changed' | 'cont28';
+  policy: FollowPolicyV1; delivery: 'wake' | 'next_turn' | null }>)('defers an original-backed update to original admission ($dispatcherState dispatcher, $eventType, $policy.preset)', async ({ dispatcherState, eventType, policy, delivery }) => {
   await withConfiguredDaemonTestHome({ prefix: 'follow-original-wake-' }, async ({ homeDir }) => {
     const accountId = 'receiver-account';
     const machineId = 'receiver-machine';
@@ -163,15 +177,18 @@ it.each([
     const metadata = JSON.stringify({ path: homeDir, host: 'host', machineId, flavor: 'codex',
       runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} }, codexSessionId: 'native-receiver' });
     const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
-      metadata, ownerAccountId: accountId, origin: { kind: 'none' }, seq: 1, archivedAt: null, active: true,
+      metadata, ownerAccountId: accountId, origin: { kind: 'none' }, seq: eventType === 'cont28' ? 15 : 1, archivedAt: null, active: true,
       latestTurnId: 'source-turn', latestTurnStatus: 'completed', pendingReviewRuns: 0 });
     const destination = createSessionRecordFixture({ id: destinationSessionId, encryptionMode: 'plain', dataEncryptionKey: null,
       metadata, ownerAccountId: accountId, origin: { kind: 'none' }, archivedAt: null, active: true });
     const observation: SessionFollowSessionPendingObservationV1 = { sourceSessionId, destinationSessionId,
-      ...(eventType === 'ready' ? { relation: 'manager' as const, attachedAt: 1 } : { relation: 'follower' as const }),
-      policy: { preset: 'everything' }, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1,
-      observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1, turn: { id: 'source-turn', status: 'completed' } } };
+      ...(eventType === 'ready' || eventType === 'cont28' || policy.preset !== 'everything'
+        ? { relation: 'manager' as const, attachedAt: 1 } : { relation: 'follower' as const }),
+      policy, delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: eventType === 'cont28' ? 9 : 0 },
+      observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: source.seq, turn: { id: 'source-turn', status: 'completed' } } };
     let rulesAvailable = dispatcherState === 'available';
+    let routesAvailable = true;
+    let losePendingResponse = eventType === 'cont28';
     const pending: unknown[] = [];
     const legacyContexts: unknown[] = [];
     const app = fastify();
@@ -185,19 +202,27 @@ it.each([
     app.get(`/v2/sessions/${sourceSessionId}`, async () => ({ session: source }));
     app.get(`/v2/sessions/${destinationSessionId}`, async () => ({ session: destination }));
     app.get(`/v2/sessions/${destinationSessionId}/delivery-mutes`, async () => ({ scopes: [] }));
-    app.get(`/v1/sessions/${sourceSessionId}/messages`, async () => ({ messages: [{ id: 'ready-original', localId: 'ready-original', seq: 1,
-      createdAt: 200, updatedAt: 200, sidechainId: null, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
-        content: { type: 'event', id: 'ready-original', data: { type: eventType,
-          ...(eventType === 'ready' ? { completedTurnId: 'source-turn' } : {}) } } } } }], hasMore: false }));
+    app.get(`/v1/sessions/${sourceSessionId}/messages`, async () => ({ messages:
+      (eventType === 'cont28' ? [{ seq: 10, type: 'ready' }, { seq: 11, type: 'goal-changed' }, { seq: 15, type: 'ready' }]
+        : [{ seq: 1, type: eventType }]).map(({ seq, type }) => ({ id: `original-${seq}`, localId: `original-${seq}`, seq,
+        createdAt: 200 + seq, updatedAt: 200 + seq, sidechainId: null, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
+          content: { type: 'event', id: `original-${seq}`, data: { type,
+            ...(type === 'ready' ? { completedTurnId: eventType === 'cont28' && seq === 10 ? 'old-source-turn' : 'source-turn' } : {}) } } } } })), hasMore: false }));
     app.post('/v2/sessions/:sessionId/follows/inactive-observations', async request => {
       const sessionId = (request.params as { sessionId: string }).sessionId;
       return { ok: true, v: 1, sessionId, target: { homeId: serverId, accountId, sessionId, machineId,
         installationId: readInstallationIdentityIfExistsSync()!.installationId },
         currentSourceSessionIds: [sourceSessionId], observations: [observation] };
     });
-    app.post(`/v2/sessions/${sourceSessionId}/follows/occurrence-routes`, async () => ({ ok: true, v: 1, sourceSessionId,
-      originalCreatedAt: 200, routes: [observation] }));
-    app.post(`/v2/sessions/${destinationSessionId}/pending`, async request => { pending.push(request.body); return { didWrite: true }; });
+    app.post(`/v2/sessions/${sourceSessionId}/follows/occurrence-routes`, async (_request, reply) => routesAvailable
+      ? { ok: true, v: 1, sourceSessionId, originalCreatedAt: 200, routes: [observation] }
+      : reply.code(503).send({ error: 'unavailable' }));
+    app.post(`/v2/sessions/${destinationSessionId}/pending`, async (request, reply) => {
+      pending.push(request.body);
+      // HTTP boundary only: custody may have committed before its response is lost.
+      if (losePendingResponse) { losePendingResponse = false; return reply.code(503).send({ error: 'unavailable' }); }
+      return { didWrite: true };
+    });
     const restoreHttp = installAxiosFastifyAdapter({ app, origin });
     let changedSession: Parameters<ApiMachineClient['onSessionChanged']>[0] | undefined;
     const transport = { ...createApiMachineTransportFixture(),
@@ -253,8 +278,22 @@ it.each([
       await changedSession({ sessionId: destinationSessionId, cursor: 1 });
       const beforeRetry = [...legacyContexts];
       rulesAvailable = true;
-      await changedSession({ sessionId: destinationSessionId, cursor: 2 });
-      expect(pending).toHaveLength(dispatcherState === 'available' ? 2 : 1);
+      if (eventType === 'cont28') {
+        expect(pending).toHaveLength(1);
+        expect(pending[0]).toMatchObject({ followDeliveryV1: { delivery: 'next_turn', event: { kind: 'finished' },
+          original: { sourceMessage: { seq: 10 } } } });
+        routesAvailable = false;
+        await changedSession({ sessionId: destinationSessionId, cursor: 2 });
+        expect(pending).toHaveLength(1);
+        expect(legacyContexts).toEqual([]);
+        routesAvailable = true;
+      }
+      await changedSession({ sessionId: destinationSessionId, cursor: 3 });
+      expect(pending).toHaveLength(eventType === 'cont28' ? 4 : delivery === null ? 0 : dispatcherState === 'available' ? 2 : 1);
+      for (const request of pending) expect(request).toMatchObject({ followDeliveryV1: { delivery } });
+      if (eventType === 'cont28') expect(pending).toMatchObject([10, 10, 11, 15].map(seq => ({
+        followDeliveryV1: { original: { sourceMessage: { seq } } },
+      })));
       expect(beforeRetry).toEqual([]);
       expect(legacyContexts).toEqual([]);
     } finally {

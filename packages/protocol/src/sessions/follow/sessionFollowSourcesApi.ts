@@ -122,6 +122,6 @@ export const SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 = Object.freeze({
   list: '/v2/sessions/:destinationSessionId/follows/sessions',
   followers: '/v2/sessions/:sourceSessionId/follows/followers',
   source: '/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId',
-  otherSource: '/v2/sessions/:destinationSessionId/follows/sources/:sourceRef',
-  otherFollowers: '/v2/follows/sources/:sourceRef/followers',
+  otherSource: '/v2/sessions/:destinationSessionId/follows/sources',
+  otherFollowers: '/v2/follows/sources/followers',
 });

@@ -181,20 +181,24 @@ it.each(['complete', 'abort', 'dispose', 'rebind', 'retire'] as const)(
     let current = true;
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    let sourceLists = 0;
-    vi.spyOn(axios, 'get').mockImplementation(async url => {
+    let sourceRangeReads = 0;
+    vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200,
         data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
-      if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [{
+      if (path === '/v2/account/session-follow-rules') {
+        // Exact source recovery waits on its rule-source read, rather than
+        // rediscovering unrelated configured Run sources as a test barrier.
+        if (options?.params?.destinationSessionId && ++sourceRangeReads === 1) await gate;
+        return { status: 200, data: { rules: [{
         ruleId: 'enabled-rule', version: 0, receiver: { kind: 'session', sessionId: destinationSessionId },
         content: { t: 'plain', v: { v: 1, enabled: true,
           filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }), policy: { preset: 'quiet' } } },
       }], sourceRanges: { status: 'available', sources: [] } } };
+      }
       if (path === '/v2/account/session-follow-preferences') return { status: 200,
         data: { assigned: false, direct: false, team: false, group: false } };
       if (path.endsWith('/follows/sessions')) {
-        if (++sourceLists === 1) await gate;
         return { status: 200, data: { sources: [] } };
       }
       throw new Error(`Unexpected GET ${path}`);
@@ -225,7 +229,7 @@ it.each(['complete', 'abort', 'dispose', 'rebind', 'retire'] as const)(
     recovery.bind(reconcile, lifetime.signal);
     try {
       hint('source-a');
-      await vi.waitFor(() => expect(sourceLists).toBe(1));
+      await vi.waitFor(() => expect(sourceRangeReads).toBe(1));
       hint('source-b');
       hint('source-c');
       hint('source-c');

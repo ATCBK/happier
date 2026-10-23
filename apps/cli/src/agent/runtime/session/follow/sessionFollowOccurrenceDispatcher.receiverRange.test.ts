@@ -17,6 +17,62 @@ import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/session
 
 afterEach(() => vi.restoreAllMocks());
 
+it('discovers future predicate matches without waking receiver rules that exclude the changed Session', async () => {
+  const sourceSessionId = 'c111111111111111111111111';
+  const matchingReceiver = 'c222222222222222222222222';
+  const unrelatedReceiver = 'c333333333333333333333333';
+  const rule = (sessionId: string, show: 'sessions' | 'runs') => ({ ruleId: sessionId, version: 1,
+    receiver: { kind: 'session', sessionId }, sources: [], content: { t: 'plain', v: { v: 1, enabled: true,
+      filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible', show }),
+      policy: { preset: 'quiet' } } } });
+  const source = createSessionRecordFixture({ id: sourceSessionId, ownerAccountId: 'account-1', encryptionMode: 'plain',
+    dataEncryptionKey: null, metadata: JSON.stringify({ path: '/work', host: 'host', machineId: 'machine' }) });
+  let readable = true;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-rules') return { status: 200,
+      data: { rules: [rule(matchingReceiver, 'sessions'), rule(unrelatedReceiver, 'runs')] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200,
+      data: { assigned: false, direct: false, team: false, group: false } };
+    if (path === `/v2/sessions/${sourceSessionId}`) return readable ? { status: 200, data: { session: source } } : { status: 404, data: {} };
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://follow.test',
+    machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+  try {
+    expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual([matchingReceiver]);
+    readable = false;
+    expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual([matchingReceiver, unrelatedReceiver]);
+  }
+  finally { dispatcher.dispose(); }
+});
+
+it('does not rediscover configured Run sources on an exact Session source wake', async () => {
+  const reads = vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200,
+      data: { assigned: false, direct: false, team: false, group: false } };
+    if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://follow.test',
+    machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+  try {
+    expect(await dispatcher.dispatchReceiverRange({ destinationSessionId: 'c222222222222222222222222',
+      sourceSessionId: 'c111111111111111111111111', observations: [] })).toEqual({ coveredEvents: [] });
+    expect(reads.mock.calls.filter(([url]) => String(url).endsWith('/follows/sessions'))).toEqual([]);
+  } finally { dispatcher.dispose(); }
+});
+
 it.each([
   { status: 'failed', sidechainSuffix: false },
   { status: 'completed', sidechainSuffix: false },

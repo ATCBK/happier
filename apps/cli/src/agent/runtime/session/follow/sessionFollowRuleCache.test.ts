@@ -15,6 +15,36 @@ const row = { ruleId: 'rule', receiver, version: 1,
   ruleId: 'rule', receiver, definition, mode: 'plain', material: null }) };
 
 describe('Account Follow rule cache', () => {
+  it('retains rule configuration for source-only notifications and reloads it on a rule change', async () => {
+    let invalidate: (change?: Readonly<{ full: boolean }>) => void = () => {};
+    let ruleReads = 0;
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const http = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      expect(new URL(String(url)).origin).toBe('https://bob-follow.test');
+      expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200,
+        data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+      if (String(url).endsWith('/v2/account/session-follow-preferences')) return { status: 200,
+        data: { assigned: false, direct: false, team: false, group: false } };
+      if (String(url).endsWith('/v2/account/session-follow-rules')) {
+        ruleReads++;
+        return { status: 200, data: { rules: [row] } };
+      }
+      throw new Error(`Unexpected Follow request ${String(url)}`);
+    });
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://bob-follow.test', signal: new AbortController().signal, isCurrent: async () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; } });
+    try {
+      expect(await cache.read()).toMatchObject({ status: 'available', rules: [{ ruleId: row.ruleId }] });
+      invalidate({ full: false });
+      expect(await cache.read()).toMatchObject({ status: 'available', rules: [{ ruleId: row.ruleId }] });
+      expect(ruleReads).toBe(1);
+      invalidate({ full: true });
+      expect(await cache.read()).toMatchObject({ status: 'available', rules: [{ ruleId: row.ruleId }] });
+      expect(ruleReads).toBe(2);
+    } finally { cache.dispose(); http.mockRestore(); }
+  });
   it('withdraws a private Bob read retired during HTTP, without borrowing the installed Account', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
     let current = true;

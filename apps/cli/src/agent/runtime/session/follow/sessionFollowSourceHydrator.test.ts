@@ -85,7 +85,7 @@ describe('Session Follow source hydrator', () => {
     } finally { material.dispose(); }
   });
 
-  it('retains a transient Home failure at an admitted request original final recheck', async () => {
+  it('retains an admitted request through unavailable or unreadable source state and withdraws only on a current resolved snapshot', async () => {
     const material = createSessionFollowSourceMaterialResolver();
     let unavailable = false;
     const source = {
@@ -114,8 +114,46 @@ describe('Session Follow source hydrator', () => {
       expect(result?.recheckWorkerUpdateAdmission).toBeTypeOf('function');
       unavailable = true;
       await expect(result!.recheckWorkerUpdateAdmission!(signal)).rejects.toMatchObject({ status: 'preparation_pending' });
+      expect(result!.isOriginalRequestWithdrawn?.()).not.toBe(true);
       unavailable = false;
       await expect(result!.recheckWorkerUpdateAdmission!(signal)).resolves.toBe(true);
+      for (const [agentStateVersion, agentState] of [[0, JSON.stringify({ requests: {} })],
+        [2, '{malformed'], [2, null]] as const) {
+        const original = { ...source, agentStateVersion, agentState };
+        const originalHydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+          credentials: { token: 'token', encryption: null }, sourceMaterialResolver: material,
+          deps: { fetchRunnerSourceProjection: async () => SessionFollowSourceProjectionResponseV1Schema.parse({
+            v: 1, source: original, messages: [], hasMore: false,
+          }) } });
+        const pending = await originalHydrate({ signal, observation: { kind: 'admitted_input', localInputId: 'request-original',
+          sourceSessionId: 'source', destinationSessionId: 'destination', delivery,
+          delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+          observed: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 1, turn: null } } });
+        expect(pending?.isOriginalRequestWithdrawn?.()).not.toBe(true);
+      }
+      source.agentStateVersion = 2;
+      source.agentState = JSON.stringify({ requests: {} });
+      await expect(result!.recheckWorkerUpdateAdmission!(signal)).resolves.toBe(false);
+      expect(result!.isOriginalRequestWithdrawn?.()).toBe(true);
+      // Old groups and a reused request id cannot consume either current original.
+      source.agentState = JSON.stringify({ requests: {
+        approval: { tool: 'Bash', arguments: {}, createdAt: 43 },
+        survivor: { tool: 'Bash', arguments: {}, createdAt: 44 },
+      } });
+      const hydrateRequests = async (requests: ReadonlyArray<{ requestId: string; createdAt: number }>) => await hydrate({ signal,
+        observation: { kind: 'admitted_input', localInputId: 'request-original', sourceSessionId: 'source', destinationSessionId: 'destination',
+          delivery: SessionFollowInputV1Schema.parse({ ...delivery,
+            original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 2, requests } },
+            requestEvents: requests.map(request => ({ requestId: request.requestId, event: { kind: 'needs_you', type: 'approval' } })),
+          }), delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+          observed: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 2, turn: null } } });
+      expect((await hydrateRequests([{ requestId: 'approval', createdAt: 42 }, { requestId: 'survivor', createdAt: 44 }]))
+        ?.isOriginalRequestWithdrawn?.()).toBe(true);
+      for (const request of [{ requestId: 'approval', createdAt: 43 }, { requestId: 'survivor', createdAt: 44 }]) {
+        const current = await hydrateRequests([request]);
+        expect(current?.isOriginalRequestWithdrawn?.()).toBe(false);
+        await expect(current?.recheckWorkerUpdateAdmission?.(signal)).resolves.toBe(true);
+      }
     } finally { material.dispose(); }
   });
 
@@ -231,11 +269,14 @@ describe('Session Follow source hydrator', () => {
     else expect(result).toMatchObject({ observed, recentMessages: [] });
   });
 
-  it('R14 selects only original events enabled for Voice and withdraws a prepared prefix after policy replacement', async () => {
+  it.each([
+    { messageVoice: false, selectedSequences: [4] },
+    { messageVoice: true, selectedSequences: [2, 4, 5] },
+  ])('R14 selects original Voice events independently of other delivery channels (message Voice: $messageVoice) and withdraws after policy replacement', async ({ messageVoice, selectedSequences }) => {
     const selectedPolicy = { preset: 'custom' as const, events: {
       update_posted: { delivery: 'quiet' as const, voice: true },
       goal_changed: { delivery: 'quiet' as const, voice: false },
-      message: { delivery: 'off' as const, voice: true },
+      message: { delivery: 'off' as const, voice: messageVoice },
     } };
     let policy = selectedPolicy;
     const observed = { ...observation.observed, transcriptSeq: 5 };
@@ -261,8 +302,8 @@ describe('Session Follow source hydrator', () => {
     const prepare = createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192,
       observer: { kind: 'account_voice', accountId: 'account', voiceSessionId: 'destination' } });
     const prepared = await prepare({ signal: new AbortController().signal, executionRunId: 'voice-run' });
-    expect(prepared?.updates[0]?.recentMessages.map(message => message.seq)).toEqual([4]);
-    expect(prepared?.updates[0]?.recentMessages[0]?.text).toContain('Selected published update');
+    expect(prepared?.updates[0]?.recentMessages.map(message => message.seq)).toEqual(selectedSequences);
+    expect(prepared?.updates[0]?.recentMessages.find(message => message.seq === 4)?.text).toContain('Selected published update');
     expect(prepared?.updates[0]?.observed).toEqual(observed);
     expect(acknowledgements).toEqual([]);
     expect(await prepared?.recheckAdmission(new AbortController().signal)).toBe(true);

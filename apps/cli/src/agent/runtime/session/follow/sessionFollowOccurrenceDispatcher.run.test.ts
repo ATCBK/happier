@@ -10,8 +10,75 @@ import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunSt
 import { createWorkflowRunStorageTestkit } from '@/daemon/workflows/workflowRunStorage.testkit';
 import { SessionFollowRunOccurrenceSchema } from '@/daemon/sessions/sessionActivityChangedContract';
 import * as daemonTransport from '@/daemon/controlHttp';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
+import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activity/dispatchPersonalFollowOccurrence';
 
 afterEach(() => vi.restoreAllMocks());
+
+it('keeps unavailable and cancelled exact Account sources pending without discovering other follows', async () => {
+  const reads = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { follows: [] } });
+  const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409,
+    data: { ok: false, v: 1, error: 'source_unavailable' } });
+  const effects = vi.fn();
+  const lifetime = new AbortController();
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://run-follow.test',
+    machineId: 'machine', installationId: 'installation', signal: lifetime.signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => true, dispatchPersonal: effects });
+  try {
+    await dispatcher.dispatchAccountSourceRange({ workflowRunIds: ['unavailable-run'], discussionIds: ['unavailable-discussion'] });
+    expect(posts.mock.calls.map(([, body]) => body)).toEqual([
+      { v: 1, source: { kind: 'workflow_run', runId: 'unavailable-run' } },
+      { v: 1, source: { kind: 'discussion', discussionId: 'unavailable-discussion' } },
+    ]);
+    lifetime.abort();
+    await dispatcher.dispatchAccountSourceRange({ workflowRunIds: ['cancelled-run'] });
+    expect(posts).toHaveBeenCalledTimes(2);
+    expect(effects).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
+  } finally { dispatcher.dispose(); }
+});
+
+it('rechecks only changed Account Run sources without listing unrelated follows, retaining the final personal proof', async () => {
+  const reads = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { follows: [] } });
+  let followed = true;
+  const sources: unknown[] = [];
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    expect(new URL(String(url)).pathname).toBe('/v2/follows/sources/run-occurrence-routes');
+    sources.push(body);
+    const personal = followed ? { policy: { preset: 'quiet' }, alreadyRepresented: false } : undefined;
+    followed = false;
+    return { status: 200, data: { ok: true, v: 1,
+      original: { source: { kind: 'workflow_run', runId: 'changed-run' }, revision: 4 }, event: { kind: 'finished' },
+      routes: [], ...(personal ? { personal } : {}) } };
+  });
+  const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null };
+  const serverHttpBaseUrl = 'http://run-follow.test';
+  const settings = accountSettingsParse({});
+  const snapshot = { source: 'network' as const, settings, rawSettings: {}, ...notificationCatalogFixture(settings),
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    scopeKey: runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(credentials)) };
+  const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot, serverHttpBaseUrl,
+    isCurrent: async () => true });
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials, serverId: 'home', serverHttpBaseUrl,
+    machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => operationContext.isCurrent(), dispatchPersonal: (dispatch, isCurrent) =>
+      createPersonalFollowOccurrenceDispatcher({ operationContext, isCurrent: () => isCurrent() })(dispatch) });
+  try {
+    await expect(dispatcher.dispatchAccountSourceRange({ workflowRunIds: ['changed-run'] })).rejects.toThrow('personal_follow_scope_retired');
+    expect(sources).toEqual([
+      { v: 1, source: { kind: 'workflow_run', runId: 'changed-run' } },
+      { v: 1, original: { source: { kind: 'workflow_run', runId: 'changed-run' }, revision: 4 } },
+    ]);
+    expect(reads).not.toHaveBeenCalled();
+  } finally { dispatcher.dispose(); }
+});
 
 it.each([
   ['execution_run', 'notification', 'finished'], ['workflow_run', 'notification', 'finished'],

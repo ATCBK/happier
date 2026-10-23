@@ -1,5 +1,5 @@
 import { GetOtherSessionFollowSourceResponseSchema, ListSessionFollowSourcesResponseSchema, RemoveSessionFollowSourceResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceRequestSchema, SetSessionFollowSourceResponseSchema, SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
-import { parseOtherFollowSourceRefPathV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefPathV1';
+import { parseOtherFollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefTransportV1';
 import { SessionFollowSourceProjectionRequestV1Schema, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionFollowObserveInactiveRequestV1Schema, SessionFollowObserveInactiveResponseV1Schema,
     SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema,
@@ -36,9 +36,8 @@ const destinationParamsSchema = z.strictObject({
     destinationSessionId: z.string().check(z.minLength(1)),
 });
 const occurrenceParamsSchema = z.strictObject({ sourceSessionId: z.string().check(z.minLength(1)) });
-const otherSourceParamsSchema = z.strictObject({ destinationSessionId: z.string().check(z.minLength(1)),
-    sourceRef: z.string().check(z.minLength(1)) });
-const otherFollowersParamsSchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
+const otherSourceQuerySchema = z.strictObject({ sourceRef: z.string().check(z.minLength(1)) });
+const otherFollowersQuerySchema = z.strictObject({ ...otherSourceQuerySchema.shape, ...FollowListPageQueryV1Schema.shape });
 
 const sourceParamsSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destinationParamsSchema, {
     sourceSessionId: z.string().check(z.minLength(1)),
@@ -82,15 +81,14 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         config: { allowApiToken: true, apiTokenSessionAction: 'follow.list', restrictedCredentialBinding: {
             scope: 'account', allowSessionRuntime: false,
         } },
-        schema: { params: otherFollowersParamsSchema, querystring: FollowListPageQueryV1Schema,
+        schema: { querystring: otherFollowersQuerySchema,
             response: { 200: FollowListActionOutputV1Schema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherFollowersParamsSchema.safeParse(request.params);
-        const query = FollowListPageQueryV1Schema.safeParse(request.query);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const query = otherFollowersQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         if (!source || !query.success) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await listOtherSessionFollowers({ accountId: request.userId, source,
-            authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
+            authentication: readSessionAccessAuthenticationFromRequest(request), cursor: query.data.cursor, limit: query.data.limit });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
     });
 
@@ -99,10 +97,12 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         config: { apiTokenSessionAction: 'follow.get', restrictedCredentialBinding: {
             scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
         } },
-        schema: { params: otherSourceParamsSchema, response: { 200: GetOtherSessionFollowSourceResponseSchema, ...errorResponses } },
+        schema: { params: destinationParamsSchema, querystring: otherSourceQuerySchema,
+            response: { 200: GetOtherSessionFollowSourceResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const params = destinationParamsSchema.safeParse(request.params);
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         if (!params.success || !source) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await listSessionFollowSources({ accountId: request.userId,
             destinationSessionId: params.data.destinationSessionId,
@@ -117,10 +117,12 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         config: { apiTokenSessionAction: 'follow.set', restrictedCredentialBinding: {
             scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
         } },
-        schema: { params: otherSourceParamsSchema, response: { 200: SetSessionFollowSourceResponseSchema, ...errorResponses } },
+        schema: { params: destinationParamsSchema, querystring: otherSourceQuerySchema,
+            response: { 200: SetSessionFollowSourceResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const params = destinationParamsSchema.safeParse(request.params);
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         const body = SetSessionFollowSourceRequestSchema.safeParse(request.body);
         if (!params.success || !source || !body.success) return reply.code(400).send({ error: 'invalid_parameters' });
         const authentication = readSessionAccessAuthenticationFromRequest(request);
@@ -138,10 +140,12 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         config: { apiTokenSessionAction: 'follow.remove', restrictedCredentialBinding: {
             scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false,
         } },
-        schema: { params: otherSourceParamsSchema, response: { 200: RemoveSessionFollowSourceResponseSchema, ...errorResponses } },
+        schema: { params: destinationParamsSchema, querystring: otherSourceQuerySchema,
+            response: { 200: RemoveSessionFollowSourceResponseSchema, ...errorResponses } },
     }, async (request, reply) => {
-        const params = otherSourceParamsSchema.safeParse(request.params);
-        const source = params.success ? parseOtherFollowSourceRefPathV1(params.data.sourceRef) : null;
+        const params = destinationParamsSchema.safeParse(request.params);
+        const query = otherSourceQuerySchema.safeParse(request.query);
+        const source = query.success ? parseOtherFollowSourceRefV1(query.data.sourceRef) : null;
         if (!params.success || !source) return reply.code(400).send({ error: 'invalid_parameters' });
         const result = await removeOtherSessionFollowSource({ accountId: request.userId,
             destinationSessionId: params.data.destinationSessionId, source,

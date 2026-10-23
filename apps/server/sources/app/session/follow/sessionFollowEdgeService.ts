@@ -1028,7 +1028,7 @@ export async function authorizeSessionFollowSourceKeyPreparer(
     if (input.sourceSessionId === input.destinationSessionId) {
         return { ok: false, error: "session_follow_same_session" };
     }
-    return await inTx(async (tx) => await prepareSessionFollowSourceKeyPreparerInTx(tx, input), { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
+    return await inReadSnapshot(async (tx) => await prepareSessionFollowSourceKeyPreparerInTx(tx, input));
 }
 
 export async function authorizeSessionFollowSourceKeyPreparation(input: Readonly<{
@@ -1042,7 +1042,7 @@ export async function authorizeSessionFollowSourceKeyPreparation(input: Readonly
     if (input.sourceSessionId === input.destinationSessionId) {
         return { ok: false, error: "session_follow_same_session" };
     }
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const prepared = await prepareSessionFollowSourceKeyPreparerInTx(tx, input);
         if (
             !prepared.ok
@@ -1087,7 +1087,7 @@ export async function authorizeSessionFollowSourceKeyPreparation(input: Readonly
             sourceSessionId: input.sourceSessionId,
             machineId: input.principal.machineId,
         } };
-    }, { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
+    });
 }
 
 /**

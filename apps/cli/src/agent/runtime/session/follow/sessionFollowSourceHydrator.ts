@@ -127,6 +127,8 @@ export type SessionFollowHydratedUpdate = SessionFollowUpdateEnvelopeV1 & Readon
   sourceTerminalTurn?: Readonly<{ id: string; status: 'completed' }>;
   /** Recheck outcome-specific evidence after Follow rechecks its source grant. */
   recheckWorkerUpdateAdmission?: (signal: AbortSignal) => Promise<boolean>;
+  /** Only a successfully opened, sufficiently current request snapshot proves withdrawal. */
+  isOriginalRequestWithdrawn?: () => boolean;
 }>;
 
 /**
@@ -648,7 +650,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         ? await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
             request: () => readCurrentReviewWorkerUpdate({ credentials: input.credentials, observation, signal }) })
         : null;
-      let workerAdmission = reviewWorkerUpdate ? {
+      let workerAdmission: Pick<SessionFollowHydratedUpdate, 'recheckWorkerUpdateAdmission' | 'isOriginalRequestWithdrawn'> = reviewWorkerUpdate ? {
         recheckWorkerUpdateAdmission: async (recheckSignal: AbortSignal) => {
           try {
             const current = await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
@@ -771,15 +773,16 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
       };
       if ('kind' in observation && 'sourceRequests' in observation.delivery.original) {
         const original = observation.delivery.original.sourceRequests;
+        let withdrawn = false;
         const currentRequestIsLive = async (source: Parameters<typeof readLiveRequests>[0]): Promise<boolean> => {
           const active = await readLiveRequests(source, original.agentStateVersion);
-          return active !== null && original.requests.every(request => active.some(([requestId, current]) => requestId === request.requestId
+          const live = active !== null && original.requests.every(request => active.some(([requestId, current]) => requestId === request.requestId
             && current.createdAt === request.createdAt && current.turnId === request.turnId));
+          withdrawn = active !== null && !live;
+          return live;
         };
-        if (!await currentRequestIsLive(transport.rawSession)) {
-          return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
-        }
-        workerAdmission = { recheckWorkerUpdateAdmission: async (requestSignal: AbortSignal) => {
+        workerAdmission = { isOriginalRequestWithdrawn: () => withdrawn,
+          recheckWorkerUpdateAdmission: async (requestSignal: AbortSignal) => {
           try {
             requestSignal.throwIfAborted();
             if (useRunnerProjection) {
@@ -798,6 +801,9 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
             return false;
           }
         } };
+        if (!await currentRequestIsLive(transport.rawSession)) {
+          return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs, ...workerAdmission };
+        }
       }
 
       const deliveredSeq = observation.delivered.transcriptSeq;

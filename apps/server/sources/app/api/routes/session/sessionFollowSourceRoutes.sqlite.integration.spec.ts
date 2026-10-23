@@ -179,7 +179,7 @@ describe('Session Follow source routes', () => {
         await db.session.update({ where: { id: parent.id }, data: { runtimeMachineTarget: {
             homeId: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', accountId: owner.id, sessionId: parent.id,
             machineId: machine.id, installationId: machine.installationId! } } });
-        const source = { kind: 'execution_run' as const, sessionId: parent.id, runId: 'exact-run' };
+        const source = { kind: 'execution_run' as const, sessionId: parent.id, runId: `run_${randomUUID()}` };
         const receiver = kind === 'account' ? { kind: 'account' as const }
             : { kind: 'session' as const, sessionId: destination.id };
         const policy = { preset: 'important' as const };
@@ -216,6 +216,12 @@ describe('Session Follow source routes', () => {
             expect(parseSessionFollowActionResponse('follow.list', listInput, { ...listed.json(), rules: [],
                 ...(kind === 'account' ? { sources: [] } : { follows: [] }), coverage: 'complete' }))
                 .toMatchObject(kind === 'account' ? { follows: [{ source }] } : { sources: [{ source }] });
+            const reverseInput = { direction: 'followers' as const, source, limit: 1 };
+            const reverse = await app.inject({ method: 'GET', url: resolveSessionFollowActionRequest('follow.list', reverseInput).path });
+            expect(reverse.statusCode, reverse.body).toBe(200);
+            expect(parseSessionFollowActionResponse('follow.list', reverseInput, reverse.json()))
+                .toMatchObject(kind === 'account' ? { peopleCount: 1, follows: [{ source }] }
+                    : { sources: [{ source, destinationSessionId: destination.id }] });
             online = false;
             expect((await app.inject({ method: 'PUT', url: path, payload: { policy: { preset: 'quiet' } } })).statusCode).toBe(200);
             expect((await app.inject({ method: 'DELETE', url: path })).json()).toEqual({ changed: true });

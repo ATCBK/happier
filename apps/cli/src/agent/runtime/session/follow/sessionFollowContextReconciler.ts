@@ -45,7 +45,7 @@ export type SessionFollowHydrateObservation = (input: Readonly<{
   selectionChannel?: 'voice';
 }>) => Promise<(SessionFollowUpdateEnvelopeV1 & Partial<Pick<
   SessionFollowHydratedUpdate,
-  'sourceRecencyMs' | 'transcriptConsumedThroughByRenderedMessageCount' | 'pendingHumanIngress' | 'workerUpdate' | 'recheckWorkerUpdateAdmission' | 'sourceTerminalTurn'
+  'sourceRecencyMs' | 'transcriptConsumedThroughByRenderedMessageCount' | 'pendingHumanIngress' | 'workerUpdate' | 'recheckWorkerUpdateAdmission' | 'sourceTerminalTurn' | 'isOriginalRequestWithdrawn'
 >>) | null>;
 
 /** One hydrated-source decision shared by active and absent-host Follow admission. */
@@ -215,7 +215,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
       && sameStrictJsonValue(observation.delivery, delivery))) return null;
     return current.publisherGeneration;
   };
-  const reconcileSessions = async ({ signal, maxFollowContextUtf8Bytes: invocationAllowance, deliveryIntent = 'natural', executionRunId, followDeliveries = [] }: Options): Promise<SessionFollowReconciledContext | null> => {
+  const reconcileSessions = async ({ signal, maxFollowContextUtf8Bytes: invocationAllowance, deliveryIntent = 'natural', executionRunId, followDeliveries = [] }: Options,
+    withdrawnFollowLocalInputIds: string[]): Promise<SessionFollowReconciledContext | null> => {
     if (signal.aborted) return null;
     // Reuse the host's next preparation boundary; no rearm/timer or second
     // native effect is needed to finish an already accepted input's ACK.
@@ -338,6 +339,14 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     if (!observed.publisherGeneration || !observed.observations || observed.observations.length === 0) return null;
     const publisherGeneration = observed.publisherGeneration;
     const destinationSessionId = (input.session as Pick<ApiSessionClient, 'sessionId'>).sessionId;
+    const recordOriginalWithdrawal = (observation: SessionFollowPendingObservationV1, isWithdrawn?: () => boolean) => {
+      if ('kind' in observation && isWithdrawn?.()
+        && followDeliveries.some(delivery => delivery.localInputId === observation.localInputId
+          && sameStrictJsonValue(delivery.delivery, observation.delivery))
+        && !withdrawnFollowLocalInputIds.includes(observation.localInputId)) {
+        withdrawnFollowLocalInputIds.push(observation.localInputId);
+      }
+    };
     const isAwaitingAcknowledgement = (observation: SessionFollowPendingObservationV1, update: WorkerUpdateV1 | undefined): boolean => {
       for (const pending of pendingAcknowledgements) {
         const represented = pending.workerObservation ?? pending.observation;
@@ -399,6 +408,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
         if (update.edge.sourceSessionId !== observation.sourceSessionId) return null;
         if (update.edge.destinationSessionId !== observation.destinationSessionId) return null;
         if (update.awareness.sessionId !== observation.sourceSessionId) return null;
+        recordOriginalWithdrawal(observation, update.isOriginalRequestWithdrawn);
+        if ('kind' in observation && withdrawnFollowLocalInputIds.includes(observation.localInputId)) return null;
         if (
           update.observed.transcriptSeq < observation.delivered.transcriptSeq
           || update.observed.transcriptSeq > observation.observed.transcriptSeq
@@ -428,6 +439,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
           workerUpdate,
           recheckWorkerUpdateAdmission,
           sourceTerminalTurn,
+          isOriginalRequestWithdrawn,
           ...rawPromptUpdate
         } = update;
         if (transcriptConsumedThroughByRenderedMessageCount !== undefined) {
@@ -450,7 +462,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
           : rawPromptUpdate;
         if (observer.kind === 'destination_session' && observation.relation === 'manager' && !workerUpdate) return null;
         return { update: promptUpdate, sourceRecencyMs, transcriptConsumedThroughByRenderedMessageCount, readMode, workerUpdate, recheckWorkerUpdateAdmission,
-          sourceTerminalTurn, acceptedOriginalRejoin,
+          sourceTerminalTurn, acceptedOriginalRejoin, isOriginalRequestWithdrawn,
           mayWake: shouldWakeForSessionFollowObservation(observation, update) };
       } catch (error) {
         // A queued original is required input, so its unavailable Home read must
@@ -475,7 +487,10 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     if (signal.aborted) return null;
     const readmittedEntries = (await Promise.all(admitted.map(async (entry) => {
       if (!isStillAdmitted(readmitted, entry.observation)) return null;
-      if (entry.recheckWorkerUpdateAdmission && !await entry.recheckWorkerUpdateAdmission(signal)) return null;
+      if (entry.recheckWorkerUpdateAdmission && !await entry.recheckWorkerUpdateAdmission(signal)) {
+        recordOriginalWithdrawal(entry.observation, entry.isOriginalRequestWithdrawn);
+        return null;
+      }
       if (isAwaitingAcknowledgement(entry.observation, entry.workerUpdate)) return null;
       return entry;
     }))).flatMap(entry => entry ? [entry] : []);
@@ -578,6 +593,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
       const primary = { observation, update: filtered,
         workerUpdate: 'kind' in observation ? projection.workerUpdate : undefined,
         recheckWorkerUpdateAdmission: 'kind' in observation ? entry.recheckWorkerUpdateAdmission : undefined,
+        isOriginalRequestWithdrawn: entry.isOriginalRequestWithdrawn,
         ackable, renderFollow: projection.renderFollow };
       return [primary];
     });
@@ -633,6 +649,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
       : undefined;
 
     return {
+      withdrawnFollowLocalInputIds,
       ...(representedDeliveries.length ? { representedFollowLocalInputIds: representedDeliveries.map(delivery => delivery.localInputId) } : {}),
       updates: prefixPrepared.filter(entry => entry.renderFollow).map(({ update }) => update),
       ...(prepared.some(entry => entry.workerUpdate) ? {
@@ -675,10 +692,15 @@ export function createSessionFollowContextReconciler(input: Readonly<{
         }
         // All or nothing: the wake event identity and its ACK name every represented
         // source, so a context that lost any of them is withdrawn rather than narrowed.
-        const allowed = await Promise.all(prepared.map(async ({ observation, workerUpdate, recheckWorkerUpdateAdmission }) =>
-          isStillAdmitted(current, observation)
-          && (!recheckWorkerUpdateAdmission || await recheckWorkerUpdateAdmission(dispatchSignal))
-          && !isAwaitingAcknowledgement(observation, workerUpdate)));
+        const allowed = await Promise.all(prepared.map(async entry => {
+          const { observation, workerUpdate, recheckWorkerUpdateAdmission } = entry;
+          if (!isStillAdmitted(current, observation)) return false;
+          if (recheckWorkerUpdateAdmission && !await recheckWorkerUpdateAdmission(dispatchSignal)) {
+            recordOriginalWithdrawal(observation, 'isOriginalRequestWithdrawn' in entry ? entry.isOriginalRequestWithdrawn : undefined);
+            return false;
+          }
+          return !isAwaitingAcknowledgement(observation, workerUpdate);
+        }));
         return !signal.aborted && !dispatchSignal.aborted && allowed.every(Boolean);
       },
       acknowledgeAccepted: (acceptance, pendingSettlement) => {
@@ -773,9 +795,15 @@ export function createSessionFollowContextReconciler(input: Readonly<{
   };
   return async options => {
     await Promise.all([...pendingRunAcknowledgements].map(retry => retry()));
+    const withdrawnFollowLocalInputIds: string[] = [];
     const queued = (options.followDeliveries ?? []).filter(entry => 'source' in entry.delivery.original);
-    const sessions = await reconcileSessions({ ...options,
-      followDeliveries: (options.followDeliveries ?? []).filter(entry => 'sourceSessionId' in entry.delivery.original) });
+    const preparedSessions = await reconcileSessions({ ...options,
+      followDeliveries: (options.followDeliveries ?? []).filter(entry => 'sourceSessionId' in entry.delivery.original) }, withdrawnFollowLocalInputIds);
+    const sessions: SessionFollowReconciledContext | null = preparedSessions ?? (withdrawnFollowLocalInputIds.length ? {
+      updates: [], withdrawnFollowLocalInputIds,
+      recheckAdmission: async (signal: AbortSignal) => !signal.aborted && !options.signal.aborted,
+      acknowledgeAccepted: () => {},
+    } : null);
     if (!queued.length || input.observer?.kind === 'account_voice' || options.signal.aborted) return sessions;
     const observe = async (signal: AbortSignal) => {
       try { return await input.session.observePendingSessionFollow({ signal,
@@ -788,7 +816,6 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     };
     const observed = await observe(options.signal);
     if (!observed?.ok || options.signal.aborted) return sessions;
-    const withdrawnFollowLocalInputIds: string[] = [];
     const readWithdrawn = (observations: typeof observed.observations) => {
       for (const entry of queued) if (observations.some(observation => 'kind' in observation
         && observation.kind === 'admitted_run_input' && observation.disposition === 'withdrawn'

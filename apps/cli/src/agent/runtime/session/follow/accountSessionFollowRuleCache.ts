@@ -4,13 +4,13 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { createAutomationAccountEncryptionMaterialSnapshotV1, isAvailableE2eeAutomationAccountEncryptionV1, resolveValidatedAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import type { StoredCredentials } from '@/persistence';
-import { createSessionFollowRuleCache } from './sessionFollowRuleCache';
+import { createSessionFollowRuleCache, type SessionFollowRuleInvalidation } from './sessionFollowRuleCache';
 import { SESSION_FOLLOW_HTTP_PATHS_V1, SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
 
 /** Own-Account transport captured by the daemon; restricted Session credentials never enter this reader. */
 export function createAccountSessionFollowRuleCache(input: Readonly<{
   accountId: string; credentials: StoredCredentials; serverHttpBaseUrl: string; signal: AbortSignal;
-  isCurrent: () => boolean | Promise<boolean>; subscribeInvalidation: (listener: () => void) => () => void;
+  isCurrent: () => boolean | Promise<boolean>; subscribeInvalidation: (listener: (change?: SessionFollowRuleInvalidation) => void) => () => void;
 }>) {
   if (readAccountIdFromToken(input.credentials.token) !== input.accountId) throw new Error('follow_rule_account_mismatch');
   const cache = createSessionFollowRuleCache({

@@ -136,7 +136,7 @@ export type SessionAutoFollowPreferencesResponse = z.infer<
 
 export const SESSION_FOLLOW_HTTP_PATHS_V1 = Object.freeze({
   follow: '/v2/sessions/:sessionId/follow',
-  otherSource: '/v2/account/follows/sources/:sourceRef',
+  otherSource: '/v2/account/follows/sources',
   preferences: '/v2/account/session-follow-preferences',
   voiceInclusions: '/v2/account/session-follow-voice-inclusions',
 });

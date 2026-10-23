@@ -6,6 +6,32 @@ import { sealSessionFollowRuleContentV1 } from './sessionFollowRuleContentCodecV
 import { pageFollowListV1 } from './sessionFollowListV1.js';
 
 describe('signed Follow HTTP purposes', () => {
+  it('binds long exact Run source queries for both receivers and reverse inspection', () => {
+    const source = { kind: 'execution_run' as const, sessionId: 'cmvjujoae0070m2opuposiddv',
+      runId: "run_a29bce41-d16c-4af6-a586-6f96d8773e2d/%?+'" };
+    for (const receiver of [{ kind: 'account' }, { kind: 'session', sessionId: 'receiver' }] as const) {
+      for (const actionId of ['follow.get', 'follow.set', 'follow.remove'] as const) {
+        const request = resolveSessionFollowActionRequest(actionId, { receiver, source,
+          ...(actionId === 'follow.set' ? { policy: { preset: 'important' } } : {}) });
+        const url = new URL(request.path, 'https://home.test');
+        const sourceRef = url.searchParams.get('sourceRef');
+        expect(JSON.parse(sourceRef!)).toEqual(source);
+        const wire = { ...request, routeInput: { sourceRef,
+          ...(receiver.kind === 'session' ? { destinationSessionId: receiver.sessionId } : {}), ...request.body },
+          ...(receiver.kind === 'session' ? { sessionRouteSessionId: receiver.sessionId } : {}) };
+        expect(isSessionFollowActionHttpRequestV1(actionId, wire)).toBe(true);
+        expect(isSessionFollowActionHttpRequestV1(actionId, { ...wire,
+          routeInput: { ...wire.routeInput, sourceRef: JSON.stringify({ ...source, runId: 'another-run' }) } })).toBe(false);
+        expect(isSessionFollowActionHttpRequestV1(actionId, { ...wire, path: `${request.path}&accountId=foreign` })).toBe(false);
+      }
+    }
+    const request = resolveSessionFollowActionRequest('follow.list', { direction: 'followers', source, cursor: 'next/page', limit: 1 });
+    const sourceRef = new URL(request.path, 'https://home.test').searchParams.get('sourceRef');
+    const wire = { ...request, routeInput: { sourceRef, cursor: 'next/page', limit: 1 } };
+    expect(isSessionFollowActionHttpRequestV1('follow.list', wire)).toBe(true);
+    expect(isSessionFollowActionHttpRequestV1('follow.list', { ...wire, routeInput: { ...wire.routeInput, limit: 2 } })).toBe(false);
+  });
+
   it('continues exact source keys after removal and binds the cursor to its admitted list', () => {
     const rows = ['source-c', 'source-a', 'source-b'];
     const first = pageFollowListV1({ rows, scope: 'receiver', limit: 1, key: row => row });

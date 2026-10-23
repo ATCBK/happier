@@ -46,6 +46,8 @@ import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEven
 import { captureSemanticSessionFollowRuleSourceEvidence } from './sessionFollowRuleSourceEvidence';
 import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
+import { matchSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { SessionFollowRuleInvalidation } from './sessionFollowRuleCache';
 export type { SessionFollowAccountOccurrence } from './sessionFollowRuleSourceEvidence';
 export type SessionFollowReceiverRangeResult = Readonly<{ coveredEvents: readonly Readonly<{
   sourceSessionId: string; kind: FollowEventV1['kind'];
@@ -55,7 +57,7 @@ export type SessionFollowOccurrenceDispatch = Readonly<
   { occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowRunOccurrence; destinationSessionId?: never; contextSessionId?: string }
   | { occurrence: SessionFollowAccountOccurrence; destinationSessionId: string }
   | { observations: readonly SessionFollowSessionPendingObservationV1[]; destinationSessionId: string; sourceSessionId?: string; occurrence?: never }
-  | { sourceSessionIdChanged: string; occurrence?: never; destinationSessionId?: never }
+  | { sourceSessionIdChanged: string; contextSessionId?: string; occurrence?: never; destinationSessionId?: never }
   | { accountFollowSourcesChanged: Readonly<{ sourceSessionId?: string; workflowRunIds?: readonly string[]; discussionIds?: readonly string[] }>; occurrence?: never; destinationSessionId?: never }
 >;
 
@@ -64,7 +66,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   accountId: string; credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string;
   machineId: string; installationId: string; signal: AbortSignal;
   isCurrent: () => Promise<boolean>;
-  subscribeInvalidation: (listener: () => void) => () => void;
+  subscribeInvalidation: (listener: (change?: SessionFollowRuleInvalidation) => void) => () => void;
   /** Borrowed from the already-retained requester Account lifetime, never an installed Account substitute. */
   rulesCache?: ReturnType<typeof createAccountSessionFollowRuleCache>;
   spawnSession?: Parameters<typeof sendSessionMessage>[0]['spawnSession'];
@@ -231,6 +233,19 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     }
   };
   const dispatchAccountSourceRange = async (filter: Readonly<{ sourceSessionId?: string; workflowRunIds?: readonly string[]; discussionIds?: readonly string[] }> = {}) => {
+    // The retained-source owner proves the personal relation itself. Exact
+    // source hints need no Account-wide discovery; reconnects still page it.
+    if (filter.sourceSessionId === undefined && (filter.workflowRunIds || filter.discussionIds)) {
+      for (const runId of new Set(filter.workflowRunIds)) {
+        if (!await current() || !await input.isPersonalCurrent()) return;
+        await dispatchRun({ source: { kind: 'workflow_run', runId } }, undefined, true);
+      }
+      for (const discussionId of new Set(filter.discussionIds)) {
+        if (!await current() || !await input.isPersonalCurrent()) return;
+        await dispatchDiscussion({ kind: 'discussion', discussionId });
+      }
+      return;
+    }
     let cursor: string | undefined;
     do {
       if (!await current() || !await input.isPersonalCurrent()) return;
@@ -510,7 +525,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     // Receiver recovery re-reads configured Run sources. A source publisher's
     // notification repairs its own Session prefix without scanning other work.
     // A Run's retained original is never inferred from a parent turn.
-    if (!sourcePublisher) {
+    if (!sourcePublisher && !request.sourceSessionId) {
       let cursor: string | undefined;
       do {
         const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));
@@ -680,11 +695,29 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       dispatch(request.occurrence, request.destinationSessionId),
     dispatchReceiverRange,
     dispatchAccountSourceRange,
-    async readReceiverSessionIds(): Promise<readonly string[]> {
+    async readReceiverSessionIds(sourceSessionId?: string): Promise<readonly string[]> {
       if (!await current()) return [];
       const opened = await rules.read();
-      return opened.status === 'available' && await current() ? [...new Set(opened.rules.flatMap(rule =>
-        rule.definition.enabled && rule.receiver.kind === 'session' ? [rule.receiver.sessionId] : []))] : [];
+      if (opened.status !== 'available' || !await current()) return [];
+      let candidates = opened.rules.filter(rule => rule.definition.enabled && rule.receiver.kind === 'session');
+      if (sourceSessionId && candidates.length) {
+        const [encryption, source] = await Promise.allSettled([
+          fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
+          fetchSessionById({ token: input.credentials.token, sessionId: sourceSessionId,
+            serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
+        ]);
+        if (!await current()) return [];
+        if (encryption.status === 'fulfilled' && source.status === 'fulfilled' && source.value) {
+          const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption: encryption.value,
+            row: source.value, serverId: input.serverId, nowMs: Date.now(), accountId: input.accountId,
+            serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
+            filters: candidates.map(rule => rule.definition.filter) });
+          // A known miss suppresses discovery only. Unknown facts retain the
+          // receiver, and actual dispatch still proves rules and source fresh.
+          if (facts) candidates = candidates.filter(rule => matchSessionListFilterV1(rule.definition.filter, facts) !== 'miss');
+        }
+      }
+      return await current() ? [...new Set(candidates.flatMap(rule => rule.receiver.kind === 'session' ? [rule.receiver.sessionId] : []))] : [];
     },
   };
 }
