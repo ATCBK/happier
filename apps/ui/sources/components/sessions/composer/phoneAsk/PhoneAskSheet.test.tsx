@@ -153,3 +153,26 @@ describe('PhoneAskSheet', () => {
     await screen.unmount();
   });
 });
+
+describe('PhoneWorkingCapsuleView', () => {
+  it('floats above the floating tab bar when one covers the page, so the capsule stays in view', async () => {
+    const { PhoneWorkingCapsuleView } = await import('./PhoneWorkingCapsule');
+    const { SessionCockpitBottomChromeHeightContext } = await import(
+      '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry'
+    );
+    const { StyleSheet } = await import('react-native');
+    const tabBarHeight = 84;
+    const screen = await renderScreen(
+      <SessionCockpitBottomChromeHeightContext.Provider value={tabBarHeight}>
+        <PhoneWorkingCapsuleView kind="working" agent="Codex" onView={() => {}} />
+      </SessionCockpitBottomChromeHeightContext.Provider>,
+    );
+    const capsule = screen.findByTestId('phone-ask-working-capsule');
+    expect(capsule).toBeTruthy();
+    let dock = capsule!.parent;
+    while (dock && StyleSheet.flatten(dock.props.style)?.position !== 'absolute') dock = dock.parent;
+    expect(StyleSheet.flatten(dock?.props.style)).toMatchObject({ position: 'absolute' });
+    expect(StyleSheet.flatten(dock?.props.style).bottom).toBeGreaterThanOrEqual(tabBarHeight);
+    await screen.unmount();
+  });
+});

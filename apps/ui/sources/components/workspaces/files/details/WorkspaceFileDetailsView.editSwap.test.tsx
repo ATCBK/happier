@@ -199,6 +199,51 @@ describe('File page View → Edit swap', () => {
         } finally { await screen.unmount(); }
     });
 
+    it('seats the phone selection bar above the floating tab bar, in place of the page toolbar', async () => {
+        viewport.width = 390;
+        viewport.height = 844;
+        const { SessionCockpitBottomChromeHeightContext } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { SelectionActionBar } = await import('@/components/ui/selection/SelectionActionBar');
+        const { StyleSheet } = await import('react-native');
+        // The code view's DOM selection is the boundary: one selected row of the read body.
+        const root = document.createElement('div');
+        const line = document.createElement('div');
+        line.id = 'file-view-f:1';
+        line.append(document.createTextNode('export const attempts = 3;'));
+        root.append(line);
+        document.body.append(root);
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        range.getBoundingClientRect = () => new DOMRect(20, 30, 160, 20);
+        range.getClientRects = () => [new DOMRect(20, 30, 160, 20)] as unknown as DOMRectList;
+        const tabBarHeight = 84;
+        const screen = await fixture.render(<ModalProvider><SessionCockpitBottomChromeHeightContext.Provider value={tabBarHeight}>
+            <SurfaceStateSizeProvider size="phone">
+                <WorkspaceFileDetailsView scopeId="project:phone-selection" scope={fixture.scope} filePath={filePath}
+                    sessionIdForAugmentation={null} />
+            </SurfaceStateSizeProvider>
+        </SessionCockpitBottomChromeHeightContext.Provider></ModalProvider>, { createNodeMock: node => node.type === 'View' ? root : null });
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            await flushHookEffects({ cycles: 4 });
+            expect(screen.findHostByTestId('file-page-toolbar')).not.toBeNull();
+            window.getSelection()!.removeAllRanges();
+            window.getSelection()!.addRange(range);
+            await act(async () => { document.dispatchEvent(new Event('selectionchange')); });
+            await vi.waitFor(() => expect(screen.findByType(SelectionActionBar).props.visible).toBe(true));
+            await flushHookEffects({ cycles: 2 });
+            // The floating tab bar covers the page's bottom: the bar clears it, and the page toolbar steps aside.
+            expect(StyleSheet.flatten(screen.findByType(SelectionActionBar).parent?.props.style)).toMatchObject({ bottom: tabBarHeight });
+            expect(screen.findHostByTestId('file-page-toolbar')).toBeNull();
+            // ✕ puts the bar away until the selection changes, and the page toolbar comes back.
+            await screen.pressByTestIdAsync('selection-bar-dismiss');
+            await flushHookEffects({ cycles: 2 });
+            expect(screen.findByType(SelectionActionBar).props.visible).toBe(false);
+            expect(screen.findHostByTestId('file-page-toolbar')).not.toBeNull();
+        } finally { await screen.unmount(); root.remove(); window.getSelection()?.removeAllRanges(); }
+    });
+
     it('keeps the read view up until the editor reports ready, then swaps to the editor', async () => {
         const screen = await fixture.render(<ModalProvider>
             <WorkspaceFileDetailsView scopeId="project:edit-swap" scope={fixture.scope} filePath={filePath}

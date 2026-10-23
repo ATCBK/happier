@@ -22,6 +22,7 @@ import { resolveThemeRaisedEdge } from '@/components/ui/surfaces/themeRaisedEdge
 import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
 import { surfaceUsesRim } from '@/components/ui/surfaces/surfaceEdgeTreatment';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { useSessionCockpitComposerBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { t } from '@/text';
 
 import { usePhoneAskSheet } from './phoneAskSheetState';
@@ -45,7 +46,8 @@ export function usePhoneAskSheetFrameReport():
 /**
  * The phone cockpit's frame around its Chat scene (P5 §3.9, D-4). Not raised, the scene fills the cockpit as the
  * Session screen. Raised — Ask is open over another scene — the cockpit shows the same scene through a bottom
- * window exactly as tall as the Ask sheet (the composer and its keyboard lift), so the page above stays readable
+ * window exactly as tall as the Ask sheet (the composer, its keyboard lift and the bottom chrome it sits above),
+ * so the page above stays readable
  * and a tap on it closes the sheet. The scene keeps its full-size layout either way: the composer's own keyboard
  * geometry is untouched and nothing inside remounts.
  */
@@ -60,6 +62,9 @@ export function PhoneAskSheetFrame(
   const [layerHeight, setLayerHeight] = React.useState(0);
   const [lift, setLift] = React.useState<SharedValue<number> | null>(null);
   const sheetHeight = useSharedValue(0);
+  // The Session screen holds its composer above the floating bottom chrome (0 while the keyboard hides it); the
+  // window shows the composer there, so it is that much taller than the sheet itself.
+  const composerReservation = useSessionCockpitComposerBottomChromeHeight();
   // The sheet rises from the bottom edge on Ask; reduced motion presents it in place.
   const rise = useSharedValue(raised ? 0 : 1);
   React.useEffect(() => {
@@ -100,9 +105,9 @@ export function PhoneAskSheetFrame(
   const windowStyle = useAnimatedStyle(() => {
     // Every key is written in both presentations: a key an animated style stops returning keeps its last value.
     if (!raised) return { height: layerHeight, transform: [{ translateY: 0 }] };
-    const height = sheetHeight.value + (lift ? lift.value : 0);
+    const height = sheetHeight.value + (lift ? lift.value : 0) + composerReservation;
     return { height, transform: [{ translateY: rise.value * height }] };
-  }, [layerHeight, lift, raised]);
+  }, [composerReservation, layerHeight, lift, raised]);
 
   return (
     <PhoneAskSheetFrameReportContext.Provider value={report}>

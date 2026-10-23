@@ -9,6 +9,7 @@ import {
   useCoreCapsuleColors,
 } from '@/components/ui/status/capsuleHost';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
@@ -79,7 +80,7 @@ export function PhoneWorkingCapsule(
   );
 }
 
-/** The capsule itself, floating above the page's bottom edge. */
+/** The capsule itself, floating above the page's bottom edge and its floating tab bar. */
 export function PhoneWorkingCapsuleView(
   props: Readonly<{
     kind: PhoneWorkingCapsuleKind;
@@ -90,11 +91,13 @@ export function PhoneWorkingCapsuleView(
   const { theme } = useUnistyles();
   const colors = useCoreCapsuleColors();
   const insets = useChromeSafeAreaInsets();
+  // Like the page's other bottom bars: above the floating tab bar when one covers the page.
+  const chromeClearance = useFloatingChromeClearance();
   const needsYou = props.kind === 'needsYou';
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.dock, { bottom: insets.bottom + theme.space.s16 }]}
+      style={[styles.dock, { bottom: chromeClearance > 0 ? chromeClearance : insets.bottom + theme.space.s16 }]}
     >
       <HappierStatusCapsule
         placement="inline"

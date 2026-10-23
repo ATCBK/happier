@@ -66,6 +66,7 @@ export function FileChangesStrip(
 
 export type FileChangesAsk = Readonly<{ scopeId: string; scope: WorkspaceScopeBase; filePath: string; sessionId: string | null; active: boolean;
   onCommentRange?: React.ComponentProps<typeof FileReadAskControls>['onCommentRange'];
+  onPhoneBarShownChange?: React.ComponentProps<typeof FileReadAskControls>['onPhoneBarShownChange'];
 }>;
 
 export type FileChangesDiffSurface = Readonly<{
@@ -139,7 +140,7 @@ export function FileChangesBody(
       {Platform.OS === 'web' && props.ask ? (
         <FileReadAskControls rootRef={diffRootRef} mode="diff" scopeId={props.ask.scopeId} scope={props.ask.scope}
           filePath={props.ask.filePath} text={unifiedDiff} sessionId={props.ask.sessionId} active={props.ask.active}
-          onCommentRange={props.ask.onCommentRange} />
+          onCommentRange={props.ask.onCommentRange} onPhoneBarShownChange={props.ask.onPhoneBarShownChange} />
       ) : null}
       {phone && strip.total > 0 ? (
         <ReviewBar
@@ -256,7 +257,7 @@ export function FileChangesSection(props: Readonly<{
     containsFocus?: () => boolean;
     liveChangeKind?: string | null;
     /** Mounts the shared selection toolbar (Ask · Comment · Copy) over the diff; the page's pane scope and Session. */
-    ask?: Pick<FileChangesAsk, 'scopeId' | 'sessionId' | 'active' | 'onCommentRange'>;
+    ask?: Pick<FileChangesAsk, 'scopeId' | 'sessionId' | 'active' | 'onCommentRange' | 'onPhoneBarShownChange'>;
     children: (surface: FileChangesDiffSurface) => React.ReactNode;
 }>) {
     const { review, keyboardActive, containsFocus, children, liveChangeKind } = props;

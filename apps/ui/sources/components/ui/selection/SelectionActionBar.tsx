@@ -56,7 +56,8 @@ function CoreSelectionBarOverflowMenu(props: Readonly<{
             matchTriggerWidth={false}
             placement="top"
             popoverAnchorAlign="end"
-            trigger={({ toggle }) => <>{props.renderTrigger(toggle)}</>}
+            // The trigger itself (no Fragment around it), so the menu can mark it expanded.
+            trigger={({ toggle }) => props.renderTrigger(toggle)}
         />
     );
 }

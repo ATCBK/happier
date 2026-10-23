@@ -1,7 +1,9 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { SelectionActionBar } from '@/components/ui/selection/SelectionActionBar';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
@@ -15,8 +17,8 @@ export type AskSelectionControlsProps = UseAskSelectionInput &
     commentEnabled?: boolean;
     /** The surface's own Comment for the selected lines (opens its inline composer); implies Comment. */
     onCommentSelection?: (selection: AskSelection) => void;
-    /** Clears the source selection (phone ✕). */
-    onDismissSelection?: () => void;
+    /** The phone selection bar took (true) or left (false) the bottom edge, so a page's own bottom bar can step aside. */
+    onPhoneBarShownChange?: (shown: boolean) => void;
     testID?: string;
   }>;
 
@@ -27,9 +29,11 @@ export type AskSelectionControlsProps = UseAskSelectionInput &
 export function AskSelectionControls(
   props: AskSelectionControlsProps,
 ): React.ReactElement | null {
-  const { commentEnabled, onCommentSelection, onDismissSelection, testID, ...input } = props;
+  const { commentEnabled, onCommentSelection, onPhoneBarShownChange, testID, ...input } = props;
   const ask = useAskSelection(input);
   const phone = useDeviceType() === 'phone';
+  // The phone bar floats over the page like its other bottom bars: above the floating tab bar when one covers it.
+  const chromeClearance = useFloatingChromeClearance();
   const selection = ask.selection;
   // Once the person asked or commented, the toolbar steps back until the selection changes (lab A2:
   // the selection stays visible, the question is in the composer now).
@@ -62,6 +66,12 @@ export function AskSelectionControls(
       return ask.comment();
     };
   }, [ask.canComment, ask.comment, ask.selection, commentEnabled, onCommentSelection, selectionKey]);
+  const phoneBarShown = phone && visible;
+  React.useEffect(() => {
+    if (!onPhoneBarShownChange) return;
+    onPhoneBarShownChange(phoneBarShown);
+  }, [onPhoneBarShownChange, phoneBarShown]);
+  React.useEffect(() => () => onPhoneBarShownChange?.(false), [onPhoneBarShownChange]);
   const menuItems = React.useMemo(() => ask.menuItems.map((item) => ({
     ...item,
     run: () => {
@@ -74,6 +84,10 @@ export function AskSelectionControls(
       ? selection.endLine - selection.startLine + 1
       : 0;
     return (
+      <View
+        pointerEvents="box-none"
+        style={[styles.phoneBarHost, chromeClearance > 0 ? { bottom: chromeClearance } : null]}
+      >
       <SelectionActionBar
         visible={visible}
         label={t('files.askSelection.lineCount', { count: lineCount })}
@@ -104,21 +118,24 @@ export function AskSelectionControls(
             onPress: ask.copy,
             testID: 'selection-bar-copy',
           },
+          // Other ways to ask are the rare path: on a phone they wait under the bar's ⋯, as behind Ask's chevron on desktop.
           ...menuItems.map((item) => ({
             id: item.id,
             label: item.label,
+            placement: 'menu' as const,
             onPress: item.run,
             testID: `selection-bar-${item.id}`,
           })),
         ]}
         dismiss={{
           label: t('common.close'),
-          onPress: () => onDismissSelection?.(),
+          // ✕ puts the bar away until the selection changes, the same step-back as after Ask or Comment.
+          onPress: () => setActedOnKey(selectionKey),
           testID: 'selection-bar-dismiss',
         }}
-        style={styles.phoneBar}
         testID={testID ? `${testID}-bar` : 'selection-bar'}
       />
+      </View>
     );
   }
   return (
@@ -134,7 +151,8 @@ export function AskSelectionControls(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  phoneBar: {
+  // The bar takes its host's width, so the host holds the gutters (a bar with its own insets would be page-wide and spill).
+  phoneBarHost: {
     position: 'absolute',
     left: theme.space.s16,
     right: theme.space.s16,

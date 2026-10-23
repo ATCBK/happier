@@ -1393,8 +1393,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     // (ED1p), the review bar in Changes (rvp P1) or Find's bar. The header then carries the view choice
     // and Done itself.
     const findHoldsBottom = findOpenPath === filePath;
+    // A selection's bar (Ask · Comment · Copy) holds the bottom edge while it shows, as Find's bar does.
+    const [selectionBarPath, setSelectionBarPath] = React.useState<string | null>(null);
+    const reportSelectionBarShown = React.useCallback((shown: boolean) => setSelectionBarPath(current => shown ? filePath : current === filePath ? null : current), [filePath]);
     const toolbarSeat = phonePage && !isEditorSelected && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
-    const phoneToolbar = toolbarSeat && !findHoldsBottom;
+    const phoneToolbar = toolbarSeat && !findHoldsBottom && selectionBarPath !== filePath;
     const pdfZoom = fileView.pdfZoom ?? 'fit-width';
     const pdfPosition = fileView.pdfPosition ?? null;
     const pdfControl = React.useMemo(() => ({
@@ -1599,7 +1602,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                 <FileReadAskControls rootRef={readBodyRef} mode={displayMode === 'markdown' ? 'markdown' : 'code'}
                     scopeId={props.scopeId} scope={scope} filePath={filePath} text={heldText}
                     sessionId={sessionId || null} active={isActive && !reviewCommentModeActive}
-                    onCommentRange={reviewCommentsEnabled && displayMode === 'file' ? onCommentSelectedRange : undefined} />
+                    onCommentRange={reviewCommentsEnabled && displayMode === 'file' ? onCommentSelectedRange : undefined}
+                    onPhoneBarShownChange={reportSelectionBarShown} />
             ) : null}
         </View>
     );
@@ -1810,7 +1814,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     <FileChangesSection review={changesReview} scope={scope} filePath={filePath}
                         keyboardActive={isActive} liveChangeKind={fileEntry?.kind ?? null}
                         ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive,
-                            onCommentRange: reviewCommentsEnabled ? onCommentSelectedRange : undefined }}>
+                            onCommentRange: reviewCommentsEnabled ? onCommentSelectedRange : undefined,
+                            onPhoneBarShownChange: reportSelectionBarShown }}>
                         {(surface) => renderFindPanel(surface)}
                     </FileChangesSection>
                 ) : readBody}
