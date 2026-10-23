@@ -219,12 +219,12 @@ export class ClaudeLocalPermissionBridge {
         });
     }
 
-    async handlePermissionHook(data: PermissionHookData): Promise<PermissionHookResponse> {
-        if (this.disposed) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
+    async handlePermissionHook(data: PermissionHookData, options?: Readonly<{ signal?: AbortSignal }>): Promise<PermissionHookResponse> {
+        if (this.disposed || options?.signal?.aborted) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
         this.syncPermissionModeFromMetadataSnapshot();
         const hookRequestId = this.resolveRequestId(data);
         const transcriptRequestId = !hookRequestId ? await this.resolveRequestIdFromTranscript(data) : null;
-        if (this.disposed) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
+        if (this.disposed || options?.signal?.aborted) return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
         const requestId = hookRequestId ?? transcriptRequestId ?? this.generateRequestId();
 
         if (!hookRequestId && transcriptRequestId) {
@@ -315,6 +315,7 @@ export class ClaudeLocalPermissionBridge {
             toolName,
             toolInput: coordinatorToolInput,
             createdAt,
+            transportSignal: options?.signal,
         });
 
         const coordinatorDecision = this.permissionCoordinator.requestDecision({
@@ -339,10 +340,12 @@ export class ClaudeLocalPermissionBridge {
             },
             async (error) => {
                 const remaining = this.finishLocalWaiter(requestId, waiter.id);
-                if (waiter.wasTimedOut()) {
+                if (waiter.wasTimedOut() || options?.signal?.aborted) {
                     if (remaining === 0) {
                         const context = this.permissionCoordinator.getResponseContext(requestId);
-                        if (context) await this.expireRequestByContext(context, PERMISSION_TIMED_OUT_REASON);
+                        if (context) await this.expireRequestByContext(context, waiter.wasTimedOut()
+                            ? PERMISSION_TIMED_OUT_REASON
+                            : 'Provider hook transport closed before a response was delivered');
                     }
                     return this.buildDefaultHookResponse(hookEventName);
                 }
@@ -468,6 +471,7 @@ export class ClaudeLocalPermissionBridge {
         toolName: string;
         toolInput: unknown;
         createdAt: number;
+        transportSignal?: AbortSignal;
     }): { id: string; signal: AbortSignal; wasTimedOut: () => boolean } {
         const waiterId = `local-waiter-${++this.localWaiterSequence}`;
         const controller = new AbortController();
@@ -492,7 +496,9 @@ export class ClaudeLocalPermissionBridge {
 
         return {
             id: waiterId,
-            signal: controller.signal,
+            signal: params.transportSignal
+                ? AbortSignal.any([controller.signal, params.transportSignal])
+                : controller.signal,
             wasTimedOut: () => timedOut,
         };
     }

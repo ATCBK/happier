@@ -778,7 +778,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 localPermissionBridge?.handleSessionHook(data);
             }
         },
-        onPermissionHook: async (data) => {
+        onPermissionHook: async (data, options) => {
             const hookTool = typeof (data as any)?.tool_name === 'string'
                 ? (data as any).tool_name
                 : (typeof (data as any)?.toolName === 'string' ? (data as any).toolName : 'unknown_tool');
@@ -793,7 +793,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 if (!localPermissionBridgeEnabled || !localPermissionBridge) {
                     return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
                 }
-                return localPermissionBridge.handlePermissionHook(data);
+                return await localPermissionBridge.handlePermissionHook(data, options);
             } finally {
                 publishPermissionLifecycleHook(data, 'PermissionRequestCompleted');
             }
@@ -1652,13 +1652,13 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                 localPermissionBridge?.handleSessionHook(data);
             }
         },
-        onPermissionHook: async (data) => {
+        onPermissionHook: async (data, options) => {
             publishPermissionLifecycleHook(data, 'PermissionRequest');
             try {
                 if (!localPermissionBridgeEnabled || !localPermissionBridge) {
                     return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
                 }
-                return localPermissionBridge.handlePermissionHook(data);
+                return await localPermissionBridge.handlePermissionHook(data, options);
             } finally {
                 publishPermissionLifecycleHook(data, 'PermissionRequestCompleted');
             }

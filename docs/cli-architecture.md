@@ -1848,7 +1848,11 @@ the coordinator keeps the detached occurrence available for a later retirement
 attempt. Asynchronous reset cleanup retires only the routing entries it captured,
 and does not clear a subsequent turn's requests or cached decisions. Local hook
 expiry uses the same admission boundary before returning its
-default response. A disposed local bridge stops admitting hooks, including a
+default response. In development source, the hook HTTP server propagates timeout
+and disconnect cancellation to the local bridge. The bridge retires the request
+through that coordinator when its last transport waiter closes, including an
+interactive question; a duplicate hook with another live waiter remains answerable.
+A disposed local bridge stops admitting hooks, including a
 missing-id hook whose transcript read was already in flight; captured cancellation
 retirements retain their existing retry behavior. Automatic history
 first uses the normal
