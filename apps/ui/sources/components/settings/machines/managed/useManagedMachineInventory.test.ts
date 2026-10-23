@@ -46,6 +46,8 @@ describe('managed Machine inventory', () => {
         const hook = await renderHook(() => useManagedMachineInventory([target.id], undefined,
             execute), { flushOptions: { cycles: 20 } });
         expect(hook.getCurrent().entries.srv_inventory_revalidate?.status).toBe('ready');
+        const displayRows = hook.getCurrent().machinesByServerId;
+        const enrolledRows = hook.getCurrent().machinesByEnrolledMachineIdByServerId;
         await act(async () => publishHomeAccountChange(target.id));
         await flushHookEffects({ cycles: 5 });
         expect(reads).toBe(2);
@@ -54,6 +56,11 @@ describe('managed Machine inventory', () => {
         await act(async () => revalidation.resolve(Response.json({ machines: [machine] })));
         await flushHookEffects({ cycles: 20 });
         expect(hook.getCurrent().entries.srv_inventory_revalidate?.status).toBe('ready');
+        // The completed read is a new receipt, not new Machine display facts.
+        // A rebuilt index invalidates the entire open picker even though its
+        // admitted row array was retained by this same inventory owner.
+        expect(hook.getCurrent().machinesByServerId).toBe(displayRows);
+        expect(hook.getCurrent().machinesByEnrolledMachineIdByServerId).toBe(enrolledRows);
         await hook.unmount();
     });
     it('isolates shared demand by Home and retires old Account reads before accepting a replacement', async () => {
