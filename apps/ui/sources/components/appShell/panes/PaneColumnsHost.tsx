@@ -26,6 +26,10 @@ import { captureArrangementTravelStart, playArrangementTravel, type ArrangementT
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import type { RightPanePlacement } from './rightPanePlacement';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { AppShellTailContext, AppShellTailSlot, useAppShellTail } from '@/components/navigation/shell/appShellTail';
+import { appShellColumnPlaneColor } from '@/components/navigation/shell/appRail/appShellColumnSurface';
+import { useDestinationFocus } from '@/components/appShell/workspace/destinationInstanceContext';
+import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
 /**
  * The one pane primitive: a main column plus the side columns every destination shares — the
@@ -95,7 +99,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     const deviceType = useDeviceType();
     const multiPaneDeviceType = resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType });
     const { width: windowWidthPx, height: windowHeightPx } = useWindowDimensions();
-    const [hostWidthPx, setHostWidthPx] = React.useState<number>(windowWidthPx);
+    const [measuredHostWidthPx, setHostWidthPx] = React.useState<number>(windowWidthPx);
     const [containerHeightPx, setContainerHeightPx] = React.useState<number>(windowHeightPx);
     const hostRef = React.useRef<View | null>(null);
     React.useLayoutEffect(() => {
@@ -114,6 +118,18 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
 
     const arrangement = props.arrangement === 'editor' && multiPaneEnabled && multiPaneDeviceType !== 'phone' ? 'editor' : 'session';
     const mirrored = arrangement === 'editor';
+    // The shell's right panel position (calm-shell R4-2). With `canvas`, this page's docked right column
+    // and its rail stand in the shell's tail, beside the page sheet: only for the one page on screen at
+    // the trailing edge (not Editor first, not one pane of a split). The layout keeps budgeting the
+    // width the sheet has when the tail is empty, so both placements resolve the same columns.
+    const shellTail = useAppShellTail();
+    const workspace = useOptionalWorkspaceNavigation();
+    const destinationFocused = useDestinationFocus();
+    const soleScope = !workspace?.active || workspace.state.maximizedGroupId !== null || workspace.state.root.kind === 'leaf';
+    const canvasTail = shellTail?.placement === 'canvas' && Platform.OS === 'web' && !mirrored && soleScope ? shellTail : null;
+    const hostWidthPx = canvasTail?.containerWidthPx ?? measuredHostWidthPx;
+    const rightTail = React.useMemo(() => (canvasTail ? { host: canvasTail.rightHost, hidden: !destinationFocused } : undefined),
+        [canvasTail, destinationFocused]);
     // The swap travels (lab FL): read the columns where they are before the new order commits, then
     // slide each from there once it has.
     const reducedMotion = useReducedMotionPreference();
@@ -589,9 +605,11 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 onDragBottomDockHeightPx={setBottomDragHeightPx}
                 rightOverlayFocusReturnRef={props.rightOverlayFocusReturnRef}
                 detailsOverlayFocusReturnRef={props.detailsOverlayFocusReturnRef}
+                rightTail={rightTail}
                 bottomOverlayFocusReturnRef={props.bottomOverlayFocusReturnRef}
             />
             {showActionRail ? (
+                <RailTailSlot tail={rightTail} host={canvasTail?.railHost ?? null}>
                 <View
                     ref={railColumnRef}
                     testID="pane-action-rail-column"
@@ -599,11 +617,15 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                     style={styles.railColumn}
                 >
                     {/* The rail and its side column are one surface (OR-2): it takes the column's material, so a page's
-                        atmosphere (a Project's planet and band) stays on the page and never shows through the rail. */}
-                    <GlassSurface surfaceGroup="content" solidColor={theme.colors.surface.base} finishRole={null} nested style={styles.railSurface}>
+                        atmosphere (a Project's planet and band) stays on the page and never shows through the rail. On
+                        the canvas both stand on the navigation plane instead. */}
+                    <GlassSurface surfaceGroup={canvasTail ? 'sidebar' : 'content'}
+                        solidColor={canvasTail ? appShellColumnPlaneColor(theme.colors) : theme.colors.surface.base}
+                        finishRole={null} nested style={styles.railSurface}>
                         <PaneRegionProvider region="main">{props.actionRail}</PaneRegionProvider>
                     </GlassSurface>
                 </View>
+                </RailTailSlot>
             ) : null}
         </>
     );
@@ -632,12 +654,24 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 }}
             >
                 <AppPaneScopeLayoutProvider value={layoutContext}>
-                    {props.wrapContent ? props.wrapContent(columns) : columns}
+                    {/* One page takes the shell's tail; a pane host nested inside it never does. */}
+                    <AppShellTailContext.Provider value={null}>
+                        {props.wrapContent ? props.wrapContent(columns) : columns}
+                    </AppShellTailContext.Provider>
                 </AppPaneScopeLayoutProvider>
             </View>
         </PaneActionRailContext.Provider>
     );
 });
+
+function RailTailSlot(props: Readonly<{
+    tail: Readonly<{ hidden: boolean }> | undefined;
+    host: HTMLElement | null;
+    children: React.ReactElement;
+}>): React.ReactNode {
+    if (!props.tail) return props.children;
+    return <AppShellTailSlot host={props.host} hidden={props.tail.hidden}>{props.children}</AppShellTailSlot>;
+}
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {

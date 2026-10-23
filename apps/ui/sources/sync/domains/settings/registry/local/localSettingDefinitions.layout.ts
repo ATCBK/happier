@@ -37,6 +37,12 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
         schema: z.catch(z.enum(['session', 'editor']), 'session'), default: 'session',
         description: 'Pane arrangement on this device', storageScope: 'local',
     },
+    // Where the docked right panel and its rail stand: on the canvas beside the page, mirroring the
+    // sidebar (calm-shell R4-2), or inside the page sheet. Window geometry, like the arrangement.
+    rightPanelPlacement: {
+        schema: z.catch(z.enum(['canvas', 'sheet']), 'canvas'), default: 'canvas',
+        description: 'Right panel position on this device', storageScope: 'local',
+    },
     sessionColumnWidthPx: {
         schema: z.number(), default: DEFAULT_SESSION_WIDTH_PX,
         description: 'Preferred session column width in px', storageScope: 'local',

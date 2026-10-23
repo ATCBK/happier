@@ -1,12 +1,14 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { GlassAppearanceControls } from '@/components/settings/appearance/GlassAppearanceControls';
 import { useAtmospherePictureCatalog } from '../useAtmospherePictureCatalog';
 import type { AtmospherePicture } from '@happier-dev/brand/atmosphere';
 import type { AtmosphereEditor } from './atmosphereEditor';
-import { PictureControls, PlanetControls, SourceControl } from './LookControls';
+import { LookPanelBlock, LookSegments, PictureControls, PlanetControls, SourceControl } from './LookControls';
+import { useRightPanelPlacement, type RightPanelPlacement } from '@/components/appShell/panes/arrangement/useRightPanelPlacement';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { Item } from '@/components/ui/lists/Item';
 import { Switch } from '@/components/ui/forms/Switch';
 
@@ -45,9 +47,35 @@ export const LookPanel = React.memo(function LookPanel(
       ) : null}
       <LookBackdropControls editor={editor} pictures={pictures} />
       <GlassAppearanceControls presentation="panel" />
+      <RightPanelPlacementBlock />
     </View>
   );
 });
+
+/**
+ * Where the right panels stand (calm-shell R4-2), beside the glass it composes with. Only where panes
+ * sit side by side, like the Appearance row; it writes the same device setting.
+ */
+function RightPanelPlacementBlock() {
+  const deviceType = useDeviceType();
+  const { placement, setPlacement } = useRightPanelPlacement();
+  if (!(Platform.OS === 'web' || deviceType === 'tablet') || deviceType === 'phone') return null;
+  const title = t('settingsAppearance.rightPanelPlacement');
+  return (
+    <LookPanelBlock title={title} testID="look-right-panel-placement">
+      <LookSegments<RightPanelPlacement>
+        label={title}
+        testIDPrefix="look-right-panel-placement"
+        options={[
+          { id: 'canvas', label: t('settingsAppearance.rightPanelPlacementCanvas') },
+          { id: 'sheet', label: t('settingsAppearance.rightPanelPlacementSheet') },
+        ]}
+        value={placement}
+        onChange={setPlacement}
+      />
+    </LookPanelBlock>
+  );
+}
 
 /**
  * The backdrop half of Look: the source, then the planet's or the picture's controls. Home's panel adds

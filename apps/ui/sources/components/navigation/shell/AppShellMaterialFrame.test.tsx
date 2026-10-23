@@ -13,7 +13,8 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-import { AppShellMaterialFrame } from './AppShellMaterialFrame';
+import { AppShellMaterialFrame, resolveColumnDrawnWidthPx } from './AppShellMaterialFrame';
+import { lightTheme } from '@/theme';
 import { applyGlassDocumentPresentation } from '@/components/ui/glass/glassDocumentPresentation';
 import { glassPresetMaterials } from '@/components/ui/glass/glassMaterial';
 import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
@@ -106,5 +107,53 @@ describe('real shell material planes', () => {
         check(glassPresetMaterials('everywhere'));
         check(glassPresetMaterials('auto'));
         check(glassPresetMaterials('solid'));
+    });
+
+    it('lifts the page alone: the column stands on the navigation plane beside it and the seam traces the page edge', async () => {
+        const frame = (column: boolean, width: number, overshootPx = 0) => <AppShellMaterialFrame showChrome dragEnabled={false}
+            leftOffsetPx={64 + width} sidebarWidth={width} columnResizeState={{ collapseArmed: false, overshootPx, dragging: overshootPx !== 0 }}
+            titleStrip={<View testID="title" />} rail={<View testID="rail" />}
+            column={column ? <View testID="sidebar-body" /> : null} peek={<View testID="peek-probe" />}>
+            <ChromeLifetimeProbe />
+            <View testID="route" />
+        </AppShellMaterialFrame>;
+        const screen = await renderScreen(frame(true, 320));
+        try {
+            const style = (node: ReactTestInstance) => StyleSheet.flatten(node.props.style) ?? {};
+            const clipped = (node: ReactTestInstance) => typeof node.type === 'string' && style(node).overflow === 'hidden' && Number(style(node).borderRadius) > 0;
+            const hostAncestors = (node: ReactTestInstance) => {
+                const result: ReactTestInstance[] = [];
+                for (let parent = node.parent; parent; parent = parent.parent) if (typeof parent.type === 'string') result.push(parent);
+                return result;
+            };
+            const sheetOf = (id: string) => hostAncestors(screen.findHostByTestId(id)!).find(clipped) ?? null;
+            const identity = screen.root.findByType('ChromeLifetimeBoundary').props.identity;
+            // Only the page is in the rounded sheet; the column and the peek are not clipped by it.
+            const sheet = sheetOf('route');
+            expect(sheet).not.toBeNull();
+            expect(sheetOf('sidebar-body')).toBeNull();
+            expect(sheetOf('peek-probe')).toBeNull();
+            // No outline round the sheet and no hairline on the column's trailing edge.
+            expect(style(sheet!).borderWidth ?? 0).toBe(0);
+            const column = screen.findHostByTestId('navigation-sidebar')!;
+            expect(style(column).borderRightWidth ?? 0).toBe(0);
+            expect(style(column).width).toBe(320);
+            // One inert seam, beside the sheet in the page's own slot (it moves with the page, never offset by the rail).
+            const seams = screen.findAll(node => typeof node.type === 'string' && style(node).boxShadow === lightTheme.colors.shadowSeamCastBoxShadow);
+            expect(seams).toHaveLength(1);
+            expect(seams[0]!.props.pointerEvents).toBe('none');
+            expect(hostAncestors(seams[0]!)[0]).toBe(hostAncestors(sheet!)[0]);
+            expect(style(seams[0]!).left ?? 0).toBe(0);
+            expect(hostAncestors(sheet!)[0]!.findAll(node => node === column)).toHaveLength(0);
+            // The drawn width (rubber band included) is the column's own width, so the page edge follows it.
+            await screen.update(frame(true, 320, 40));
+            expect(style(screen.findHostByTestId('navigation-sidebar')!).width).toBe(resolveColumnDrawnWidthPx(320, 40));
+            // Hiding and showing the column, or resizing it, never replaces the page.
+            await screen.update(frame(false, 0));
+            await screen.update(frame(true, 280));
+            expect(screen.root.findByType('ChromeLifetimeBoundary').props.identity).toBe(identity);
+        } finally {
+            await screen.unmount();
+        }
     });
 });

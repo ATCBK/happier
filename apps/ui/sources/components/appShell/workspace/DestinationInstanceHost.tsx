@@ -3,7 +3,6 @@ import { useGlobalSearchParams, useLocalSearchParams, usePathname, useRouter } f
 import { resolveHref } from 'expo-router/build/link/href';
 
 import { hrefForDestinationRef, type DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
-import { useOptionalScreenIsFocused } from '@/utils/navigation/useOptionalScreenIsFocused';
 import { useOptionalWorkspaceNavigation } from './WorkspaceNavigationContext';
 import { qualifyPaneScopeId } from '@/components/appShell/panes/paneScopeIdentity';
 import { PluginSurfaceFocusEligibilityProvider, useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -18,7 +17,7 @@ import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootS
 import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
 import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
-import { DestinationInstanceContext, DestinationHeaderOptionsContext, useDestinationInstanceKey, type DestinationInstanceContextValue, type DestinationNavigation } from './destinationInstanceContext';
+import { DestinationInstanceContext, DestinationHeaderOptionsContext, useDestinationFocus, useDestinationInstanceKey, type DestinationInstanceContextValue, type DestinationNavigation } from './destinationInstanceContext';
 export { useDestinationInstanceKey, useDestinationNavigation, type DestinationNavigation } from './destinationInstanceContext';
 
 const EMPTY_SCREEN_OPTIONS: NativeStackNavigationOptions = {};
@@ -236,11 +235,7 @@ export function useDestinationPathname(): string {
     return pathname!;
 }
 
-export function useDestinationFocus(): boolean {
-    const instance = React.useContext(DestinationInstanceContext);
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- ownership is stable for this mounted body.
-    return instance ? instance.focused : useOptionalScreenIsFocused();
-}
+export { useDestinationFocus } from './destinationInstanceContext';
 
 export function useDestinationVisibility(): boolean {
     return React.useContext(DestinationInstanceContext)?.visible ?? true;

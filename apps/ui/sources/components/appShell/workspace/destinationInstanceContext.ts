@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ExpoRouter from 'expo-router';
 import type { useRouter } from 'expo-router';
 import { NavigationContext } from '@react-navigation/native';
+import { useOptionalScreenIsFocused } from '@/utils/navigation/useOptionalScreenIsFocused';
 import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
 
 import type { DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
@@ -56,4 +57,11 @@ export function useDestinationRouteNavigation() {
     if (!hosted) return ExpoRouter.useNavigation();
     if (!navigation) throw new Error('A hosted destination requires navigation');
     return navigation;
+}
+
+/** Whether this mounted body is the focused one: its workspace pane's, or its Stack screen's. */
+export function useDestinationFocus(): boolean {
+    const instance = React.useContext(DestinationInstanceContext);
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- ownership is stable for this mounted body.
+    return instance ? instance.focused : useOptionalScreenIsFocused();
 }

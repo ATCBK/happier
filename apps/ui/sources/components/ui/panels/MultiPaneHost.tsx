@@ -22,6 +22,9 @@ import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegi
 import { PaneMainBodyPresentationContext, PaneMainComposerReporterContext } from './paneMainComposerAnchor';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { AppShellTailSlot } from '@/components/navigation/shell/appShellTail';
+import { PaneHeaderScrollIsolation } from '@/components/appShell/panes/paneHeaderScroll';
+import { appShellColumnPlaneColor } from '@/components/navigation/shell/appRail/appShellColumnSurface';
 
 // A pane floating over the main content (overlay presentation) rounds the one edge that shows.
 const PANE_OVERLAY_CORNER_RADIUS_PX = 16;
@@ -74,6 +77,12 @@ export type MultiPaneHostProps = Readonly<{
      * the context, so main is only quieted, not shaded (details lab 2, Q1).
      */
     detailsScrim?: 'standard' | 'soft';
+    /**
+     * Set when the shell stands this page's right panel on the canvas (calm-shell R4-2): while docked
+     * the right column renders in `host`, beside the page sheet, and `hidden` while this page is not on
+     * screen. The column keeps one mounted instance whichever place it stands in.
+     */
+    rightTail?: Readonly<{ host: HTMLElement | null; hidden: boolean }>;
 }>;
 
 export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
@@ -182,6 +191,8 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
     // The details drawer is inset by a docked side column's width, so it covers the main column only:
     // the column beside it stays live (T-INTEL H-T1). Only what an overlay actually covers is its underlay.
     const rightBesideDetailsOverlay = rightDocked && !rightInMain;
+    // Docked with the canvas placement, the right column stands outside the page sheet.
+    const rightOnCanvas = props.rightTail !== undefined && rightDocked && !rightInMain && !mirrored;
     const rightUnderDetailsOverlay = detailsModalActive && !rightBesideDetailsOverlay;
     const shouldHideDockedMainRegion = hideMain === true;
     const mainWidthPx = props.mainDockWidthPx ?? DEFAULT_SESSION_WIDTH_PX;
@@ -348,7 +359,7 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                     onCommitWidthPx={props.onCommitDetailsDockWidthPx}
                     onDragWidthPx={props.onDragDetailsDockWidthPx}
                     onResetWidthPx={props.onResetDetailsDockWidthPx}
-                    overlayRightInsetPx={rightDocked ? rightDockWidthPx : 0}
+                    overlayRightInsetPx={rightDocked && !rightOnCanvas ? rightDockWidthPx : 0}
                     overlayZIndex={overlayZIndexBase + 1}
                     overlayFocusRef={detailsModalBoundary.setOverlayFocusRef}
                     overlayProps={detailsModalOverlayProps}
@@ -370,10 +381,11 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                 </PaneColumn>
             ) : null}
             {rightPresence.present ? (
+                <MaybeTailSlot key="right" tail={props.rightTail} host={rightOnCanvas ? props.rightTail?.host ?? null : null}>
                 <PaneColumn
-                    key="right"
                     name="right"
                     mirrored={mirrored}
+                    onCanvas={rightOnCanvas}
                     presentation={rightInMain ? (rightInMainVisible ? 'main' : 'hidden') : layout.right}
                     modalActive={rightModalActive}
                     progress={rightPresence.progress}
@@ -407,6 +419,7 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                 >
                     {rightPresence.node}
                 </PaneColumn>
+                </MaybeTailSlot>
             ) : null}
         </View>
     );
@@ -416,9 +429,20 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
  * One mounted column per pane. Docking, overlaying and parking change its layout and modal
  * attributes, never its parents: a pane's editor draft, focus and scroll belong to this instance.
  */
+function MaybeTailSlot(props: Readonly<{
+    tail: MultiPaneHostProps['rightTail'];
+    host: HTMLElement | null;
+    children: React.ReactElement;
+}>): React.ReactNode {
+    if (!props.tail) return props.children;
+    return <AppShellTailSlot host={props.host} hidden={props.tail.hidden}>{props.children}</AppShellTailSlot>;
+}
+
 function PaneColumn(props: Readonly<{
     name: 'right' | 'details';
     mirrored?: boolean;
+    /** Docked on the shell's canvas beside the page: the navigation plane's paint, no edge of its own. */
+    onCanvas?: boolean;
     flexible?: boolean;
     /** `main`: laid over the main column down to its composer (lab AR1 EFv). */
     presentation: ResolvedPaneLayout['details'] | 'main';
@@ -542,17 +566,18 @@ function PaneColumn(props: Readonly<{
                         {/* Docked and in the column the pane is page; over the page it is a sheet that floats (DESIGN.md →
                             "Flat edge in flow; the rim only for what floats"): the floating paint, finish and rim. It keeps the
                             content material, so a transcript read in it stays as legible as in the column (lab FB1). */}
-                        <GlassSurface surfaceGroup="content"
-                            solidColor={overlay ? theme.colors.edge.floatingFill : theme.colors.surface.base}
+                        <GlassSurface surfaceGroup={props.onCanvas ? 'sidebar' : 'content'}
+                            solidColor={overlay ? theme.colors.edge.floatingFill : props.onCanvas ? appShellColumnPlaneColor(theme.colors) : theme.colors.surface.base}
                             finishRole={overlay ? 'floating' : null} nested={docked || inMain} style={{
                             flex: 1, minHeight: 0, minWidth: 0,
-                            borderLeftWidth: docked && !props.mirrored ? StyleSheet.hairlineWidth : 0,
+                            borderLeftWidth: docked && !props.mirrored && !props.onCanvas ? StyleSheet.hairlineWidth : 0,
                             borderRightWidth: docked && props.mirrored ? StyleSheet.hairlineWidth : 0,
                             borderLeftColor: theme.colors.border.subtle, borderRightColor: theme.colors.border.subtle,
                             overflow: 'hidden',
                         }}>
                             <PluginSurfaceFocusEligibilityProvider active={props.focusEligible} presentationActive={!hidden}>
-                                {props.children}
+                                {/* A side pane's scrollers never drive the main column's header shade. */}
+                                <PaneHeaderScrollIsolation>{props.children}</PaneHeaderScrollIsolation>
                             </PluginSurfaceFocusEligibilityProvider>
                             {overlay ? (
                                 // The rim runs past the anchored edge, so only the edge that shows (and its corners) is drawn.

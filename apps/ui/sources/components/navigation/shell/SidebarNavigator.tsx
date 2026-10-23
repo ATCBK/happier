@@ -73,6 +73,7 @@ export const SidebarNavigator = React.memo(() => {
     const { width: windowWidth } = useWindowDimensions();
     const sidebarCollapsed = useLocalSetting('sidebarCollapsed');
     const sidebarWidthPx = useLocalSetting('sidebarWidthPx');
+    const rightPanelPlacement = useLocalSetting('rightPanelPlacement');
     const [dragSidebarWidthPx, setDragSidebarWidthPx] = React.useState<number | null>(null);
     const [sidebarCollapseArmed, setSidebarCollapseArmed] = React.useState(false);
     const [sidebarOvershootPx, setSidebarOvershootPx] = React.useState(0);
@@ -203,6 +204,7 @@ export const SidebarNavigator = React.memo(() => {
             leftOffsetPx={shellLeftPx}
             sidebarWidth={sidebarWidth}
             columnResizeState={{ collapseArmed: sidebarCollapseArmed, overshootPx: sidebarOvershootPx, dragging: dragSidebarWidthPx !== null }}
+            rightPanelPlacement={rightPanelPlacement === 'sheet' ? 'sheet' : 'canvas'}
             titleStrip={showSidebar || workspace?.active ? (
                 <AppShellTitleStrip key="title-strip" columnVisible={columnShown}
                     columnToggleAvailable={column.kind !== 'none'} onToggleColumn={handleToggleColumn}

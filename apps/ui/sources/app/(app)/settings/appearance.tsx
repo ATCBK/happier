@@ -3,6 +3,7 @@ import { UI_FONT_SCALE_PRESETS } from '@/components/ui/text/uiFontScale';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
 import { PaneArrangementPreview } from '@/components/settings/appearance/PaneArrangementPreview';
+import { useRightPanelPlacement } from '@/components/appShell/panes/arrangement/useRightPanelPlacement';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -85,6 +86,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const deviceType = useDeviceType();
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const { arrangement: paneArrangement, setArrangement: setPaneArrangement } = usePaneArrangement();
+    const { placement: rightPanelPlacement, setPlacement: setRightPanelPlacement } = useRightPanelPlacement();
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
     const [showChatCodeBlockWrapControls, setShowChatCodeBlockWrapControls] = useSettingMutable('showChatCodeBlockWrapControls');
@@ -470,8 +472,34 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                                     value={paneArrangement}
                                     onChange={(next) => { if (next === 'session' || next === 'editor') setPaneArrangement(next); }}
                                     options={[
-                                        { id: 'session', title: t('settingsAppearance.paneArrangementSession'), subtitle: t('settingsAppearance.paneArrangementSessionCaption'), preview: <PaneArrangementPreview arrangement="session" /> },
+                                        { id: 'session', title: t('settingsAppearance.paneArrangementSession'), subtitle: t('settingsAppearance.paneArrangementSessionCaption'), preview: <PaneArrangementPreview arrangement="session" rightPanel={rightPanelPlacement} /> },
                                         { id: 'editor', title: t('settingsAppearance.paneArrangementEditor'), subtitle: t('settingsAppearance.paneArrangementEditorCaption'), preview: <PaneArrangementPreview arrangement="editor" /> },
+                                    ]}
+                                />
+                            }
+                        />
+                    </SettingAnchor>
+                ) : null}
+                {/* Where the right panels stand, beside the arrangement it shapes (calm-shell R4-2). */}
+                {panelsSupported && deviceType !== 'phone' ? (
+                    <SettingAnchor setting={APPEARANCE_SETTINGS.settings.rightPanelPlacement}>
+                        <Item
+                            title={t(APPEARANCE_SETTINGS.settings.rightPanelPlacement.titleKey)}
+                            subtitle={t('settingsAppearance.rightPanelPlacementDescription')}
+                            subtitleLines={0}
+                            accessoryLayout="stacked"
+                            showChevron={false}
+                            rightElement={
+                                <SelectionTiles
+                                    variant="visual"
+                                    tileSizing="fill"
+                                    accessibilityLabel={t(APPEARANCE_SETTINGS.settings.rightPanelPlacement.titleKey)}
+                                    testIdPrefix="settings-appearance-rightPanelPlacement"
+                                    value={rightPanelPlacement}
+                                    onChange={(next) => { if (next === 'canvas' || next === 'sheet') setRightPanelPlacement(next); }}
+                                    options={[
+                                        { id: 'canvas', title: t('settingsAppearance.rightPanelPlacementCanvas'), subtitle: t('settingsAppearance.rightPanelPlacementCanvasCaption'), preview: <PaneArrangementPreview arrangement="session" rightPanel="canvas" /> },
+                                        { id: 'sheet', title: t('settingsAppearance.rightPanelPlacementSheet'), subtitle: t('settingsAppearance.rightPanelPlacementSheetCaption'), preview: <PaneArrangementPreview arrangement="session" rightPanel="sheet" /> },
                                     ]}
                                 />
                             }

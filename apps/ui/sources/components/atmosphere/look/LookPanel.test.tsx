@@ -84,6 +84,17 @@ describe('Look panel writes', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it('places the right panels from Look, writing the one device setting the Appearance row writes', async () => {
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.getState().applyLocalSettings({ rightPanelPlacement: 'canvas' });
+    const { screen } = await renderPanel(HOME);
+    expect(screen.findByTestId('look-right-panel-placement')).not.toBeNull();
+    await screen.pressByTestIdAsync('look-right-panel-placement:sheet');
+    expect(storage.getState().localSettings.rightPanelPlacement).toBe('sheet');
+    await screen.pressByTestIdAsync('look-right-panel-placement:canvas');
+    expect(storage.getState().localSettings.rightPanelPlacement).toBe('canvas');
+  });
+
   it('sets the planet placement, style and digits from their own controls', async () => {
     const { screen, last } = await renderPanel(HOME);
     await screen.pressByTestIdAsync('look-placement:rise');
