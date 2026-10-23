@@ -12,7 +12,7 @@ import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalA
 import { chmod, copyFile, cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createWorkspaceExecutionConfigClientV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigClientV1';
 import { ProjectManifestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { RpcHandlerContext } from '@/api/rpc/types';
@@ -27,6 +27,7 @@ import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/inv
 import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { discoverLocalServiceRunTargets } from './runTargets';
 import { createProjectServiceDeclarationStarter } from './projectDeclarations';
+import { logger } from '@/ui/logger';
 import { createLocalServicesDaemonRuntime } from '../runtime';
 import { createLocalServiceLauncherFeed } from './feed';
 import { createLocalServiceLauncherRoutes } from './routes';
@@ -104,6 +105,7 @@ import { ACTION_OPERATION_REQUEST_ID_MAX_LENGTH_V1, ActionOperationSnapshotV1Sch
 import { ActionOperationSnapshotV1Schema as PredecessorOperationSchema } from '@/daemon/actionOperations/testFixtures/predecessorActionOperationV1';
 
 class ObservedSetupPty implements PtyProcess {
+    constructor(private readonly observed?: () => void) {}
     readonly pid = 3456;
     readonly ownedProcessGroupId = 3456;
     private readonly exits = new Set<(event: PtyExitEvent) => void>();
@@ -111,11 +113,136 @@ class ObservedSetupPty implements PtyProcess {
     resize() {}
     kill() {}
     onData() { return { dispose() {} }; }
-    onExit(listener: (event: PtyExitEvent) => void) { this.exits.add(listener); return { dispose: () => this.exits.delete(listener) }; }
+    onExit(listener: (event: PtyExitEvent) => void) { this.exits.add(listener); this.observed?.(); return { dispose: () => this.exits.delete(listener) }; }
     exit(exitCode: number) { for (const listener of this.exits) listener({ exitCode, signal: 0 }); }
 }
 
 describe('accepted Project Service declaration starter', () => {
+    it('does not disclose a pending setup review after authority is revoked during its trust read', async () => {
+        const h = await fixture(true);
+        let current = true;
+        const post = h.post.getMockImplementation()!;
+        h.post.mockImplementation(async (url, body, options) => {
+            const response = await post(url, body, options);
+            if (String(url).endsWith('/project-trust/read')) current = false;
+            return response;
+        });
+        const result = await h.starter.resolveStartTarget(h.request,
+            { ...h.ingress, verifyMachineAdmissionCurrent: async () => current }, h.context);
+        expect(current).toBe(false);
+        expect(result).toEqual({ ok: false, reasonCode: 'machine_admission_changed' });
+        expect(h.setupProcesses).toEqual([]);
+    });
+
+    it('bounds fresh SOURCE inspections and Machine admissions across all eight reviewed Start boundaries', async () => {
+        const h = await fixture(true, undefined, true, 'portable');
+        // A retained destination permits passive approval; Start must still copy anew.
+        await cp(h.root, h.targetRoot, { recursive: true });
+        let reviews = 0;
+        let admissions = 0;
+        let inspections = 0;
+        vi.spyOn(logger, 'debug').mockImplementation((message, details) => {
+            if (message === '[ProjectService] launch phase' && details && typeof details === 'object'
+                && 'phase' in details && details.phase === 'runtime') reviews++;
+        });
+        const delay = () => new Promise<void>(resolve => setTimeout(resolve, 20));
+        const post = h.post.getMockImplementation()!;
+        h.post.mockImplementation(async (url, body, options) => {
+            if (String(url).endsWith('/v1/actions/projects.inspect')) { inspections++; await delay(); }
+            return post(url, body, options);
+        });
+        const ingress = { ...h.ingress, verifyMachineAdmissionCurrent: async () => { admissions++; await delay(); return true; } };
+        const startedAt = performance.now();
+        const approval = await h.starter.prepareStartApproval(h.request, ingress, h.context);
+        if ('ok' in approval) throw new Error(approval.errorCode);
+        h.trustSetupDigest(approval.setup!.reviewedEffectDigest);
+        const context = { ...h.context, nativeServiceStartApproval: approval };
+        const selected = await h.starter.resolveStartTarget(h.request, ingress, context);
+        if (!selected.ok) throw new Error(selected.reasonCode);
+        const completion = h.starter.startManagedDeclaration(selected.declaration, h.request, ingress, context);
+        await Promise.race([h.setupStarted, completion]);
+        h.setupProcesses[0]?.pty.exit(0);
+        expect(await completion).toMatchObject({ status: 'succeeded' });
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        // Three fresh fences per full review, plus the two setup-effect fences.
+        expect({ reviews, inspections, admissions }).toEqual({ reviews: 8, inspections: 3, admissions: 26 });
+        await h.owner.listProjectServices()[0]?.stop();
+    });
+
+    it.each([
+        [1, 'approval preparation'], [2, 'launcher'], [3, 'executor entry'], [4, 'post-copy'],
+        [5, 'setup reservation'], [6, 'post-setup'], [7, 'invocation capture'], [8, 'final authorization'],
+    ] as const)('refuses revoked authority at Start review %i (%s)', async (boundary, _label) => {
+        const h = await fixture(true, undefined, true, 'portable');
+        await cp(h.root, h.targetRoot, { recursive: true });
+        let reviews = 0;
+        let reviewAdmissions = 0;
+        // Observe the existing log boundary; replace only the external admission verdict.
+        vi.spyOn(logger, 'debug').mockImplementation((message, details) => {
+            if (message === '[ProjectService] launch phase' && details && typeof details === 'object'
+                && 'phase' in details && details.phase === 'runtime') { reviews++; reviewAdmissions = 0; }
+        });
+        // Revoke at the final fence, after the review's awaited reads have run.
+        const ingress = { ...h.ingress, verifyMachineAdmissionCurrent: async () => !(reviews === boundary && ++reviewAdmissions === 3) };
+        const approval = await h.starter.prepareStartApproval(h.request, ingress, h.context);
+        if (boundary === 1) {
+            expect(approval).toMatchObject({ ok: false, errorCode: 'machine_admission_changed' });
+        } else {
+            if ('ok' in approval) throw new Error(approval.errorCode);
+            h.trustSetupDigest(approval.setup!.reviewedEffectDigest);
+            const context = { ...h.context, nativeServiceStartApproval: approval };
+            const selected = await h.starter.resolveStartTarget(h.request, ingress, context);
+            if (boundary === 2) {
+                expect(selected).toMatchObject({ ok: false, reasonCode: 'machine_admission_changed' });
+            } else {
+                if (!selected.ok) throw new Error(selected.reasonCode);
+                const completion = h.starter.startManagedDeclaration(selected.declaration, h.request, ingress, context);
+                await Promise.race([h.setupStarted, completion]);
+                h.setupProcesses[0]?.pty.exit(0);
+                expect(await completion).toMatchObject({ status: 'denied', reasonCode: boundary >= 7
+                    ? 'plugin_managed_service_establishment_failed' : 'machine_admission_changed' });
+            }
+        }
+        expect(reviews).toBe(boundary);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it.each(['source_before_copy', 'destination_after_copy', 'setup_inputs', 'placement'] as const)(
+        'refuses changed %s in a reviewed worker Start', async scenario => {
+        const h = await fixture(true, undefined, true, 'portable');
+        await cp(h.root, h.targetRoot, { recursive: true });
+        const approval = await h.starter.prepareStartApproval(h.request, h.ingress, h.context);
+        if ('ok' in approval) throw new Error(approval.errorCode);
+        h.trustSetupDigest(approval.setup!.reviewedEffectDigest);
+        const context = { ...h.context, nativeServiceStartApproval: approval };
+        const selected = await h.starter.resolveStartTarget(h.request, h.ingress, context);
+        if (!selected.ok) throw new Error(selected.reasonCode);
+        const changed = { ...h.manifest, services: { worker: { ...h.manifest.services!.worker,
+            source: { kind: 'command', command: 'echo unapproved' } } } };
+        if (scenario === 'source_before_copy') {
+            // Change real SOURCE bytes after its executor inspection response,
+            // so the causal copy brings bytes different from the approved basis.
+            const post = h.post.getMockImplementation()!;
+            h.post.mockImplementation(async (url, body, options) => {
+                const response = await post(url, body, options);
+                if (String(url).endsWith('/v1/actions/projects.inspect')) {
+                    await writeFile(join(h.root, '.happier/project.json'), JSON.stringify(changed));
+                }
+                return response;
+            });
+        } else if (scenario === 'destination_after_copy') h.changeCopiedManifest(changed);
+        else if (scenario === 'placement') h.afterCopy(() => h.savePlacement({ runsOn: { kind: 'primary' }, unavailable: 'primary' }));
+        const completion = h.starter.startManagedDeclaration(selected.declaration, h.request, h.ingress, context);
+        await Promise.race([h.setupStarted, completion]);
+        if (scenario === 'setup_inputs') {
+            expect(h.setupProcesses).toHaveLength(1);
+            await writeFile(join(h.targetRoot, '.happier/project.json'), JSON.stringify(changed));
+        }
+        h.setupProcesses[0]?.pty.exit(0);
+        expect(await completion).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_changed' });
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
     it('starts an exact Project declaration without waiting for unrelated listener discovery', async () => {
         const h = await fixture();
         await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ ...h.manifest,
@@ -278,7 +405,9 @@ describe('accepted Project Service declaration starter', () => {
         const h = await fixture(false, undefined, true, 'portable');
         let releaseCopy!: () => void;
         const copying = new Promise<void>(resolve => { releaseCopy = resolve; });
-        h.afterCopy(() => copying);
+        let observeCopy!: () => void;
+        const copyStarted = new Promise<void>(resolve => { observeCopy = resolve; });
+        h.afterCopy(() => { observeCopy(); return copying; });
         const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
         if (!review.reviewedEffectDigest) throw new Error('Expected service review');
         const request = { ...h.request, expectedEffectDigest: review.reviewedEffectDigest };
@@ -291,7 +420,10 @@ describe('accepted Project Service declaration starter', () => {
             execute: async context => ({ ok: true, result: await h.routes.startTarget!(request, ingress, context) }) });
         const scope = { accountId: 'owner', machineId: h.targetWorkspace.machineId };
         try {
-            await expect.poll(() => h.copies()).toBe(1);
+            await Promise.race([copyStarted, completion.then(result => {
+                throw new Error('Service Start settled before its copy phase: ' + JSON.stringify(result));
+            })]);
+            expect(h.copies()).toBe(1);
             const start = h.operationRuntime.store.list(scope).items.find(item => item.actionId === 'localServices.launcher.start');
             expect(start).toMatchObject({ state: 'running', progress: { phase: 'copying' },
                 domainRef: { kind: 'projectService', purpose: 'start', sourceWorkspace: { serverId: 'home', refId: h.workspace.id },
@@ -525,8 +657,10 @@ describe('accepted Project Service declaration starter', () => {
                 : { status: 'absent' }; },
                 mutate: async () => { throw new Error('read only'); } } });
         const setupProcesses: Array<{ params: PtySpawnParams; pty: ObservedSetupPty }> = [];
+        let resolveSetupStarted!: () => void;
+        const setupStarted = new Promise<void>(resolve => { resolveSetupStarted = resolve; });
         const terminalSessions = createTerminalPtySessionManager({ ptyProvider: { spawn(params) {
-            const pty = new ObservedSetupPty(); setupProcesses.push({ params, pty }); return pty;
+            const pty = new ObservedSetupPty(resolveSetupStarted); setupProcesses.push({ params, pty }); return pty;
         // This fake OS process has no descendants after its supplied exit.
         } }, stopProcessTree: async () => {}, probeProcessGroup: () => 'absent',
             config: { bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
@@ -610,7 +744,7 @@ describe('accepted Project Service declaration starter', () => {
             projectManagedServices: owner,
             runTargets: () => discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [targetWorkspace] }) });
         const routes = createLocalServiceLauncherRoutes({ feed, history, ...starter });
-        return { root, workspace, targetRoot, targetWorkspace, serverIdentityId, projectDefinitionActionFor, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, operationSnapshots, runtime, admissionDrain, prepareBetween,
+        return { root, workspace, targetRoot, targetWorkspace, serverIdentityId, projectDefinitionActionFor, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, setupStarted, operationRuntime, operationSnapshots, runtime, admissionDrain, prepareBetween,
             async createRuntimeActionExecutor(relocateService?: LocalServicesRuntimeActionRoutes['relocateService'], actionRoutes?: LocalServicesRuntimeActionRoutes['actionRoutes'], launcherRoutes = routes, runtimeIngress = ingress) {
                 const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
                     features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true },
@@ -1314,10 +1448,18 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect(started.status).toBe('succeeded');
         await expect.poll(() => readFile(portPath, 'utf8').then(Number).catch(() => null), { timeout: 10_000 }).toEqual(expect.any(Number));
         const port = Number(await readFile(portPath, 'utf8'));
-        await expect.poll(async () => (await h.routes.getSnapshot()).targets.find(target => target.source === 'managed_service')?.endpointUrl,
-            { timeout: 10_000 }).toBe(`http://127.0.0.1:${port}`);
+        const handle = h.owner.listProjectServices()[0];
+        if (!handle) throw new Error('Expected the started Service owner');
+        const endpointUrl = `http://127.0.0.1:${port}`;
+        let observeEndpoint!: () => void;
+        const endpointObserved = new Promise<void>(resolve => { observeEndpoint = resolve; });
+        const checkEndpoint = () => { if (handle.snapshot().baseUrl === endpointUrl) observeEndpoint(); };
+        const observation = handle.observe(checkEndpoint);
+        onTestFinished(() => observation.dispose());
+        checkEndpoint();
+        await endpointObserved;
         const target = (await h.routes.getSnapshot()).targets.find(target => target.source === 'managed_service');
-        expect(target).toMatchObject({ serviceState: 'running', endpointKind: 'http', startedByAccountId: 'owner' });
+        expect(target).toMatchObject({ endpointUrl, serviceState: 'running', endpointKind: 'http', startedByAccountId: 'owner' });
         await h.owner.listProjectServices()[0]?.stop();
     });
 
@@ -1957,6 +2099,8 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         } });
         expect(h.copies()).toBeGreaterThan(0);
         expect(h.owner.listProjectServices()).toEqual([]);
+        h.post.mockClear();
+        const previousCopies = h.copies();
         const started = await h.routes.startTarget!({ ...h.request, expectedEffectDigest: review.reviewedEffectDigest }, h.ingress, h.context);
         expect(DaemonLocalServiceLauncherStartResponseV1Schema.parse(started)).toMatchObject({ status: 'succeeded', currentTarget: {
             machineId: h.targetWorkspace.machineId, workspaceId: h.targetWorkspace.id, cwd: h.targetRoot,
@@ -1965,6 +2109,10 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect(handle.snapshot()).toMatchObject({ state: 'running', baseUrl: null });
         expect(h.runtime.workerAdmission.dependencies()).toEqual([]);
         expect(h.setupProcesses).toEqual([]);
+        // Launcher and executor each need fresh SOURCE; subsequent target/native
+        // checks use the executor's already copied basis without another copy.
+        expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/actions/projects.inspect'))).toHaveLength(2);
+        expect(h.copies() - previousCopies).toBe(2);
         await handle.stop();
     });
 
