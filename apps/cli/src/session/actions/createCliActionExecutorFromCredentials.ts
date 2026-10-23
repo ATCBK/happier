@@ -1401,6 +1401,10 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // retained guest is online. Keep policy/approval in the shared executor;
       // admitted Session/Run origins retain their existing credentialed owner.
       const originalCliCaller = isOriginalCliActionContext(context);
+      // Archive state belongs to Home. The archive service requests Stop only
+      // when Home reports an active Session; an inactive record must remain
+      // archivable after its worker grant or daemon has gone away.
+      if (originalCliCaller && (actionId === 'session.archive' || actionId === 'session.unarchive')) return { context };
       const provenance = readAuthTokenProvenance(decodeJwtPayload(credentials.token), { allowLegacyHome: true });
       const ordinary = provenance?.provenance.kind === 'account' && provenance.provenance.authority === 'present_user'
         && context.authority !== 'account_automation';
