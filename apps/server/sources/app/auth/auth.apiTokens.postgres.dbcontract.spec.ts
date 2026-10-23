@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
@@ -115,6 +116,71 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")(
             }
 
             expect(await db.accountApiToken.count({ where: { accountId: account.id } })).toBe(1);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
+                .toEqual({ seq: 1 });
+        });
+
+        it("mints a child without conflicting with a concurrent Account cursor writer", async () => {
+            const account = await db.account.create({
+                data: { publicKey: `${PUBLIC_KEY_PREFIX}${randomUUID()}`, encryptionMode: "plain" },
+            });
+            const parent = await auth.createApiToken({
+                accountId: account.id,
+                tokenId: randomUUID(),
+                label: "Embed parent",
+            });
+            const principal = await auth.verifyPat(parent.token);
+            if (!principal.ok) throw new Error("Expected the parent API token to verify");
+
+            let releaseWriter!: () => void;
+            let signalWriter!: () => void;
+            const writerHeld = new Promise<void>((resolve) => { signalWriter = resolve; });
+            const writerRelease = new Promise<void>((resolve) => { releaseWriter = resolve; });
+            const writing = inTx(async peerTx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(peerTx, account.id, "content");
+                await peerTx.account.update({
+                    where: { id: account.id },
+                    data: { seq: { increment: 1 } },
+                });
+                signalWriter();
+                await writerRelease;
+            }, {
+                isolationLevel: "ReadCommitted",
+                transactionClass: "api-token-child-cursor-writer",
+            });
+            await writerHeld;
+
+            const childTokenId = randomUUID();
+            const transaction = db.$transaction;
+            db.$transaction = new Proxy(transaction, {
+                apply(target, receiver, args: unknown[]) {
+                    const callback = args[0];
+                    if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                    return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                        // Bound only this disposable DB-contract interleaving. A
+                        // compatible child lock never waits; an exclusive lock
+                        // exposes the regression immediately.
+                        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '50ms'");
+                        return callback(tx);
+                    }, ...args.slice(1)]);
+                },
+            });
+            try {
+                await expect(auth.createChildApiToken({
+                    principal,
+                    tokenId: childTokenId,
+                    label: "Embed child",
+                    expiresAt: new Date(Date.now() + 60_000),
+                    grant: API_TOKEN_FULL_GRANT_V1,
+                })).resolves.toMatchObject({ tokenId: childTokenId });
+            } finally {
+                releaseWriter();
+                await writing;
+                db.$transaction = transaction;
+            }
+
+            expect(await db.accountApiToken.findUnique({ where: { id: childTokenId } }))
+                .toMatchObject({ accountId: account.id, parentTokenId: parent.tokenId });
             expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
                 .toEqual({ seq: 1 });
         });

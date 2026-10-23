@@ -823,7 +823,10 @@ class AuthModule {
             ? { isolationLevel: "Serializable" as const }
             : undefined;
         const row = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
+            // A child is derived content under its root credential: Account
+            // authority changes must still exclude it, while ordinary Session
+            // metadata publication must not serialize every frame credential mint.
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, child ? "content" : "exclusive");
             const admission = await tx.account.findUniqueOrThrow({ where: { id: accountId }, select: { status: true } });
             assertAccountActive(admission.status);
             if (child) {
