@@ -92,8 +92,8 @@ export const ActivityRemoteAlertEventV2Schema = lazyZodSchema(() => z.union([
   // The Agent-allocated request id is the cross-leg identity of one committed
   // request. It is optional only because a producer without a committed request
   // in hand must still be able to describe the category.
-  z.strictObject({ type: z.literal('permission_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(asProtocolZod(TurnIdSchema)) }),
-  z.strictObject({ type: z.literal('user_action_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(asProtocolZod(TurnIdSchema)) }),
+  z.strictObject({ type: z.literal('permission_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(TurnIdSchema) }),
+  z.strictObject({ type: z.literal('user_action_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(TurnIdSchema) }),
   z.strictObject({ type: z.literal('assigned') }),
   z.strictObject({ type: z.literal('failed'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
   z.strictObject({ type: z.literal('cancelled'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
