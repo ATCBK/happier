@@ -16,6 +16,7 @@ import { serverFetch } from '@/sync/http/client';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { StopSessionResultSchema, type StopSessionResult } from '@happier-dev/protocol/sessionStop';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import type { SessionStopOutcome } from '@happier-dev/protocol/sessions/control/contract';
 import { createRpcCallError, isRpcSessionMachineControlUnavailableError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { readMachineControlTargetForSession, shouldFallbackFromMachineRpc } from './sessionMachineTarget';
@@ -167,11 +168,11 @@ async function observeSessionStopRequest<TResult>(params: Readonly<{
     serverId: string;
     signal?: AbortSignal;
     onIssued?: () => void;
-    withdrawn: () => TResult;
+    withdrawn: (issued: boolean) => TResult;
     request: (operation: Readonly<{ signal: AbortSignal; onIssued: () => void }>) => Promise<TResult>;
 }>): Promise<TResult> {
     const observer = params.signal;
-    if (observer?.aborted) return params.withdrawn();
+    if (observer?.aborted) return params.withdrawn(false);
     const beforeIssuance = new AbortController();
     let issued = false;
     const withdrawBeforeIssuance = () => { if (!issued) beforeIssuance.abort(); };
@@ -188,7 +189,7 @@ async function observeSessionStopRequest<TResult>(params: Readonly<{
     }).finally(() => observer?.removeEventListener('abort', withdrawBeforeIssuance));
     if (!observer) return await operation;
     return await new Promise<TResult>((resolve, reject) => {
-        const withdraw = () => { observer.removeEventListener('abort', withdraw); resolve(params.withdrawn()); };
+        const withdraw = () => { observer.removeEventListener('abort', withdraw); resolve(params.withdrawn(issued)); };
         observer.addEventListener('abort', withdraw, { once: true });
         operation.then(result => { observer.removeEventListener('abort', withdraw); resolve(result); },
             error => { observer.removeEventListener('abort', withdraw); reject(error); });
@@ -208,7 +209,8 @@ export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
     if (!serverId) return { type: 'failed', message: 'action_home_not_found', errorCode: 'action_home_not_found' };
     return await observeSessionStopRequest<DaemonMachineSessionStopAttempt>({
         serverId, signal: params.signal, onIssued: params.onIssued,
-        withdrawn: () => ({ type: 'failed', message: 'Session Stop observation was withdrawn', errorCode: 'MACHINE_RPC_ABORTED' }),
+        withdrawn: issued => issued ? { type: 'requested' }
+            : { type: 'failed', message: 'Session Stop observation was withdrawn', errorCode: 'MACHINE_RPC_ABORTED' },
         request: operation => requestDaemonMachineSessionStop({ ...params, serverId, ...operation }),
     });
 }
@@ -221,6 +223,7 @@ async function requestDaemonMachineSessionStop(params: Readonly<{
     signal?: AbortSignal;
     onIssued?: () => void;
 }>): Promise<DaemonMachineSessionStopAttempt> {
+    let issued = false;
     try {
         const response = await machineRpcWithServerScope<unknown, { sessionId: string }>({
             machineId: params.machineId,
@@ -238,7 +241,7 @@ async function requestDaemonMachineSessionStop(params: Readonly<{
             operationTimeoutMs: null,
             // Stop is safe to reroute only before emission. Once issued, replaying the
             // same session id can terminate a replacement that resumed after the first exit.
-            onIssued: params.onIssued ?? (() => {}),
+            onIssued: () => { issued = true; params.onIssued?.(); },
         });
         const strictResult = readStrictStopSessionResult(response);
         if (strictResult?.status === 'stopped') return { type: 'stopped' };
@@ -286,10 +289,16 @@ async function requestDaemonMachineSessionStop(params: Readonly<{
         log.log(`[SESSION STOP] Unsupported machine RPC response ${JSON.stringify(
             describeUnsupportedMachineStopResponse(response),
         )}`);
-        return { type: 'failed', message: 'Unsupported response from machine RPC' };
+        return issued ? { type: 'requested' }
+            : { type: 'failed', message: 'Unsupported response from machine RPC' };
     } catch (error) {
         const message = unknownErrorMessage(error);
         const errorCode = readRpcErrorCode(error);
+        // A lost reply does not revoke an issued Stop. Keep the existing
+        // inactive-session reconciliation, and never try the runner as a replay.
+        if (readRpcRequestDisposition(error) === 'outcomeUnknown' || errorCode === RPC_ERROR_CODES.OUTCOME_UNKNOWN) {
+            return { type: 'requested' };
+        }
         if (shouldFallbackFromMachineRpc(error) || isRpcSessionMachineControlUnavailableError(error)) {
             return {
                 type: 'fallback',
@@ -311,12 +320,14 @@ async function stopSessionViaRunnerRpc(params: Readonly<{
     serverId?: string | null;
     scope?: ServerAccountScope;
     signal?: AbortSignal;
+    onIssued?: () => void;
 }>): Promise<unknown> {
     const serverId = params.scope?.serverId ?? params.serverId ?? getActiveServerSnapshot().serverId;
     if (!serverId) return { success: false, message: 'action_home_not_found', errorCode: 'action_home_not_found' };
     return await observeSessionStopRequest({
-        serverId, signal: params.signal,
-        withdrawn: () => ({ success: false, message: 'Session Stop observation was withdrawn', errorCode: 'SOCKET_RPC_ABORTED' }),
+        serverId, signal: params.signal, onIssued: params.onIssued,
+        withdrawn: issued => issued ? { status: 'requested' }
+            : { success: false, message: 'Session Stop observation was withdrawn', errorCode: 'SOCKET_RPC_ABORTED' },
         request: operation => requestRunnerSessionStop({ ...params, serverId, ...operation }),
     });
 }
@@ -341,6 +352,9 @@ async function requestRunnerSessionStop(params: Readonly<{
             : await sessionRpcWithServerScope<StopSessionResult | LegacySessionKillResponse, SessionKillRequest>({ ...request, serverId: params.serverId ?? null });
     } catch (error) {
         const errorCode = readSessionRpcErrorCode(error);
+        if (readRpcRequestDisposition(error) === 'outcomeUnknown' || errorCode === RPC_ERROR_CODES.OUTCOME_UNKNOWN) {
+            return { status: 'requested' };
+        }
         return {
             success: false,
             message: unknownErrorMessage(error),
@@ -464,11 +478,13 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
 
     try { assertCurrent(); }
     catch (error) { return failed(error, 'session_rpc'); }
+    let runnerIssued = false;
     const killResult = await stopSessionViaRunnerRpc({
         sessionId: params.sessionId,
         serverId,
         ...(params.scope ? { scope: params.scope } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
+        onIssued: () => { runnerIssued = true; },
     });
     const strictKillResult = readStrictStopSessionResult(killResult);
     if (strictKillResult?.status === 'stopped') {
@@ -504,6 +520,17 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
     const releasedAcknowledgement = readReleasedRunnerStopAcknowledgement(killResult);
     if (releasedAcknowledgement?.success) {
         // Released runners acknowledge signal initiation using success:true.
+        return {
+            success: false,
+            failedAt: 'session_rpc',
+            reason: 'requested',
+            recovery: 'wait_for_inactive',
+            message: 'Stop requested; waiting for the session to become inactive',
+        };
+    }
+
+    if (!releasedAcknowledgement && runnerIssued) {
+        // A malformed receipt cannot establish failure of an emitted effect.
         return {
             success: false,
             failedAt: 'session_rpc',

@@ -8,6 +8,7 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { clearBugReportUserActionTrail, getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
 
 const boundary = await installSessionOpsNetworkBoundary();
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
@@ -95,6 +96,67 @@ describe('Session creation pending settlement', () => {
 afterAll(() => boundary.dispose());
 
 describe('Session directory preflight through the Action and Machine transport owners', () => {
+    it('keeps an unconfirmed directory read a pre-effect transport refusal without creating a spawn operation', async () => {
+        clearBugReportUserActionTrail();
+        const home = await boundary.addHome('https://spawn-preflight-read-loss.test', 'spawn-account');
+        const account = await captureLazyActionAccountContext(home.id);
+        boundary.setRpcAckResponder(async () => {
+            throw Object.assign(new Error('socket has been disconnected'), { cause: new Error('private directory read detail') });
+        });
+        const input = { creationKey: SessionCreationKeyV1Schema.parse('preflight-read-loss'),
+            executionTarget: { serverId: home.id, machineId: 'machine-1' },
+            directory: { kind: 'path' as const, path: '/workspace/project' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionSpawnNewDirectoryApprovalPreflight: sessionSpawnNewAction.createUiSessionSpawnNewDirectoryApprovalPreflight(account),
+            sessionSpawnNew: async () => await sessionSpawnNewAction.dispatchSessionSpawnNewToMachine({ payload: input }),
+        }));
+        const operations = actionOperationStore.getSnapshot();
+        try {
+            const result = await sessionSpawnNewAction.executeSessionSpawnNewAction(input,
+                { surface: 'ui', authority: 'present_user' }, executor);
+            expect(result).toMatchObject({ ok: true, result: { type: 'error', code: 'spawn_failed', retryable: true,
+                launchError: { kind: 'launch_error', code: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+                    rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN } } });
+            expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT]);
+            expect(actionOperationStore.getSnapshot()).toBe(operations);
+            expect(getBugReportUserActionTrail()).toContainEqual(expect.objectContaining({
+                action: 'session.spawn_new.directory_preflight_failure',
+                metadata: { phase: 'setup', spawnIssued: false, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+                    rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN, requestDisposition: 'outcomeUnknown' },
+            }));
+            if (!result.ok) throw new Error('Expected a typed pre-effect refusal');
+            expect(SessionSpawnNewResultV1Schema.parse(result.result)).toEqual(result.result);
+            expect(JSON.stringify(result)).not.toContain('private directory read detail');
+            expect(JSON.stringify(getBugReportUserActionTrail())).not.toContain('private directory read detail');
+            expect(JSON.stringify(getBugReportUserActionTrail())).not.toContain(input.creationKey);
+            expect(JSON.stringify(getBugReportUserActionTrail()).includes(home.token)).toBe(false);
+        } finally {
+            account.dispose();
+        }
+    });
+
+    it('keeps an issued spawn acknowledgement loss pending with its original creation key', async () => {
+        const home = await boundary.addHome('https://spawn-issued-response-loss.test', 'spawn-account');
+        boundary.setRpcAckResponder(async () => {
+            throw Object.assign(new Error('socket has been disconnected'), { cause: new Error('private spawn acknowledgement detail') });
+        });
+        const input = { creationKey: SessionCreationKeyV1Schema.parse('issued-response-loss'),
+            executionTarget: { serverId: home.id, machineId: 'machine-1' }, directory: { kind: 'managed' as const },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionSpawnNew: async () => await sessionSpawnNewAction.dispatchSessionSpawnNewToMachine({ payload: input }),
+        }));
+        const result = await sessionSpawnNewAction.executeSessionSpawnNewAction(input,
+            { surface: 'ui', authority: 'present_user' }, executor);
+        expect(result).toEqual({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' } });
+        expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.SESSION_SPAWN_NEW]);
+        expect(boundary.requests[0]?.payload).toMatchObject({ creationKey: input.creationKey });
+        if (!result.ok) throw new Error('Expected a typed pending spawn');
+        expect(SessionSpawnNewResultV1Schema.parse(result.result)).toEqual(result.result);
+        expect(JSON.stringify(result)).not.toContain('private spawn acknowledgement detail');
+    });
+
     it('preserves the generic Machine setup deadline through the strict spawn Action consumer before any spawn is issued', async () => {
         boundary.resetRequests();
         const home = await boundary.addHome('https://spawn-preflight.test', 'spawn-account');

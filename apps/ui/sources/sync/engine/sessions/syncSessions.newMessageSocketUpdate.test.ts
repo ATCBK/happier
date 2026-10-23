@@ -714,7 +714,9 @@ describe('handleNewMessageSocketUpdate', () => {
         { marker: 'turn_cancelled', status: 'in_progress', thinking: true, markerTurnId: 'old-turn', turnId: 'new-turn' },
         { marker: 'task_started', status: 'completed', thinking: false, markerTurnId: 'turn-1', turnId: 'turn-1' },
     ] as const)('keeps canonical $status Turn authority when transcript $marker arrives', async ({ marker, status, thinking, markerTurnId, turnId }) => {
-        const { params, applySessions, applyMessages } = buildHarness({
+        const onTaskLifecycleEvent = vi.fn();
+        const { params, applySessions } = buildHarness({
+            onTaskLifecycleEvent,
             updateData: buildUpdate({
                 sid: 's1',
                 messageId: 'late-lifecycle-marker',
@@ -750,7 +752,11 @@ describe('handleNewMessageSocketUpdate', () => {
             latestTurnStatusObservedAt: 100,
             thinking,
         });
-        expect(applyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({ id: 'late-lifecycle-marker' });
+        // Lifecycle-only records are observed but intentionally normalize to no
+        // transcript row. Preserve their callback without giving it Turn authority.
+        expect(onTaskLifecycleEvent).toHaveBeenCalledWith('s1', {
+            type: marker, id: markerTurnId, createdAt: 1000,
+        });
     });
 
     it('triggers catch-up when a gap is detected for a loaded transcript', async () => {

@@ -812,9 +812,19 @@ const EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID: SessionsDomainSlice['sessionListRows
  * other Home then re-renders nothing, and an empty selection (a disabled consumer) never re-renders.
  * Without it the consumer follows every Home's rows.
  */
+export function useSessionListRowsByServerId<T>(
+  serverIds: ReadonlyArray<string> | undefined,
+  select: (rows: SessionsDomainSlice['sessionListRowsByServerId']) => T,
+): T;
 export function useSessionListRowsByServerId(
   serverIds?: ReadonlyArray<string>,
-): SessionsDomainSlice['sessionListRowsByServerId'] {
+): SessionsDomainSlice['sessionListRowsByServerId'];
+export function useSessionListRowsByServerId<T>(
+  serverIds?: ReadonlyArray<string>,
+  select?: (rows: SessionsDomainSlice['sessionListRowsByServerId']) => T,
+) {
+  useServerProfilesGeneration();
+  const resolveScopeId = captureServerProfileScopeResolver();
   const serverIdsKey = serverIds ? serverIds.join('\u0001') : null;
   const selectedServerIds = React.useMemo(
     () => (serverIds
@@ -823,19 +833,23 @@ export function useSessionListRowsByServerId(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the selection's identity
     [serverIdsKey],
   );
-  const rows = getStorage()(useShallow((state) => {
-    if (!selectedServerIds) return state.sessionListRowsByServerId;
-    if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID;
-    const resolveScopeId = captureServerProfileScopeResolver();
-    const selected: Record<string, SessionsDomainSlice['sessionListRowsByServerId'][string]> = {};
-    for (const serverId of selectedServerIds) {
-      const rows = readSessionListRowsForServerId(state.sessionListRowsByServerId, serverId, resolveScopeId);
-      if (rows) selected[serverId] = rows;
+  return getStorage()(useShallow((state) => {
+    if (selectedServerIds?.length === 0) {
+      return select ? select(EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID) : EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID;
     }
-    return selected;
+    let rows = state.sessionListRowsByServerId;
+    if (selectedServerIds) {
+      const selected: Record<string, SessionsDomainSlice['sessionListRowsByServerId'][string]> = {};
+      for (const serverId of selectedServerIds) {
+        const bucket = readSessionListRowsForServerId(rows, serverId, resolveScopeId);
+        if (bucket) selected[serverId] = bucket;
+      }
+      rows = selected;
+    }
+    const projected = projectSessionArchiveRowsByServerId(rows,
+      readSessionArchiveOperationsForServers(state, selectedServerIds, resolveScopeId));
+    return select ? select(projected) : projected;
   }));
-  const operations = getStorage()(useShallow(state => readSessionArchiveOperationsForServers(state, selectedServerIds)));
-  return React.useMemo(() => projectSessionArchiveRowsByServerId(rows, operations), [rows, operations]);
 }
 
 export function useOrdinarySessionListMembershipByServerId(): SessionsDomainSlice['ordinarySessionListMembershipByServerId'] {
@@ -947,7 +961,16 @@ export function useSessionListRuntimePriorityRowKeysForItems(
   return getStorage()(selector);
 }
 
-export type SessionListReachabilityRenderable = Pick<SessionListRenderableSession, 'id' | 'metadata'>;
+type SessionListReachabilityMetadata = Pick<NonNullable<SessionListRenderableSession['metadata']>,
+  'machineId' | 'host' | 'homeDir' | 'path' | 'sessionDirectoryV1' | 'externalSessionV1'>;
+export type SessionListReachabilityRenderable = Readonly<{
+  id: string;
+  metadata: SessionListReachabilityMetadata | null;
+}>;
+
+const SESSION_LIST_REACHABILITY_METADATA_FIELDS = [
+  'machineId', 'host', 'homeDir', 'path', 'sessionDirectoryV1', 'externalSessionV1',
+] as const satisfies readonly (keyof SessionListReachabilityMetadata)[];
 
 type SessionListReachabilityItemKey = Readonly<{
   key: string;
@@ -957,10 +980,7 @@ type SessionListReachabilityItemKey = Readonly<{
 
 const emptySessionListReachabilityRenderablesByKey =
   new Map<string, SessionListReachabilityRenderable>() as ReadonlyMap<string, SessionListReachabilityRenderable>;
-const sessionListReachabilityRenderableCache = new Map<string, Readonly<{
-  metadata: SessionListRenderableSession['metadata'];
-  value: SessionListReachabilityRenderable;
-}>>();
+const sessionListReachabilityRenderableCache = new Map<string, SessionListReachabilityRenderable>();
 
 export function buildSessionListReachabilityRenderableKey(
   serverId: string | null | undefined,
@@ -975,24 +995,33 @@ function projectSessionListReachabilityRenderable(
   renderable: SessionListRenderableSession,
 ): SessionListReachabilityRenderable {
   const cached = sessionListReachabilityRenderableCache.get(cacheKey);
-  if (cached?.metadata === renderable.metadata && cached.value.id === renderable.id) {
-    return cached.value;
+  if (cached?.id === renderable.id && (cached.metadata === renderable.metadata
+    || (Boolean(cached.metadata) === Boolean(renderable.metadata)
+      && SESSION_LIST_REACHABILITY_METADATA_FIELDS.every(field =>
+        Object.is(cached.metadata?.[field], renderable.metadata?.[field]))))) {
+    return cached;
   }
 
   const value: SessionListReachabilityRenderable = {
     id: renderable.id,
-    metadata: renderable.metadata,
+    metadata: renderable.metadata ? {
+      machineId: renderable.metadata.machineId,
+      host: renderable.metadata.host,
+      homeDir: renderable.metadata.homeDir,
+      path: renderable.metadata.path,
+      sessionDirectoryV1: renderable.metadata.sessionDirectoryV1,
+      externalSessionV1: renderable.metadata.externalSessionV1,
+    } : null,
   };
-  sessionListReachabilityRenderableCache.set(cacheKey, {
-    metadata: renderable.metadata,
-    value,
-  });
+  sessionListReachabilityRenderableCache.set(cacheKey, value);
   return value;
 }
 
 export function useSessionListReachabilityRenderablesForItems(
   items: ReadonlyArray<SessionListIndexItem> | null | undefined,
 ): ReadonlyMap<string, SessionListReachabilityRenderable> {
+  const profileGeneration = useServerProfilesGeneration();
+  const resolveScopeId = React.useMemo(() => captureServerProfileScopeResolver(), [profileGeneration]);
   const itemKeys = React.useMemo(() => {
     if (!items || items.length === 0) return emptyArray as SessionListReachabilityItemKey[];
     const next: SessionListReachabilityItemKey[] = [];
@@ -1009,24 +1038,26 @@ export function useSessionListReachabilityRenderablesForItems(
     return next.length === 0 ? (emptyArray as SessionListReachabilityItemKey[]) : next;
   }, [items]);
 
-  return getStorage()(useShallow((state) => {
-    if (itemKeys.length === 0) return emptySessionListReachabilityRenderablesByKey;
-    const resolveScopeId = captureServerProfileScopeResolver();
-
-    const next = new Map<string, SessionListReachabilityRenderable>();
-    for (const itemKey of itemKeys) {
-      const row = readSessionListRowForServerId(
-        state.sessionListRowsByServerId,
-        itemKey.serverId,
-        itemKey.sessionId,
-        resolveScopeId,
-      );
-      if (!row) continue;
-      next.set(itemKey.key, projectSessionListReachabilityRenderable(itemKey.key, row));
-    }
-
-    return next.size === 0 ? emptySessionListReachabilityRenderablesByKey : next;
-  }));
+  const selector = React.useMemo(() => {
+    let previousRows: StorageState['sessionListRowsByServerId'] | undefined;
+    let previous = emptySessionListReachabilityRenderablesByKey;
+    return (state: StorageState) => {
+      // Machine/profile-independent notifications do not change this input owner.
+      if (previousRows === state.sessionListRowsByServerId) return previous;
+      previousRows = state.sessionListRowsByServerId;
+      const next = new Map<string, SessionListReachabilityRenderable>();
+      for (const itemKey of itemKeys) {
+        const row = readSessionListRowForServerId(state.sessionListRowsByServerId,
+          itemKey.serverId, itemKey.sessionId, resolveScopeId);
+        if (row) next.set(itemKey.key, projectSessionListReachabilityRenderable(itemKey.key, row));
+      }
+      if (next.size !== previous.size || [...next].some(([key, row]) => previous.get(key) !== row)) {
+        previous = next.size === 0 ? emptySessionListReachabilityRenderablesByKey : next;
+      }
+      return previous;
+    };
+  }, [itemKeys, resolveScopeId]);
+  return getStorage()(selector);
 }
 
 const emptySessionListRowRenderablesByKey =
@@ -1035,6 +1066,8 @@ const emptySessionListRowRenderablesByKey =
 export function useSessionListRowRenderablesForItems(
   items: ReadonlyArray<SessionListIndexItem> | null | undefined,
 ): ReadonlyMap<string, SessionListRenderableSession> {
+  useServerProfilesGeneration();
+  const resolveScopeId = captureServerProfileScopeResolver();
   const itemKeys = React.useMemo(() => {
     if (!items || items.length === 0) return emptyArray as SessionListReachabilityItemKey[];
     const next: SessionListReachabilityItemKey[] = [];
@@ -1053,8 +1086,6 @@ export function useSessionListRowRenderablesForItems(
 
   return getStorage()(useShallow((state) => {
     if (itemKeys.length === 0) return emptySessionListRowRenderablesByKey;
-    const resolveScopeId = captureServerProfileScopeResolver();
-
     const next = new Map<string, SessionListRenderableSession>();
     for (const itemKey of itemKeys) {
       const row = readSessionListRowForServerId(
@@ -1313,8 +1344,13 @@ export function useSessionOrganizationSnapshotVersions(serverId: string | null |
 
 const EMPTY_MACHINE_DISPLAY_BY_ID: Record<string, MachineDisplayRenderable> = {};
 
-export function useMachineDisplayById(): Record<string, MachineDisplayRenderable> {
-  return getStorage()(useShallow((state) => state.machineDisplayById ?? EMPTY_MACHINE_DISPLAY_BY_ID));
+export function useMachineDisplayById<T>(select: (machines: Record<string, MachineDisplayRenderable>) => T): T;
+export function useMachineDisplayById(): Record<string, MachineDisplayRenderable>;
+export function useMachineDisplayById<T>(select?: (machines: Record<string, MachineDisplayRenderable>) => T) {
+  return getStorage()(useShallow((state) => {
+    const machines = state.machineDisplayById ?? EMPTY_MACHINE_DISPLAY_BY_ID;
+    return select ? select(machines) : machines;
+  }));
 }
 
 /** Subscribe only to display-name changes for an already-bounded machine set. */

@@ -326,6 +326,7 @@ function readSessionListRowOwnerMetadata(params: Readonly<{
     return readSessionLayout1OwnerMetadata({
         access: normalizeSessionAccessProjection(params.row, { allowLegacy: true }),
         accountMode: params.accountCurrentness?.mode,
+        accountCurrentness: params.accountCurrentness,
         ownerMetadataEnvelope: params.row.ownerMetadata,
         credentials: params.credentials,
         previousProjection: params.previousProjection,
@@ -369,6 +370,7 @@ function buildPlainHydratedSessionFromRow(
         ? projectSessionLayout1OwnerMetadata({
             sharedMetadata: sharedMetadata.data,
             ownerMetadataRead,
+            metadataVersion: row.metadataVersion,
         })
         : null;
     const isOwner = ownerProjection?.kind === 'owner';
@@ -380,7 +382,7 @@ function buildPlainHydratedSessionFromRow(
         encryptionMode: 'plain',
         metadata: readableMetadata,
         ownerMetadataView: isOwner ? ownerProjection.ownerMetadataView : null,
-        ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
+        ownerMetadataProjection: isOwner ? ownerProjection : null,
         composerOptionsInput: isOwner ? ownerProjection.composerOptionsInput : null,
         agentState: row.agentState == null
             ? null
@@ -480,7 +482,7 @@ export function buildRenderableFromRowAndCache(
             agentState: null,
             encryptedContentAvailability: knownContentAvailability,
             ownerMetadataView: projectSessionLayout1LockedOwnerVisibility(ownerMetadataRead),
-            ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
+            ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' ? ownerMetadataRead : null,
         }) as Session,
         // The Home-qualified applied row may retain the store's safe title even with no metadata.
         // Carry only that memory projection; buildHydratedSessionFromRowState stripped wire input.
@@ -1110,6 +1112,7 @@ async function decryptSessionRow(
                     ? projectSessionLayout1OwnerMetadata({
                         sharedMetadata: sharedMetadata.data,
                         ownerMetadataRead: ownerMetadataRead!,
+                        metadataVersion: row.metadataVersion,
                     })
                     : null;
                 if (ownerProjection?.kind === 'unavailable') {
@@ -1129,7 +1132,7 @@ async function decryptSessionRow(
                     ownerMetadataView: ownerProjection?.kind === 'owner'
                         ? ownerProjection.ownerMetadataView
                         : null,
-                    ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
+                    ownerMetadataProjection: ownerProjection?.kind === 'owner' ? ownerProjection : null,
                     composerOptionsInput: ownerProjection?.kind === 'owner' ? ownerProjection.composerOptionsInput : null,
                     agentState,
                     cachedEntry,

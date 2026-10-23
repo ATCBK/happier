@@ -219,7 +219,9 @@ export type SessionScmPullRequestDraftV1 = Readonly<{
 export type SessionScmPullRequestBodyDraft = Readonly<{
     /** Captured execution target and branch comparison; another repository must never consume this arrival. */
     key: string;
-    attempt: Readonly<{ bodyAtRequest: string; baselineResultId: string | null; baselineRevision: number | null; started: boolean | null }> | null;
+    attempt: Readonly<{ bodyAtRequest: string; baselineResultId: string | null; baselineRevision: number | null; started: boolean | null;
+        /** Exact result acknowledged by this request; absent until its Start receipt arrives. */
+        resultId?: string | null }> | null;
     candidate: string | null;
 }>;
 
@@ -262,6 +264,7 @@ const SessionScmPullRequestDraftV1Schema = z.strictObject({
             bodyAtRequest: z.string(), baselineResultId: z.nullable(z.string()),
             baselineRevision: z.nullable(z.number().check(z.int(), z.nonnegative())),
             started: z.nullable(z.boolean()),
+            resultId: z.optional(z.nullable(z.string())),
         })),
         candidate: z.nullable(z.string()),
     })),

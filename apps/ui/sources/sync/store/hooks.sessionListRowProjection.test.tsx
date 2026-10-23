@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as serverProfiles from '@/sync/domains/server/serverProfiles';
+import * as rowLookup from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import renderer, { act } from 'react-test-renderer';
 import * as linkedSessionMetadata from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
+import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
+import { t } from '@/text';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
@@ -51,6 +54,109 @@ afterEach(() => {
 });
 
 describe('useSessionListRenderableWithServerScope row projection', () => {
+    it('does not revisit Session row readers for Machine-only notifications', async () => {
+        const previous = storage.getState();
+        const serverId = 'machine-notification-home';
+        const rows = Array.from({ length: 50 }, (_, i) => buildActiveRenderable({ id: `row-${i}` }));
+        const items: SessionListIndexItem[] = rows.map(row => ({ type: 'session', serverId, sessionId: row.id }));
+        storage.setState({ sessionListRowsByServerId: { [serverId]: Object.fromEntries(rows.map(row => [row.id, row])) } });
+        const hook = await renderHook(() => useSessionListReachabilityRenderablesForItems(items));
+        const read = vi.spyOn(rowLookup, 'readSessionListRowForServerId');
+        try {
+            await act(async () => { storage.setState(state => ({ machineDisplayById: { ...state.machineDisplayById } })); });
+            expect(hook.getCurrent().size).toBe(50);
+            expect(read).not.toHaveBeenCalled();
+        } finally { read.mockRestore(); await hook.unmount(); storage.setState(previous); }
+    });
+
+    it('projects the canonical workspace path and managed-directory display facts', async () => {
+        const previous = storage.getState();
+        const serverId = 'workspace-display-home';
+        const row = buildActiveRenderable({ metadata: {
+            machineId: 'workspace-machine', path: '/home/alice/work/repo', homeDir: '/home/alice', host: 'host',
+        } });
+        const items: SessionListIndexItem[] = [{ type: 'session', serverId, sessionId: row.id }];
+        storage.setState({ sessionListRowsByServerId: { [serverId]: { [row.id]: row } } });
+        const hook = await renderHook(() => useSessionListReachabilityRenderablesForItems(items));
+        const display = () => resolveSessionWorkspaceDisplayPresentation({ serverId,
+            metadata: [...hook.getCurrent().values()][0]?.metadata, workspaceRefs: [], workspacePathDisplayModeV1: 'path' });
+        try {
+            expect(display()).toMatchObject({ directoryKind: 'path', displayTitle: '~/work/repo',
+                workspaceScope: { serverId, machineId: 'workspace-machine', rootPath: '/home/alice/work/repo' } });
+            await act(async () => { storage.setState({ sessionListRowsByServerId: { [serverId]: { [row.id]: {
+                ...row, metadata: { ...row.metadata!, sessionDirectoryV1: { v: 1, kind: 'managed' } },
+            } } } }); });
+            expect(display()).toMatchObject({ directoryKind: 'managed', displayTitle: t('session.folderless.privateToSession'), workspaceScope: null });
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
+
+    it('releases superseded metadata while retaining the unchanged reachability projection', async () => {
+        const { Session: InspectorSession } = await import('node:inspector');
+        const previous = storage.getState();
+        const serverId = 'reachability-metadata-retention-home';
+        const sessionId = 'reachability-metadata-retention-session';
+        const items: SessionListIndexItem[] = [{ type: 'session', serverId, sessionId }];
+        const superseded = (() => {
+            const metadata = { path: '/workspace', host: 'host', summaryText: 'private summary '.repeat(1024) };
+            storage.setState({ sessionListRowsByServerId: {
+                [serverId]: { [sessionId]: buildActiveRenderable({ id: sessionId, metadata }) },
+            } });
+            return new WeakRef(metadata);
+        })();
+        const hook = await renderHook(() => useSessionListReachabilityRenderablesForItems(items));
+        const inspector = new InspectorSession();
+        inspector.connect();
+        try {
+            const first = [...hook.getCurrent().values()][0];
+            expect(first?.metadata).toMatchObject({ path: '/workspace', host: 'host' });
+            await act(async () => {
+                storage.setState({ sessionListRowsByServerId: {
+                    [serverId]: { [sessionId]: buildActiveRenderable({ id: sessionId,
+                        metadata: { path: '/workspace', host: 'host', summaryText: 'replacement' } }) },
+                } });
+            });
+            expect([...hook.getCurrent().values()][0]).toBe(first);
+            // Drop React's prior selector snapshots as well as the store row.
+            // Only the reachability owner should retain its compact projection.
+            await hook.unmount();
+            storage.setState(previous);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage',
+                error => error ? reject(error) : resolve()));
+            expect(superseded.deref() === undefined, 'reachability must not retain the full superseded metadata').toBe(true);
+        } finally {
+            inspector.disconnect();
+            await hook.unmount();
+            storage.setState(previous);
+        }
+    });
+
+    it('updates reachability fields and unreadability independently for the same Session id on two Homes', async () => {
+        const previous = storage.getState();
+        const sessionId = 'reachability-owner-fields';
+        const row = buildActiveRenderable({ id: sessionId, metadata: { path: '/first', host: 'host' } });
+        storage.setState({ sessionListRowsByServerId: { 'reach-home-a': { [sessionId]: row }, 'reach-home-b': { [sessionId]: row } } });
+        const items: SessionListIndexItem[] = ['reach-home-a', 'reach-home-b'].map(serverId => ({ type: 'session', serverId, sessionId }));
+        const hook = await renderHook(() => useSessionListReachabilityRenderablesForItems(items));
+        try {
+            const first = [...hook.getCurrent().values()];
+            await act(async () => { storage.setState({ sessionListRowsByServerId: {
+                'reach-home-a': { [sessionId]: { ...row, metadata: { path: '/moved', host: 'host' } } },
+                'reach-home-b': { [sessionId]: row },
+            } }); });
+            const moved = [...hook.getCurrent().values()];
+            expect(moved[0]?.metadata?.path).toBe('/moved');
+            expect(moved[0]).not.toBe(first[0]);
+            expect(moved[1]).toBe(first[1]);
+            await act(async () => { storage.setState({ sessionListRowsByServerId: {
+                'reach-home-a': { [sessionId]: { ...row, metadata: null } },
+                'reach-home-b': { [sessionId]: row },
+            } }); });
+            expect([...hook.getCurrent().values()][0]?.metadata).toBeNull();
+            expect([...hook.getCurrent().values()][1]).toBe(first[1]);
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
+
     it('does not reacquire the profile resolver per row on unchanged multi-Home store notifications', async () => {
         const previous = storage.getState();
         const previousProfiles = serverProfiles.listServerProfiles();
@@ -72,12 +178,14 @@ describe('useSessionListRenderableWithServerScope row projection', () => {
             expect(hook.getCurrent().reachability.size).toBe(100);
             expect(hook.getCurrent().mounted).toMatchObject({ id: 'same-0', archiving: true });
             const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+            const capture = vi.spyOn(serverProfiles, 'captureServerProfileScopeResolver');
             try {
                 for (let index = 0; index < 3; index++) await act(async () => {
                     storage.setState(state => ({ isDataReady: !state.isDataReady }));
                 });
                 expect(resolve).not.toHaveBeenCalled();
-            } finally { resolve.mockRestore(); }
+                expect(capture).not.toHaveBeenCalled();
+            } finally { resolve.mockRestore(); capture.mockRestore(); }
             // A real profile publication is seen by the next operation, not
             // hidden behind a resolver retained by a mounted selector.
             await act(async () => { await serverProfiles.setServerProfileIdentityForUrl('https://home-a.example.test', 'srv_home_a'); });

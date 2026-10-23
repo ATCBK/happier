@@ -107,9 +107,9 @@ it.each(['single', 'batch'] as const)('requires admitted turns only for interval
     const context = captureUiUsageQueryAccountContext(credentials)!;
     await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
         const currentness = createOperationAccountCurrentnessSource({ credentials, request: authority.request, serverId: authority.scope.serverId });
-        const read = async (requireTurns: boolean) => {
+        const read = async (requireTurns: boolean, includeTurns?: boolean) => {
             if (transport === 'single') return readSessionSnapshotForAuthority({ authority, sessionId, requireTurns, accountCurrentnessSource: currentness });
-            const result = (await readSessionSnapshotsForAuthority({ authority, sessionIds: [sessionId], requireTurns, accountCurrentnessSource: currentness })).get(sessionId);
+            const result = (await readSessionSnapshotsForAuthority({ authority, sessionIds: [sessionId], requireTurns, includeTurns, accountCurrentnessSource: currentness })).get(sessionId);
             if (!result?.ok) throw result?.error ?? new Error('Missing batch result');
             return result.snapshot;
         };
@@ -128,6 +128,12 @@ it.each(['single', 'batch'] as const)('requires admitted turns only for interval
             ]);
             turnsOutcome = 'empty';
             expect((await read(true)).session.sessionTurns?.turns).toEqual([]);
+            if (transport === 'batch') {
+                // Metadata consumers omit optional work; interval demand still requires turns.
+                expect((await read(false, false)).session.sessionTurns).toBeUndefined();
+                expect(SessionReadBatchRequestV1Schema.parse(home!.requests.filter(request => request.path === '/v2/sessions/read-batch').at(-1)!.body).includeTurns).toBe(false);
+                expect((await read(true, false)).session.sessionTurns?.turns).toEqual([]);
+            }
         } finally { currentness.dispose(); }
     });
 });

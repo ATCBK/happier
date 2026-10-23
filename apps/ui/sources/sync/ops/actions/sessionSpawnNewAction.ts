@@ -51,7 +51,7 @@ export type SessionSpawnNewActionResult =
     | Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
 
 /** Preserve recognized transport causes without copying private exception messages into the result. */
-function projectSessionSpawnSetupTransportFailure(error: unknown): Extract<SessionSpawnNewResultV1, { type: 'error' }> | null {
+function projectSessionSpawnSetupTransportFailure(error: unknown) {
     const rpcErrorCode = readRpcErrorCode(error);
     const code = rpcErrorCode
         ?? (error && typeof error === 'object' && 'code' in error ? error.code : undefined);
@@ -60,14 +60,16 @@ function projectSessionSpawnSetupTransportFailure(error: unknown): Extract<Sessi
     return {
         type: 'error', code: 'spawn_failed', retryable: true,
         launchError: { kind: 'launch_error',
-            code: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? code : MACHINE_RPC_TIMEOUT_ERROR_CODE,
+            // An unconfirmed setup read cannot make Session creation uncertain.
+            // Retain its original RPC cause separately from this pre-effect verdict.
+            code: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE : MACHINE_RPC_TIMEOUT_ERROR_CODE,
             ...(rpcErrorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE || rpcErrorCode === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? { rpcErrorCode } : {}),
             ...(error instanceof ScopedRpcSocketConnectionTimeoutError ? { connectionPhase: error.connectionPhase } : {}),
             message: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN
                 ? 'Session creation transport lost its acknowledgement before a spawn request was issued.'
                 : 'Session creation transport timed out before a spawn request was issued.',
         },
-    };
+    } satisfies Extract<SessionSpawnNewResultV1, { type: 'error' }>;
 }
 
 /** Read-only target preparation precedes the UI Artifact, as it does for CLI approvals. */
@@ -88,7 +90,16 @@ export function createUiSessionSpawnNewDirectoryApprovalPreflight(
         } catch (error) {
             if (signal?.aborted) throw error;
             const failure = projectSessionSpawnSetupTransportFailure(error);
-            if (failure) return { type: 'error', result: failure };
+            if (failure) {
+                recordBugReportUserAction('session.spawn_new.directory_preflight_failure', {
+                    metadata: { phase: 'setup', spawnIssued: false,
+                        errorCode: failure.launchError?.code ?? 'unknown',
+                        rpcErrorCode: failure.launchError?.rpcErrorCode ?? 'unknown',
+                        requestDisposition: readRpcRequestDisposition(error) ?? 'unknown',
+                    },
+                });
+                return { type: 'error', result: failure };
+            }
             throw error;
         }
         account.assertCurrent();

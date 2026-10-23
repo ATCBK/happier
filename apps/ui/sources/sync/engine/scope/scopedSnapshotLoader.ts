@@ -74,8 +74,8 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     shouldLoadOnObserve: (target: TTarget) => boolean;
     /** Marks the domain's rows for one Home stale. Called before refetching. */
     invalidateServer: (serverId: string) => void;
-    /** Marks this exact retained target stale without disturbing sibling rows. */
-    invalidateTarget: (target: TTarget) => void;
+    /** Marks this exact retained target stale; the domain distinguishes advisory reloads from retirement. */
+    invalidateTarget: (target: TTarget, reason: 'reload' | 'explicit' | 'observer-gap') => void;
     /** Filters exact focused-Home wakes. Content-free secondary/socket wakes stay conservative. */
     matchesWake?: (event: HomeAccountChangeEvent) => boolean;
     /** A domain may narrow the demanded rows, or discard an already received revision. */
@@ -199,7 +199,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                     // The just-settled request began before the wake/gap. Keep any
                     // last-known answer visible, but never expose its capabilities
                     // as current while the deciding trailing read is pending.
-                    params.invalidateTarget(target);
+                    params.invalidateTarget(target, 'reload');
                 }
             } finally {
                 // Delete the single-flight registration before this exact promise settles.
@@ -237,7 +237,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     function invalidate(target: TTarget): Promise<void> {
         const observedTarget = observed.get(target.key);
         if (observedTarget) observedTarget.target = target;
-        params.invalidateTarget(target);
+        params.invalidateTarget(target, 'explicit');
         requireMaintenanceReload(target);
         const existing = inFlight.get(target.key);
         if (existing) {
@@ -263,7 +263,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         // itself before the refetch answers. Other Homes are untouched.
         if (!params.prepareWake) params.invalidateServer(targets[0]!.serverId);
         for (const target of targets) {
-            if (params.prepareWake) params.invalidateTarget(target);
+            if (params.prepareWake) params.invalidateTarget(target, 'reload');
             requestReload(target);
         }
     }
@@ -309,7 +309,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                 // This device heard no wakes while the target had no observer.
                 // Retained rows remain useful, but their mutation decisions are
                 // withdrawn synchronously before the remounted surface renders.
-                params.invalidateTarget(target);
+                params.invalidateTarget(target, 'observer-gap');
                 requireMaintenanceReload(target);
             }
             if (returnedAfterObserverGap && inFlight.has(target.key)) {
@@ -336,7 +336,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                     // the shared lifecycle alive. Retain the rows for continuity,
                     // but withdraw their currentness immediately so synchronous
                     // readers cannot treat an unobserved projection as fresh.
-                    params.invalidateTarget(target);
+                    params.invalidateTarget(target, 'observer-gap');
                     // No background read is useful without a consumer. The
                     // next first observer now owns the revalidation instead.
                     reloadAfterInFlight.delete(target.key);

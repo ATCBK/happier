@@ -594,6 +594,7 @@ export function buildUpdatedSessionProjectionFromSocketUpdate(params: {
 
 export async function buildUpdatedSessionFromSocketUpdate(params: {
     session: Session;
+    getCurrentSession?: () => Session;
     updateBody: any;
     updateSeq: number;
     updateCreatedAt: number;
@@ -611,14 +612,6 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
     if (encryptionMode === 'e2ee' && !sessionEncryption) {
         throw new Error(`Session encryption not found for ${session.id}`);
     }
-    const projectionSession = buildUpdatedSessionProjectionFromSocketUpdate({
-        session,
-        updateBody,
-        updateSeq,
-        updateCreatedAt,
-        onRuntimeActivityResyncRequired: params.onRuntimeActivityResyncRequired,
-        onResponsibilityResyncRequired: params.onResponsibilityResyncRequired,
-    });
     const storedMetadataLayoutVersion = readSessionMetadataLayoutVersion(session.metadataLayoutVersion);
     const nextMetadataLayoutVersion = Math.max(
         storedMetadataLayoutVersion,
@@ -647,10 +640,10 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
     const hasStatePayload = hydrateMetadata || hydrateAgentState;
     const agentStateVisibility = {
         metadataLayoutVersion: nextMetadataLayoutVersion,
-        access: projectionSession.access,
-        accessLevel: projectionSession.accessLevel,
+        access: session.access,
+        accessLevel: session.accessLevel,
         ownerMetadataAvailable: storedMetadataLayoutVersion === nextMetadataLayoutVersion
-            && readSessionOwnerMetadataView(projectionSession) !== null,
+            && readSessionOwnerMetadataView(session) !== null,
     };
     const shouldBatchDecryptState = Boolean(
         hydrateMetadata
@@ -658,7 +651,7 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
         && encryptionMode === 'e2ee'
         && nextMetadataLayoutVersion !== 1
         && isSessionAgentStateVisible({ ...agentStateVisibility,
-            contentAvailability: readSessionContentAvailability(projectionSession) })
+            contentAvailability: readSessionContentAvailability(session) })
         && sessionEncryption?.decryptSessionSnapshotState,
     );
     let metadataAuthenticationFailed = false;
@@ -668,7 +661,7 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             hydrationState: encryptionMode === 'plain' ? 'not_required' : 'ready',
             contentAuthenticationFailed: metadataAuthenticationFailed,
         })
-        : readSessionContentAvailability(projectionSession);
+        : readSessionContentAvailability(session);
     const resolveUpdatedState = async (): Promise<{
         agentState: AgentState | null;
         metadata: Metadata | null;
@@ -746,12 +739,24 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             resolveUpdatedState,
         )
         : await resolveUpdatedState();
+    // Decryption can overlap a by-ID owner refresh or another socket publication.
+    // Only this frame's opened tuples belong to the captured Session; omitted
+    // fields (especially ownerMetadataView and active) belong to the current base.
+    const currentSession = params.getCurrentSession?.() ?? session;
+    const projectionSession = buildUpdatedSessionProjectionFromSocketUpdate({
+        session: currentSession,
+        updateBody,
+        updateSeq,
+        updateCreatedAt,
+        onRuntimeActivityResyncRequired: params.onRuntimeActivityResyncRequired,
+        onResponsibilityResyncRequired: params.onResponsibilityResyncRequired,
+    });
     const agentState = !metadataAuthenticationFailed && isSessionAgentStateVisible({
         ...agentStateVisibility, contentAvailability: readUpdatedContentAvailability(),
-    }) ? openedAgentState : null;
+    }) ? (hydrateAgentState ? openedAgentState : currentSession.agentState) : null;
     const mergedMetadata = nextMetadataLayoutVersion === 1
         ? metadata
-        : preserveSessionRuntimeLocalMetadata(session.metadata, metadata);
+        : preserveSessionRuntimeLocalMetadata(currentSession.metadata, metadata);
 
     const nextSession: Session = {
         ...projectionSession,
@@ -762,9 +767,9 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             ? nextMetadataLayoutVersion
             : session.metadataLayoutVersion,
         agentState,
-        agentStateVersion: hydrateAgentState ? updateBody.agentState.version : session.agentStateVersion,
-        metadata: mergedMetadata,
-        metadataVersion: hydrateMetadata ? updateBody.metadata.version : session.metadataVersion,
+        agentStateVersion: hydrateAgentState ? updateBody.agentState.version : currentSession.agentStateVersion,
+        metadata: hydrateMetadata ? mergedMetadata : currentSession.metadata,
+        metadataVersion: hydrateMetadata ? updateBody.metadata.version : currentSession.metadataVersion,
         // A layout-1 socket patch carries only the shared metadata; the owner view for the new
         // revision is re-read by the caller's targeted owner hydration. Until that lands the
         // last-known owner view stays (from `projectionSession`): clearing it made the owner's

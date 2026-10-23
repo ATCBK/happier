@@ -1873,6 +1873,7 @@ export async function handleUpdateContainer(params: {
         const resolvedUpdate = shouldHydrateSessionState
             ? await buildUpdatedSessionFromSocketUpdate({
                 session,
+                getCurrentSession: () => getSocketSessionApplyBase(session.id) ?? session,
                 updateBody: updateData.body,
                 updateSeq: updateData.seq,
                 updateCreatedAt: updateData.createdAt,

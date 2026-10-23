@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionListRenderableSessionFixture, createSessionMessagesFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createRenderCommitCounter, useRenderCommitCounter } from '@/dev/testkit/performance/counts';
 
-import { useSessionPendingMessages, useSessionMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionVisibleReadSeq } from '@/sync/domains/state/storage';
+import { useSessionListRowsByServerId, useSessionPendingMessages, useSessionMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionVisibleReadSeq } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Message } from "@happier-dev/session-core/messages";
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
@@ -14,6 +15,73 @@ afterEach(() => {
 });
 
 describe('useSessionMessages', () => {
+    // PERFCI gate admission requires ten unchanged passes. STREAM changed the
+    // selector and fixture during calibration; the latest basis has one pass.
+    // Retain this contract and enable it after completing current-basis calibration.
+    it.skip('keeps mounted Home and another Session quiet while a sibling transcript streams', async () => {
+        const previous = storage.getState();
+        const homeCounts = createRenderCommitCounter();
+        const otherSessionCounts = createRenderCommitCounter();
+        const streamingCounts = createRenderCommitCounter();
+        const text = (value: string): Message => ({
+            id: 'text', kind: 'agent-text', localId: null, createdAt: 1, text: value,
+        });
+        const transcript = (value: string) => createSessionMessagesFixture({
+            messageIdsOldestFirst: ['text'], messagesById: { text: text(value) }, isLoaded: true,
+        });
+        const homeServerIds = ['perf-home'];
+        const homeRow = createSessionListRenderableSessionFixture({ id: 'perf-other' });
+        const chunk = (value: string, updatedAtMs: number): NormalizedMessage => ({
+            id: 'stream-segment', localId: 'stream-segment', createdAt: 1,
+            role: 'agent', isSidechain: false, content: [{ type: 'text', text: value, uuid: 'stream-segment', parentUUID: null }],
+            meta: { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant',
+                segmentLocalId: 'stream-segment', segmentState: 'streaming', startedAtMs: 1, updatedAtMs } },
+        });
+        storage.setState({ isDataReady: true, sessionListRowsByServerId: {
+            ...previous.sessionListRowsByServerId, 'perf-home': { 'perf-other': homeRow },
+        }, sessions: {
+            ...previous.sessions, 'perf-streaming': createSessionFixture({ id: 'perf-streaming' }),
+        }, sessionMessages: {
+            ...previous.sessionMessages, 'perf-streaming': createSessionMessagesFixture({ isLoaded: true }), 'perf-other': transcript('other'),
+        } });
+        storage.getState().applyMessages('perf-streaming', [chunk('start', 1)]);
+        const home = await renderHook(() => {
+            useRenderCommitCounter(homeCounts);
+            return useSessionListRowsByServerId(homeServerIds);
+        });
+        const other = await renderHook(() => {
+            useRenderCommitCounter(otherSessionCounts);
+            return useSessionMessages('perf-other');
+        });
+        const streaming = await renderHook(() => {
+            useRenderCommitCounter(streamingCounts);
+            return useSessionMessages('perf-streaming');
+        });
+        try {
+            const initialHome = home.getCurrent();
+            const initialOther = other.getCurrent();
+            expect(initialHome['perf-home']?.['perf-other']).toBe(homeRow);
+            expect(initialOther.messages[0]).toMatchObject({ text: 'other' });
+            homeCounts.reset(); otherSessionCounts.reset(); streamingCounts.reset();
+            // The baseline is zero work in unrelated mounted subscriptions;
+            // deterministic render/commit counts need no timing noise margin.
+            for (const [index, value] of ['one token', 'two tokens', 'three tokens'].entries()) {
+                await act(async () => {
+                    storage.getState().applyMessages('perf-streaming', [chunk(value, index + 2)]);
+                });
+            }
+            expect(home.getCurrent()).toBe(initialHome);
+            expect(other.getCurrent()).toBe(initialOther);
+            expect({ home: homeCounts.read(), otherSession: otherSessionCounts.read() }).toEqual({
+                home: { renders: 0, commits: 0 }, otherSession: { renders: 0, commits: 0 },
+            });
+            expect(streamingCounts.read()).toEqual({ renders: 3, commits: 3 });
+            expect(streaming.getCurrent().messages[0]).toMatchObject({ text: 'three tokens' });
+        } finally {
+            await home.unmount(); await other.unmount(); await streaming.unmount();
+            storage.setState(previous);
+        }
+    });
     it('projects only the requested Pending target and ignores sibling row changes', async () => {
         const previousState = storage.getState();
         const main = { id: 'main', localId: 'main', text: 'main', createdAt: 1, updatedAt: 1, rawRecord: {} };

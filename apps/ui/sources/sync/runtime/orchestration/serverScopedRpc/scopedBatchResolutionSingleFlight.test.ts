@@ -1,8 +1,147 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
+import { createDeferred } from '@/dev/testkit';
 
 describe('scoped batch pending reads', () => {
+    it.each([false, true])('keeps cancellation work linear with a surviving borrower (settled chunk: %s)', async settledChunk => {
+        async function cancellationWork(size: number): Promise<number> {
+            const reads = createScopedBatchResolutionSingleFlight<string>();
+            const caller = new AbortController();
+            const started = createDeferred<void>();
+            const response = createDeferred<ReadonlyMap<string, string>>();
+            const ids = Array.from({ length: size }, (_, index) => `row-${index}`);
+            let physical!: AbortSignal;
+            let publish!: (values: ReadonlyMap<string, string>) => void;
+            const request = (_ids: readonly string[], signal: AbortSignal, onChunk: typeof publish) => {
+                physical = signal;
+                publish = onChunk;
+                started.resolve();
+                return response.promise;
+            };
+            const departing = reads.run('details', ids, request, { signal: caller.signal });
+            const departed = expect(departing).rejects.toMatchObject({ name: 'AbortError' });
+            // Keep the last selected item alive after the shared caller leaves.
+            const survivorId = ids.at(-1)!;
+            const survivor = reads.run('details', [survivorId], request);
+            const early = settledChunk ? reads.run('details', [ids[0]!], request) : undefined;
+            try {
+                await started.promise;
+                if (early) {
+                    publish(new Map(ids.slice(0, size / 2).map(id => [id, id])));
+                    expect([...(await early)]).toEqual([[ids[0], ids[0]]]);
+                }
+                // Observe real native operations without replacing owner logic. Set membership
+                // also catches retaining a whole-batch completed-item filter after fixing signals.
+                // Only the synchronous abort turn counts, excluding setup/response/clock noise.
+                const memberships = vi.spyOn(Set.prototype, 'has');
+                const signalReads = vi.spyOn(AbortSignal.prototype, 'aborted', 'get');
+                const signalReasons = vi.spyOn(AbortSignal.prototype, 'reason', 'get');
+                let work: number;
+                try {
+                    caller.abort();
+                    work = signalReads.mock.calls.length + signalReasons.mock.calls.length + memberships.mock.calls.length;
+                } finally { signalReads.mockRestore(); signalReasons.mockRestore(); memberships.mockRestore(); }
+                await departed;
+                expect(physical.aborted).toBe(false);
+                response.resolve(new Map(ids.map(id => [id, id])));
+                expect([...(await survivor)]).toEqual([[survivorId, survivorId]]);
+                return work;
+            } finally {
+                caller.abort();
+                response.resolve(new Map(ids.map(id => [id, id])));
+                await Promise.allSettled([departing, survivor, ...(early ? [early] : [])]);
+                reads.reset();
+            }
+        }
+        const small = await cancellationWork(32);
+        const large = await cancellationWork(128);
+        expect(small).toBeGreaterThan(0);
+        // Four times the changed items may do at most four times the native observation work.
+        expect(large, JSON.stringify({ small, large, settledChunk })).toBeLessThanOrEqual(small * 4);
+    });
+
+    it('settles each completed physical chunk for its borrowers before later chunks finish or fail', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const later = createDeferred<void>();
+        const firstChunk = createDeferred<void>();
+        const request = async (_ids: readonly string[], _signal: AbortSignal,
+            publish?: (values: ReadonlyMap<string, string>) => void) => {
+            await firstChunk.promise;
+            publish?.(new Map([['a', 'first']]));
+            await later.promise;
+            throw new Error('later chunk failed');
+        };
+        const first = reads.run('details', ['a'], request);
+        const all = reads.run('details', ['a', 'b'], request);
+        const outcome = all.catch((error: unknown) => error);
+        let observed: ReadonlyMap<string, string> | undefined;
+        void first.then(value => { observed = value; }, () => {});
+        try {
+            firstChunk.resolve();
+            await vi.waitFor(() => expect(observed?.get('a')).toBe('first'));
+            later.resolve();
+            expect(await outcome).toMatchObject({ message: 'later chunk failed' });
+            expect([...(await first)]).toEqual([['a', 'first']]);
+        } finally {
+            firstChunk.resolve(); later.resolve();
+            await outcome;
+        }
+    });
+
+    it('cancels remaining physical work after an early borrower settles and the last pending borrower leaves', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const started = createDeferred<void>();
+        const firstChunk = createDeferred<void>();
+        let physicalSignal: AbortSignal | undefined;
+        const request = async (_ids: readonly string[], signal: AbortSignal, publish: (values: ReadonlyMap<string, string>) => void) => {
+            physicalSignal = signal;
+            started.resolve();
+            await firstChunk.promise;
+            publish(new Map([['a', 'first']]));
+            return await new Promise<ReadonlyMap<string, string>>((_resolve, reject) => {
+                signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                if (signal.aborted) reject(signal.reason);
+            });
+        };
+        const abort = new AbortController();
+        const first = reads.run('details', ['a'], request);
+        const later = reads.run('details', ['b'], request, { signal: abort.signal }).catch((error: unknown) => error);
+        await started.promise;
+        firstChunk.resolve();
+        expect([...(await first)]).toEqual([['a', 'first']]);
+        expect(physicalSignal?.aborted).toBe(false);
+        abort.abort();
+        await later;
+        expect(physicalSignal?.aborted).toBe(true);
+    });
+
+    it('does not cancel the physical continuation after all selected chunks have already settled', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const started = createDeferred<void>();
+        const response = createDeferred<ReadonlyMap<string, string>>();
+        const caller = new AbortController();
+        let physical!: AbortSignal;
+        let publish!: (values: ReadonlyMap<string, string>) => void;
+        const result = reads.run('details', ['a', 'b'], (_ids, signal, onChunk) => {
+            physical = signal;
+            publish = onChunk;
+            started.resolve();
+            return response.promise;
+        }, { signal: caller.signal });
+        try {
+            await started.promise;
+            publish(new Map([['a', 'A']]));
+            publish(new Map([['b', 'B']]));
+            expect([...(await result)]).toEqual([['a', 'A'], ['b', 'B']]);
+            caller.abort();
+            expect(physical.aborted).toBe(false);
+        } finally {
+            response.resolve(new Map());
+            await result;
+            reads.reset();
+        }
+    });
     it.each([33, 64])('gathers concurrent readers after %i asynchronous preparation steps', async preparationDepth => {
         const realTask = globalThis.setTimeout;
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

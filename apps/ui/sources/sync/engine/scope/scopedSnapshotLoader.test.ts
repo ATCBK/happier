@@ -492,7 +492,7 @@ describe('createScopedSnapshotLoader', () => {
 
         const releaseRemount = loader.observe(target);
 
-        expect(invalidateTarget).toHaveBeenCalledWith(target);
+        expect(invalidateTarget).toHaveBeenCalledWith(target, 'observer-gap');
         await vi.waitFor(() => expect(finishReload).not.toBeNull());
         finishReload!();
         releaseRemount();
@@ -558,7 +558,7 @@ describe('createScopedSnapshotLoader', () => {
         finishFirst!();
 
         await vi.waitFor(() => expect(finishTrailing).not.toBeNull());
-        expect(invalidateTarget).toHaveBeenCalledWith(target);
+        expect(invalidateTarget).toHaveBeenCalledWith(target, 'reload');
 
         finishTrailing!();
         release();
@@ -590,7 +590,7 @@ describe('createScopedSnapshotLoader', () => {
         const invalidated = loader.invalidate(target);
 
         expect(currentness[0]?.()).toBe(false);
-        expect(invalidateTarget).toHaveBeenCalledWith(target);
+        expect(invalidateTarget).toHaveBeenCalledWith(target, 'explicit');
         finishFirst!();
         await vi.waitFor(() => expect(finishTrailing).not.toBeNull());
         expect(load).toHaveBeenCalledTimes(2);

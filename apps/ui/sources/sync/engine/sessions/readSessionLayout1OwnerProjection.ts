@@ -1,6 +1,7 @@
 import { openSessionOwnerMetadataEnvelopeV1, openSessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
-import { projectSessionOwnerCompatibilityViewV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1, type SessionOwnerMetadataV1, type SessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { projectSessionOwnerCompatibilityViewV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { projectAccountEncryptionIdentity, sameAccountEncryptionIdentity } from '@happier-dev/sync-client';
 
 import { isSessionAccessOwner, type NormalizedSessionAccessProjection } from './normalizeSessionAccessProjection';
 import { ComposerOptionsInputV1Schema, projectComposerOptionsInputV1, type ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
@@ -10,7 +11,7 @@ import { MetadataSchema, type Metadata } from '@happier-dev/session-core/state';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { isSessionContentReadable, type SessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { readSessionMetadataLayoutVersion } from './parsePlainSessionPayload';
-import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataAuthority, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 /** Full AgentState is owner-private in layout 1, including presentation commands. */
 export function isSessionAgentStateVisible(params: Readonly<{
@@ -68,10 +69,7 @@ export function buildSessionOwnerMetadataUnavailableShell<T extends Readonly<{
 export type SessionLayout1OwnerProjection =
     | Readonly<{ kind: 'recipient' }>
     | Readonly<{ kind: 'composer'; ownerMetadataView: null; composerOptionsInput: ComposerOptionsInputV1 | null }>
-    | Readonly<{
-        kind: 'owner';
-        ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1;
-        ownerMetadata: SessionOwnerMetadataV1;
+    | Readonly<SessionOwnerMetadataProjection & {
         ownerMetadataView: Metadata;
         composerOptionsInput: ComposerOptionsInputV1;
       }>
@@ -117,6 +115,7 @@ export function projectSessionLayout1LockedOwnerVisibility(
 export function readSessionLayout1OwnerMetadata(params: Readonly<{
     access: NormalizedSessionAccessProjection | null;
     accountMode?: AccountEncryptionCurrentnessResponse['mode'];
+    accountCurrentness?: AccountEncryptionCurrentnessResponse;
     ownerMetadataEnvelope: unknown;
     credentials: AuthCredentials;
     composerOptionsInput?: ComposerOptionsInputV1 | null;
@@ -178,22 +177,35 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
         ? validated.envelope.v
         : material ? openSessionOwnerMetadataV1({ material, ciphertext: validated.envelope.c }) : null;
     if (!ownerMetadata) return { kind: 'unavailable', reason: 'invalid_ciphertext' };
+    // Plain inputs still pass the strict envelope/owner reader every time. Retain
+    // equal admitted facts afterwards; encrypted ciphertext reuse remains separate.
+    if (validated.envelope.t === 'plain' && params.previousProjection?.ownerMetadataEnvelope.t === 'plain'
+        && params.previousProjection.isCurrentAuthority?.(params)
+        && JSON.stringify(params.previousProjection.ownerMetadata) === JSON.stringify(ownerMetadata)) return params.previousProjection;
     const { credentials, accountMode } = params;
     const ciphertext = validated.envelope.t === 'encrypted' ? validated.envelope.c : null;
     const token = credentials.token;
     const secret = 'secret' in credentials ? credentials.secret : undefined;
     const machineKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined;
     const publicKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined;
+    const accountEncryptionIdentity = params.accountCurrentness ? projectAccountEncryptionIdentity(params.accountCurrentness) : undefined;
+    const matchesCredentials = (candidate: AuthCredentials) => candidate.token === token
+        && ('secret' in candidate ? candidate.secret : undefined) === secret
+        && (isDataKeyAuthCredentials(candidate) ? candidate.encryption.machineKey : undefined) === machineKey
+        && (isDataKeyAuthCredentials(candidate) ? candidate.encryption.publicKey : undefined) === publicKey;
+    const isCurrentAuthority = (next: SessionOwnerMetadataAuthority) => (next.accountMode ?? next.accountCurrentness?.mode) === accountMode
+        && matchesCredentials(credentials) && matchesCredentials(next.credentials)
+        && (accountEncryptionIdentity
+            ? Boolean(next.accountCurrentness && sameAccountEncryptionIdentity(accountEncryptionIdentity, next.accountCurrentness))
+            : next.accountCurrentness === undefined);
     return {
         kind: 'owner',
         ownerMetadataEnvelope: validated.envelope,
         ownerMetadata,
+        isCurrentAuthority,
+        accountEncryptionIdentity,
         ...(ciphertext === null ? {} : { canReuse: (next: Parameters<NonNullable<SessionOwnerMetadataProjection['canReuse']>>[0]) => {
-            if (next.credentials !== credentials || next.accountMode !== accountMode) return false;
-            if (credentials.token !== token
-                || ('secret' in credentials ? credentials.secret : undefined) !== secret
-                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined) !== machineKey
-                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined) !== publicKey) return false;
+            if (next.credentials !== credentials || !isCurrentAuthority({ ...next, credentials })) return false;
             const envelope = next.ownerMetadataEnvelope;
             // Identity comparison only: unknown extensions still take the canonical strict reader.
             return envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
@@ -205,13 +217,25 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
     };
 }
 
+function hasProjectedOwnerMetadata(read: SessionOwnerMetadataProjection): read is Extract<SessionLayout1OwnerProjection, { kind: 'owner' }> {
+    return read.ownerMetadataView !== undefined && read.composerOptionsInput !== undefined;
+}
+
 export function projectSessionLayout1OwnerMetadata(params: Readonly<{
     sharedMetadata: SessionSharedMetadataV1;
     ownerMetadataRead: SessionLayout1OwnerMetadataRead;
+    metadataVersion?: number;
 }>): SessionLayout1OwnerProjection {
     if (params.ownerMetadataRead.kind !== 'owner') {
         return params.ownerMetadataRead;
     }
+    const sharedMetadataSignature = JSON.stringify(params.sharedMetadata);
+    // The existing owner read already admitted this envelope under current access,
+    // mode and credentials. Reuse its full projection only for the same shared
+    // content and tuple, not merely the presence of its Symbol.
+    if (hasProjectedOwnerMetadata(params.ownerMetadataRead)
+        && params.ownerMetadataRead.admittedMetadataVersion === params.metadataVersion
+        && params.ownerMetadataRead.sharedMetadataSignature === sharedMetadataSignature) return params.ownerMetadataRead;
     const ownerMetadataView = MetadataSchema.safeParse(
         projectSessionOwnerCompatibilityViewV1({
             sharedMetadata: params.sharedMetadata,
@@ -222,9 +246,9 @@ export function projectSessionLayout1OwnerMetadata(params: Readonly<{
         return { kind: 'unavailable', reason: 'invalid_envelope' };
     }
     return {
-        kind: 'owner',
-        ownerMetadataEnvelope: params.ownerMetadataRead.ownerMetadataEnvelope,
-        ownerMetadata: params.ownerMetadataRead.ownerMetadata,
+        ...params.ownerMetadataRead,
+        sharedMetadataSignature,
+        admittedMetadataVersion: params.metadataVersion,
         ownerMetadataView: ownerMetadataView.data,
         composerOptionsInput: projectComposerOptionsInputV1(ownerMetadataView.data),
     };

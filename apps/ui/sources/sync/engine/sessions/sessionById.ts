@@ -705,6 +705,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     ? readSessionLayout1OwnerMetadata({
         access,
         accountMode,
+        accountCurrentness,
         ownerMetadataEnvelope: row.ownerMetadata,
         credentials: params.credentials,
         composerOptionsInput: params.composerOptionsInput,
@@ -845,6 +846,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     ? projectSessionLayout1OwnerMetadata({
         sharedMetadata: layout1SharedMetadata,
         ownerMetadataRead: ownerMetadataRead!,
+        metadataVersion: row.metadataVersion,
       })
     : null;
   if (ownerProjection?.kind === 'unavailable') {
@@ -1005,7 +1007,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     thinkingAt: 0,
     metadata,
     ownerMetadataView,
-    [SESSION_OWNER_METADATA_PROJECTION]: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
+    [SESSION_OWNER_METADATA_PROJECTION]: ownerProjection?.kind === 'owner' ? ownerProjection : null,
     composerOptionsInput,
     metadataProjection: params.composerOptionsInput !== undefined ? 'sessionOnly' as const : undefined,
     agentState,

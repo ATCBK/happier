@@ -31,6 +31,8 @@ export type SessionPartsReadOptions = Readonly<{
     fresh?: boolean;
     retry?: 'none';
     assertCurrent: () => void;
+    /** Validated parts from each settled physical batch, fenced per borrower. */
+    onResult?: (sessionId: string, part: SessionReadPart) => void;
 }>;
 
 /** The one parsed Session-parts acquisition owner; admission and opening remain per borrower. */
@@ -56,7 +58,7 @@ export function prepareSessionPartsRead(params: Omit<SessionPartsReadOptions, 's
         async read(sessionIds: readonly string[]): Promise<ReadonlyMap<string, SessionReadPart>> {
             try {
                 assertCurrent();
-                return await reservation.run(sessionIds, async (ids, signal) => {
+                return await reservation.run(sessionIds, async (ids, signal, publish) => {
                     const result = new Map<string, SessionReadPart>();
                     let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
                     const batches: string[][] = [];
@@ -86,6 +88,7 @@ export function prepareSessionPartsRead(params: Omit<SessionPartsReadOptions, 's
                             ? await transport.read('/v2/sessions/read-batch', init, params.retry ? { retry: params.retry } : undefined, consume)
                             : await consume(await params.request('/v2/sessions/read-batch', init));
                         const expected = new Set(sessionIds);
+                        const completed = new Map<string, SessionReadPart>();
                         for (const row of body.results) {
                             if (!expected.delete(row.sessionId)
                                 || (params.includeSnapshot && !row.detail)
@@ -93,12 +96,14 @@ export function prepareSessionPartsRead(params: Omit<SessionPartsReadOptions, 's
                                 || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
                                 throw new SessionPartsInvalidResponseError();
                             }
-                            result.set(row.sessionId, row);
+                            completed.set(row.sessionId, row);
                         }
                         if (expected.size) throw new SessionPartsInvalidResponseError();
+                        for (const [id, row] of completed) result.set(id, row);
+                        publish(completed);
                     }
                     return result;
-                });
+                }, undefined, (id, row) => { assertCurrent(); params.onResult?.(id, row); });
             } finally {
                 reservation.release();
                 assertCurrent();

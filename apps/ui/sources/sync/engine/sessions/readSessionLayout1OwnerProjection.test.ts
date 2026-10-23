@@ -23,6 +23,22 @@ const credentials = {
 };
 
 describe('readSessionLayout1OwnerMetadata', () => {
+    it('retains the same admitted plain owner facts only after validating fresh input', () => {
+        const envelope = createPlainSessionOwnerMetadataEnvelopeV1(ownerMetadata);
+        const params = { access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
+            credentials: { token: 'plain-retention' }, accountMode: 'plain' as const, ownerMetadataEnvelope: envelope };
+        const first = readSessionLayout1OwnerMetadata(params);
+        expect(first.kind).toBe('owner');
+        const previousProjection = first.kind === 'owner' ? first : null;
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection,
+            ownerMetadataEnvelope: structuredClone(envelope) })).toBe(first);
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection,
+            ownerMetadataEnvelope: { ...envelope, unexpected: true } })).toMatchObject({ kind: 'unavailable', reason: 'invalid_envelope' });
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection,
+            ownerMetadataEnvelope: { t: 'plain', v: { v: 1, workspace: { path: 9 } } } })).toMatchObject({ kind: 'unavailable', reason: 'invalid_envelope' });
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection,
+            ownerMetadataEnvelope: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, workspace: { path: '/changed' } }) })).not.toBe(first);
+    });
     it.each([null, undefined])('fails closed when an owner projection omits its required owner envelope (%s)', (ownerMetadataEnvelope) => {
         expect(readSessionLayout1OwnerMetadata({
             access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),

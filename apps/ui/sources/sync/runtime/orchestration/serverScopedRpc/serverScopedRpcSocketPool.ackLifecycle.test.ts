@@ -2,7 +2,9 @@ import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { io, type Socket } from 'socket.io-client';
 import { expect, it } from 'vitest';
-import { emitWithAckCancellable, readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { callSocketRpc, emitWithAckCancellable, readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createServerScopedRpcSocketPool } from './serverScopedRpcSocketPool';
 
 it.each([
@@ -194,5 +196,67 @@ it('refuses an ACK write after its pooled physical socket disconnects without bu
     } finally {
         await pool.stopAll();
         await new Promise<void>((resolve) => { server.close(() => resolve()); });
+    }
+});
+
+it('settles the original issued read after namespace loss even when its pooled socket is connected again', async () => {
+    const http = createServer();
+    const server = new Server(http, { path: '/v1/updates/' });
+    const requests: string[] = [];
+    let acknowledgeOld!: (value: unknown) => void;
+    let observeIssued!: () => void;
+    const issued = new Promise<void>(resolve => { observeIssued = resolve; });
+    server.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+        (request: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            requests.push(request.requestId!);
+            if (request.requestId === 'old-read') { acknowledgeOld = ack; observeIssued(); }
+            else ack({ ok: true, result: 'current-read' });
+        }));
+    await new Promise<void>(resolve => { http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing loopback server address');
+    const sockets: Socket[] = [];
+    const pool = createServerScopedRpcSocketPool({
+        createSocket: ({ serverUrl }) => {
+            const socket = io(serverUrl, { path: '/v1/updates/', autoConnect: false, reconnection: false, forceNew: true });
+            socket.io.timeout(false);
+            sockets.push(socket);
+            return socket;
+        },
+        reachability: {
+            startReachability: async () => {}, waitForReachable: async () => {},
+            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
+        },
+        readIdleDisconnectMs: () => 0,
+    });
+    const scope = { serverUrl: `http://127.0.0.1:${address.port}`, token: 'synthetic-token', timeoutMs: 5_000 };
+    try {
+        const first = await pool.acquire(scope);
+        const originalNamespace = first.getSocketId();
+        const oldRead = callSocketRpc({ socket: first, target: { kind: 'machine', id: 'machine-1' },
+            method: RPC_METHODS.MACHINES_VITALS_GET, params: {}, content: { mode: 'plain' }, timeoutMs: null, requestId: 'old-read' })
+            .catch((error: unknown) => error);
+        await issued;
+        sockets[0]!.disconnect();
+        const second = await pool.acquire(scope);
+        expect(second.connected).toBe(true);
+        expect(second.getSocketId()).not.toBe(originalNamespace);
+        expect(first.getSocketId()).toBe(second.getSocketId());
+        expect(sockets).toHaveLength(1);
+        const failure = await oldRead;
+        expect(failure).toMatchObject({ rpcErrorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+        expect(readRpcRequestDisposition(failure)).toBe('outcomeUnknown');
+        // A late reply belongs to the old namespace; the new request's ACK is
+        // the transport barrier, not a timer or a replay of the old read.
+        acknowledgeOld({ ok: true, result: 'late-old-read' });
+        await expect(callSocketRpc({ socket: second, target: { kind: 'machine', id: 'machine-1' },
+            method: RPC_METHODS.MACHINES_VITALS_GET, params: {}, content: { mode: 'plain' }, timeoutMs: null, requestId: 'new-read' }))
+            .resolves.toBe('current-read');
+        expect(requests).toEqual(['old-read', 'new-read']);
+        first.disconnect();
+        second.disconnect();
+    } finally {
+        await pool.stopAll();
+        await new Promise<void>(resolve => { server.close(() => resolve()); });
     }
 });

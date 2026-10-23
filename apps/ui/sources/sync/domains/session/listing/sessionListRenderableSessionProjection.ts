@@ -5,6 +5,9 @@ import { isSessionAccessOwner, isSessionAccessRecipient } from '@/sync/engine/se
 import { classifySessionTupleApplyCurrentness } from '@/sync/domains/session/sessionTupleApplyCurrentness';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataAuthority } from '../readSessionOwnerMetadataView';
+import { isSessionContentReadable, readSessionContentAvailability } from '../encryptedContentAvailability';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
 import type { SessionListRenderableSession } from './sessionListRenderable';
 
@@ -47,10 +50,30 @@ export function isSessionListRenderableOwnerProjection(
         && isSessionAccessOwner(renderable.access, renderable.accessLevel);
 }
 
-/** A list row's owner metadata view, with the same layout rules as a hydrated Session's. */
+/** Compact display view by default; full continuation facts only under explicit current admission. */
 export function readSessionListRenderableOwnerMetadataView(
-    renderable: SessionListRenderableOwnerProjectionInput & Readonly<{ metadata: unknown }>,
+    renderable: SessionListRenderableOwnerProjectionInput & Readonly<{ metadata: unknown }>
+        & Partial<Pick<SessionListRenderableSession, 'metadataVersion' | 'metadataUnavailable'
+            | 'encryptionMode' | 'encryptedContentAvailability' | typeof SESSION_OWNER_METADATA_PROJECTION>>,
+    options?: Readonly<{
+        /** Caller retains the canonical Account-encryption and Home/credential lifetime fences. */
+        requireAdmitted: SessionOwnerMetadataAuthority & Readonly<{
+            accountCurrentness: AccountEncryptionCurrentnessResponse;
+            isCurrent: () => boolean;
+        }>;
+    }>,
 ): Metadata | null {
+    if (options) {
+        const row = renderable;
+        const projection = row[SESSION_OWNER_METADATA_PROJECTION];
+        if (!options.requireAdmitted.isCurrent() || !isSessionListRenderableOwnerProjection(row)
+            || row.metadataUnavailable === true || row.metadata == null
+            || !isSessionContentReadable(readSessionContentAvailability(row))
+            || !projection?.ownerMetadataView || !projection.accountEncryptionIdentity || typeof row.metadataVersion !== 'number'
+            || projection.admittedMetadataVersion !== row.metadataVersion
+            || !projection.isCurrentAuthority?.(options.requireAdmitted)) return null;
+        return projection.ownerMetadataView;
+    }
     const metadataLayoutVersion = readSessionMetadataLayoutVersion(renderable.metadataLayoutVersion);
     if (metadataLayoutVersion === 0 || isSessionListRenderableOwnerProjection(renderable)) {
         return renderable.metadata as Metadata | null;

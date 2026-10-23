@@ -1,6 +1,8 @@
 import { reconcileSessionRequestProjection } from '../sessionTupleApplyCurrentness';
 import { reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
+import { readSessionExplicitStopV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
+import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
 import type { SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import {
@@ -134,6 +136,8 @@ export interface SessionListRenderableSession {
     workflowHeadline?: SessionWorkflowActivityHeadlineV1 | null;
     /** The guard's word for this row (plan 50 G3-2): a stop is coming, or the guard stopped it. */
     guardState?: SessionListGuardState | null;
+    /** Memory-only owner facts for question captions, not answer admission or warm-cache authority. */
+    workerQuestionHandling?: Readonly<{ answersWorkerQuestions: boolean; explicitlyStopped: boolean }> | null;
     encryptionMode?: Session["encryptionMode"];
     encryptedContentAvailability?: Session['encryptedContentAvailability'];
     /** Store-produced recipient-safe title; memory only, never metadata or a wire/cache field. */
@@ -203,6 +207,18 @@ export interface SessionListRenderableSession {
 }
 
 export type SessionListRenderablePatchFields = Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>;
+
+/** Compact display facts shared by scoped list rows and live-carrier captions. */
+export function readSessionWorkerQuestionHandlingProjection(
+    metadata: Metadata | null,
+): NonNullable<SessionListRenderableSession['workerQuestionHandling']> | null {
+    if (!metadata) return null;
+    const stop = readSessionExplicitStopV1FromMetadata(metadata);
+    return {
+        answersWorkerQuestions: readSessionAnswersWorkerQuestionsV1(metadata),
+        explicitlyStopped: Boolean(stop && !('status' in stop)),
+    };
+}
 
 export type SessionListRenderableFieldSnapshot = Readonly<{
     active: boolean;
@@ -597,6 +613,11 @@ export function buildSessionListRenderableFromSession(
     const workState = renderableSourceMetadata ? readSessionWorkStateV1FromMetadata(renderableSourceMetadata) : null;
     const workflowHeadline = parsedWorkflow.success ? parsedWorkflow.data : null;
     const guardState = readSessionListGuardState(renderableSourceMetadata?.sessionGuardStateV1);
+    const workerQuestionHandling = readSessionMetadataLayoutVersion(session.metadataLayoutVersion) === 0 || ownerProjection
+        ? metadataUndecided || preserveMetadata
+            ? previous?.workerQuestionHandling ?? null
+            : readSessionWorkerQuestionHandlingProjection(readSessionOwnerMetadataView(session))
+        : null;
     const next: SessionListRenderableSession = {
         forkV1: renderableSourceMetadata?.forkV1,
         agentActivityHeadline: JSON.stringify(previous?.agentActivityHeadline ?? null) === JSON.stringify(agentActivityHeadline)
@@ -605,6 +626,10 @@ export function buildSessionListRenderableFromSession(
         workState: JSON.stringify(previous?.workState ?? null) === JSON.stringify(workState) ? previous?.workState ?? null : workState,
         workflowHeadline: JSON.stringify(previous?.workflowHeadline ?? null) === JSON.stringify(workflowHeadline) ? previous?.workflowHeadline ?? null : workflowHeadline,
         guardState: JSON.stringify(previous?.guardState ?? null) === JSON.stringify(guardState) ? previous?.guardState ?? null : guardState,
+        workerQuestionHandling:
+            previous?.workerQuestionHandling?.answersWorkerQuestions === workerQuestionHandling?.answersWorkerQuestions
+            && previous?.workerQuestionHandling?.explicitlyStopped === workerQuestionHandling?.explicitlyStopped
+                ? previous?.workerQuestionHandling ?? null : workerQuestionHandling,
         id: session.id,
         seq: session.seq,
         encryptionMode: session.encryptionMode,
@@ -890,6 +915,10 @@ export function preserveSessionListRenderableStaleFields(
         agentActivityHeadline: preserveMetadata
             ? previous.agentActivityHeadline ?? null
             : next.agentActivityHeadline ?? null,
+        workerQuestionHandling: preserveMetadata
+            && (readSessionMetadataLayoutVersion(next.metadataLayoutVersion) === 0 || isSessionListRenderableOwnerProjection(next))
+                ? previous.workerQuestionHandling ?? null
+                : next.workerQuestionHandling ?? null,
         latestReadyEventSeq,
         latestReadyEventAt,
         pendingBlockedCount: preservePendingBlockedCount
@@ -923,6 +952,8 @@ export function areSessionListRenderablesEqual(
     if (previous.workState !== next.workState && JSON.stringify(previous.workState ?? null) !== JSON.stringify(next.workState ?? null)) return false;
     if (previous.workflowHeadline !== next.workflowHeadline && JSON.stringify(previous.workflowHeadline ?? null) !== JSON.stringify(next.workflowHeadline ?? null)) return false;
     if (JSON.stringify(previous.guardState ?? null) !== JSON.stringify(next.guardState ?? null)) return false;
+    if (previous.workerQuestionHandling?.answersWorkerQuestions !== next.workerQuestionHandling?.answersWorkerQuestions
+        || previous.workerQuestionHandling?.explicitlyStopped !== next.workerQuestionHandling?.explicitlyStopped) return false;
     const previousMetadata = readSessionListRenderableMetadataComparisonFromRenderable(previous.metadata);
     const nextMetadata = readSessionListRenderableMetadataComparisonFromRenderable(next.metadata);
 

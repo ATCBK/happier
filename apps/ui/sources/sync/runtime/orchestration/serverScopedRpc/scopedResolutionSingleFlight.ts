@@ -174,11 +174,13 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
     };
 }
 
-type BatchRead<T> = (ids: readonly string[], signal: AbortSignal) => Promise<ReadonlyMap<string, T>>;
+type BatchRead<T> = (ids: readonly string[], signal: AbortSignal,
+    publish: (values: ReadonlyMap<string, T>) => void) => Promise<ReadonlyMap<string, T>>;
 
 export type ScopedBatchReadPreparation<T> = Readonly<{
     /** Settle this reservation once the caller has prepared its selected ids. */
-    run: (ids: readonly string[], read: BatchRead<T>, signal?: AbortSignal) => Promise<ReadonlyMap<string, T>>;
+    run: (ids: readonly string[], read: BatchRead<T>, signal?: AbortSignal,
+        onResolved?: (id: string, value: T) => void) => Promise<ReadonlyMap<string, T>>;
     /** A failed or abandoned preparation must not hold other ready readers. */
     release: () => void;
 }>;
@@ -248,29 +250,61 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
         const first = items[0];
         if (!first) return;
         const abort = new AbortController();
+        // The per-id single flight selects one live physical item per id. Keep only
+        // unsettled items here, so an abort or published chunk touches its own items.
+        const pending = new Map<string, { item: Item; onAbort: () => void }>();
+        let wanted = items.length;
         const cancelIfUnwanted = () => {
-            if (items.every(item => item.signal.aborted)) abort.abort();
+            if (pending.size > 0 && wanted === 0) abort.abort();
         };
-        for (const item of items) item.signal.addEventListener('abort', cancelIfUnwanted, { once: true });
+        for (const item of items) {
+            const onAbort = () => {
+                if (!pending.has(item.id)) return;
+                wanted -= 1;
+                cancelIfUnwanted();
+            };
+            pending.set(item.id, { item, onAbort });
+            item.signal.addEventListener('abort', onAbort, { once: true });
+        }
         try {
             cancelIfUnwanted();
             throwIfAborted(abort.signal);
-            const result = await first.read(items.map(item => item.id), abort.signal);
-            for (const item of items) {
+            // Typed adapters validate a complete physical chunk before publishing
+            // it. Settle its selected items now, retaining later items in this
+            // same pending owner rather than holding every borrower at a barrier.
+            const publish = (values: ReadonlyMap<string, T>) => {
+                for (const [id, value] of values) {
+                    const entry = pending.get(id);
+                    if (!entry) continue;
+                    const { item, onAbort } = entry;
+                    pending.delete(id);
+                    item.signal.removeEventListener('abort', onAbort);
+                    if (item.signal.aborted) item.reject(abortReason(item.signal));
+                    else {
+                        wanted -= 1;
+                        item.accept(value);
+                    }
+                }
+                cancelIfUnwanted();
+            };
+            const result = await first.read(items.map(item => item.id), abort.signal, publish);
+            for (const { item } of pending.values()) {
                 if (item.signal.aborted) item.reject(abortReason(item.signal));
                 else if (!result.has(item.id)) item.reject(new Error('Scoped batch omitted a requested resource'));
                 // Map.has establishes presence even when T itself permits undefined.
                 else item.accept(result.get(item.id) as T);
             }
         } catch (error) {
-            for (const item of items) item.reject(error);
+            for (const { item } of pending.values()) item.reject(error);
         } finally {
-            for (const item of items) item.signal.removeEventListener('abort', cancelIfUnwanted);
+            for (const { item, onAbort } of pending.values()) item.signal.removeEventListener('abort', onAbort);
+            pending.clear();
         }
     }
 
     async function run(acquisition: ReturnType<typeof acquire>, groupKey: string, batch: Batch,
-        ids: readonly string[], read: BatchRead<T>, options: ScopedReadOptions, signal?: AbortSignal) {
+        ids: readonly string[], read: BatchRead<T>, options: ScopedReadOptions, signal?: AbortSignal,
+        onResolved?: (id: string, value: T) => void) {
         const invocation = new AbortController();
         const cancellation = mergeAbortSignals([invocation.signal, options.signal, signal]);
         try {
@@ -291,6 +325,8 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                         flushWhenPrepared(acquisition, groupKey, batch);
                     },
                 });
+                throwIfAborted(cancellation.signal);
+                onResolved?.(id, value);
                 return [id, value] as const;
             }));
             flushWhenPrepared(acquisition, groupKey, batch);
@@ -322,7 +358,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
             };
             options.signal?.addEventListener('abort', release, { once: true });
             return {
-                run(ids, read, signal) {
+                run(ids, read, signal, onResolved) {
                     if (!open) {
                         return Promise.reject(options.signal?.aborted ? abortReason(options.signal)
                             : new Error('Scoped read preparation has already ended'));
@@ -330,7 +366,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                     // Retain this exact partition even if invalidation has
                     // withdrawn its joins while preparation was awaiting.
                     acquisition.partition.users += 1;
-                    try { return run(acquisition, groupKey, batch, ids, read, options, signal); }
+                    try { return run(acquisition, groupKey, batch, ids, read, options, signal, onResolved); }
                     finally { release(); }
                 },
                 release,

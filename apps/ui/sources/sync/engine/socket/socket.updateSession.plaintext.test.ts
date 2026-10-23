@@ -19,6 +19,7 @@ import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normali
 import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
 import { SecretBoxEncryption, type Decryptor, type Encryptor } from '@/sync/encryption/encryptor';
+import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { flushActivityUpdates, handleSocketUpdate, handleUpdateContainer } from './socket';
 
 const socketPostDecryptSideEffectMocks = vi.hoisted(() => ({
@@ -184,6 +185,104 @@ describe('socket update handling: plaintext update-session', () => {
         } finally {
             releaseDecrypt.resolve();
             await older;
+        }
+    });
+
+    it('does not resurrect stopped owner metadata or presence when an Agent state decrypt finishes later', async () => {
+        vi.useFakeTimers();
+        const sessionId = 's_delayed_agent_state_after_stop';
+        const initial: Session = { ...buildSession(sessionId), encryptionMode: 'e2ee',
+            metadataLayoutVersion: 1, metadataVersion: 36, agentStateVersion: 7,
+            access: createSessionAccessFixture(), encryptedContentAvailability: 'ready',
+            ownerMetadataView: { path: '/tmp', host: 'localhost', lifecycleState: 'running' } };
+        storage.getState().applySessions([initial]);
+        markSessionSurfaceVisible(sessionId);
+        const decryptStarted = createDeferred<void>();
+        const releaseDecrypt = createDeferred<void>();
+        const crypto = new SecretBoxEncryption(new Uint8Array(32));
+        // Only crypto is delayed: the socket admission and Session store stay real.
+        const delayedCrypto: Encryptor & Decryptor = {
+            encrypt: data => crypto.encrypt(data),
+            decrypt: async (data, options) => {
+                decryptStarted.resolve();
+                await releaseDecrypt.promise;
+                return crypto.decrypt(data, options);
+            },
+        };
+        const sessionEncryption = new SessionEncryption(sessionId, delayedCrypto, new EncryptionCache());
+        const params = buildBaseParams({ encryption: {
+            getSessionEncryption: () => sessionEncryption, getMachineEncryption: () => null,
+            removeSessionEncryption: () => {},
+        } as unknown as HandleUpdateContainerBaseParams['encryption'],
+        applySessions: rows => storage.getState().applySessions(rows) });
+        const ciphertext = await sessionEncryption.encryptAgentState({ requests: {} });
+        let pending: Promise<void> | undefined;
+        try {
+            pending = handleUpdateContainer({ ...params, updateData: {
+                id: 'delayed-agent-state-after-stop', seq: 8, createdAt: 200,
+                body: { t: 'update-session', id: sessionId, metadataLayoutVersion: 1,
+                    agentState: { version: 8, value: ciphertext } },
+            } });
+            await decryptStarted.promise;
+            // The layout-1 owner envelope can refresh at the same shared metadata revision.
+            // Publisher closure also leaves activeAt unchanged.
+            storage.getState().applySessions([{ ...initial, active: false, updatedAt: 300,
+                ownerMetadataView: { ...initial.ownerMetadataView!, lifecycleState: 'stopped' } }]);
+            releaseDecrypt.resolve();
+            await pending;
+            await vi.advanceTimersByTimeAsync(100);
+            expect(storage.getState().sessions[sessionId]).toMatchObject({
+                active: false, metadataVersion: 36,
+                ownerMetadataView: { lifecycleState: 'stopped' },
+                agentStateVersion: 8, agentState: { requests: {} },
+            });
+        } finally {
+            releaseDecrypt.resolve();
+            await pending;
+        }
+    });
+
+    it('does not resurrect cached presence when metadata decrypt finishes after a Stop refresh', async () => {
+        vi.useFakeTimers();
+        const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+        const initial = { ...buildSession('s_cached_decrypt_after_stop'), serverId,
+            encryptionMode: 'e2ee' as const, archivedAt: null };
+        replaceActiveSessionListRows([initial]);
+        demandSessionListRow(initial.id);
+        const decryptStarted = createDeferred<void>();
+        const releaseDecrypt = createDeferred<void>();
+        const crypto = new SecretBoxEncryption(new Uint8Array(32));
+        const reader = new SessionEncryption(initial.id, {
+            encrypt: data => crypto.encrypt(data),
+            decrypt: async (data, options) => {
+                decryptStarted.resolve();
+                await releaseDecrypt.promise;
+                return crypto.decrypt(data, options);
+            },
+        }, new EncryptionCache());
+        const params = buildBaseParams({ encryption: {
+            getSessionEncryption: () => reader, getMachineEncryption: () => null,
+            removeSessionEncryption: () => {},
+        } as unknown as HandleUpdateContainerBaseParams['encryption'] });
+        const ciphertext = await reader.encryptMetadata({ path: '/tmp', host: 'localhost', lifecycleState: 'running' });
+        let pending: Promise<void> | undefined;
+        try {
+            pending = handleUpdateContainer({ ...params, sourceServerId: serverId, updateData: {
+                id: 'cached-metadata-after-stop', seq: 8, createdAt: 200,
+                body: { t: 'update-session', id: initial.id, metadata: { version: 2, value: ciphertext } },
+            } });
+            await decryptStarted.promise;
+            replaceActiveSessionListRows([{ ...initial, active: false, metadataVersion: 3, updatedAt: 300,
+                metadata: { path: '/tmp', host: 'localhost', lifecycleState: 'stopped' } }]);
+            releaseDecrypt.resolve();
+            await pending;
+            expect(storage.getState().sessionListRowsByServerId[serverId][initial.id]).toMatchObject({
+                active: false, metadataVersion: 3, metadata: { lifecycleState: 'stopped' },
+            });
+            expect(storage.getState().sessions[initial.id]).toBeUndefined();
+        } finally {
+            releaseDecrypt.resolve();
+            await pending;
         }
     });
 

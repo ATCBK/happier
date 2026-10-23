@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import * as ownerEnvelopes from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import * as dataKeyEnvelopes from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import * as canonicalBase64 from '@happier-dev/protocol/crypto/base64';
+import * as metadataSchemas from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import {
     createPlainSessionOwnerMetadataEnvelopeV1,
     projectLegacySessionAccessCapabilitiesV1,
@@ -28,12 +29,70 @@ import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/sugge
 import { t } from '@/text';
 
 import { buildRenderableFromRowAndCache, fetchAndApplySessions } from './sessionSnapshot';
+import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 const QUERY: SessionListQueryV1 = {
     v: 1, storage: 'active', includeInactive: true, scope: 'my_work',
     attention: 'any', audiences: [], tagIds: [],
 };
 const initialState = storage.getState();
+
+it('retains admitted plain owner continuation facts independently of public list identity', async () => {
+    const serverId = 'admitted-continuation-home';
+    const credentials = { token: 'admitted-continuation' };
+    const accountCurrentness = createPlainAccountEncryptionCurrentnessFixture();
+    const body = createOwnerChoicesPage();
+    body.sessions = body.sessions.slice(0, 1).map(row => ({ ...row,
+        metadata: JSON.stringify({ v: 1, agentPresentation: { agentId: 'codex' } }),
+        ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
+            workspace: { path: '/private/continuation', machineId: 'machine-private', flavor: 'claude' },
+            nativeSession: { claudeSessionId: 'native-private', runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
+                nativeResumeIdentityV1: { v: 1, vendorResumeId: 'native-private' } },
+            runtime: { modelOverrideV1: { v: 1, modelId: 'private-model', updatedAt: 1 } },
+        }),
+    }));
+    const refresh = () => fetchAndApplySessions({ serverId, credentials, encryption: null, sessionDataKeys: new Map(),
+        accountCurrentness,
+        request: async () => Response.json(body), getExistingSession: () => null,
+        getCurrentSessionListRenderable: id => storage.getState().sessionListRowsByServerId[serverId]?.[id],
+        applySessionListRenderables: rows => storage.getState().applyServerScopedSessionListRows(serverId, rows, { source: 'rowOnly', mode: 'replace' }),
+        applySessionListRenderablePatches: patches => storage.getState().applyServerScopedSessionListRowPatches(serverId, patches),
+        applySessions() {}, awaitSessionListHydration: true, log: { log() {} },
+    });
+    await refresh();
+    const row = storage.getState().sessionListRowsByServerId[serverId]!['choice-0']!;
+    expect(row.metadata?.flavor).toBe('codex');
+    expect(storage.getState().sessions[row.id]).toBeUndefined();
+    const admission = { credentials, accountMode: 'plain' as const, accountCurrentness, isCurrent: () => true };
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: admission })).toMatchObject({
+        flavor: 'claude', claudeSessionId: 'native-private', machineId: 'machine-private',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
+        nativeResumeIdentityV1: { v: 1, vendorResumeId: 'native-private' },
+        modelOverrideV1: { v: 1, modelId: 'private-model', updatedAt: 1 },
+    });
+    expect(row[SESSION_OWNER_METADATA_PROJECTION]?.ownerMetadataEnvelope.t).toBe('plain');
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: { ...admission,
+        accountCurrentness: { ...accountCurrentness, updatedAt: accountCurrentness.updatedAt + 1 },
+    } })).toBeNull();
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: { ...admission,
+        accountCurrentness: { ...accountCurrentness, version: accountCurrentness.version + 1 },
+    } })).not.toBeNull();
+    for (const withdrawn of [
+        { ...row, metadataVersion: row.metadataVersion + 1 },
+        { ...row, encryptedContentAvailability: 'encrypted_content_unavailable' as const },
+        { ...row, access: null },
+        { ...row, metadataUnavailable: true },
+        { ...row, [SESSION_OWNER_METADATA_PROJECTION]: null },
+    ]) expect(readSessionListRenderableOwnerMetadataView(withdrawn, { requireAdmitted: admission })).toBeNull();
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: { ...admission, isCurrent: () => false } })).toBeNull();
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: { ...admission, accountMode: 'e2ee' } })).toBeNull();
+    expect(readSessionListRenderableOwnerMetadataView(row, { requireAdmitted: { ...admission, credentials: { token: 'other-account' } } })).toBeNull();
+    expect(JSON.stringify(row)).not.toContain('native-private');
+    expect(JSON.stringify(buildSessionListCacheEntriesFromRenderables({ [row.id]: row }))).not.toContain('native-private');
+    await refresh();
+    expect(storage.getState().sessionListRowsByServerId[serverId]?.[row.id]).toBe(row);
+});
 
 it('settles demanded Session hydration without sweeping older rows on refresh and opens deferred rows on demand', async () => {
     const secret = new Uint8Array(32).fill(31);
@@ -202,6 +261,8 @@ it('names Account-opened owner envelopes before Session content hydration throug
 
 it('lists cold encrypted owner rows from proved visibility before Session content hydration', async () => {
     const secret = new Uint8Array(32).fill(31);
+    const credentials = { token: 'visibility', secret: encodeBase64(secret) };
+    const accountCurrentness = { mode: 'e2ee' as const, version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 };
     const encryption = await Encryption.create(secret);
     encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
     const serverId = 'cold-owner-visibility-home';
@@ -222,8 +283,8 @@ it('lists cold encrypted owner rows from proved visibility before Session conten
     }));
     const openDataKey = vi.spyOn(dataKeyEnvelopes, 'openEncryptedDataKeyEnvelopeV1');
     const refresh = () => fetchAndApplySessions({
-        serverId, credentials: { token: 'visibility', secret: encodeBase64(secret) }, encryption,
-        accountCurrentness: { mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 },
+        serverId, credentials, encryption,
+        accountCurrentness,
         sessionDataKeys: new Map(),
         request: async () => Response.json({ sessions: rows, nextCursor: null, hasNext: false }),
         getExistingSession: id => storage.getState().sessions[id],
@@ -246,6 +307,10 @@ it('lists cold encrypted owner rows from proved visibility before Session conten
     expect(projected['choice-2']?.metadataUnavailable).toBe(true);
     expect(rows.map(row => state.sessions[row.id])).toEqual([undefined, undefined, undefined]);
     expect(rows.map(row => encryption.getSessionEncryption(row.id))).toEqual([null, null, null]);
+    expect(projected['choice-0']?.[SESSION_OWNER_METADATA_PROJECTION]?.kind).toBe('owner');
+    expect(readSessionListRenderableOwnerMetadataView(projected['choice-0']!, {
+        requireAdmitted: { credentials, accountMode: 'e2ee', accountCurrentness, isCurrent: () => true },
+    })).toBeNull();
     expect(openDataKey).not.toHaveBeenCalled();
 
     // A prior readable projection remains useful while shared content is deferred.
@@ -273,6 +338,7 @@ it('lists cold encrypted owner rows from proved visibility before Session conten
 it('opens an unchanged owner envelope once and retains unrelated scoped row subscriptions', async () => {
     const secret = new Uint8Array(32).fill(7);
     const credentials = { token: 'owner-projection-test', secret: encodeBase64(secret, 'base64') };
+    const accountCurrentness = { mode: 'e2ee' as const, version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 };
     const body = createOwnerChoicesPage();
     body.sessions = body.sessions.slice(0, 2).map(row => ({ ...row,
         ownerMetadata: ownerEnvelopes.sealSessionOwnerMetadataEnvelopeV1({
@@ -284,6 +350,7 @@ it('opens an unchanged owner envelope once and retains unrelated scoped row subs
     const open = vi.spyOn(ownerEnvelopes, 'openSessionOwnerMetadataEnvelopeV1');
     const openValue = vi.spyOn(ownerEnvelopes, 'openSessionOwnerMetadataV1');
     const parseEnvelope = vi.spyOn(ownerEnvelopes.SessionOwnerMetadataEnvelopeV1Schema, 'safeParse');
+    const projectOwner = vi.spyOn(metadataSchemas, 'projectSessionOwnerCompatibilityViewV1');
     const opens = () => open.mock.calls.length + openValue.mock.calls.length;
     // Forward the real canonical validator: fresh HTTP objects must not rescan
     // retained ciphertext, while new bytes still go through full validation.
@@ -294,7 +361,7 @@ it('opens an unchanged owner envelope once and retains unrelated scoped row subs
     const readRows = () => storage.getState().sessionListRowsByServerId[serverId] ?? {};
     const refresh = () => fetchAndApplySessions({
         serverId, credentials, encryption: null, sessionDataKeys: new Map(),
-        accountCurrentness: { mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 },
+        accountCurrentness,
         request: async () => Response.json(body),
         getExistingSession: id => storage.getState().sessions[id],
         getCurrentSessionListRenderable: id => readRows()[id],
@@ -308,6 +375,13 @@ it('opens an unchanged owner envelope once and retains unrelated scoped row subs
     expect(readRows()['choice-0']?.metadata?.path).toBe('/owner-projection');
     expect(opens()).toBe(2);
     expect(parseEnvelope).toHaveBeenCalledTimes(2);
+    expect(projectOwner).toHaveBeenCalledTimes(2);
+    const admission = { credentials: { ...credentials }, accountCurrentness, isCurrent: () => true };
+    expect(readSessionListRenderableOwnerMetadataView(readRows()['choice-0']!, { requireAdmitted: admission }))
+        .toMatchObject({ path: '/owner-projection' });
+    expect(readSessionListRenderableOwnerMetadataView(readRows()['choice-0']!, { requireAdmitted: { ...admission,
+        accountCurrentness: { ...accountCurrentness, contentKeyFingerprint: 'changed-content' },
+    } })).toBeNull();
     const initialValidations = validations();
     expect(initialValidations).toBeGreaterThan(0);
     const unchanged = readRows()['choice-1'];
@@ -319,6 +393,7 @@ it('opens an unchanged owner envelope once and retains unrelated scoped row subs
         await refresh();
         expect(opens()).toBe(2);
         expect(parseEnvelope).toHaveBeenCalledTimes(2);
+        expect(projectOwner).toHaveBeenCalledTimes(2);
         expect(validations()).toBe(initialValidations);
         body.sessions[0] = { ...body.sessions[0]!, updatedAt: 2, seq: 2, metadataVersion: 2,
             metadata: JSON.stringify({ v: 1, summary: { text: 'Updated', updatedAt: 2 } }),
@@ -327,6 +402,7 @@ it('opens an unchanged owner envelope once and retains unrelated scoped row subs
         expect(opens()).toBe(2);
         expect(parseEnvelope).toHaveBeenCalledTimes(2);
         expect(readRows()['choice-0']?.metadata?.summaryText).toBe('Updated');
+        expect(projectOwner).toHaveBeenCalledTimes(3);
         expect(readRows()['choice-1']).toBe(unchanged);
         expect(unrelatedUpdates).toBe(0);
         expect(validations()).toBe(initialValidations);

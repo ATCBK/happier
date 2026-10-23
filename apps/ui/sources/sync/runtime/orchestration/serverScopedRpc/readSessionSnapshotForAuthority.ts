@@ -5,6 +5,7 @@ import type { ServerAccountRequestAuthority } from './createServerRequestWithSer
 import type { SessionByIdPrefetchedRead } from '@/sync/engine/sessions/sessionById';
 import { readSessionBatchForAuthority } from './readSessionBatchForAuthority';
 import { readSessionDetailAccessProjectionVersion } from '@/sync/api/session/sessionDetailAccessProjection';
+import type { SessionReadBatchResultV1 } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 
 type SessionSnapshot = Omit<Session, 'presence'> & { presence?: 'online' | number };
 
@@ -85,9 +86,13 @@ export async function readSessionSnapshotsForAuthority(params: Readonly<{
     authority: ServerAccountRequestAuthority;
     sessionIds: readonly string[];
     requireTurns?: boolean;
+    /** Metadata-only consumers can omit optional turns; required interval evidence still wins. */
+    includeTurns?: boolean;
     isCurrent?: () => boolean;
     signal?: AbortSignal;
     accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;
+    /** Each admitted snapshot can be consumed before the remaining batches settle. */
+    onResult?: (sessionId: string, result: SessionSnapshotResult) => void;
 }>): Promise<ReadonlyMap<string, SessionSnapshotResult>> {
     const credentials = params.authority.context.credentials;
     if (!credentials) throw new Error('Session request requires credentials');
@@ -98,23 +103,44 @@ export async function readSessionSnapshotsForAuthority(params: Readonly<{
         if (params.signal?.aborted) throw params.signal.reason ?? new SessionSnapshotReadError('cancelled');
         if (params.isCurrent?.() === false) throw new SessionSnapshotReadError('stale_response');
     };
+    const opening = new Map<string, Promise<readonly [string, SessionSnapshotResult]>>();
+    const accessProjectionVersion = readSessionDetailAccessProjectionVersion(params.authority.scope.serverId);
+    const open = async (sessionId: string, row: SessionReadBatchResultV1): Promise<readonly [string, SessionSnapshotResult]> => {
+        let result: SessionSnapshotResult;
+        try {
+            assertCurrent();
+            if (!row.detail) throw new SessionSnapshotReadError('invalid_response');
+            const snapshot = await readSessionSnapshotForAuthority({ ...params, sessionId,
+                accountCurrentnessSource: currentness, prefetched: { accessProjectionVersion, detail: row.detail, turns: row.turns } });
+            await currentness.ensureCurrent();
+            assertCurrent();
+            result = { ok: true, snapshot };
+        } catch (error) { result = { ok: false, error }; }
+        // Never disclose even a failure from a retired or cancelled borrower.
+        if (!params.signal?.aborted && params.isCurrent?.() !== false && currentness.isCurrent()) {
+            params.onResult?.(sessionId, result);
+        }
+        return [sessionId, result];
+    };
     try {
-        const accessProjectionVersion = readSessionDetailAccessProjectionVersion(params.authority.scope.serverId);
-        const rows = await readSessionBatchForAuthority({ ...params, accessProjectionVersion, includeSnapshot: true, includeMessages: false, assertCurrent });
-        const results = await Promise.all([...rows].map(async ([sessionId, row]): Promise<readonly [string, SessionSnapshotResult]> => {
-            try {
-                assertCurrent();
-                if (!row.detail) throw new SessionSnapshotReadError('invalid_response');
-                const snapshot = await readSessionSnapshotForAuthority({ ...params, sessionId,
-                    accountCurrentnessSource: currentness, prefetched: { accessProjectionVersion, detail: row.detail, turns: row.turns } });
-                assertCurrent();
-                return [sessionId, { ok: true, snapshot }];
-            } catch (error) { return [sessionId, { ok: false, error }]; }
-        }));
+        const rows = await readSessionBatchForAuthority({ ...params, accessProjectionVersion, includeSnapshot: true,
+            includeTurns: params.requireTurns ? true : params.includeTurns, includeMessages: false, assertCurrent,
+            onResult: (sessionId, row) => {
+                const pending = open(sessionId, row);
+                opening.set(sessionId, pending);
+                // Keep rejection custody until the physical reader settles.
+                void pending.catch(() => {});
+            } });
+        const results = await Promise.all([...rows.keys()].map(id => opening.get(id)!));
         await currentness.ensureCurrent();
         assertCurrent();
         return new Map(results);
-    } finally { if (!params.accountCurrentnessSource) currentness.dispose(); }
+    } finally {
+        // Opening may already be in flight when a later physical batch fails.
+        // Keep currentness alive through those admissions and progress callbacks.
+        await Promise.allSettled(opening.values());
+        if (!params.accountCurrentnessSource) currentness.dispose();
+    }
 }
 
 /** Draft pages consume the ordinary admitted mode/key path without opening Session content. */

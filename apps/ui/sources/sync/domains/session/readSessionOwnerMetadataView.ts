@@ -3,6 +3,15 @@ import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePl
 import { SessionOwnerMetadataV1Schema, type SessionOwnerMetadataEnvelopeV1, type SessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
+import type { AccountEncryptionIdentity } from '@happier-dev/sync-client';
+
+export type SessionOwnerMetadataAuthority = Readonly<{
+  accountMode?: AccountEncryptionCurrentnessResponse['mode'];
+  credentials: AuthCredentials;
+  accountCurrentness?: AccountEncryptionCurrentnessResponse;
+}>;
 
 /** In-memory provenance travels with the Session/list projection, never with wire or warm-cache data. */
 export const SESSION_OWNER_METADATA_PROJECTION = Symbol('sessionOwnerMetadataProjection');
@@ -10,8 +19,16 @@ export type SessionOwnerMetadataProjection = Readonly<{
   kind: 'owner';
   ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1;
   ownerMetadata: SessionOwnerMetadataV1;
+  /** Present only after shared content and this owner view were admitted together. */
+  ownerMetadataView?: Metadata;
+  sharedMetadataSignature?: string;
+  composerOptionsInput?: ComposerOptionsInputV1;
+  admittedMetadataVersion?: number;
+  accountEncryptionIdentity?: AccountEncryptionIdentity;
+  isCurrentAuthority?: (input: SessionOwnerMetadataAuthority) => boolean;
   canReuse?: (input: Readonly<{
     accountMode?: AccountEncryptionCurrentnessResponse['mode'];
+    accountCurrentness?: AccountEncryptionCurrentnessResponse;
     credentials: object;
     ownerMetadataEnvelope: unknown;
   }>) => boolean;

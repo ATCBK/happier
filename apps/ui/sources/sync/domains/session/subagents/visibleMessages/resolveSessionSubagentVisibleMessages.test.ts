@@ -101,6 +101,21 @@ describe('resolveSessionSubagentVisibleMessages', () => {
         ]);
     });
 
+    it('includes only the addressed Run’s committed questions beside its sidechain answers, once and in order', async () => {
+        const question = { kind: 'user-text', id: 'question', localId: 'input-1', createdAt: 2, seq: 23,
+            text: 'Why keep this selection?', meta: { happier: { kind: 'participant_message.v1',
+                payload: { recipient: { kind: 'execution_run', runId: 'run_1' } } } } } satisfies Message;
+        const answer = { ...createAgentTextMessage('answer', 'It survives refresh.'), createdAt: 3, seq: 25 };
+        const runMessage = createToolMessage({ id: 'run', name: 'SubAgentRun', state: 'running', input: { runId: 'run_1' } });
+        const other = { ...question, id: 'other', meta: { happier: { kind: 'participant_message.v1',
+            payload: { recipient: { kind: 'execution_run', runId: 'run_2' } } } } };
+        const messages = [runMessage, other, question];
+        const params = { session: { metadata: { flavor: 'codex' } }, tool: runMessage.tool, messages };
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [answer] })).toEqual([question, answer]);
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [question, answer] })).toEqual([question, answer]);
+        expect(await resolveVisibleMessages({ ...params, focusedMessages: [] })).toEqual([question]);
+    });
+
     it('keeps execution-run focused messages unchanged', async () => {
         const focusedMessages = [
             createAgentTextMessage('m1', '{"type":"shutdown_approved","from":"beta"}'),

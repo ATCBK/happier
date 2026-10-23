@@ -60,6 +60,14 @@ it.each(['scope-reset', 'account-encryption-change', 'same-home-resume', 'same-h
       invalidateAccountEncryptionModeCache({ serverId: 'srv_currentness_promoted' });
     }
     else if (invalidation !== 'scope-reset') invalidateAccountEncryptionModeCache();
+    if (invalidation === 'same-home-resume') {
+      expect(currentness.isCurrent()).toBe(true);
+      const afterResume = home!.httpRequests.filter(request => request.path === '/v1/account/encryption/currentness').length;
+      expect((await readSessionSnapshotForAuthority({ authority, sessionId: 'batch-3', accountCurrentnessSource: currentness })).session.id)
+        .toBe('batch-3');
+      expect(home!.httpRequests.filter(request => request.path === '/v1/account/encryption/currentness')).toHaveLength(afterResume + 1);
+      return;
+    }
     expect(currentness.isCurrent()).toBe(false);
     await expect(readSessionSnapshotForAuthority({ authority, sessionId: 'batch-3', accountCurrentnessSource: currentness }))
       .rejects.toMatchObject({ code: 'account_encryption_currentness_changed' });
