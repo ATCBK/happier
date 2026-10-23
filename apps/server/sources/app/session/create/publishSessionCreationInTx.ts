@@ -34,6 +34,7 @@ export async function publishSessionCreationInTx(
     });
     const viewer = projectSessionViewer({
         row: personalRow,
+        latestFailureSeq: null,
         viewerAccountId: session.accountId,
         // A Session that is being created in this transaction has no
         // conversation yet, so there is nothing to load or to claim.

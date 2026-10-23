@@ -19,6 +19,7 @@ import {
     createSessionListScopeWhere,
 } from "@/app/session/personal/queries";
 import type { SessionPersonalDiscussionFacts } from "@/app/session/personal/discussionFacts";
+import { loadSessionLatestFailureSequencesInTx } from "@/app/session/personal/projection";
 import {
     readSessionMetadataOwnerAccountModes,
     isSessionMetadataPrivacyUpgradeRequiredError,
@@ -175,6 +176,7 @@ export async function listSessionsForAccount(params: Readonly<{
             attentionWhere: attentionQuery?.candidateWhere,
             attentionRowAdmission: attentionQuery?.admitRows,
             observedAttentionDiscussionFacts: attentionQuery?.observedDiscussionFacts,
+            observedAttentionFailureSequences: attentionQuery?.observedFailureSequences,
             now,
         });
         return page && {
@@ -278,6 +280,7 @@ async function listSessionRowsForAccount(params: Readonly<{
     rowAdmission?: SessionListRowAdmission;
     attentionRowAdmission?: SessionListRowAdmission;
     observedAttentionDiscussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
+    observedAttentionFailureSequences?: ReadonlyMap<string, number | null>;
     now?: number;
     rowRepresentabilityWhere: Prisma.SessionWhereInput;
     timing: ReturnType<typeof createV2SessionListServerTiming>;
@@ -301,8 +304,9 @@ async function listSessionRowsForAccount(params: Readonly<{
             params.observedAttentionDiscussionFacts,
         );
         const otherNamedCollaboratorFacts = await readSessionListOtherNamedCollaboratorFacts(rows, userId, params.readSource?.discussionReader);
+        const latestFailureSequences = await loadSessionLatestFailureSequencesInTx(params.readSource?.discussionReader ?? db, rows, params.observedAttentionFailureSequences);
         return timing.measure("page", () => ({ ...mapV2SessionListRows({
-            rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts,
+            rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts, latestFailureSequences,
             qualifiedTeamIds: params.readSource?.qualifiedTeamIds,
             accessMode: params.readSource?.accessMode,
             now: params.now,
@@ -342,9 +346,10 @@ async function listSessionRowsForAccount(params: Readonly<{
             params.observedAttentionDiscussionFacts,
         );
         const otherNamedCollaboratorFacts = await readSessionListOtherNamedCollaboratorFacts(page.rows, userId, params.readSource?.discussionReader);
+        const latestFailureSequences = await loadSessionLatestFailureSequencesInTx(params.readSource?.discussionReader ?? db, page.rows, params.observedAttentionFailureSequences);
         return {
             ...mapV2SessionListRows({
-                rows: page.rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts,
+                rows: page.rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts, latestFailureSequences,
                 qualifiedTeamIds: params.readSource?.qualifiedTeamIds,
                 accessMode: params.readSource?.accessMode,
                 now: params.now,
@@ -394,6 +399,7 @@ async function listSessionRowsForAccount(params: Readonly<{
                 params.observedAttentionDiscussionFacts,
             ),
             readOtherNamedCollaboratorFacts: (pageRows) => readSessionListOtherNamedCollaboratorFacts(pageRows, userId, params.readSource?.discussionReader),
+            readLatestFailureSequences: (pageRows) => loadSessionLatestFailureSequencesInTx(params.readSource?.discussionReader ?? db, pageRows, params.observedAttentionFailureSequences),
             pageRows: rows,
             limit,
             pinnedSessionIds,
@@ -417,9 +423,10 @@ async function listSessionRowsForAccount(params: Readonly<{
         params.observedAttentionDiscussionFacts,
     );
     const otherNamedCollaboratorFacts = await readSessionListOtherNamedCollaboratorFacts(page.rows, userId, params.readSource?.discussionReader);
+    const latestFailureSequences = await loadSessionLatestFailureSequencesInTx(params.readSource?.discussionReader ?? db, page.rows, params.observedAttentionFailureSequences);
     return timing.measure("page", () => ({
         ...mapV2SessionListRows({
-            rows: page.rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts,
+            rows: page.rows, userId, ownerAccountModes, discussionFacts, otherNamedCollaboratorFacts, latestFailureSequences,
             qualifiedTeamIds: params.readSource?.qualifiedTeamIds,
             accessMode: params.readSource?.accessMode,
             now: params.now,
@@ -563,6 +570,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             rowAdmission,
             attentionRowAdmission: admitAttentionCandidates,
             observedAttentionDiscussionFacts: attentionQuery.observedDiscussionFacts,
+            observedAttentionFailureSequences: attentionQuery.observedFailureSequences,
             now,
             rowRepresentabilityWhere: params.rowRepresentabilityWhere,
             timing: params.timing,

@@ -45,6 +45,7 @@ describe('SessionListQueryResponseV1Schema', () => {
       capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
     },
     viewer: {
+      latestFailureSeq: null,
       readState: { state: 'not_started' },
       relevance: { relevant: true, reasons: ['shared_directly_with_me'] },
       attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

@@ -12,7 +12,7 @@ import {
     createSessionListScopeWhere,
     createSessionPersonalAttentionQueryInTx,
 } from "@/app/session/personal/queries";
-import { loadSessionViewerProjection } from "@/app/session/personal/projection";
+import { loadSessionLatestFailureSequencesInTx, loadSessionViewerProjection } from "@/app/session/personal/projection";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { observeSqliteRequests } from "@/testkit/observeSqliteRequests";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
@@ -1206,6 +1206,7 @@ describe("Session listing predicate composition (SQLite)", () => {
             pinnedSessionIds: [foreign.id, shared.id], includeAttentionRows: true, attentionRowsLimit: 1,
             readOwnerAccountModes: (ids) => readSessionMetadataOwnerAccountModes(db, ids),
             readViewerDiscussionFacts: (rows) => readSessionListViewerDiscussionFacts(rows, viewer.id),
+            readLatestFailureSequences: rows => loadSessionLatestFailureSequencesInTx(db, rows),
         });
         expect(page?.sessions.map((row) => row.id)).toEqual([shared.id]);
         expect(page).toMatchObject({ hasNext: false, attentionHasNext: false });

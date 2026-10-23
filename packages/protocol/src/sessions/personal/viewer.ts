@@ -10,6 +10,7 @@ import { SessionPersonalRelevanceV1Schema, type SessionPersonalRelevanceV1 } fro
 /** Account-private read projection; each nested fact has its own closed schema. */
 export const SessionViewerProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   readState: ViewerReadStateV1Schema,
+  latestFailureSeq: z.nullable(z.number().check(z.int(), z.gte(0))),
   relevance: SessionPersonalRelevanceV1Schema,
   attention: SessionPersonalAttentionProjectionV1Schema,
   follow: SessionFollowFactsV1Schema,
@@ -18,6 +19,7 @@ export const SessionViewerProjectionV1Schema = lazyZodSchema(() => z.strictObjec
 
 export type SessionViewerProjectionV1 = Readonly<{
   readState: ViewerReadStateV1;
+  latestFailureSeq: number | null;
   relevance: SessionPersonalRelevanceV1;
   attention: SessionPersonalAttentionProjectionV1;
   follow: SessionFollowFactsV1;

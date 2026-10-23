@@ -28,6 +28,7 @@ export function createExistingSessionDirectoryPreflightResult(raw: unknown) {
 export function createSessionViewerFixture(overrides: Partial<SessionViewerProjectionV1> = {}): SessionViewerProjectionV1 {
     const follow = overrides.follow ?? ABSENT_SESSION_FOLLOW_FACTS_V1;
     return SessionViewerProjectionV1Schema.parse({
+        latestFailureSeq: null,
         readState: { state: 'not_started' },
         relevance: { relevant: follow.follows, reasons: follow.follows ? ['followed_by_me'] : [] },
         attention: QUIET_SESSION_PERSONAL_ATTENTION_V1,
@@ -220,6 +221,7 @@ export function createSessionOwnerViewerFixture(session: Session): SessionViewer
     const follow = ABSENT_SESSION_FOLLOW_FACTS_V1;
     return SessionViewerProjectionV1Schema.parse({
         readState,
+        latestFailureSeq: null,
         follow,
         notification: resolveSessionEffectiveNotificationV1({ facts: follow, isSessionOwner: true }),
         relevance: resolveSessionPersonalRelevanceV1({ ...NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, ownedByMe: true }),
@@ -227,6 +229,7 @@ export function createSessionOwnerViewerFixture(session: Session): SessionViewer
             tracked: true, accessible: session.access.capabilities.readTranscript, accountSuspended: false,
             contentAvailable: isSessionContentReadable(readSessionContentAvailability(session)),
             visibleSessionSeq: session.seq, readState, latestReadyEventSeq: session.latestReadyEventSeq ?? null,
+            latestFailureSeq: null,
             hasPrimarySessionFailure: session.latestTurnStatus === 'failed'
                 && session.lastRuntimeIssue?.scope === 'primary_session' && session.lastRuntimeIssue.status === 'failed',
             pendingBlockedCount: session.pendingBlockedCount ?? 0,

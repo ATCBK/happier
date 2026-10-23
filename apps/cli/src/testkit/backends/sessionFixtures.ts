@@ -358,6 +358,7 @@ export function createSessionNotificationContextFixture(sessionId: string): Curr
             capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }),
         },
         viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: true, reasons: ['owned_by_me'] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

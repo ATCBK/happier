@@ -336,6 +336,7 @@ export function mapV2SessionListRow(params: Readonly<{
      * relevance or unread for this viewer.
      */
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
+    latestFailureSequences?: ReadonlyMap<string, number>;
     hasOtherNamedCollaborator?: boolean;
     effectiveAccess?: EffectiveSessionAccess;
     recipientReadiness?: AccountRecipientEnvelopeReadinessReadScope;
@@ -434,6 +435,7 @@ export function mapV2SessionListRow(params: Readonly<{
         ? undefined
         : projectSessionViewer({
             row,
+            latestFailureSeq: params.latestFailureSequences?.get(row.id) ?? null,
             viewerAccountId: userId,
             recipientReadiness: params.recipientReadiness,
             discussion: params.discussionFacts?.get(row.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
@@ -516,6 +518,7 @@ export function mapV2SessionOwnerRow(
     row: V2SessionOwnerRow,
     ownerAccountMode?: SessionMetadataOwnerAccountMode,
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>,
+    latestFailureSequences?: ReadonlyMap<string, number>,
 ): V2SessionRecord {
     const {
         rollbackEligibleTurnStarts: _rollbackEligibleTurnStarts,
@@ -525,6 +528,7 @@ export function mapV2SessionOwnerRow(
         userId: row.accountId,
         ownerAccountMode,
         discussionFacts,
+        latestFailureSequences,
     });
     return session;
 }

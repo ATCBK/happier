@@ -14,6 +14,7 @@ const TRACKED_CAUGHT_UP: SessionPersonalAttentionInputV1 = {
   visibleSessionSeq: 5,
   readState: { state: 'tracking', lastViewedSessionSeq: 5, unreadSince: null },
   latestReadyEventSeq: null,
+  latestFailureSeq: null,
   hasPrimarySessionFailure: false,
   pendingBlockedCount: 0,
   pendingPermissionRequestCount: 0,
@@ -51,6 +52,18 @@ describe('resolveSessionPersonalAttentionV1', () => {
   it('is quiet for a caught-up tracked viewer', () => {
     expect(resolveSessionPersonalAttentionV1(TRACKED_CAUGHT_UP))
       .toEqual(QUIET_SESSION_PERSONAL_ATTENTION_V1);
+  });
+
+  it('acknowledges only the fixed committed primary failure sequence through the viewer cursor', () => {
+    const failure = { ...TRACKED_CAUGHT_UP, hasPrimarySessionFailure: true, latestFailureSeq: 6, visibleSessionSeq: 6 };
+    expect(resolveSessionPersonalAttentionV1(failure).reasons).toContain('failed');
+    const read = { ...failure, readState: { state: 'tracking' as const, lastViewedSessionSeq: 6, unreadSince: null } };
+    expect(resolveSessionPersonalAttentionV1(read).reasons).not.toContain('failed');
+    expect(resolveSessionPersonalAttentionV1({ ...read, visibleSessionSeq: 9 }).reasons).toEqual(['unread']);
+    expect(resolveSessionPersonalAttentionV1({ ...read, latestFailureSeq: 10, visibleSessionSeq: 10 }).reasons).toContain('failed');
+    expect(resolveSessionPersonalAttentionV1(failure).reasons).toContain('failed');
+    expect(resolveSessionPersonalAttentionV1({ ...failure, latestFailureSeq: null }).reasons).not.toContain('failed');
+    expect(resolveSessionPersonalAttentionV1({ ...failure, readState: { state: 'not_started' } }).reasons).not.toContain('failed');
   });
 
   it('never reports ongoing attention for an untracked viewer with raw unread facts', () => {
@@ -115,6 +128,7 @@ describe('resolveSessionPersonalAttentionV1', () => {
     expect(resolveSessionPersonalAttentionV1({
       ...TRACKED_CAUGHT_UP,
       hasPrimarySessionFailure: true,
+      latestFailureSeq: 8,
       pendingPermissionRequestCount: 1,
       visibleSessionSeq: 9,
       readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: 1_700 },

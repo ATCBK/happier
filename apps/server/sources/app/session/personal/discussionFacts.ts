@@ -57,6 +57,7 @@ export function doesDiscussionViewerNeedAttention(facts: DiscussionAttentionFact
         visibleSessionSeq: 0,
         readState: { state: 'not_started' },
         latestReadyEventSeq: null,
+        latestFailureSeq: null,
         hasPrimarySessionFailure: false,
         pendingBlockedCount: 0,
         pendingPermissionRequestCount: 0,

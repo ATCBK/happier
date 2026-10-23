@@ -189,6 +189,7 @@ export function mapV2SessionListRows(params: Readonly<{
     ownerAccountMode?: SessionMetadataOwnerAccountMode;
     ownerAccountModes?: ReadonlyMap<string, SessionMetadataOwnerAccountMode>;
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
+    latestFailureSequences?: ReadonlyMap<string, number>;
     otherNamedCollaboratorFacts?: ReadonlyMap<string, boolean>;
     qualifiedTeamIds?: ReadonlySet<string>;
     accessMode?: "effective_access_v1" | "legacy_owner_or_direct";
@@ -206,6 +207,7 @@ export function mapV2SessionListRows(params: Readonly<{
                 ownerAccountMode: params.ownerAccountMode,
                 ownerAccountModes: params.ownerAccountModes,
                 discussionFacts: params.discussionFacts,
+                latestFailureSequences: params.latestFailureSequences,
                 hasOtherNamedCollaborator: params.otherNamedCollaboratorFacts?.get(row.id),
                 qualifiedTeamIds: params.qualifiedTeamIds,
                 accessMode: params.accessMode,
@@ -297,6 +299,7 @@ export function createV2SessionListPage(params: Readonly<{
     ownerAccountMode?: SessionMetadataOwnerAccountMode;
     ownerAccountModes?: ReadonlyMap<string, SessionMetadataOwnerAccountMode>;
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
+    latestFailureSequences?: ReadonlyMap<string, number>;
     otherNamedCollaboratorFacts?: ReadonlyMap<string, boolean>;
     qualifiedTeamIds?: ReadonlySet<string>;
     accessMode?: "effective_access_v1" | "legacy_owner_or_direct";
@@ -313,6 +316,7 @@ export function createV2SessionListPage(params: Readonly<{
             ownerAccountMode: params.ownerAccountMode,
             ownerAccountModes: params.ownerAccountModes,
             discussionFacts: params.discussionFacts,
+            latestFailureSequences: params.latestFailureSequences,
             otherNamedCollaboratorFacts: params.otherNamedCollaboratorFacts,
             qualifiedTeamIds: params.qualifiedTeamIds,
             accessMode: params.accessMode,

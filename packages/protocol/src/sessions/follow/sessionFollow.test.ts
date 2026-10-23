@@ -8,6 +8,7 @@ import type { FollowPolicyV1 } from './sessionFollowPolicyV1.js';
 describe('personal Follow one-shot occurrence', () => {
   it('keeps stored delivery and policy authority closed while dropping unrelated retired viewer presentation', () => {
     const viewer = {
+      latestFailureSeq: null,
       readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
       attention: { needsAttention: false, primary: null, reasons: [], presentation: 'full' },
       follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'none' },

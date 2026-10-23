@@ -6,7 +6,8 @@ import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/session
 import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
-import { inReadSnapshot } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     buildSessionAccessProjectionSelect,
@@ -17,7 +18,7 @@ import {
 } from "@/app/session/access/sessionAccess";
 import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { applySessionTranscriptPublicationCeilingToProjection, resolveSessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
-import { parseStoredSessionRuntimeIssue } from "@/app/session/turns/parseSessionTurnState";
+import { parseStoredSessionRuntimeIssue, parseStoredSessionTurnTranscriptAnchors } from "@/app/session/turns/parseSessionTurnState";
 import {
     createSessionDataKeyEnvelopeViewerSelect,
     resolveViewerSessionNotificationContentAvailability,
@@ -36,6 +37,7 @@ export function createSessionPersonalProjectionSelect(accountId: string, context
         archivedAt: true,
         responsibleAccountId: true,
         latestReadyEventSeq: true,
+        latestTurnId: true,
         latestTurnStatus: true,
         lastRuntimeIssue: true,
         pendingBlockedCount: true,
@@ -72,6 +74,7 @@ export function createSessionPersonalAttentionProjectionSelectForAccounts(accoun
         archivedAt: true,
         responsibleAccountId: true,
         latestReadyEventSeq: true,
+        latestTurnId: true,
         latestTurnStatus: true,
         lastRuntimeIssue: true,
         pendingBlockedCount: true,
@@ -102,6 +105,34 @@ export type SessionPersonalAttentionProjectionRow = Omit<SelectedSessionPersonal
 export type SessionPersonalProjectionRow = Omit<SelectedSessionPersonalProjectionRow, "responsibleAccountId">
     & Partial<Pick<SelectedSessionPersonalProjectionRow, "responsibleAccountId">>;
 
+/** Exact current failed turns only, shared by row, badge and coordinator batches. */
+export async function loadSessionLatestFailureSequencesInTx(
+    tx: Pick<Tx, "sessionTurn">,
+    rows: readonly Readonly<{ id: string; latestTurnId: string | null; latestTurnStatus: string | null }>[],
+    observedSequences?: ReadonlyMap<string, number | null>,
+): Promise<ReadonlyMap<string, number>> {
+    const failures = rows.flatMap(row => !observedSequences?.has(row.id) && row.latestTurnStatus === "failed" && row.latestTurnId
+        ? [{ sessionId: row.id, turnId: row.latestTurnId }] : []);
+    const sequences = new Map<string, number>();
+    for (const row of rows) {
+        const observed = observedSequences?.get(row.id);
+        if (typeof observed === "number") sequences.set(row.id, observed);
+    }
+    // Two identity binds per pair plus status and Prisma's OFFSET bind; the existing
+    // portable provider boundary owns chunking, never a Session-history limit.
+    for (const chunk of portableQueryChunks({ values: failures, bindingsPerValue: 2, fixedBindings: 2 })) {
+        const turns = await tx.sessionTurn.findMany({
+            where: { status: "failed", OR: [...chunk] },
+            select: { sessionId: true, transcriptAnchorsJson: true },
+        });
+        for (const turn of turns) {
+            const seq = parseStoredSessionTurnTranscriptAnchors(turn.transcriptAnchorsJson)?.endSeqInclusive;
+            if (typeof seq === "number") sequences.set(turn.sessionId, seq);
+        }
+    }
+    return sequences;
+}
+
 export function resolveSessionAttentionStandingProjectionFacts(
     standing: Readonly<{ standing: boolean; remindAt: Date | null }> | null | undefined,
     now: number,
@@ -131,6 +162,7 @@ export function resolveSessionAttentionStandingProjectionFacts(
  */
 function projectSessionViewerAttentionState(params: Readonly<{
     row: SessionPersonalAttentionProjectionRow;
+    latestFailureSeq: number | null;
     viewerAccountId: string;
     discussion: SessionPersonalDiscussionFacts;
     contentAvailable: boolean;
@@ -164,12 +196,16 @@ function projectSessionViewerAttentionState(params: Readonly<{
     const responsible = row.responsibleAccountId === viewerAccountId;
     const live = resolveSessionTranscriptPublicationCeiling(row) === null;
     const issue = live ? parseStoredSessionRuntimeIssue(row.lastRuntimeIssue) : null;
+    const hasPrimarySessionFailure = row.latestTurnStatus === "failed" && issue?.scope === "primary_session" && issue.status === "failed";
+    const latestFailureSeq = hasPrimarySessionFailure && params.latestFailureSeq !== null
+        && params.latestFailureSeq <= sequences.seq ? params.latestFailureSeq : null;
     const attention = resolveSessionPersonalAttentionV1({
         tracked, accessible: access?.capabilities.readTranscript === true, accountSuspended: false,
         contentAvailable: params.contentAvailable,
         visibleSessionSeq: sequences.seq, readState,
         latestReadyEventSeq: sequences.latestReadyEventSeq ?? null,
-        hasPrimarySessionFailure: row.latestTurnStatus === "failed" && issue?.scope === "primary_session" && issue.status === "failed",
+        latestFailureSeq,
+        hasPrimarySessionFailure,
         pendingBlockedCount: live ? row.pendingBlockedCount : 0,
         pendingPermissionRequestCount: live ? row.pendingPermissionRequestCount + row.pendingSharedActionConfirmationCount : 0,
         pendingUserActionRequestCount: live ? row.pendingUserActionRequestCount : 0,
@@ -183,12 +219,13 @@ function projectSessionViewerAttentionState(params: Readonly<{
         reminderDue: standingFacts.reminderDue,
         onceDelivery: follow.onceDelivery,
     });
-    return { access, attention, follow, now, ownedByMe, readState, responsible, standing };
+    return { access, attention, follow, latestFailureSeq, now, ownedByMe, readState, responsible, standing };
 }
 
-/** Exact membership for bounded content-free attention and badge scans. */
-export function doesSessionViewerNeedAttention(params: Readonly<{
+/** Content-free personal facts for exact attention, badges and coordinator summaries. */
+export function projectSessionViewerAttention(params: Readonly<{
     row: SessionPersonalAttentionProjectionRow;
+    latestFailureSeq: number | null;
     viewerAccountId: string;
     discussion: SessionPersonalDiscussionFacts;
     qualifiedTeamIds?: ReadonlySet<string>;
@@ -196,11 +233,17 @@ export function doesSessionViewerNeedAttention(params: Readonly<{
 }>) {
     // Availability changes only `presentation`; these callers consume only
     // membership/reasons and deliberately do not select content or key bytes.
-    return projectSessionViewerAttentionState({ ...params, contentAvailable: false }).attention.needsAttention;
+    return projectSessionViewerAttentionState({ ...params, contentAvailable: false }).attention;
+}
+
+/** Exact membership for bounded content-free attention and badge scans. */
+export function doesSessionViewerNeedAttention(params: Parameters<typeof projectSessionViewerAttention>[0]) {
+    return projectSessionViewerAttention(params).needsAttention;
 }
 
 export function projectSessionViewer(params: Readonly<{
     row: SessionPersonalProjectionRow;
+    latestFailureSeq: number | null;
     viewerAccountId: string;
     discussion: SessionPersonalDiscussionFacts;
     qualifiedTeamIds?: ReadonlySet<string>;
@@ -216,6 +259,7 @@ export function projectSessionViewer(params: Readonly<{
     });
     return {
         readState: state.readState,
+        latestFailureSeq: state.latestFailureSeq,
         follow: { ...state.follow, ...(state.access && row.responsibleAccountId !== undefined ? {
             defaultRelationships: projectSessionFollowDefaultRelationshipsV1({ responsibleForMe: state.responsible,
                 relationshipKinds: state.access.relationshipKinds }),
@@ -263,12 +307,14 @@ export async function loadSessionViewerProjection(params: Readonly<{ accountId: 
             select: createSessionPersonalProjectionSelect(params.accountId),
         });
         if (!row) return null;
+        const failureSequences = await loadSessionLatestFailureSequencesInTx(tx, [row]);
         const discussion = await loadSessionPersonalDiscussionFactsInTx(tx, {
             accountId: params.accountId,
             sessionIds: [params.sessionId],
         });
         return projectSessionViewer({
             row,
+            latestFailureSeq: failureSequences.get(row.id) ?? null,
             viewerAccountId: params.accountId,
             discussion: discussion.get(params.sessionId) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,

@@ -7,7 +7,7 @@ import { inTx, TransactionReplayRequiredError } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { readCurrentCommittedSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
-import { createSessionPersonalProjectionSelect, projectSessionViewer } from '@/app/session/personal/projection';
+import { createSessionPersonalProjectionSelect, loadSessionLatestFailureSequencesInTx, projectSessionViewer } from '@/app/session/personal/projection';
 import { QUIET_SESSION_PERSONAL_DISCUSSION_FACTS } from '@/app/session/personal/discussionFacts';
 import { resolveVisibleSessionSeq } from '@/app/session/personal/readState';
 import { readSessionFollowOriginalOccurrenceFrontiersInTx, readSessionFollowRuleProgressInTx,
@@ -109,6 +109,7 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
         // source/rule mute: neither positive Inbox acceptance nor rule progress.
         if (!original || original.originalAuthorAccountId === input.accountId) return unrepresented;
         const viewer = projectSessionViewer({ row: source, viewerAccountId: input.accountId,
+            latestFailureSeq: (await loadSessionLatestFailureSequencesInTx(tx, [source])).get(source.id) ?? null,
             discussion: QUIET_SESSION_PERSONAL_DISCUSSION_FACTS, effectiveAccess: access });
         if (!viewer.follow.follows && viewer.follow.notificationLevel === 'none') return unrepresented;
         if (occurrence.sourceMessage) {

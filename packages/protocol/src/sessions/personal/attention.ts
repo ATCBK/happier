@@ -94,6 +94,8 @@ export type SessionPersonalAttentionInputV1 = Readonly<{
   externalSessionHasUnread?: boolean;
   readState: ViewerReadStateV1;
   latestReadyEventSeq: number | null;
+  /** Fixed committed primary failed-turn terminal anchor; null means unknown. */
+  latestFailureSeq: number | null;
   hasPrimarySessionFailure: boolean;
   pendingBlockedCount: number;
   pendingPermissionRequestCount: number;
@@ -150,7 +152,8 @@ export function resolveSessionPersonalAttentionV1(
   const cursor = input.readState.state === 'tracking' ? input.readState.lastViewedSessionSeq : null;
 
   const reasons: SessionPersonalAttentionReasonV1[] = [];
-  if (input.hasPrimarySessionFailure) reasons.push('failed');
+  if (input.hasPrimarySessionFailure && cursor !== null
+    && input.latestFailureSeq !== null && input.latestFailureSeq > cursor) reasons.push('failed');
   const pendingCapabilities = { canSubmitAgentInput: canAct, canApprovePermissions: canApprove };
   if (count(input.pendingPermissionRequestCount) > 0 && isPendingRequestAnswerableV1({ kind: 'permission' }, pendingCapabilities)) reasons.push('permission_required');
   if (count(input.pendingUserActionRequestCount) > 0 && isPendingRequestAnswerableV1({ kind: 'user_action' }, pendingCapabilities)) reasons.push('user_action_required');

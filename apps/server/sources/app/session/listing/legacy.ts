@@ -3,7 +3,7 @@ import { createAccountRecipientEnvelopeReadinessReadScope } from "@/app/encrypti
 import type { Prisma } from "@prisma/client";
 import { projectLegacyViewerLastViewedSessionSeqV1, projectLegacyViewerUnreadSinceV1 } from '@happier-dev/protocol/sessions';
 import { QUIET_SESSION_PERSONAL_DISCUSSION_FACTS } from "@/app/session/personal/discussionFacts";
-import { createSessionPersonalProjectionSelect, projectSessionViewer } from "@/app/session/personal/projection";
+import { createSessionPersonalProjectionSelect, loadSessionLatestFailureSequencesInTx, projectSessionViewer } from "@/app/session/personal/projection";
 import { db } from "@/storage/db";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, toShareUserProfile } from "@/app/account/profile/accountDisplayProfile";
 import {
@@ -193,10 +193,12 @@ export async function listLegacyV1SessionsForAccount(params: Readonly<{
         userId,
     );
     const recipientReadiness = createAccountRecipientEnvelopeReadinessReadScope();
+    const failureSequences = await loadSessionLatestFailureSequencesInTx(db, projectedRows.map(row => row.session));
     const projectLegacyRow = (row: (typeof projectedRows)[number]) => {
         const v = row.session;
         const viewer = projectSessionViewer({
             row: v,
+            latestFailureSeq: failureSequences.get(v.id) ?? null,
             recipientReadiness,
             viewerAccountId: userId,
             discussion: discussionFacts.get(v.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,

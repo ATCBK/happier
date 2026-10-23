@@ -19,6 +19,7 @@ import {
     createSessionPersonalAttentionProjectionSelectForAccounts,
     createSessionPersonalAttentionProjectionSelect,
     doesSessionViewerNeedAttention,
+    loadSessionLatestFailureSequencesInTx,
     type SessionPersonalAttentionProjectionRow,
 } from "./projection";
 import {
@@ -43,6 +44,7 @@ export async function filterSessionPersonalAttentionRowsInTx<Row extends Session
         now?: number;
         /** Request/transaction-local facts to reuse when admitted rows are projected. */
         observedDiscussionFacts?: Map<string, SessionPersonalDiscussionFacts>;
+        observedFailureSequences?: Map<string, number | null>;
     }>,
 ): Promise<Row[]> {
     if (params.rows.length === 0) return [];
@@ -50,8 +52,10 @@ export async function filterSessionPersonalAttentionRowsInTx<Row extends Session
         accountId: params.accountId,
         sessionIds: params.rows.map((row) => row.id),
     });
+    const failureSequences = await loadSessionLatestFailureSequencesInTx(tx, params.rows);
     const admittedRows = params.rows.filter((row) => doesSessionViewerNeedAttention({
         row,
+        latestFailureSeq: failureSequences.get(row.id) ?? null,
         viewerAccountId: params.accountId,
         discussion: discussionFacts.get(row.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
         qualifiedTeamIds: params.qualifiedTeamIds,
@@ -64,6 +68,9 @@ export async function filterSessionPersonalAttentionRowsInTx<Row extends Session
                 discussionFacts.get(row.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             );
         }
+    }
+    if (params.observedFailureSequences) {
+        for (const row of admittedRows) params.observedFailureSequences.set(row.id, failureSequences.get(row.id) ?? null);
     }
     return admittedRows;
 }
@@ -89,6 +96,7 @@ export function createSessionPersonalAttentionQueryInTx(tx: Tx, params: Readonly
     const observedDiscussionFacts = params.captureObservedDiscussionFacts
         ? new Map<string, SessionPersonalDiscussionFacts>()
         : undefined;
+    const observedFailureSequences = params.captureObservedDiscussionFacts ? new Map<string, number | null>() : undefined;
     return {
         candidateWhere: createSessionPersonalAttentionCandidateWhere({
             accountId: params.accountId,
@@ -101,8 +109,10 @@ export function createSessionPersonalAttentionQueryInTx(tx: Tx, params: Readonly
                 qualifiedTeamIds: params.qualifiedTeamIds,
                 now,
                 observedDiscussionFacts,
+                observedFailureSequences,
             }),
         observedDiscussionFacts,
+        observedFailureSequences,
     };
 }
 
@@ -204,6 +214,7 @@ export async function countAccountPersonalAttentionRowsForAccountsInTx(
             }),
             cursorAfter: (rows) => rows[rows.length - 1]?.id ?? "",
             admitCandidates: async (rows) => {
+                const failureSequences = await loadSessionLatestFailureSequencesInTx(tx, rows);
                 const discussionByAccount = await loadDiscussionAttentionForAccountsInTx(tx, {
                     accountIds,
                     sessionIds: rows.map((row) => row.id),
@@ -216,6 +227,7 @@ export async function countAccountPersonalAttentionRowsForAccountsInTx(
                         );
                         if (!doesSessionViewerNeedAttention({
                             row,
+                            latestFailureSeq: failureSequences.get(row.id) ?? null,
                             viewerAccountId: admission.accountId,
                             discussion: {
                                 ...discussionSignals,

@@ -71,7 +71,8 @@ describe("computeSessionContributesToActivityBadge", () => {
 
     it("counts failed primary-session runtime issues as badge attention", () => {
         expect(computeSessionContributesToActivityBadge(badgeInputs({
-            seq: 0,
+            seq: 1,
+            latestFailureSeq: 1,
             viewerReadState: tracked(0),
             latestTurnStatus: "failed",
             lastRuntimeIssue: JSON.stringify({

@@ -23,6 +23,7 @@ import {
 } from "@/app/session/listing/page";
 import { listLegacyV1SessionsForAccount } from "@/app/session/listing/legacy";
 import { listSessionsForAccount, SessionListInvalidCursorError } from "@/app/session/listing/service";
+import { loadSessionLatestFailureSequencesInTx } from "@/app/session/personal/projection";
 import { createV2SessionListServerTiming } from "@/app/session/listing/timing";
 import { registerSessionFilteredListingRoute } from "./registerSessionFilteredListingRoute";
 import {
@@ -165,7 +166,8 @@ export async function readSessionDetail(input: Readonly<{ userId: string; sessio
                 ownerAccountMode,
                 ...(verifiedSessionRuntimePrincipal
                     ? {}
-                    : { discussionFacts: await readSessionListViewerDiscussionFacts([session], userId, tx) }),
+                    : { discussionFacts: await readSessionListViewerDiscussionFacts([session], userId, tx),
+                        latestFailureSequences: await loadSessionLatestFailureSequencesInTx(tx, [session]) }),
                 hasOtherNamedCollaborator: (await readSessionListOtherNamedCollaboratorFacts([session], userId, tx)).get(session.id),
                 effectiveAccess: admission.access,
                 verifiedSessionRuntimePrincipal,

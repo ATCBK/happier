@@ -33,6 +33,7 @@ export type SessionActivityBadgeInputs = SessionTranscriptPublicationFields & Re
     pendingPermissionRequestCount?: number | null;
     pendingUserActionRequestCount?: number | null;
     latestReadyEventSeq?: number | null;
+    latestFailureSeq?: number | null;
     latestTurnStatus?: string | null;
     lastRuntimeIssue?: string | null;
     active?: boolean | null;
@@ -100,6 +101,7 @@ export function resolveSessionViewerActivityAttention(
             ? projection.latestReadyEventSeq
             : null,
         hasPrimarySessionFailure: hasLiveFacts && hasCanonicalPrimarySessionFailure(session),
+        latestFailureSeq: hasLiveFacts ? session.latestFailureSeq ?? null : null,
         pendingBlockedCount: hasLiveFacts ? normalizeCount(session.pendingBlockedCount) : 0,
         pendingPermissionRequestCount: hasLiveFacts ? normalizeCount(session.pendingPermissionRequestCount) : 0,
         pendingUserActionRequestCount: hasLiveFacts ? normalizeCount(session.pendingUserActionRequestCount) : 0,

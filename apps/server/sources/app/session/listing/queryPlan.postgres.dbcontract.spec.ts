@@ -7,6 +7,7 @@ import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/session
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { readSessionMetadataOwnerAccountModes } from "@/app/session/metadata/sessionMetadataRecipientProjection";
 import { findV2SessionListRows, mapV2SessionListRows, V2_SESSION_LIST_ORDER_BY } from "./page";
+import { loadSessionLatestFailureSequencesInTx } from "@/app/session/personal/projection";
 
 interface PlanNode {
     "Node Type": string;
@@ -33,6 +34,39 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
         await client.$connect();
     });
     afterAll(async () => { await client.$disconnect(); await shutdownDbClient(); });
+
+    it("reads exact current failure anchors in batches without scanning historical turns or querying per Session", async () => {
+        const prefix = `failure-anchor-${randomUUID()}`;
+        const accountId = `${prefix}-owner`;
+        const sessionIds = Array.from({ length: 1_000 }, (_, index) => `${prefix}-${index}`);
+        await client.account.create({ data: { id: accountId, publicKey: prefix, encryptionMode: "plain" } });
+        try {
+            await client.session.createMany({ data: sessionIds.map(id => ({ id, accountId, tag: id, metadata: "{}",
+                latestTurnId: "current", latestTurnStatus: "failed", seq: 20 })) });
+            await client.sessionTurn.createMany({ data: sessionIds.flatMap(sessionId => [
+                { sessionId, turnId: "historical", status: "failed", startedAt: 1, updatedAt: 30,
+                    transcriptAnchorsJson: JSON.stringify({ endSeqInclusive: 3 }) },
+                { sessionId, turnId: "current", status: "failed", startedAt: 2, updatedAt: 20,
+                    transcriptAnchorsJson: JSON.stringify({ endSeqInclusive: 12 }) },
+            ]) });
+            const rows = await client.session.findMany({ where: { accountId },
+                select: { id: true, latestTurnId: true, latestTurnStatus: true } });
+            queries.length = 0;
+            const sequences = await loadSessionLatestFailureSequencesInTx(client, rows);
+            expect(sequences.size).toBe(sessionIds.length);
+            expect([...sequences.values()].every(seq => seq === 12)).toBe(true);
+            const anchorReads = queries.filter(query => query.query.startsWith("SELECT"));
+            expect(anchorReads).toHaveLength(3);
+            expect(anchorReads.every(query => JSON.parse(query.params).length <= 999)).toBe(true);
+            queries.length = 0;
+            expect(await loadSessionLatestFailureSequencesInTx(client, rows.map(row => ({ ...row, latestTurnStatus: "completed" }))))
+                .toEqual(new Map());
+            expect(queries).toHaveLength(0);
+        } finally {
+            await client.session.deleteMany({ where: { accountId } });
+            await client.account.delete({ where: { id: accountId } });
+        }
+    });
 
     it("reuses captured membership facts while preserving rollback and current collective access", async () => {
         const prefix = `query-plan-${randomUUID()}`;

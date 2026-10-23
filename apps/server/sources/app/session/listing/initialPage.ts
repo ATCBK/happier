@@ -51,6 +51,9 @@ type V2SessionListInitialPageParams = Readonly<{
     readOtherNamedCollaboratorFacts?: (
         rows: ReadonlyArray<Readonly<{ id: string; accountId: string }>>,
     ) => Promise<ReadonlyMap<string, boolean>>;
+    readLatestFailureSequences: (
+        rows: ReadonlyArray<V2SessionListRowCompat>,
+    ) => Promise<ReadonlyMap<string, number>>;
     pageRows: ReadonlyArray<V2SessionListRowCompat>;
     limit: number;
     pinnedSessionIds: readonly string[];
@@ -275,6 +278,7 @@ export async function createV2SessionListInitialPage(params: V2SessionListInitia
     );
 
     const discussionFacts = await params.readViewerDiscussionFacts(mergedRows);
+    const latestFailureSequences = await params.readLatestFailureSequences(mergedRows);
     const otherNamedCollaboratorFacts = params.readOtherNamedCollaboratorFacts
         ? await params.readOtherNamedCollaboratorFacts(mergedRows)
         : undefined;
@@ -285,6 +289,7 @@ export async function createV2SessionListInitialPage(params: V2SessionListInitia
             userId: params.userId,
             ownerAccountModes,
             discussionFacts,
+            latestFailureSequences,
             otherNamedCollaboratorFacts,
             qualifiedTeamIds: params.source?.qualifiedTeamIds,
             accessMode: params.source?.accessMode,

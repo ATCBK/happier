@@ -35,6 +35,7 @@ export function readSessionViewerAttentionSignature(session: Session | SessionLi
         viewer?.attention.primary ?? '',
         viewer?.attention.presentation ?? '',
         viewer?.attention.reasons.join(',') ?? '',
+        viewer?.latestFailureSeq ?? '',
         viewer?.follow.onceDelivery?.event ?? '',
         viewer?.follow.onceDelivery?.requestId ?? '',
         viewer?.follow.onceDelivery?.turnId ?? '',
@@ -124,6 +125,7 @@ function addRuleAttentionForViewer(session: Session, existing: SessionPersonalAt
         contentAvailable: session.metadataLayoutVersion !== 1 || metadata != null,
         visibleSessionSeq: resolveSessionListReadableSeq(session, undefined), readState: viewer.readState,
         latestReadyEventSeq: session.latestReadyEventSeq ?? null,
+        latestFailureSeq: viewer.latestFailureSeq ?? null,
         hasPrimarySessionFailure: runtime.operational.reasons.includes('failed'),
         pendingBlockedCount: session.pendingBlockedCount ?? 0,
         pendingPermissionRequestCount: pending.hasPendingPermissionRequests ? 1 : 0,
@@ -195,6 +197,7 @@ export function resolveSessionPersonalAttentionForViewer(
             ? { state: 'not_started' }
             : { state: 'tracking', lastViewedSessionSeq: legacyCursor, unreadSince: null },
         latestReadyEventSeq: session.latestReadyEventSeq ?? null,
+        latestFailureSeq: null,
         hasPrimarySessionFailure: runtime.operational.reasons.includes('failed'),
         pendingBlockedCount: session.pendingBlockedCount ?? 0,
         pendingPermissionRequestCount: runtime.freshPermissionRequired ? 1 : 0,

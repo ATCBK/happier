@@ -64,6 +64,7 @@ function sampleSession(key: SampleKey, primary: SessionPersonalAttentionReasonV1
         thinkingAt: 0,
         presence: 'online',
         viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: primary === 'ready_after_read' ? 1 : 2, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'none' },

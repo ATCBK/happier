@@ -25,6 +25,8 @@ import {
     stampViewerUnreadEntryInTx,
 } from "./readState";
 import { loadSessionViewerProjection } from "./projection";
+import { listSessionsForAccount } from "@/app/session/listing/service";
+import { createV2SessionListServerTiming } from "@/app/session/listing/timing";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
 import { decodeBase64 } from "privacy-kit";
 
@@ -89,7 +91,80 @@ describe("private viewer read state (SQLite integration)", () => {
         return { owner, collaborator, session };
     }
 
-    it.each(["message", "finished_with_message", "failed", "request"] as const)(
+    it("clears only the reading viewer's committed failure anchor and preserves it across unrelated updates and reload", async () => {
+        const { owner, collaborator, session } = await createSharedSession({ seq: 5 });
+        await db.session.update({ where: { id: session.id }, data: { encryptionMode: "plain" } });
+        await db.accountSessionFollow.create({ data: { accountId: collaborator.id, sessionId: session.id,
+            following: true, followPolicy: JSON.stringify({ preset: "everything" }) } });
+        await inTx(tx => beginViewerReadTrackingOnFollowEntryInTx({ tx, accountId: collaborator.id,
+            sessionId: session.id, wasTracked: false }));
+        const read = (accountId: string) => loadSessionViewerProjection({ accountId, sessionId: session.id, authentication });
+        const list = async (initialLegacy = false) => listSessionsForAccount({ userId: owner.id, authentication,
+            source: initialLegacy ? { kind: "legacy", storage: "active", includeAttention: true } : {
+                kind: "query", query: { v: 1, storage: "active", includeInactive: true,
+                    scope: "all_accessible", attention: "any", audiences: [], tagIds: [], limit: 50 } },
+            rowRepresentabilityWhere: {}, timing: createV2SessionListServerTiming({}),
+        });
+        const failWithoutAssistantOutput = async (turnId: string, observedAt: number) => {
+            const base = { v: 1 as const, sessionId: session.id, turnId };
+            expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+                ...base, action: "begin", mutationId: crypto.randomUUID(), observedAt,
+            } })).toMatchObject({ ok: true });
+            const marker = await inTx(tx => writeSessionTranscriptMessageInTx(tx, {
+                sessionId: session.id, writeAuthority: "hosted", sessionEncryptionMode: "plain", storagePolicy: "optional",
+                content: { t: "plain", v: { role: "agent", content: { type: "acp", agentId: "codex",
+                    data: { type: "turn_failed", id: turnId } } } },
+                localId: `${turnId}:turn_failed`, sidechainId: null, messageRole: "event", createdAt: new Date(observedAt + 1),
+            }));
+            expect(marker).toMatchObject({ ok: true });
+            if (!marker.ok) throw new Error("failure marker was not committed");
+            const seq = marker.message.seq;
+            expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+                ...base, action: "append_transcript_anchors", mutationId: crypto.randomUUID(), observedAt: observedAt + 2,
+                transcriptAnchors: { startSeqInclusive: seq, endSeqInclusive: seq, finalAssistantMessageSeq: null },
+            } })).toMatchObject({ ok: true });
+            expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+                ...base, action: "fail", mutationId: crypto.randomUUID(), observedAt: observedAt + 3,
+                issue: { v: 1, scope: "primary_session", status: "failed", code: "test_failure", source: "unknown",
+                    occurredAt: observedAt + 3 },
+            } })).toMatchObject({ ok: true });
+            return seq;
+        };
+        const firstSeq = await failWithoutAssistantOutput("first-empty-failure", 100);
+        expect(firstSeq).toBeGreaterThan(5);
+        // A late historical update is not the current failure's identity.
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: "historical-failure",
+            status: "failed", startedAt: 1, updatedAt: 999,
+            transcriptAnchorsJson: JSON.stringify({ endSeqInclusive: 5 }) } });
+        expect(await read(owner.id)).toMatchObject({ latestFailureSeq: firstSeq, attention: { primary: "failed" } });
+        expect((await list())?.sessions.find(row => row.id === session.id)?.viewer)
+            .toMatchObject({ latestFailureSeq: firstSeq, attention: { primary: "failed" } });
+        expect((await list(true))?.sessions.find(row => row.id === session.id)?.viewer)
+            .toMatchObject({ latestFailureSeq: firstSeq, attention: { primary: "failed" } });
+        // Reading projections (including peeks) does not acknowledge anything.
+        expect(await read(owner.id)).toMatchObject({ attention: { primary: "failed" } });
+        expect(await applyViewerReadCursorOperation({ accountId: owner.id, sessionId: session.id,
+            operation: { kind: "mark-read" }, authentication })).toMatchObject({ ok: true });
+        expect((await read(owner.id))?.attention.reasons).not.toContain("failed");
+        expect((await read(collaborator.id))?.attention.reasons).toContain("failed");
+        await db.session.update({ where: { id: session.id }, data: { seq: firstSeq + 4, active: false } });
+        expect(await read(owner.id)).toMatchObject({ latestFailureSeq: firstSeq });
+        expect((await read(owner.id))?.attention.reasons).not.toContain("failed");
+        expect((await list())?.sessions.find(row => row.id === session.id)?.viewer?.attention.reasons).not.toContain("failed");
+        expect(await applyViewerReadCursorOperation({ accountId: owner.id, sessionId: session.id,
+            operation: { kind: "mark-read" }, authentication })).toMatchObject({ ok: true });
+        const nextSeq = await failWithoutAssistantOutput("second-empty-failure", 200);
+        expect(nextSeq).toBeGreaterThan(firstSeq + 4);
+        expect(await read(owner.id)).toMatchObject({ latestFailureSeq: nextSeq, attention: { primary: "failed" } });
+        expect(await db.session.findUnique({ where: { id: session.id }, select: { latestTurnStatus: true } }))
+            .toEqual({ latestTurnStatus: "failed" });
+        await db.sessionTurn.update({ where: { sessionId_turnId: { sessionId: session.id, turnId: "second-empty-failure" } },
+            data: { transcriptAnchorsJson: "invalid" } });
+        expect(await read(owner.id)).toMatchObject({ latestFailureSeq: null });
+        expect((await read(owner.id))?.attention.reasons).not.toContain("failed");
+    });
+
+    it.each(["message", "finished_with_message", "request"] as const)(
         "represents an app-closed owner's committed %s effect through the real personal projection without enrollment",
         async kind => {
             const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
@@ -138,8 +213,7 @@ describe("private viewer read state (SQLite integration)", () => {
                     })).toMatchObject({ ok: true, didApply: true });
                 }
             }
-            const reason = kind === "message" || kind === "finished_with_message" ? "unread"
-                : kind === "failed" ? "failed" : "user_action_required";
+            const reason = kind === "message" || kind === "finished_with_message" ? "unread" : "user_action_required";
             expect(await read()).toMatchObject({ attention: { needsAttention: true, reasons: expect.arrayContaining([reason]) } });
             expect(await db.accountSessionFollow.count({ where: { accountId: owner.id, sessionId: session.id } })).toBe(0);
             if (kind === "message" || kind === "finished_with_message") {
