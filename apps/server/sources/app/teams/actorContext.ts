@@ -157,7 +157,8 @@ export async function resolveTeamActorContextsInTx(
         Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids =>
             tx.team.findMany({ where: { id: { in: [...ids] } }, select: TEAM_PROJECTION_SELECT }))),
         readHomeGovernanceAccountInTx(tx, input.actorAccountId),
-        Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 2 }).map(ids => tx.teamMembership.findMany({
+        // Actor id plus the two one-to-one relation LIMIT operands on PostgreSQL.
+        Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 3 }).map(ids => tx.teamMembership.findMany({
             where: { teamId: { in: [...ids] }, accountId: input.actorAccountId },
             select: { id: true, teamId: true, role: true, status: true,
                 provisionedIdentity: { select: { id: true } },

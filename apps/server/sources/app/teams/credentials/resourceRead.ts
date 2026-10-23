@@ -5,6 +5,8 @@ import { TeamCredentialSourceResourceAdministrationV1Schema, teamCredentialSourc
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type { Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
+import type { TeamCredentialErrorCodeV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import {
     qualifyTeamOperationAuthenticationInTx,
@@ -910,20 +912,72 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
     if (!actor?.capabilities.viewTeam) return { ok: false as const, error: "not_found_or_not_visible" as const };
     const qualification = await qualifyTeamCredentialOperationInTx(tx, actor, input.authentication);
     if (!qualification.ok) return qualification;
-    const limit = input.limit ?? 50;
     const queryKey = `v1:credential-recipient:${input.teamId}:${input.application ? JSON.stringify(input.application) : ''}`;
+    return readAdmittedTeamCredentialCatalogInTx(tx, { ...input, teamIds: [input.teamId], queryKey });
+}
+
+/** One Account/application read; the existing authority and qualification owners decide every Team. */
+export async function readTeamCredentialDiscoveryInTx(tx: Tx, input: Omit<CredentialReadInput, 'teamId'> & Readonly<{
+    teamIds: readonly string[];
+}>) {
+    const teamIds = [...new Set(input.teamIds)];
+    const actors = await resolveTeamActorContextsInTx(tx, { teamIds, actorAccountId: input.actorAccountId });
+    const visible = teamIds.flatMap(teamId => {
+        const actor = actors.get(teamId);
+        return actor?.capabilities.viewTeam ? [actor] : [];
+    });
+    const qualifications = await qualifyTeamCredentialOperationsInTx(tx, visible, input.authentication);
+    const admittedTeamIds: string[] = [];
+    const failures: Array<{ teamId: string; error: TeamCredentialErrorCodeV1 }> = [];
+    for (const teamId of teamIds) {
+        const actor = actors.get(teamId);
+        if (!actor?.capabilities.viewTeam) {
+            failures.push({ teamId, error: 'not_found_or_not_visible' });
+            continue;
+        }
+        const qualification = qualifications.get(teamId);
+        if (!qualification?.ok) {
+            failures.push({ teamId, error: qualification?.error ?? 'team_authentication_policy_unavailable' });
+            continue;
+        }
+        admittedTeamIds.push(teamId);
+    }
+    const result = await readAdmittedTeamCredentialCatalogInTx(tx, {
+        ...input, teamIds: admittedTeamIds,
+        queryKey: `v1:credential-discovery:${JSON.stringify([...teamIds].sort())}:${input.application ? JSON.stringify(input.application) : ''}`,
+    });
+    return result.ok ? { ...result, page: { ...result.page, failures } } : result;
+}
+
+/** Both recipient operations share the same current entitlement/material/source projection. */
+async function readAdmittedTeamCredentialCatalogInTx(tx: Tx, input: Omit<CredentialReadInput, 'teamId'> & Readonly<{
+    teamIds: readonly string[];
+    queryKey: string;
+}>) {
+    const limit = input.limit ?? 50;
+    const queryKey = input.queryKey;
     const decoded = input.cursor ? decodeTeamCredentialResourcesCursorV1(input.cursor, queryKey) : null;
     if (decoded?.status === 'invalid') return { ok: false as const, error: 'invalid_resource_input' as const };
     const after = decoded?.status === 'ok' ? decoded.cursor : null;
     const projected: Array<{ row: ResourceRow; resource: NonNullable<Awaited<ReturnType<typeof projectCatalogEntryInTx>>> }> = [];
     const projectionFactsByResourceId = new Map<string, Parameters<NonNullable<Parameters<typeof projectCatalogEntryInTx>[8]>>[0]>();
-    const candidateWindow = await tx.teamCredentialResource.findMany({
-            where: { teamId: input.teamId, ...(after ? { OR: [
-                { displayName: { gt: after.displayName } },
-                { displayName: after.displayName, id: { gt: after.id } },
-            ] } : {}) },
+    let candidateWindow: ResourceRow[] = [];
+    // Retain only the leading page between bind chunks. The database orders the
+    // union, preserving its collation and keyset semantics on every provider.
+    for (const teamIds of portableQueryChunks({ values: input.teamIds, bindingsPerValue: 1,
+        fixedBindings: limit + 1 + 5 })) {
+        candidateWindow = await tx.teamCredentialResource.findMany({
+            where: { AND: [
+                { OR: [{ teamId: { in: [...teamIds] } },
+                    ...(candidateWindow.length > 0 ? [{ id: { in: candidateWindow.map(row => row.id) } }] : [])] },
+                ...(after ? [{ OR: [
+                    { displayName: { gt: after.displayName } },
+                    { displayName: after.displayName, id: { gt: after.id } },
+                ] }] : []),
+            ] },
             orderBy: [{ displayName: 'asc' }, { id: 'asc' }], take: limit + 1,
         });
+    }
     const hasMoreCandidates = candidateWindow.length > limit;
     const candidates = candidateWindow.slice(0, limit);
     if (candidates.length > 0) {
@@ -937,10 +991,18 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
         const sourceResolutions = await resolveTeamCredentialResourceSourcesInTx(tx, candidates.map((row, index) => ({
             custodianAccountId: row.custodianAccountId, source: candidateSources[index],
         })));
+        const membershipAccountsByTeam = new Map<string, Set<string>>();
+        for (const row of candidates) {
+            const accounts = membershipAccountsByTeam.get(row.teamId) ?? new Set([input.actorAccountId]);
+            accounts.add(row.custodianAccountId);
+            membershipAccountsByTeam.set(row.teamId, accounts);
+        }
         const [membershipRows, materialRows, recipientRow, deliveryActivityRows] = await Promise.all([tx.teamMembership.findMany({
-            where: { teamId: input.teamId, accountId: { in: [...new Set([
-                input.actorAccountId, ...candidates.map(row => row.custodianAccountId),
-            ])] } },
+            // At most one Team and actor bind per candidate, plus its custodian:
+            // the existing 100-candidate page keeps this below the portable ceiling.
+            where: { OR: [...membershipAccountsByTeam].map(([teamId, accountIds]) => ({
+                teamId, accountId: { in: [...accountIds] },
+            })) },
             select: {
                 id: true, teamId: true, accountId: true, role: true, status: true, sessionAccessStartsAt: true,
                 account: { select: { status: true } }, team: { select: { archivedAt: true } },
@@ -959,10 +1021,7 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
             where: { resourceId: { in: candidates.map(row => row.id) }, actorAccountId: input.actorAccountId, kind: 'direct_delivered' },
             select: { resourceId: true },
         })]);
-        const membershipByAccount = new Map(membershipRows.map(row => [row.accountId, row]));
-        const actorMembershipRow = membershipByAccount.get(input.actorAccountId);
-        const actorMembership = actorMembershipRow ? projectExternalKeyMembership(actorMembershipRow) : null;
-        const actorGroups = actorMembershipRow ? projectExternalKeyGroupMemberships(actorMembershipRow) : [];
+        const membershipByTeamAndAccount = new Map(membershipRows.map(row => [JSON.stringify([row.teamId, row.accountId]), row]));
         const recipientBinding = recipientRow === null ? null : deriveAccountEncryptionCurrentnessFromRow(recipientRow);
         const deliveredResourceIds = new Set(deliveryActivityRows.map(row => row.resourceId));
         const materialsByResource = new Map<string, typeof materialRows>();
@@ -973,7 +1032,10 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
         }
         const candidateProjectionInputs = candidates.map((row, index) => {
             const audience = audiences.get(row.id) ?? NO_AUDIENCE;
-            const custodianRow = membershipByAccount.get(row.custodianAccountId);
+            const actorMembershipRow = membershipByTeamAndAccount.get(JSON.stringify([row.teamId, input.actorAccountId]));
+            const actorMembership = actorMembershipRow ? projectExternalKeyMembership(actorMembershipRow) : null;
+            const actorGroups = actorMembershipRow ? projectExternalKeyGroupMemberships(actorMembershipRow) : [];
+            const custodianRow = membershipByTeamAndAccount.get(JSON.stringify([row.teamId, row.custodianAccountId]));
             const entitlement = projectTeamCredentialEntitlement({
                 resource: { ...row, groupGrants: audience.groupGrants, memberGrants: audience.memberGrants },
                 membership: actorMembership,

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { RouteOptions } from "fastify";
 import { ClusterAdapter, MessageType, type ClusterMessage } from "socket.io-adapter";
 import { io as connect } from "socket.io-client";
 
@@ -18,12 +19,15 @@ import {
     verifyPeerTcpTunnelRelayAuthorizationV2,
     type AccountPasswordCredentialV1,
     type PeerTcpTunnelRelayEnvelope,
+    API_TOKEN_FULL_GRANT_V1,
+    ApiTokenGrantV1Schema,
 } from "@happier-dev/protocol";
 import type { ProviderConnectionId } from "@happier-dev/protocol/providers/ids";
-import { TeamCredentialResourceCatalogEntryV1Schema } from "@happier-dev/protocol/teams/credentials/resourceV1";
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceCatalogEntryV1Schema } from "@happier-dev/protocol/teams/credentials/resourceV1";
 
 import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountIdentityDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
+import { isRestrictedAuthTokenDeniedForRoute } from "@/app/api/utils/apiTokenRouteAdmission";
 import { getMachineSocketRoom, getSocketRooms, getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -45,6 +49,7 @@ describe("Team credential resource routes (SQLite integration)", () => {
     afterEach(() => vi.restoreAllMocks());
     let harness: LightSqliteHarness;
     let app: ReturnType<typeof createAuthenticatedTestApp>;
+    const catalogRouteConfigs = new Map<string, RouteOptions["config"]>();
 
     beforeAll(async () => {
         harness = await createLightSqliteHarness({
@@ -65,6 +70,12 @@ describe("Team credential resource routes (SQLite integration)", () => {
             },
         });
         app = createAuthenticatedTestApp();
+        app.addHook("onRoute", (route: RouteOptions) => {
+            if (route.url === TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1
+                || route.url === "/v1/teams/credential-resources/entitled/list") {
+                catalogRouteConfigs.set(route.url, route.config);
+            }
+        });
         registerTeamCredentialResourceRoutes(app);
         await app.ready();
     }, 180_000);
@@ -104,6 +115,35 @@ describe("Team credential resource routes (SQLite integration)", () => {
     async function createAccount() {
         return await db.account.create({ data: { encryptionMode: "plain", publicKey: null } });
     }
+
+    it("discovers an Account's admitted Teams in one request while retaining per-Team refusals", async () => {
+        const actor = await createAccount();
+        const teams = await Promise.all(Array.from({ length: 6 }, (_, index) => db.team.create({
+            data: { name: `Discovery ${index}`, memberships: { create: { accountId: actor.id, role: "owner" } } },
+        })));
+        const denied = await db.team.create({ data: { name: "Unrelated discovery Team" } });
+        const response = await post(TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, actor.id, {
+            teamIds: [...teams.map(team => team.id), denied.id],
+        });
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json()).toEqual({ resources: [], nextCursor: null,
+            failures: [{ teamId: denied.id, error: "not_found_or_not_visible" }] });
+        for (const url of ["/v1/teams/credential-resources/entitled/list", TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1]) {
+            const payload = url === TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1 ? { teamIds: [teams[0]!.id] } : { teamId: teams[0]!.id };
+            for (const grant of [API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema.parse({
+                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ["teams.credentials.entitled.list"] },
+            })]) {
+                expect(isRestrictedAuthTokenDeniedForRoute({ authTokenKind: "api_token", apiTokenPrincipal: { grant },
+                    routeOptions: { config: catalogRouteConfigs.get(url) } })).toBe(true);
+            }
+            const pat = await app.inject({ method: "POST", url, payload,
+                headers: { "x-test-user-id": actor.id, "x-test-auth-token-kind": "api_token" } });
+            expect(pat.statusCode, pat.body).toBe(403);
+            const terminal = await app.inject({ method: "POST", url, payload,
+                headers: { "x-test-user-id": actor.id, "x-test-auth-token-kind": "terminal" } });
+            expect(terminal.statusCode, terminal.body).toBe(200);
+        }
+    });
 
     it("tests a newly saved revision-zero resource through signed relay admission", async () => {
         const custodian = await createAccount();
@@ -2821,6 +2861,11 @@ describe("Team credential resource routes (SQLite integration)", () => {
             [getUserMachinesSocketRoom(custodian.id)], [getMachineSocketRoom(otherCustodian.id, otherMachine.id)],
         ]));
         expect.soft(transportedIdentities).toBe(1003);
+        const discoveredCatalog = await post(TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, recipient.id, {
+            teamIds: [team.id], application,
+        });
+        expect(discoveredCatalog.statusCode, discoveredCatalog.body).toBe(200);
+        expect(discoveredCatalog.json()).toEqual({ ...mixedCatalog.json(), failures: [] });
         await db.teamCredentialResource.delete({ where: { id: directResource.id } });
         await db.machinePoolMember.updateMany({ where: { poolId: { in: [pool.id, ...additionalPoolIds, otherPool.id] } }, data: { enabled: false } });
         presenceRequests.length = 0;
@@ -3243,6 +3288,10 @@ describe("Team credential resource routes (SQLite integration)", () => {
                 body: { error: "team_authentication_required" },
             });
         }
+        const discovery = await post(TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, manager.id, { teamIds: [team.id] });
+        expect(discovery.statusCode, discovery.body).toBe(200);
+        expect(discovery.json()).toEqual({ resources: [], nextCursor: null,
+            failures: [{ teamId: team.id, error: "team_authentication_required" }] });
         // The manager must qualify before issuing any assigned key.
         const deniedExternalKeyCreate = await post(
             "/v1/teams/credential-resources/external-keys/create",

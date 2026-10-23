@@ -1,5 +1,6 @@
 import { TeamCredentialErrorCodeV1Schema, teamCredentialErrorHttpStatusV1, TeamCredentialResourceAudienceInputV1Schema, TeamCredentialResourceCreateInputV1Schema, TeamCredentialResourceDeleteInputV1Schema, TeamCredentialResourceErrorV1Schema, TeamCredentialResourcePageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceGetInputV1Schema, TeamCredentialResourceReadInputV1Schema, TeamCredentialResourceListInputV1Schema, TeamCredentialResourceSummaryV1Schema, TeamCredentialResourceMutationResultV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialResourceActivityReadInputV1Schema, TeamCredentialResourceActivityPageV1Schema, TeamCredentialRequestPolicySupportInputV1Schema, TeamCredentialRequestPolicySupportOutputV1Schema, type TeamCredentialErrorCodeV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialTestActionInputV1Schema, TeamCredentialTestActionOutputV1Schema, TeamCredentialPreparationOutputV1Schema } from '@happier-dev/protocol/teams/credentials/actionsV1';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoverInputV1Schema, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceCandidateListInputV1Schema, TeamCredentialSourceCandidateListOutputV1Schema, TeamCredentialSourceResourceListInputV1Schema, TeamCredentialSourceResourceListOutputV1Schema, TeamCredentialSourceResourceAdministrationV1Schema, TeamCredentialUsageLimitDeleteInputV1Schema, TeamCredentialUsageLimitListInputV1Schema, TeamCredentialUsageLimitListOutputV1Schema, TeamCredentialUsageLimitUpsertInputV1Schema, TeamCredentialUsageLimitUpsertOutputV1Schema, TeamCredentialUsageQueryInputV1Schema, TeamCredentialUsageQueryResultV1Schema, TeamCredentialExternalApiKeyCreateInputV1Schema, TeamCredentialExternalApiKeyAuthorizeInputV1Schema, TeamCredentialExternalApiKeyAuthorizeOutputV1Schema, TeamCredentialExternalApiKeyCreateOutputV1Schema, TeamCredentialExternalApiKeyListInputV1Schema, TeamCredentialExternalApiKeyListOutputV1Schema, TeamCredentialExternalApiKeyRevokeInputV1Schema, TeamCredentialExternalApiKeyRevokeOutputV1Schema, TeamCredentialExternalApiKeyRevokeAllInputV1Schema, TeamCredentialExternalApiKeyRevokeAllOutputV1Schema } from '@happier-dev/protocol/teams';
 import { RunnerBrokerReadinessRequestV1Schema } from '@happier-dev/protocol/ephemeralRunner/brokerReadinessRequestV1';
 import { RunnerBrokerReadinessResponseV1Schema } from '@happier-dev/protocol/teams/credentials/readinessV1';
@@ -14,6 +15,7 @@ import { z } from "zod/mini";
 import { logger } from "@/utils/logging/log";
 import type { Fastify } from "@/app/api/types";
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 import { inTx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
@@ -58,6 +60,7 @@ import {
     projectTeamCredentialResourceSummaryInTx,
     projectTeamCredentialBrokerPresentationInTx,
     readTeamCredentialCatalogInTx,
+    readTeamCredentialDiscoveryInTx,
     readTeamCredentialResourceAdministrationInTx,
     readTeamCredentialResourcePageInTx,
     readTeamCredentialSourceResourceAdministrationInTx,
@@ -79,7 +82,8 @@ import {
     type TeamCredentialRequestPolicySupportEvidence,
 } from "./resourceRequestPolicySupport";
 
-const errors = { 400: TeamCredentialResourceErrorV1Schema, 403: TeamCredentialResourceErrorV1Schema,
+const errors = { 400: TeamCredentialResourceErrorV1Schema,
+    403: z.union([TeamCredentialResourceErrorV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
     404: TeamCredentialResourceErrorV1Schema, 409: TeamCredentialResourceErrorV1Schema,
     503: TeamCredentialResourceErrorV1Schema } as const;
 type ErrorReply = Readonly<{
@@ -1112,23 +1116,10 @@ export function registerTeamCredentialResourceRoutes(
         }
     });
 
-    routes.post(homeDomainActionPathForMethod("teams.credentials.entitled.list", "POST"), {
-        preHandler: app.authenticate, attachValidation: true,
-        schema: { body: TeamCredentialResourceReadInputV1Schema, response: { 200: TeamCredentialResourceEntitledPageV1Schema, ...errors } },
-    }, async (request, reply) => {
-        if (request.validationError) return fail(reply, "invalid_resource_input");
-        const body = TeamCredentialResourceReadInputV1Schema.safeParse(request.body);
-        if (!body.success) return fail(reply, "invalid_resource_input");
-        const result = await inTx(tx => readTeamCredentialCatalogInTx(tx, {
-            teamId: body.data.teamId,
-            actorAccountId: request.userId,
-            ...(body.data.application ? { application: body.data.application } : {}),
-            ...(body.data.cursor ? { cursor: body.data.cursor } : {}),
-            limit: body.data.limit,
-            authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
-        if (!result.ok) return fail(reply, result.error);
-        if (!body.data.application || result.projectionRequests.length === 0) return reply.send(result.page);
+    async function projectTeamCredentialCatalogModels(
+        result: Extract<Awaited<ReturnType<typeof readTeamCredentialCatalogInTx>>, { ok: true }>,
+        application: NonNullable<z.infer<typeof TeamCredentialResourceReadInputV1Schema>["application"]>,
+    ) {
         const resourcesById = new Map(result.page.resources.map(resource => [resource.id, resource] as const));
         const directAccountIds = new Set<string>();
         const poolIdsByAccount = new Map<string, Set<string>>();
@@ -1181,7 +1172,7 @@ export function registerTeamCredentialResourceRoutes(
                         : [];
             const projections = await Promise.all(machineIds.map(async machineId => {
                 const rpcKey = JSON.stringify([projectionRequest.custodianAccountId, machineId,
-                    projectionRequest.source, body.data.application,
+                    projectionRequest.source, application,
                     projectionRequest.deliveryMode === 'direct' && projectionRequest.directMaterialReferences.length === 1]);
                 let rpc = projectionRpcByKey.get(rpcKey);
                 if (!rpc) {
@@ -1190,8 +1181,8 @@ export function registerTeamCredentialResourceRoutes(
                     method: `${machineId}:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`,
                     params: {
                     machineId,
-                    agentTargetKey: body.data.application!.agentTargetKey,
-                    application: body.data.application,
+                    agentTargetKey: application!.agentTargetKey,
+                    application: application,
                     sourceCatalog: true,
                     ...(poolSnapshot?.ok ? { refreshPolicy: "current_only" as const } : {}),
                     ...(projectionRequest.deliveryMode === 'direct'
@@ -1215,8 +1206,8 @@ export function registerTeamCredentialResourceRoutes(
                     resourceId: projectionRequest.resourceId,
                     teamId: projectionRequest.teamId,
                     resourceRevision: projectionRequest.resourceRevision,
-                    agentTargetKey: body.data.application!.agentTargetKey,
-                    application: body.data.application!,
+                    agentTargetKey: application!.agentTargetKey,
+                    application: application!,
                     allowedModelIds: projectionRequest.allowedModelIds,
                     source: projectionRequest.source,
                     deliveryMode: projectionRequest.deliveryMode,
@@ -1293,10 +1284,48 @@ export function registerTeamCredentialResourceRoutes(
                     ? 'source_owner_action' : 'retry';
             }
         }
-        return reply.send(TeamCredentialResourceEntitledPageV1Schema.parse({
+        return TeamCredentialResourceEntitledPageV1Schema.parse({
             resources: [...resourcesById.values()],
             nextCursor: result.page.nextCursor,
+        });
+    }
+
+    routes.post(homeDomainActionPathForMethod("teams.credentials.entitled.list", "POST"), {
+        preHandler: app.authenticate, attachValidation: true,
+        schema: { body: TeamCredentialResourceReadInputV1Schema, response: { 200: TeamCredentialResourceEntitledPageV1Schema, ...errors } },
+    }, async (request, reply) => {
+        if (request.validationError) return fail(reply, "invalid_resource_input");
+        const body = TeamCredentialResourceReadInputV1Schema.safeParse(request.body);
+        if (!body.success) return fail(reply, "invalid_resource_input");
+        const result = await inTx(tx => readTeamCredentialCatalogInTx(tx, {
+            teamId: body.data.teamId,
+            actorAccountId: request.userId,
+            ...(body.data.application ? { application: body.data.application } : {}),
+            ...(body.data.cursor ? { cursor: body.data.cursor } : {}),
+            limit: body.data.limit,
+            authentication: readTeamOperationAuthenticationFromRequest(request),
         }));
+        if (!result.ok) return fail(reply, result.error);
+        if (!body.data.application || result.projectionRequests.length === 0) return reply.send(result.page);
+        return reply.send(await projectTeamCredentialCatalogModels(result, body.data.application));
+    });
+
+    routes.post(TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, {
+        preHandler: app.authenticate, attachValidation: true,
+        schema: { body: TeamCredentialResourceDiscoverInputV1Schema, response: { 200: TeamCredentialResourceDiscoveryPageV1Schema, ...errors } },
+    }, async (request, reply) => {
+        if (request.validationError) return fail(reply, "invalid_resource_input");
+        const body = TeamCredentialResourceDiscoverInputV1Schema.safeParse(request.body);
+        if (!body.success) return fail(reply, "invalid_resource_input");
+        const result = await inTx(tx => readTeamCredentialDiscoveryInTx(tx, {
+            ...body.data,
+            actorAccountId: request.userId,
+            authentication: readTeamOperationAuthenticationFromRequest(request),
+        }));
+        if (!result.ok) return fail(reply, result.error);
+        const page = body.data.application && result.projectionRequests.length > 0
+            ? await projectTeamCredentialCatalogModels(result, body.data.application) : result.page;
+        return reply.send({ ...page, failures: result.page.failures });
     });
 
     routes.post(homeDomainActionPathForMethod("teams.credentials.activity.list", "POST"), {
