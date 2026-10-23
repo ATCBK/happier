@@ -1027,7 +1027,8 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
   ): Promise<WorkspaceSyncPrepareBetweenResultV1> => withWebLatencyTrace(
     readWebLatencyTracePoint()?.requestId ?? context?.callerInputAuthorization?.binding.requestId ?? context?.transportRequestId,
     () => timeWebLatencyPhase('workspaceSync.handoffPrepareBetween', async () => {
-    const route = await currentRoute(request, signal, context);
+    const snapshot = await currentRouteSnapshot(request, signal, context);
+    const route = resolveWorkspaceSyncTransferRoute({ ...snapshot, ...request });
     if (!route.ok) return routeFailure(route);
     if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
       authorization: context?.callerInputAuthorization, ownerKind: 'relationship' });
@@ -1037,7 +1038,6 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     try {
       if (isProjectPreparation(context)) {
         if (!context || !input.callWorkspacePrepareBetween) throw compositionError('workspace_sync_update_required', 'Signed controller preparation is unavailable');
-        const snapshot = await currentRouteSnapshot(request, signal, context);
         const sourceWorkspace = resolveWorkspaceRefById(snapshot.workspaceRefs, request.sourceWorkspaceRefId, semanticServerId);
         if (!sourceWorkspace) throw compositionError('workspace_ref_not_ready', 'The admitted source Workspace is unavailable');
         return WorkspaceSyncPrepareBetweenResultV1Schema.parse(await input.callWorkspacePrepareBetween({

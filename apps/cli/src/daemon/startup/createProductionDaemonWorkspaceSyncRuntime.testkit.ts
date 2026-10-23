@@ -89,6 +89,7 @@ export async function composeBindChildSourcePhaseTestRuntime(options: Readonly<{
   readAdditionalHttpPostResponse?: (url: string, data: unknown, config?: AxiosRequestConfig) => Promise<Readonly<{ status: number; data: unknown }> | undefined>;
   handleAdditionalSocketAck?: (payload: unknown) => Promise<unknown | undefined>;
   callWorkspaceTargetPhase?: (descriptor: WorkspaceSyncTargetPhaseDescriptor, context: RpcHandlerContext) => Promise<unknown>;
+  callWorkspacePrepareBetween?: Parameters<typeof createProductionDaemonWorkspaceSyncRuntime>[0]['callWorkspacePrepareBetween'];
   callWorkspaceSeedExport?: (descriptor: Readonly<{ machineId: string;
     request: import('@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas').WorkspaceSyncSeedExportPrepareV1;
     signal?: AbortSignal }>, context: RpcHandlerContext) => Promise<unknown>;
@@ -536,6 +537,7 @@ export async function composeBindChildSourcePhaseTestRuntime(options: Readonly<{
       isCurrent: async () => true,
       ...(localHomeTarget ? { homeTarget: localHomeTarget } : {}),
       ...(options.callWorkspaceTargetPhase ? { callWorkspaceTargetPhase: options.callWorkspaceTargetPhase } : {}),
+      ...(options.callWorkspacePrepareBetween ? { callWorkspacePrepareBetween: options.callWorkspacePrepareBetween } : {}),
       ...(options.callWorkspaceSeedExport ? { callWorkspaceSeedExport: options.callWorkspaceSeedExport } : {}),
       ...(requestDirectPeerTransferToFile ? {
         requestDirectTransferPayloadFile: requestDirectPeerTransferToFile,
