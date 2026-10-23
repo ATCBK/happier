@@ -11,6 +11,7 @@ import { SOCKET_RPC_EVENTS, SocketRpcTimeoutMsSchema, type SocketRpcRequestPaylo
 import { readRpcRequestDisposition, socketRpcCodec } from '@happier-dev/sync-client';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { machineRpcWithServerScope } from './serverScopedMachineRpc';
+import { createMachineRpcReadAdmission } from './machineRpcReadAdmission';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from './serverScopedRpcSocketPool';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -35,6 +36,11 @@ function serializeMachineReadFixture(request: Pick<IncomingMessage, 'url'>, mach
 
 const credentials = vi.hoisted(() => ({ token: '', secret: undefined as string | undefined }));
 
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+
 // Credential persistence is the only device boundary. HTTP and Socket.IO run in process.
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
@@ -57,6 +63,84 @@ afterEach(async () => {
     resetScopedMachineTransportCacheForTests();
     clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
+});
+
+it('retires a stalled Machine key opening when the scoped caller deadline expires', async () => {
+    const { Encryption } = await import('@/sync/encryption/encryption');
+    const { installWebCryptoWorker } = await import('@/sync/encryption/nativeCryptoWorker/webCryptoWorkerRuntime');
+    const entered = createDeferred<void>();
+    const workers: HeldWorker[] = [];
+    let holding = true;
+    // Worker delivery is the OS boundary. The actual adapter, queue, envelope
+    // crypto, HTTP, scope, Machine admission and RPC owner remain real.
+    class HeldWorker {
+        onmessage: ((event: MessageEvent) => void) | null = null;
+        onerror: ((event: ErrorEvent) => void) | null = null;
+        onmessageerror: (() => void) | null = null;
+        terminated = false;
+        constructor(_url: string | URL) { workers.push(this); }
+        postMessage(data: unknown, transfers: ArrayBuffer[]) {
+            const request: unknown = structuredClone(data, { transfer: transfers });
+            entered.resolve();
+            if (holding) return;
+            const port = { onmessage: null as ((event: MessageEvent) => void) | null,
+                postMessage: (value: unknown, buffers: ArrayBuffer[]) => {
+                    const result: unknown = structuredClone(value, { transfer: buffers });
+                    queueMicrotask(() => { if (!this.terminated) this.onmessage?.({ data: result } as MessageEvent); });
+                } };
+            installWebCryptoWorker(port);
+            port.onmessage?.({ data: request } as MessageEvent);
+        }
+        terminate() { this.terminated = true; }
+    }
+    vi.stubGlobal('Worker', HeldWorker);
+    const secret = new Uint8Array(32).fill(35), key = new Uint8Array(32).fill(36);
+    const encryption = await Encryption.create(secret);
+    const envelope = Buffer.from(await encryption.encryptEncryptionKey(key)).toString('base64');
+    await encryption.initializeMachines(new Map([['stalled-key-machine', key]]));
+    const cipher = encryption.getMachineEncryption('stalled-key-machine');
+    if (!cipher) throw new Error('Expected real Machine cipher');
+    let received = 0, issued = 0;
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch') response.end(serializeMachineReadFixture(request, {
+            id: 'stalled-key-machine', dataEncryptionKey: envelope,
+            access: { custodian: { accountId: 'stalled-key-account', displayName: '' }, role: 'manage',
+                resourceMode: 'e2ee', accessState: 'ready' },
+        }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+        async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            received += 1;
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'e2ee', cipher }, packet.params, packet.method);
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'e2ee', cipher }, { success: true }, decoded.callId) });
+        }));
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'stalled-key-account' })).toString('base64url')}.signature`;
+        credentials.secret = Buffer.from(secret).toString('base64url');
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Stalled Machine opening' });
+        const request = { serverId: home.id, accountId: 'stalled-key-account', machineId: 'stalled-key-machine',
+            method: RPC_METHODS.SCM_STATUS_SNAPSHOT, payload: {}, preferScoped: true,
+            onIssued: () => { issued += 1; } };
+        const pending = machineRpcWithServerScope({ ...request, timeoutMs: 1_000 }).catch((error: unknown) => error);
+        await Promise.race([entered.promise, pending.then(() => { throw new Error('Caller expired before the key-opening boundary'); })]);
+        expect(await pending).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        expect(issued).toBe(0);
+        expect(received).toBe(0);
+        expect(workers.filter(worker => worker.terminated)).toHaveLength(1);
+        holding = false;
+        await expect(machineRpcWithServerScope(request)).resolves.toEqual({ success: true });
+        expect(issued).toBe(1);
+        expect(received).toBe(1);
+    } finally {
+        for (const worker of workers) worker.onerror?.({ error: new Error('Owned test Worker retired'), preventDefault() {} } as ErrorEvent);
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
 });
 
 it.each([false, true])('distinguishes held SCM setup boundaries from elapsed continuation time (clock stall: %s)', async stallContinuation => {
@@ -178,6 +262,88 @@ it.each([false, true])('distinguishes held SCM setup boundaries from elapsed con
         releaseBody.resolve(); releaseSocket.resolve();
         vi.useRealTimers();
         resetRuntimeFetch();
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
+});
+
+it.each([
+    { method: 'scm.status.snapshot', failure: 'refused-dial' },
+    { method: 'scm.diffSummary.result.list', failure: 'refused-dial' },
+    { method: 'stop-session', failure: 'refused-dial' },
+    { method: 'scm.status.snapshot', failure: 'disconnect-during-preparation' },
+])('preserves a failed scoped socket before held Machine preparation times out ($method, $failure)', async ({ method, failure }) => {
+    const bodyStarted = createDeferred<void>();
+    const releaseBody = createDeferred<void>();
+    let received = 0;
+    let issued = 0;
+    let recovering = false;
+    const http = createServer(async (request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch') {
+            response.writeHead(200);
+            response.flushHeaders();
+            if (recovering) {
+                bodyStarted.resolve();
+                await releaseBody.promise;
+            }
+            if (!response.destroyed) response.end(serializeMachineReadFixture(request, {
+                id: 'failed-scoped-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                access: { custodian: { accountId: 'failed-scoped-account', displayName: '' },
+                    role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+            }));
+        } else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    let refusedDials = 0;
+    // Distinguish refusal of a new dial from loss of an already acquired socket.
+    // Both must win over the independent held HTTP body, without replaying RPCs.
+    relay.use(async (_socket, next) => {
+        if (recovering && failure === 'refused-dial') {
+            await bodyStarted.promise;
+            refusedDials += 1;
+            next(new Error('scoped namespace refused'));
+        } else next();
+    });
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+        async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            received += 1;
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, 'ready', decoded.callId) });
+        }));
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'failed-scoped-account' })).toString('base64url')}.signature`;
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Failed scoped preparation' });
+        const call = { serverId: home.id, accountId: 'failed-scoped-account', machineId: 'failed-scoped-machine',
+            method, payload: {}, preferScoped: true, timeoutMs: 1_000, onIssued: () => { issued += 1; },
+            ...(failure === 'disconnect-during-preparation' ? { readAdmission: createMachineRpcReadAdmission([method]) } : {}),
+        };
+        const baselineCount = failure === 'refused-dial' ? 0 : 1;
+        if (baselineCount) {
+            expect(await machineRpcWithServerScope(call)).toBe('ready');
+            expect(received).toBe(1);
+            expect(issued).toBe(1);
+        }
+        recovering = true;
+        const pending = machineRpcWithServerScope(call).then(() => null, (error: unknown) => error);
+        await bodyStarted.promise;
+        if (failure === 'disconnect-during-preparation') relay.sockets.sockets.forEach(socket => socket.disconnect(true));
+        const error = await pending;
+        expect(error).toMatchObject({ rpcErrorCode: 'MACHINE_RPC_UNREACHABLE' });
+        expect(readRpcRequestDisposition(error)).toBe('notSent');
+        expect(refusedDials).toBe(failure === 'refused-dial' ? 1 : 0);
+        expect(issued).toBe(baselineCount);
+        expect(received).toBe(baselineCount);
+        recovering = false;
+        releaseBody.resolve();
+        expect(await machineRpcWithServerScope(call)).toBe('ready');
+        expect(issued).toBe(baselineCount + 1);
+        expect(received).toBe(baselineCount + 1);
+    } finally {
+        releaseBody.resolve();
         await serverScopedRpcSocketPool.stopAll();
         await new Promise<void>(resolve => relay.close(() => resolve()));
     }
@@ -361,20 +527,28 @@ it('connects the scoped socket while the fresh Machine row is still being read',
     }
 });
 
-it('releases a late socket after Machine admission fails without sending an RPC', async () => {
+it('retires a physical socket after Machine admission fails without sending an RPC', async () => {
     const allowConnection = createDeferred<void>();
     const handshakeStarted = createDeferred<void>();
     let disconnected = false;
     let rpcReceived = false;
-    const http = createServer((request, response) => {
+    const http = createServer(async (request, response) => {
         response.setHeader('content-type', 'application/json');
-        response.writeHead(request.url === '/health' || request.url === '/v1/auth/ping' ? 200 : 404).end('{}');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else {
+            // The physical connection must actually exist before admission
+            // fails, so cancellation cannot win before this fixture is reached.
+            await handshakeStarted.promise;
+            response.writeHead(404).end('{}');
+        }
     });
     const relay = new Server(http, { path: '/v1/updates/' });
+    // A cancelled setup can close before namespace admission; the Engine owns
+    // that physical lifetime and observes both early and late close paths.
+    relay.engine.on('connection', socket => socket.on('close', () => { disconnected = true; }));
     relay.use((_socket, next) => { handshakeStarted.resolve(); void allowConnection.promise.then(() => next()); });
     relay.on('connection', socket => {
         socket.on(SOCKET_RPC_EVENTS.CALL, () => { rpcReceived = true; });
-        socket.on('disconnect', () => { disconnected = true; });
     });
     vi.stubEnv('EXPO_PUBLIC_HAPPIER_SCOPED_RPC_SOCKET_IDLE_DISCONNECT_MS', '0');
     try {

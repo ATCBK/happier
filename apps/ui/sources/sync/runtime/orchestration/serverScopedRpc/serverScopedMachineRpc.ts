@@ -54,6 +54,7 @@ import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLe
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { runAdmittedMachineRpcRead } from './machineRpcReadAdmission';
 import { prepareMachineRows, type PreparedMachineRows } from '@/sync/api/machines/machineRowsApi';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 const SCOPED_MACHINE_RPC_SESSION_WRITE_METHODS = new Set<string>([
     RPC_METHODS.SPAWN_HAPPY_SESSION,
@@ -364,11 +365,19 @@ async function machineRpcWithServerTransport<R, A>(
         observeScope(createServerAccountScope(context.targetServerId, context.targetAccountId ?? parseToken(context.token)));
 
         const releaseRequestLease = userRequestLeaseOwner.acquire();
+        const setupController = new AbortController();
+        const setupCancellation = mergeAbortSignals([params.signal, setupController.signal]);
         let carrierCustodyTransferred = false;
         let physicalReadOwnsCustody = false;
-        const socketLifetime: { finished: boolean; client: ScopedSocketClient | null } = { finished: false, client: null };
+        const socketLifetime: { finished: boolean; client: ScopedSocketClient | null; detachDisconnect?: () => void } = { finished: false, client: null };
         const releaseCustody = async () => {
             socketLifetime.finished = true;
+            // The existing setup deadline/terminal path owns this work too:
+            // retiring a caller must not leave key opening queued afterward.
+            setupController.abort();
+            setupCancellation.dispose();
+            socketLifetime.detachDisconnect?.();
+            socketLifetime.detachDisconnect = undefined;
             try { socketLifetime.client?.disconnect(); }
             finally {
                 try { if (!carrierCustodyTransferred) await context.release?.(); }
@@ -380,127 +389,156 @@ async function machineRpcWithServerTransport<R, A>(
             // The exact captured transport is known now; register before the
             // independent runner-trust preparation can yield to ready peers.
             machineRowsPreparation = context.readTransport
-                ? prepareMachineRows({ readTransport: context.readTransport, signal: params.signal }) : undefined;
+                ? prepareMachineRows({ readTransport: context.readTransport, signal: setupCancellation.signal }) : undefined;
             // Authentication/socket readiness does not depend on opening Machine content.
             // Both preparations consume the same caller deadline; no RPC is emitted until
             // the fresh key/access checks below have admitted its exact content context.
+            let rejectSocketDisconnect!: (error: unknown) => void;
+            const socketDisconnected = new Promise<never>((_resolve, reject) => { rejectSocketDisconnect = reject; });
             const socketRead = timeoutBudget.runWithinTimeout('scoped', async (timeoutMs) =>
-                await createEphemeralServerSocketClient(createScopedSocketConnectParams({ ...context, timeoutMs }, () => {
+                await createEphemeralServerSocketClient({ ...createScopedSocketConnectParams({ ...context, timeoutMs }, () => {
                     // Acquisition can resume after an awaited pool teardown. A retired
                     // preparation cannot transfer an already-released carrier then.
                     if (socketLifetime.finished) throw createMachineRpcAbortError(params.method);
                     carrierCustodyTransferred = true;
                     return context.release;
-                })).then((client) => {
+                }), signal: setupCancellation.signal }).then((client) => {
                     if (socketLifetime.finished) client.disconnect();
-                    else socketLifetime.client = client;
+                    else {
+                        socketLifetime.client = client;
+                        const onDisconnect = (reason?: unknown) => rejectSocketDisconnect(Object.assign(createRpcCallError({
+                            error: 'Scoped RPC socket disconnected during Machine preparation',
+                            errorCode: 'MACHINE_RPC_UNREACHABLE',
+                        }), { cause: reason }));
+                        client.on('disconnect', onDisconnect);
+                        socketLifetime.detachDisconnect = () => client.off('disconnect', onDisconnect);
+                        if (client.connected === false) onDisconnect();
+                    }
                     return client;
                 }));
-            // Material admission can fail before this independent connection settles.
-            // Its original rejection is still observed by the await below when needed.
-            void socketRead.catch(() => {});
             const credentials = context.credentials;
-            const runnerTrust = credentials
-                ? await timeoutBudget.runWithinTimeout('scoped', async () => await resolveRunnerMachineContentKeyTrustV1({
-                    credentials,
-                    homeServerIdentityId: context.targetServerId,
-                    machineId: context.machineId,
-                }))
-                : null;
-            const machineTransport = await timeoutBudget.runWithinTimeout(
-                'scoped',
-                async (timeoutMs) =>
-                    await resolveScopedMachineTransport({
-                    serverId: context.targetServerId,
-                    serverUrl: context.targetServerUrl,
-                    ...(context.runtimeOrigin ? { runtimeOrigin: context.runtimeOrigin } : {}),
-                    ...(context.homeCarrier ? { homeCarrier: context.homeCarrier } : {}),
-                    token: context.token,
-                    machineId: context.machineId,
-                    accountId: context.targetAccountId,
-                    readTransport: context.readTransport,
-                    preparedMachineRows: machineRowsPreparation,
-                    readAccountMode: async () => (await fetchAccountEncryptionMode(credentials ?? { token: context.token }, {
-                        request: createServerRequestForExplicitServerScope({
-                            serverUrl: context.targetServerUrl, token: context.token,
-                            runtimeOrigin: context.runtimeOrigin, homeCarrier: context.homeCarrier, timeoutMs,
-                        }),
-                    })).mode,
-                    ...(runnerTrust ? { expectedRunnerBinding: runnerTrust.expectedRunnerBinding } : {}),
-                    ...(runnerTrust?.trustedMachineKind
-                        ? { trustedMachineKind: runnerTrust.trustedMachineKind }
-                        : {}),
-                    timeoutMs,
-                    ...(context.encryption
-                        ? {
-                            decryptEncryptionKey: (value: string) =>
-                                context.encryption!.decryptEncryptionKey(value),
-                            encryption: context.encryption,
-                        }
-                        : {}),
-                    }),
-            );
-            throwIfMachineRpcAborted(params.method, params.signal);
-
-            if (!machineTransport || (machineTransport.mode === 'e2ee' && !runnerTrust)) {
-                await context.encryption?.initializeMachines(new Map(), new Set([context.machineId]));
-                throw createRpcCallError({
-                    error: `Machine encryption not found for ${context.machineId}`,
-                    errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE',
-                });
-            }
-            const usePlaintextTransport = machineTransport.mode === 'plain';
-            let requestPayload: unknown = params.payload;
-            if (params.requireEncryptedPayload && usePlaintextTransport) {
-                const { SessionRequesterBootstrapRpcRequestV1Schema, sealSessionRequesterBootstrapRpcRequestV1 } =
-                    await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
-                const request = SessionRequesterBootstrapRpcRequestV1Schema.safeParse(params.payload);
-                const installationId = machineTransport.installationId;
-                const publicKey = readMachineInstallationPublicKey(machineTransport.installationPublicKey);
-                if (params.method !== RPC_METHODS.SESSION_SPAWN_NEW || !request.success || !installationId || !publicKey
-                    || request.data.input.executionTarget.machineId !== context.machineId
-                    || request.data.input.executionTarget.serverId !== context.targetServerId) {
-                    throw createRpcCallError({ error: 'Private Machine payload requires an encrypted transport', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
-                }
-                if ('kind' in request.data.requesterBootstrap) {
-                    if (request.data.requesterBootstrap.installationId !== installationId) {
-                        throw createRpcCallError({ error: 'Private Machine payload has a stale installation', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
-                    }
-                    requestPayload = request.data;
-                } else {
-                    requestPayload = sealSessionRequesterBootstrapRpcRequestV1({ request: {
-                        kind: request.data.kind, input: request.data.input, requesterBootstrap: request.data.requesterBootstrap,
-                    }, installationId, installationPublicKey: publicKey, randomBytes: getRandomBytes });
-                }
-            }
-            const isMachineCurrent = () => machineTransport.context?.isCurrent() !== false;
-            if (usePlaintextTransport) context.encryption?.removeMachineEncryption(context.machineId);
-            let machineEncryption = null;
-            if (!usePlaintextTransport) {
-                if (!context.encryption) {
-                    throw new Error(`Machine encryption not found for ${context.machineId}`);
-                }
-                await timeoutBudget.runWithinTimeout(
+            const machinePreparation = (async () => {
+                const runnerTrust = credentials
+                    ? await timeoutBudget.runWithinTimeout('scoped', async () => await resolveRunnerMachineContentKeyTrustV1({
+                        credentials,
+                        homeServerIdentityId: context.targetServerId,
+                        machineId: context.machineId,
+                    }))
+                    : null;
+                if (socketLifetime.finished) throw createMachineRpcAbortError(params.method);
+                const machineTransport = await timeoutBudget.runWithinTimeout(
                     'scoped',
-                    async () => {
-                        await context.encryption!.initializeMachines(new Map([[
-                            context.machineId,
-                            machineTransport.mode === 'e2ee'
-                                ? machineTransport.dataKey
-                                : null,
-                        ]]), undefined, { isMachineCurrent });
-                        return undefined;
-                    },
+                    async (timeoutMs) =>
+                        await resolveScopedMachineTransport({
+                        serverId: context.targetServerId,
+                        serverUrl: context.targetServerUrl,
+                        ...(context.runtimeOrigin ? { runtimeOrigin: context.runtimeOrigin } : {}),
+                        ...(context.homeCarrier ? { homeCarrier: context.homeCarrier } : {}),
+                        token: context.token,
+                        machineId: context.machineId,
+                        accountId: context.targetAccountId,
+                        signal: setupCancellation.signal,
+                        readTransport: context.readTransport,
+                        preparedMachineRows: machineRowsPreparation,
+                        readAccountMode: async () => {
+                            const request = createServerRequestForExplicitServerScope({
+                                serverUrl: context.targetServerUrl, token: context.token,
+                                runtimeOrigin: context.runtimeOrigin, homeCarrier: context.homeCarrier, timeoutMs,
+                            });
+                            return (await fetchAccountEncryptionMode(credentials ?? { token: context.token }, {
+                                request: (path, init) => request(path, { ...init, signal: setupCancellation.signal }),
+                            })).mode;
+                        },
+                        ...(runnerTrust ? { expectedRunnerBinding: runnerTrust.expectedRunnerBinding } : {}),
+                        ...(runnerTrust?.trustedMachineKind
+                            ? { trustedMachineKind: runnerTrust.trustedMachineKind }
+                            : {}),
+                        timeoutMs,
+                        ...(context.encryption
+                            ? {
+                                decryptEncryptionKey: (value: string) =>
+                                    context.encryption!.decryptEncryptionKey(value, {
+                                        signal: setupCancellation.signal,
+                                        shouldContinue: () => !socketLifetime.finished,
+                                    }),
+                                encryption: context.encryption,
+                            }
+                            : {}),
+                        }),
                 );
-                machineEncryption = context.encryption.getMachineEncryption(context.machineId);
-                if (!machineEncryption || !isMachineCurrent()) {
-                    throw new Error(`Machine encryption not found for ${context.machineId}`);
-                }
-            }
-            throwIfMachineRpcAborted(params.method, params.signal);
+                throwIfMachineRpcAborted(params.method, params.signal);
+                if (socketLifetime.finished) throw createMachineRpcAbortError(params.method);
 
-            const socket = await socketRead;
+                if (!machineTransport || (machineTransport.mode === 'e2ee' && !runnerTrust)) {
+                    await context.encryption?.initializeMachines(new Map(), new Set([context.machineId]));
+                    throw createRpcCallError({
+                        error: `Machine encryption not found for ${context.machineId}`,
+                        errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE',
+                    });
+                }
+                const usePlaintextTransport = machineTransport.mode === 'plain';
+                let requestPayload: unknown = params.payload;
+                if (params.requireEncryptedPayload && usePlaintextTransport) {
+                    const { SessionRequesterBootstrapRpcRequestV1Schema, sealSessionRequesterBootstrapRpcRequestV1 } =
+                        await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
+                    const request = SessionRequesterBootstrapRpcRequestV1Schema.safeParse(params.payload);
+                    const installationId = machineTransport.installationId;
+                    const publicKey = readMachineInstallationPublicKey(machineTransport.installationPublicKey);
+                    if (params.method !== RPC_METHODS.SESSION_SPAWN_NEW || !request.success || !installationId || !publicKey
+                        || request.data.input.executionTarget.machineId !== context.machineId
+                        || request.data.input.executionTarget.serverId !== context.targetServerId) {
+                        throw createRpcCallError({ error: 'Private Machine payload requires an encrypted transport', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
+                    }
+                    if ('kind' in request.data.requesterBootstrap) {
+                        if (request.data.requesterBootstrap.installationId !== installationId) {
+                            throw createRpcCallError({ error: 'Private Machine payload has a stale installation', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
+                        }
+                        requestPayload = request.data;
+                    } else {
+                        requestPayload = sealSessionRequesterBootstrapRpcRequestV1({ request: {
+                            kind: request.data.kind, input: request.data.input, requesterBootstrap: request.data.requesterBootstrap,
+                        }, installationId, installationPublicKey: publicKey, randomBytes: getRandomBytes });
+                    }
+                }
+                if (socketLifetime.finished) throw createMachineRpcAbortError(params.method);
+                const isMachineCurrent = () => machineTransport.context?.isCurrent() !== false;
+                if (usePlaintextTransport) context.encryption?.removeMachineEncryption(context.machineId);
+                let machineEncryption = null;
+                if (!usePlaintextTransport) {
+                    if (!context.encryption) {
+                        throw new Error(`Machine encryption not found for ${context.machineId}`);
+                    }
+                    await timeoutBudget.runWithinTimeout(
+                        'scoped',
+                        async () => {
+                            await context.encryption!.initializeMachines(new Map([[
+                                context.machineId,
+                                machineTransport.mode === 'e2ee'
+                                    ? machineTransport.dataKey
+                                    : null,
+                        ]]), undefined, { isMachineCurrent: () => !socketLifetime.finished && isMachineCurrent() });
+                            return undefined;
+                        },
+                    );
+                    machineEncryption = context.encryption.getMachineEncryption(context.machineId);
+                    if (!machineEncryption || !isMachineCurrent()) {
+                        throw new Error(`Machine encryption not found for ${context.machineId}`);
+                    }
+                }
+                throwIfMachineRpcAborted(params.method, params.signal);
+                return { machineTransport, isMachineCurrent, usePlaintextTransport, requestPayload, machineEncryption };
+            })();
+            // Both preparations are required, but either can definitively fail.
+            // Observe that failure now, not after an unrelated sibling reaches
+            // the setup deadline and replaces its real transport cause.
+            const [socket, { machineTransport, isMachineCurrent, usePlaintextTransport, requestPayload, machineEncryption }] =
+                await Promise.race([Promise.all([socketRead, machinePreparation]), socketDisconnected]);
+            socketLifetime.detachDisconnect?.();
+            socketLifetime.detachDisconnect = undefined;
             throwIfMachineRpcAborted(params.method, params.signal);
+            // From this point the RPC cancellation/ACK owner retains custody.
+            // A later caller abort must not release its pooled socket early.
+            setupCancellation.dispose();
             return await runAdmittedMachineRpcRead({
                 admission: params.readAdmission,
                 signal: params.signal,
