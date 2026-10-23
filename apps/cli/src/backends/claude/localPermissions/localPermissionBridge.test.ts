@@ -11,6 +11,37 @@ import {
 } from '@happier-dev/agents';
 
 describe('ClaudeLocalPermissionBridge', () => {
+  it('keeps a duplicated hook live until its last transport waiter disconnects', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('duplicated-hook-disconnect');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: null });
+    bridge.activate();
+    const firstTransport = new AbortController();
+    const secondTransport = new AbortController();
+    const data = {
+      hook_event_name: 'PermissionRequest', tool_name: 'Bash',
+      tool_input: { command: 'pwd' }, tool_use_id: 'duplicated-hook-disconnect',
+    };
+    const first = bridge.handlePermissionHook(data, { signal: firstTransport.signal });
+    const second = bridge.handlePermissionHook(data, { signal: secondTransport.signal });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      firstTransport.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(first).resolves.toMatchObject({ continue: true });
+      expect(client.agentState.requests['duplicated-hook-disconnect']).toBeDefined();
+      expect(client.agentState.completedRequests['duplicated-hook-disconnect']).toBeUndefined();
+
+      secondTransport.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toMatchObject({ continue: true });
+      expect(client.agentState.requests['duplicated-hook-disconnect']).toBeUndefined();
+      expect(client.agentState.completedRequests['duplicated-hook-disconnect']).toMatchObject({ status: 'canceled' });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
   it('disposes a live hook after durable cancellation admission while the acknowledgement transport is offline', async () => {
     const { session, client } = createPermissionHandlerSessionStub('local-dispose-offline');
     const bridge = new ClaudeLocalPermissionBridge(session);
