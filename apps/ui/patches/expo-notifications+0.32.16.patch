@@ -1,0 +1,27 @@
+diff --git a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
+--- a/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
++++ b/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoHandlingDelegate.kt
+@@ -138,14 +138,18 @@
+   }
+ 
+   override fun handleNotificationResponse(notificationResponse: NotificationResponse) {
+-    if (!isAppInForeground()) {
+-      // do not run in foreground for better alignment with iOS
+-      // iOS doesn't run background tasks for notification responses at all
+-      runTaskManagerTasks(context.applicationContext, NotificationSerializer.toBundle(notificationResponse))
+-    }
+     if (notificationResponse.action.opensAppToForeground()) {
+       openAppToForeground(context, notificationResponse)
+     }
++
++    // HAPPIER PATCH: Backport the dispatch correction from expo/expo#43245.
++    // The default tap opens the app; starting a headless instance as well can race
++    // with foreground TaskManager ownership. Keep custom action task delivery.
++    // Remove when the installed Expo Notifications includes the upstream fix.
++    if (!isAppInForeground() && notificationResponse.actionIdentifier != NotificationResponse.DEFAULT_ACTION_IDENTIFIER) {
++      runTaskManagerTasks(context.applicationContext, NotificationSerializer.toBundle(notificationResponse))
++    }
++
+     // NOTE the listeners are not set up when the app is killed
+     // and is launched in response to tapping a notification button
+     // this code is a noop in that case

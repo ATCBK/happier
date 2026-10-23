@@ -638,6 +638,15 @@ removed when the installed SDK includes the upstream fix, as SDK 55 in the 0.3
 line already does. It shares this PR's new native-runtime requirement and cannot
 be delivered to an older binary by OTA alone.
 
+The SDK 54 `expo-notifications` 0.32.16 patch also backports the dispatch change
+from [Expo's notification-startup fix](https://github.com/expo/expo/pull/43245).
+An ordinary notification tap uses foreground startup without starting a second
+headless instance. Foreground-opening custom actions open the app before their
+existing task dispatch; background Allow and Deny delivery is retained. That
+module is also selected for Android source compilation and checked by the same
+postinstall verifier. SDK 55 already includes this correction, so the 0.3 line
+needs neither predecessor patch nor its source-build overrides.
+
 ## Migration history
 
 Migration source has a stricter authoring boundary than ordinary internal code:

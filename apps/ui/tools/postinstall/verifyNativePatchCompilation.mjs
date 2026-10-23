@@ -20,10 +20,10 @@ import path from 'node:path';
  * self-heal on the next prebuild — they warn loudly rather than blocking an install
  * (this checkout is shared, and a failed `yarn install` would block unrelated work).
  *
- * Expo TaskManager 14.0.9 also ships a prebuilt Android publication. Its Android
- * timer backport must compile from source through package.json's autolinking
- * buildFromSource setting, including its loader Gradle project dependency;
- * patch application alone cannot establish that.
+ * Expo TaskManager 14.0.9 and Notifications 0.32.16 also ship prebuilt Android
+ * publications. Their native backports must compile from source through
+ * package.json's autolinking buildFromSource setting, including TaskManager's
+ * loader Gradle project dependency; patch application alone cannot establish that.
  */
 
 const IOS_IMPLEMENTATION_EXTENSIONS = new Set(['.m', '.mm', '.swift']);
@@ -32,6 +32,7 @@ const SHARED_IMPLEMENTATION_EXTENSIONS = new Set(['.c', '.cc', '.cpp']);
 
 const REACT_NATIVE_CORE_PREFIX = 'node_modules/react-native/';
 const TASK_MANAGER_ANDROID_PREFIX = 'node_modules/expo-task-manager/android/';
+const NOTIFICATIONS_ANDROID_PREFIX = 'node_modules/expo-notifications/android/';
 
 function readPatchTargets(patchContents) {
     const targets = [];
@@ -84,9 +85,9 @@ export function verifyNativePatchCompilation({ uiDir }) {
     const warnings = [];
 
     const patchTargets = collectPatchTargets(path.join(uiDir, 'patches'));
-    const taskManagerTargets = patchTargets.filter((target) => target.startsWith(TASK_MANAGER_ANDROID_PREFIX)
+    const expoAndroidTargets = patchTargets.filter((target) => (target.startsWith(TASK_MANAGER_ANDROID_PREFIX) || target.startsWith(NOTIFICATIONS_ANDROID_PREFIX))
         && (ANDROID_IMPLEMENTATION_EXTENSIONS.has(path.extname(target)) || SHARED_IMPLEMENTATION_EXTENSIONS.has(path.extname(target))));
-    if (taskManagerTargets.length > 0) {
+    if (expoAndroidTargets.length > 0) {
         let packageJson = {};
         try {
             packageJson = JSON.parse(fs.readFileSync(path.join(uiDir, 'package.json'), 'utf8'));
@@ -94,8 +95,14 @@ export function verifyNativePatchCompilation({ uiDir }) {
             // Missing or invalid configuration cannot force source compilation.
         }
         const configuredProjects = packageJson?.expo?.autolinking?.android?.buildFromSource;
-        // TaskManager 14.0.9's android/build.gradle depends on this loader project.
-        const requiredProjects = ['expo-task-manager', 'unimodules-app-loader'];
+        const requiredProjects = [];
+        if (expoAndroidTargets.some((target) => target.startsWith(TASK_MANAGER_ANDROID_PREFIX))) {
+            // TaskManager 14.0.9's android/build.gradle depends on this loader project.
+            requiredProjects.push('expo-task-manager', 'unimodules-app-loader');
+        }
+        if (expoAndroidTargets.some((target) => target.startsWith(NOTIFICATIONS_ANDROID_PREFIX))) {
+            requiredProjects.push('expo-notifications');
+        }
         // Expo's settings plugin uses Regex.matches(project.name), not a substring match.
         const missingProjects = requiredProjects.filter((project) => !(Array.isArray(configuredProjects) && configuredProjects.some((pattern) => {
             if (typeof pattern !== 'string') return false;
@@ -107,10 +114,10 @@ export function verifyNativePatchCompilation({ uiDir }) {
         })));
         if (missingProjects.length > 0) {
             errors.push(
-                'patches/ edits Expo TaskManager Android implementation files, but package.json does not select\n'
+                'patches/ edits Expo Android implementation files, but package.json does not select\n'
                 + `${missingProjects.join(', ')} in expo.autolinking.android.buildFromSource.\n`
-                + 'The patched module and its loader project dependency must compile from source instead of Maven publications.\n'
-                + `Patched implementation files:\n${formatTargets(taskManagerTargets)}`,
+                + 'Patched modules and their required Gradle project dependencies must compile from source instead of Maven publications.\n'
+                + `Patched implementation files:\n${formatTargets(expoAndroidTargets)}`,
             );
         }
     }
