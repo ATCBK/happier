@@ -309,8 +309,8 @@ describe('resolveUsagePageAggregation', () => {
     const after = { ...structuredClone(value), insights: { ...insights, activeDays: 2 } };
     let visits = 0;
     for (const row of after.contributions!) {
-      const id = row.id;
-      Object.defineProperty(row, 'id', { enumerable: true, get() { visits++; return id; } });
+      const observedAtMs = row.observedAtMs;
+      Object.defineProperty(row, 'observedAtMs', { enumerable: true, get() { visits++; return observedAtMs; } });
     }
     const previous = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: before, status: 'available' }] });
     expect(retainUsageQueryResultReferences({ ...previous, results: [...previous.results] }, previous)).toBe(previous);
@@ -320,10 +320,56 @@ describe('resolveUsagePageAggregation', () => {
     expect(result.results[0]!.accounting!.contributions).toBe(previous.results[0]!.accounting!.contributions);
     expect(visits).toBeLessThanOrEqual(after.contributions!.length);
     visits = 0;
-    const progress = retainUsageQueryResultReferences({ ...current,
-      results: current.results.map(slice => ({ ...slice, pending: true })) }, result);
+    const progress = retainUsageQueryResultReferences({ ...result,
+      results: result.results.map(slice => ({ ...slice, pending: true })) }, result);
     expect(progress.results[0]!.accounting).toBe(result.results[0]!.accounting);
     expect(visits, 'independent source progress must not revisit the already reconciled accounting population').toBe(0);
+  });
+  it('retains unaffected contribution identities when one admitted fact changes under the same ID', () => {
+    const query = normalizeUsageQuery({ period: { relative: 'all' }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: Array.from({ length: 3600 }, (_, index) => ({
+      id: String(index), observedAtMs: 150, sessionId: null, turnId: null, agentId: null, modelId: null,
+      machineId: null, projectKey: null, workspaceId: null, source: null, tokens, cost: accounting.totals.cost })) });
+    const previous = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }] });
+    let unchangedReads = 0;
+    for (const row of value.contributions!.slice(0, -1)) {
+      const cost = row.cost;
+      Object.defineProperty(row, 'cost', { enumerable: true, get() { unchangedReads++; return cost; } });
+    }
+    const last = value.contributions!.at(-1)!;
+    const changed = { ...last, observedAtMs: 151 };
+    const current = { ...previous, results: previous.results.map(slice => ({ ...slice,
+      accounting: { ...value, contributions: [...value.contributions!.slice(0, -1), changed] } })) };
+    const after = retainUsageQueryResultReferences(current, previous).results[0]!.accounting!;
+    expect(after.contributions!.slice(0, -1).every((row, index) => row === value.contributions![index])).toBe(true);
+    expect(after.contributions!.at(-1)).toBe(changed);
+    expect(after.contributions!.at(-1)!.observedAtMs).toBe(151);
+    expect(unchangedReads, 'a changed contribution must not deep-walk unaffected admitted rows').toBe(0);
+  });
+  it('admits stable accounting references in the producer snapshot before independent publications', () => {
+    const query = normalizeUsageQuery({ period: { relative: 'all' }, includeSessionEvidence: false,
+      includeWorkEvidence: false, includeActivity: false, includeModelTimeline: false });
+    const before = UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
+      priceCatalog: bundledUsageModelPriceCatalog,
+      contributions: Array.from({ length: 3600 }, (_, index) => ({ id: String(index), observedAtMs: 150,
+        sessionId: null, turnId: null, agentId: null, modelId: null, machineId: null, projectKey: null,
+        workspaceId: null, source: null, tokens, tokenCategories: tokens, cost: accounting.totals.cost })) });
+    const baseline = projectUsageAccountingSnapshotPrices({ query, value: before, status: 'available' }, undefined);
+    const previous = baseline.priceProjection!.value;
+    const input = structuredClone(before);
+    const admitted = projectUsageAccountingSnapshotPrices({ query, value: input, status: 'available' }, undefined, undefined, previous);
+    expect(admitted.priceProjection!.value).toBe(previous);
+    let reads = 0;
+    for (const row of admitted.priceProjection!.value.contributions!) {
+      const id = row.id;
+      Object.defineProperty(row, 'id', { enumerable: true, get() { reads++; return id; } });
+    }
+    for (let revision = 0; revision < 12; revision++) {
+      const next = projectUsageAccountingSnapshotPrices(admitted, undefined, undefined, previous);
+      expect(next).toBe(admitted);
+      expect(next.priceProjection!.value.contributions).toBe(previous.contributions);
+    }
+    expect(reads, 'unrelated publications must not inspect already admitted accounting rows').toBe(0);
   });
   it('reuses snapshot pricing only for the same response, tariffs and cost basis', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });

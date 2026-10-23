@@ -192,15 +192,29 @@ function retainUsageMembers<T extends object>(value: T, previous: T, reconciled:
     Object.prototype.hasOwnProperty.call(previous, key) && result[key] === previous[key]) ? previous : result;
 }
 
-// Admitted accounting is immutable. Independent quota/evidence publications
-// repeatedly reconcile the same response against its already accepted result;
-// do not walk the complete contribution history again for each publication.
-const accountingReferenceReconciliations = new WeakMap<UsageAnalyticsQueryResponse, {
-  previous: UsageAnalyticsQueryResponse; value: UsageAnalyticsQueryResponse;
-}>();
 const accountingSourceLocationProjections = new WeakMap<UsageAnalyticsQueryResponse, {
   locations: UsagePageAggregationInput['sourceLocations']; value: UsageAnalyticsQueryResponse;
 }>();
+
+function retainAccountingReferences(value: UsageAnalyticsQueryResponse | undefined,
+  previous: UsageAnalyticsQueryResponse | undefined): UsageAnalyticsQueryResponse | undefined {
+  if (!value || !previous || value === previous) return value;
+  if (value.priceCatalog && previous.priceCatalog && value.priceCatalog !== previous.priceCatalog) {
+    value = { ...value, priceCatalog: retainUsageMembers(value.priceCatalog, previous.priceCatalog) };
+  }
+  if (value.contributions && previous.contributions && value.contributions !== previous.contributions) {
+    // IDs locate candidates, not immutable facts: corrections can retain an ID.
+    const prior = new Map(previous.contributions.map(row => [row.id, row]));
+    const rows = value.contributions.map(row => {
+      const retained = prior.get(row.id);
+      return retained && (row === retained || sameStrictJsonValue(row, retained)) ? retained : row;
+    });
+    const contributions = rows.length === previous.contributions.length
+      && rows.every((row, index) => row === previous.contributions![index]) ? previous.contributions : rows;
+    value = { ...value, contributions };
+  }
+  return retainUsageMembers(value, previous, ['priceCatalog', 'contributions']);
+}
 
 /** Reuse semantically unchanged validated slices from the caller's same-authority prior value. */
 export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
@@ -208,46 +222,34 @@ export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
   if (!previous || current === previous) return current;
   const prior = new Map(previous.results.map(slice => [slice.key, slice]));
   const original = new Map(settled?.results.map(slice => [slice.key, slice]));
-  const retainAccounting = (value: UsageAnalyticsQueryResponse | undefined, retained: UsageAnalyticsQueryResponse | undefined) => {
-    if (!value || !retained || value === retained) return value;
-    const input = value;
-    const known = accountingReferenceReconciliations.get(input);
-    if (known && (known.previous === retained || known.value === retained)) return known.value;
-    // New accounting facts do not replace unchanged tariffs. Keeping the
-    // admitted catalog also lets prior/current UI projections share its model
-    // dictionaries instead of retaining a full clone on every refresh.
-    if (value.priceCatalog && retained.priceCatalog && value.priceCatalog !== retained.priceCatalog) {
-      value = { ...value, priceCatalog: retainUsageMembers(value.priceCatalog, retained.priceCatalog) };
-    }
-    const reconciled = retainUsageMembers(value, retained, ['priceCatalog']);
-    accountingReferenceReconciliations.set(input, { previous: retained, value: reconciled });
-    return reconciled;
-  };
   const results = current.results.map(slice => {
     const retained = prior.get(slice.key);
     if (!retained || slice === retained) return slice;
     // Source progress replaces the slice, not its unchanged accounting. Mounted
     // consumers key their existing price/ranking projections by these facts.
     let reconciled = slice;
-    const accounting = retainAccounting(slice.accounting, retained.accounting);
+    const accounting = retainAccountingReferences(slice.accounting, retained.accounting);
     if (accounting !== slice.accounting) {
       reconciled = { ...reconciled, accounting };
     }
     if (slice.comparison?.accounting && retained.comparison?.accounting
       && getUsageQueryKey(slice.comparison.query) === getUsageQueryKey(retained.comparison.query)) {
-      const accounting = retainAccounting(slice.comparison.accounting, retained.comparison.accounting);
+      const accounting = retainAccountingReferences(slice.comparison.accounting, retained.comparison.accounting);
       reconciled = { ...reconciled, comparison: retainUsageMembers({ ...slice.comparison, accounting }, retained.comparison, ['accounting']) };
     }
     // A source revision also leaves the other admitted projections unchanged.
     // Keep their references for selectors and the Resource's byte projection.
     const result = retainUsageMembers(reconciled, retained, ['accounting', ...(slice.comparison?.accounting && retained.comparison?.accounting
       && getUsageQueryKey(slice.comparison.query) === getUsageQueryKey(retained.comparison.query) ? ['comparison' as const] : [])]);
-    // A source can return to its settled state after a pending revision. Only
-    // a changed slice needs that original identity restored; re-reconciling an
-    // unchanged current slice against the baseline would replace equal child
-    // references and force its identical transport bytes to be hashed again.
     const baseline = original.get(slice.key);
-    return result !== retained && baseline && sameStrictJsonValue(result, baseline) ? baseline : result;
+    if (!baseline || result === retained) return result;
+    // A changed sibling prevents whole-Resource digest reuse. Restore this
+    // slice's settled identity from canonical accounting references and its
+    // other members, never a recursive whole-slice comparison.
+    const comparison = result.comparison && baseline.comparison
+      ? retainUsageMembers(result.comparison, baseline.comparison, ['accounting']) : result.comparison;
+    return retainUsageMembers(comparison === result.comparison ? result : { ...result, comparison }, baseline,
+      ['accounting', 'comparison']);
   });
   if (results.length === previous.results.length
     && results.every((slice, index) => slice === previous.results[index])) return previous;
@@ -274,13 +276,17 @@ export type UsageAccountingSourceSnapshot = Readonly<{
   agentCalendarAccounting?: UsageAgentAccountingCalendar;
 }>;
 
-/** Reconcile one retained accounting snapshot at its existing owner, before independent source publications. */
+/** Admit prices and stable references once in the existing read snapshot, before source publications. */
 export function projectUsageAccountingSnapshotPrices(snapshot: UsageAccountingSourceSnapshot,
   overrides: UsageModelPriceOverridesV1 | undefined,
-  siblings?: Iterable<UsageAccountingSourceSnapshot>): UsageAccountingSourceSnapshot {
+  siblings?: Iterable<UsageAccountingSourceSnapshot>,
+  previous?: UsageAnalyticsQueryResponse): UsageAccountingSourceSnapshot {
   const value = snapshot.value;
-  if (!value || !value.priceCatalog && overrides === undefined) return snapshot.priceProjection
-    ? { ...snapshot, priceProjection: undefined } : snapshot;
+  if (!value) return snapshot.priceProjection ? { ...snapshot, priceProjection: undefined } : snapshot;
+  if (!value.priceCatalog && overrides === undefined) {
+    const admitted = retainAccountingReferences(value, previous);
+    return admitted === value && !snapshot.priceProjection ? snapshot : { ...snapshot, value: admitted, priceProjection: undefined };
+  }
   const retained = snapshot.priceProjection;
   if (retained?.input === value && retained.costBasis === snapshot.query.costBasis && sameStrictJsonValue(retained.overrides, overrides)) return snapshot;
   // Evidence flags can share one admitted accounting response. Reuse that
@@ -289,10 +295,13 @@ export function projectUsageAccountingSnapshotPrices(snapshot: UsageAccountingSo
   for (const sibling of siblings ?? []) {
     const projection = sibling.priceProjection;
     if (projection?.input === value && projection.costBasis === snapshot.query.costBasis
-      && sameStrictJsonValue(projection.overrides, overrides)) return { ...snapshot, priceProjection: projection };
+      && sameStrictJsonValue(projection.overrides, overrides)) {
+      const admitted = retainAccountingReferences(projection.value, previous)!;
+      return { ...snapshot, priceProjection: admitted === projection.value ? projection : { ...projection, value: admitted } };
+    }
   }
   return { ...snapshot, priceProjection: { input: value, overrides, costBasis: snapshot.query.costBasis,
-    value: repriceUsageAnalyticsResponse(value, value.priceCatalog, overrides, snapshot.query.costBasis) } };
+    value: retainAccountingReferences(repriceUsageAnalyticsResponse(value, value.priceCatalog, overrides, snapshot.query.costBasis), previous)! } };
 }
 
 /** Carry the admitted accounting reduction through this read's independent source publications. */
