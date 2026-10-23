@@ -22,6 +22,17 @@ describe('deriveNewAgentRequests', () => {
     ]);
   });
 
+  it.each(['turn-a', undefined])('announces a same-id request when its next turn differs from %s', (previousTurn) => {
+    const request = { tool: 'Bash', arguments: { command: 'second request' }, turnId: 'turn-b' };
+    const previous = { same: { ...request, turnId: previousTurn } };
+    expect(deriveNewAgentRequests(previous, { same: request })).toEqual([
+      { requestId: 'same', turnId: 'turn-b', requestKind: 'permission', toolName: 'Bash',
+        toolArgs: request.arguments },
+    ]);
+    expect(deriveNewAgentRequests({ same: request }, { same: { ...request, arguments: { command: 'refreshed' } } })).toEqual([]);
+    expect(deriveNewAgentRequests({ same: request }, { same: { ...request, turnId: undefined } })).toEqual([]);
+  });
+
   it('ignores requests with non-string tool names', () => {
     const prev = {};
     const next = {
