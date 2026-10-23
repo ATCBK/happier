@@ -2728,15 +2728,35 @@ Those interactive-only operations remain real user features but are omitted from
 PAT/public-SDK and host-stamped plugin catalogs whose principals cannot satisfy
 `present_user`.
 
-The Action-owned command roots — `teams`, `identity`, `credentials`, `secrets`,
-and `workflow` — are registered in `commandRegistry.ts` alongside the static,
-Agent, and trusted-plugin roots, and `ACTION_CLI_ROOT_HELP` supplies their
-`happier --help` lines. Root help, nested `--help`, completion, and dispatch all
-read that one registration plus the compiled descriptors, so none of them can
-disagree about whether a family exists: no valid command sits behind a root the
-user has to guess. Trusted externally installed and bundled plugin commands use
-the same Action-derived field compiler and host authority; neither receives a
-private parser or capability path.
+In 0.3 development source, `cli/commandDescriptors.ts` owns static command
+surfaces and their lazy handler references. The bundled-plugin generator
+projects Action paths and bundled Agent/plugin command metadata from the same
+canonical declarations into its data-only locator module. Root registration,
+help and completion share the admission/collision owners; command execution
+loads the implementation and Action field compiler only when needed.
+`ACTION_CLI_ROOT_HELP` supplies the friendly Action-family help lines. Trusted
+externally installed and bundled plugin commands retain the same Action-derived
+field compiler and host authority, not a private parser or capability path.
+
+Exact root `--version`/`-v` returns the invoked CLI's version without loading
+configuration, credentials, schemas or command dispatch. Exact `--help`/`-h`
+renders the shared static/bundled descriptors without loading command
+implementations or executable plugins. With installed plugins, help reads the
+current committed installation catalog and its already-admitted manifests through
+the canonical installed-registry reader. It checks storage framing and revision
+references, without rescanning source, revalidating whole manifests or activating
+plugins. Missing admitted manifests contribute no executable-looking help entries;
+the installation identity and unavailable diagnostic remain available to listings.
+This is the existing admitted state, not a help cache or second stored projection.
+Command invocation and activation retain their full canonical validation,
+approval, source-custody and currentness checks.
+Prefix options and real commands continue through normal bootstrap and dispatch.
+Manager-family help and aliases use the same descriptor-owned help references,
+including after prefix normalization in dispatch. Dedicated help text stays with
+its command; Action help consumes generated models from the canonical field
+compiler. Released JSON envelope spellings are pure presentation metadata shared
+by execution and the help publisher, so rendering help does not load presentation
+callbacks, executable catalogs or Agent runtimes.
 
 An ordinary `hap_v1` API Token may cross the existing one-shot child/tmux
 continuation. A compound `hapc_v1` credential contains process-local wrapping
