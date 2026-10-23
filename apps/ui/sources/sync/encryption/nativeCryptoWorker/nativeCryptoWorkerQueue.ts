@@ -6,7 +6,7 @@ import {
     recordNativeCryptoWorkerQueueDepth,
     recordNativeCryptoWorkerQueueWait,
 } from './nativeCryptoWorkerTelemetry';
-import type { CryptoWorkerScope, NativeCryptoWorkerOperation } from './types';
+import type { CryptoWorkerScope, CryptoWorkerWorkClass, NativeCryptoWorkerOperation } from './types';
 
 type QueueEntry<T, R> = {
     item: T;
@@ -46,6 +46,7 @@ export type RunNativeCryptoWorkerQueuedBatchOptions<T, R> = Readonly<{
     owner: object;
     operation: NativeCryptoWorkerOperation;
     scope: CryptoWorkerScope;
+    workClass?: CryptoWorkerWorkClass;
     maxBatchSize: number;
     items: readonly T[];
     telemetry?: SyncPerformanceTelemetry;
@@ -495,6 +496,7 @@ export function createNativeCryptoWorkerBatchQueue<T, R>(
 function queueKeyFor(options: RunNativeCryptoWorkerQueuedBatchOptions<unknown, unknown>): string {
     return [
         options.operation,
+        options.workClass ?? 'bulk',
         options.scope.accountId,
         options.scope.serverId ?? '',
         String(options.scope.generation),

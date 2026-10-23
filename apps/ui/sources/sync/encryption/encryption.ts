@@ -19,6 +19,7 @@ import sodium, { type LibsodiumKeyPair } from '@/encryption/libsodium.lib';
 import { decryptBox, encryptBox } from "@/encryption/libsodium";
 import { randomUUID } from '@/platform/randomUUID';
 import { getRandomBytes } from '@/platform/cryptoRandom';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { ENCRYPTED_DATA_KEY_V1_BYTES, openEncryptedDataKeyEnvelopeV1, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { decodePlainMachineStoredContent, isMachineDataEncryptionKeyTransferableV1, resolvePublishedMachineDataEncryptionKeyV1 } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -50,6 +51,7 @@ import { probeNativeCryptoWorkerCapabilities } from './nativeCryptoWorker/probeN
 import {
     NATIVE_CRYPTO_WORKER_OPERATION,
     type CryptoWorkerScope,
+    type CryptoWorkerWorkClass,
     type NativeCryptoWorker,
     type NativeCryptoWorkerCapability,
 } from './nativeCryptoWorker/types';
@@ -59,6 +61,8 @@ export type EncryptionScopeInput = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
     shouldContinue?: () => boolean;
+    /** Explicit control demand must not wait for inventory envelope hydration. */
+    workClass?: CryptoWorkerWorkClass;
 }>;
 
 export type SessionEncryptionScopeInput = EncryptionScopeInput & Readonly<{
@@ -226,6 +230,8 @@ export class Encryption {
         scheduled: boolean;
     }>();
     private dataKeyOpeningRecipient: Uint8Array;
+    private readonly accountMaterialLifetime = new AbortController();
+    private accountMaterialCurrentness: () => boolean = () => true;
     private cache: EncryptionCache;
     private aesBatchConcurrencyLimit = DEFAULT_AES_BATCH_CONCURRENCY_LIMIT;
     // Per-instance worker object. This is the cross-account fence: the queue registry
@@ -268,6 +274,29 @@ export class Encryption {
 
     configureAesBatchConcurrencyLimit(limit: number): void {
         this.aesBatchConcurrencyLimit = normalizeAesBatchConcurrencyLimit(limit);
+    }
+
+    /** The authenticated Home owner supplies custody, not a key-presence verdict. */
+    bindAccountMaterialCurrentness(isCurrent: () => boolean): void {
+        this.accountMaterialCurrentness = isCurrent;
+    }
+
+    private isAccountMaterialCurrent(): boolean {
+        return !this.accountMaterialLifetime.signal.aborted && this.accountMaterialCurrentness();
+    }
+
+    /** Credential withdrawal retires existing readers and pending pure openings together. */
+    retireAccountMaterial(): void {
+        this.accountMaterialLifetime.abort();
+        this.dataKeyOpenings.clear();
+        this.machineEncryptionContexts.clear();
+        this.machineEncryptionOpenings.clear();
+        this.machineEncryptions.clear();
+        this.machineKeyFingerprints.clear();
+        this.sessionEncryptions.clear();
+        this.sessionKeyFingerprints.clear();
+        this.sessionEncryptionScopes.clear();
+        this.cache.clearAll();
     }
 
     configureNativeCryptoWorker(params: Readonly<{
@@ -379,6 +408,7 @@ export class Encryption {
     }
 
     isCurrentNativeCryptoWorkerScope(scope: CryptoWorkerScope): boolean {
+        if (!this.isAccountMaterialCurrent()) return false;
         const current = this.getCurrentNativeCryptoWorkerScope({
             accountId: scope.accountId,
             serverId: scope.serverId,
@@ -524,7 +554,7 @@ export class Encryption {
      * Returns null if not initialized (should never happen in normal flow)
      */
     getSessionEncryption(sessionId: string): SessionEncryption | null {
-        return this.sessionEncryptions.get(sessionId) || null;
+        return this.isAccountMaterialCurrent() ? this.sessionEncryptions.get(sessionId) || null : null;
     }
 
     /**
@@ -561,7 +591,7 @@ export class Encryption {
         this.removeMachineEncryption(machineId);
         const context: MachineEncryptionContext = {
             ...input,
-            isCurrent: () => this.machineEncryptionContexts.get(machineId) === context,
+            isCurrent: () => this.isAccountMaterialCurrent() && this.machineEncryptionContexts.get(machineId) === context,
         };
         this.machineEncryptionContexts.set(machineId, context);
         return context;
@@ -613,6 +643,7 @@ export class Encryption {
         unavailableMachineIds?: ReadonlySet<string>,
         options: Readonly<{ isMachineCurrent?: (machineId: string) => boolean }> = {},
     ): Promise<void> {
+        if (!this.isAccountMaterialCurrent()) return;
         // Failed present envelopes are unavailable, never the null legacy-key
         // compatibility input. Retire their previous ciphers before any await.
         for (const machineId of unavailableMachineIds ?? []) {
@@ -636,7 +667,7 @@ export class Encryption {
 
             // Create appropriate encryptor based on data key
             const encryptor = await this.openEncryption(dataKey);
-            if (this.machineEncryptionOpenings.get(machineId) !== opening
+            if (!this.isAccountMaterialCurrent() || this.machineEncryptionOpenings.get(machineId) !== opening
                 || options.isMachineCurrent?.(machineId) === false) continue;
 
             // Create and cache machine encryption
@@ -656,7 +687,7 @@ export class Encryption {
      * Returns null if not initialized (should never happen in normal flow)
      */
     getMachineEncryption(machineId: string): MachineEncryption | null {
-        return this.machineEncryptions.get(machineId) || null;
+        return this.isAccountMaterialCurrent() ? this.machineEncryptions.get(machineId) || null : null;
     }
 
     //
@@ -886,6 +917,13 @@ export class Encryption {
         // Nothing to open. Short-circuited before routing so an empty call is not
         // recorded as a routing decision it never made.
         if (encryptedValues.length === 0) return [];
+        const cancellation = mergeAbortSignals([scopeInput.signal, this.accountMaterialLifetime.signal]);
+        try {
+            return await this.runDataKeyEnvelopeBatch(encryptedValues, { ...scopeInput, signal: cancellation.signal });
+        } finally { cancellation.dispose(); }
+    }
+
+    private async runDataKeyEnvelopeBatch(encryptedValues: readonly string[], scopeInput: EncryptionScopeInput): Promise<Array<Uint8Array | null>> {
         return syncPerformanceTelemetry.measureAsync(
             'sync.encryption.account.decryptDataKey',
             { items: encryptedValues.length },
@@ -948,14 +986,19 @@ export class Encryption {
                                 telemetry: syncPerformanceTelemetry,
                                 telemetryEnabled: routing.telemetryEnabled,
                                 signal: dispatchSignal,
+                                workClass: scopeInput.workClass,
                                 dispatch: async (queuedItems, context) => {
-                                    if (refreshCancellation() || context.signal?.aborted === true) {
+                                    // A shared queue outlives its first borrower. The queue
+                                    // owns per-entry cancellation; dispatch only shares the
+                                    // Account generation and this actual batch's signal.
+                                    if (!this.isCurrentNativeCryptoWorkerScope(scope) || context.signal?.aborted === true) {
                                         return queuedItems.map(() => null);
                                     }
                                     const nativeResult = await this.nativeCryptoWorker.decryptDataKeyEnvelopeV1({
                                         scope,
                                         items: queuedItems,
                                         signal: context.signal,
+                                        workClass: scopeInput.workClass,
                                     });
                                     if (nativeResult.status !== 'ok') {
                                         throw new Error('native data-key envelope decrypt batch did not complete');

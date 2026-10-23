@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeBase64 } from '@/encryption/base64';
 import { decodeHex } from '@/encryption/hex';
 import { CRYPTO_GOLDEN_VECTORS } from '@happier-dev/protocol/crypto/cryptoGoldenVectors';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { Encryption } from '../encryption';
 import { createNativeCryptoWorker } from './nativeCryptoWorker.web';
+import { runNativeCryptoWorkerQueuedBatch } from './nativeCryptoWorkerQueue';
 import { NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON } from './types';
 
 vi.mock('react-native', async () => {
@@ -93,6 +95,7 @@ describe('web crypto worker through Encryption', () => {
             worker.onerror?.({ error: new Error('Test Worker retired'), preventDefault() {} } as ErrorEvent);
             worker.terminate();
         }
+        syncPerformanceTelemetry.configure({ enabled: false });
         vi.useRealTimers();
         vi.unstubAllGlobals();
     });
@@ -249,6 +252,157 @@ describe('web crypto worker through Encryption', () => {
         await expect(second.decryptEncryptionKey(firstEnvelope)).resolves.toBeNull();
         expect(TestWorker.instances).toHaveLength(1);
         expect(TestWorker.instances[0]!.terminated).toBe(false);
+    });
+
+    it('opens interactive work while the same owner has a held bulk batch and queued inventory', async () => {
+        const vector = CRYPTO_GOLDEN_VECTORS.encryptedDataKeyEnvelopeV1.directSecretKey;
+        const item = {
+            envelopeBase64: encodeBase64(decodeHex(vector.envelope.hex)),
+            recipientSecretKeyOrSeedBase64: encodeBase64(decodeHex(vector.recipientSecretKeyOrSeed.hex)),
+        };
+        const owner = {};
+        const worker = createNativeCryptoWorker();
+        const controller = new AbortController();
+        const run = (workClass: 'bulk' | 'interactive', items: readonly typeof item[]) =>
+            runNativeCryptoWorkerQueuedBatch({
+                owner, scope, operation: 'decryptDataKeyEnvelopeV1', maxBatchSize: 64,
+                workClass, items, signal: controller.signal,
+                dispatch: async (batch, context) => {
+                    const result = await worker.decryptDataKeyEnvelopeV1({
+                        scope, workClass, items: batch, signal: context.signal,
+                    });
+                    if (result.status !== 'ok') throw new Error('Worker request cancelled');
+                    return result.items;
+                },
+            });
+        TestWorker.hold = true;
+        vi.useFakeTimers();
+        let bulkSettled = false;
+        const bulk = run('bulk', Array.from({ length: 500 }, () => item))
+            .then(items => { bulkSettled = true; return { items }; }, error => { bulkSettled = true; return { error }; });
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(TestWorker.instances).toHaveLength(1);
+            const bulkWorker = TestWorker.instances[0]!;
+            expect(bulkWorker.requestBuffers).toHaveLength(128);
+            TestWorker.hold = false;
+            const interactive = run('interactive', [item]).then(items => ({ items }), error => ({ error }));
+            await vi.advanceTimersByTimeAsync(0);
+            // A different work class must reach the Worker boundary before any
+            // held bulk reply; this also catches sharing its owner-level queue.
+            expect(TestWorker.instances).toHaveLength(2);
+            await expect(interactive).resolves.toEqual({ items: [encodeBase64(decodeHex(vector.dataKey.hex))] });
+            expect(bulkSettled).toBe(false);
+            expect(bulkWorker.pendingReplies).toHaveLength(1);
+            await bulkWorker.pendingReplies.shift()!();
+            await expect(bulk).resolves.toEqual({
+                items: Array.from({ length: 500 }, () => encodeBase64(decodeHex(vector.dataKey.hex))),
+            });
+        } finally {
+            controller.abort();
+            await bulk;
+        }
+    });
+
+    it.each(['abort', 'error'] as const)('retires only the interactive transport after its %s', async (failure) => {
+        const vector = CRYPTO_GOLDEN_VECTORS.encryptedDataKeyEnvelopeV1.directSecretKey;
+        const items = [{
+            envelopeBase64: encodeBase64(decodeHex(vector.envelope.hex)),
+            recipientSecretKeyOrSeedBase64: encodeBase64(decodeHex(vector.recipientSecretKeyOrSeed.hex)),
+        }];
+        const expected = { status: 'ok', source: 'native', items: [encodeBase64(decodeHex(vector.dataKey.hex))] };
+        const bulkController = new AbortController();
+        const interactiveController = new AbortController();
+        TestWorker.hold = true;
+        vi.useFakeTimers();
+        const bulk = createNativeCryptoWorker().decryptDataKeyEnvelopeV1({ scope, items, signal: bulkController.signal });
+        const interactive = createNativeCryptoWorker().decryptDataKeyEnvelopeV1({
+            scope, items, workClass: 'interactive', signal: interactiveController.signal,
+        }).then(result => ({ result }), error => ({ error }));
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(TestWorker.instances).toHaveLength(2);
+            const [bulkWorker, interactiveWorker] = TestWorker.instances;
+            if (failure === 'abort') {
+                interactiveController.abort();
+                await expect(interactive).resolves.toEqual({ result: { status: 'cancelled', source: 'cancelled', items: [] } });
+            } else {
+                interactiveWorker!.onerror?.({ error: new Error('Interactive Worker failed'), preventDefault() {} } as ErrorEvent);
+                await expect(interactive).resolves.toEqual({ error: new Error('Interactive Worker failed') });
+            }
+            expect(interactiveWorker!.terminated).toBe(true);
+            expect(bulkWorker!.terminated).toBe(false);
+            TestWorker.hold = false;
+            await expect(createNativeCryptoWorker().decryptDataKeyEnvelopeV1({
+                scope: { ...scope, accountId: 'other-account' }, items, workClass: 'interactive',
+            })).resolves.toEqual(expected);
+            expect(TestWorker.instances).toHaveLength(3);
+            await bulkWorker!.pendingReplies.shift()!();
+            await expect(bulk).resolves.toEqual(expected);
+            await expect(createNativeCryptoWorker().decryptDataKeyEnvelopeV1({ scope, items, workClass: 'interactive' }))
+                .resolves.toEqual(expected);
+            expect(TestWorker.instances).toHaveLength(3);
+        } finally {
+            bulkController.abort();
+            interactiveController.abort();
+            await bulk;
+            await interactive;
+        }
+    });
+
+    it('measures class-local transport waiting separately from dispatch service', async () => {
+        const vector = CRYPTO_GOLDEN_VECTORS.encryptedDataKeyEnvelopeV1.directSecretKey;
+        const items = [{
+            envelopeBase64: encodeBase64(decodeHex(vector.envelope.hex)),
+            recipientSecretKeyOrSeedBase64: encodeBase64(decodeHex(vector.recipientSecretKeyOrSeed.hex)),
+        }];
+        const expected = { result: { status: 'ok', source: 'native', items: [encodeBase64(decodeHex(vector.dataKey.hex))] } };
+        const controller = new AbortController();
+        const worker = createNativeCryptoWorker();
+        vi.useFakeTimers();
+        let now = 0;
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+        syncPerformanceTelemetry.configure({ enabled: true });
+        syncPerformanceTelemetry.reset();
+        TestWorker.hold = true;
+        const run = (workClass: 'bulk' | 'interactive') => worker.decryptDataKeyEnvelopeV1({
+            scope, items, workClass, signal: controller.signal,
+        }).then(result => ({ result }), error => ({ error }));
+        const first = run('bulk');
+        const pending = [first];
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            now = 20;
+            const second = run('bulk');
+            const interactive = run('interactive');
+            pending.push(second, interactive);
+            await vi.advanceTimersByTimeAsync(0);
+            const [bulkWorker, interactiveWorker] = TestWorker.instances;
+            now = 50;
+            await interactiveWorker!.pendingReplies.shift()!();
+            await expect(interactive).resolves.toEqual(expected);
+            await bulkWorker!.pendingReplies.shift()!();
+            await expect(first).resolves.toEqual(expected);
+            await vi.advanceTimersByTimeAsync(0);
+            now = 60;
+            await bulkWorker!.pendingReplies.shift()!();
+            await expect(second).resolves.toEqual(expected);
+            const events = syncPerformanceTelemetry.snapshot().events;
+            expect(events.find(event => event.name === 'sync.crypto.worker.web.queueWaitMs')).toMatchObject({
+                count: 3, totalMs: 30, fields: { items: 3, interactive: 1 },
+            });
+            expect(events.find(event => event.name === 'sync.crypto.worker.web.serviceMs')).toMatchObject({
+                count: 3, totalMs: 90, fields: { items: 3, interactive: 1 },
+            });
+            expect(events.find(event => event.name === 'sync.crypto.worker.web.transportDepth')).toMatchObject({
+                fieldStats: { queued: { max: 1, last: 0 }, inFlight: { max: 1, last: 0 } },
+            });
+        } finally {
+            controller.abort();
+            await Promise.all(pending);
+            syncPerformanceTelemetry.configure({ enabled: false });
+            clock.mockRestore();
+        }
     });
 
     it.each(['error', 'messageerror'] as const)('replaces a Worker that reports %s while idle and ignores retired Worker events', async (eventKind) => {

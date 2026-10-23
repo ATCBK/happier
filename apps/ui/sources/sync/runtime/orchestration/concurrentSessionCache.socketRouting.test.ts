@@ -6,6 +6,7 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { resolveScopedAccountEncryption } from '@/sync/encryption/scopedAccountEncryption';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
@@ -19,6 +20,45 @@ const machines = () => h.storage.getState().machineListByServerId[h.homeB.id];
 const route = (serverId = h.homeB.id, remoteMachineId = 'machine-b') => ({ serverId, remoteMachineId });
 
 describe('concurrent session cache socket routing', () => {
+    it.each(['existing cipher', 'first cipher'] as const)(
+        'does not let a retained credential replace the current scoped Account owner (%s)', async initialMaterial => {
+            const original = initialMaterial === 'existing cipher'
+                ? { token: h.homeB.token, secret: encodeBase64(new Uint8Array(32).fill(41), 'base64url') }
+                : { token: h.homeB.token };
+            await h.network.addHome(h.homeB.serverUrl, h.homeB.accountId, {
+                credentials: original, encryptionMode: 'e2ee',
+            });
+            h.setResponder(async input => new URL(String(input)).pathname === '/v1/account/encryption/currentness'
+                ? Response.json({ mode: 'e2ee', version: 1, signingKeyFingerprint: null,
+                    contentKeyFingerprint: null, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } })
+                : null);
+            await h.start(); await h.ready();
+            // Hold the existing reconciliation timer at the OS clock boundary.
+            // The still-managed Home can receive page demand during rotation.
+            vi.useFakeTimers();
+            try {
+                const replacement = { token: h.homeB.token,
+                    secret: encodeBase64(new Uint8Array(32).fill(42), 'base64url') };
+                expect(await h.TokenStorage.setCredentialsForServerUrl(h.homeB.serverUrl,
+                    { serverId: h.homeB.id }, replacement)).toBe(true);
+                const current = await resolveScopedAccountEncryption({ serverId: h.homeB.id,
+                    serverUrl: h.homeB.serverUrl, credentials: replacement });
+                if (!current) throw new Error('Expected replacement Account material');
+                const captured = current.getCurrentEncryptionGenerationScope();
+                expect(current.isCurrentEncryptionGenerationScope(captured)).toBe(true);
+
+                // The old entry may fail closed, but must never register its old
+                // material again and retire the newly admitted Account owner.
+                await Promise.allSettled([h.fetchConcurrentSessionListQueryPage(h.homeB.id, {
+                    source: { kind: 'ordinary', path: '/v2/sessions', allowV1Fallback: false },
+                    membership: 'rowOnly', signal: new AbortController().signal,
+                })]);
+
+                expect(current.isCurrentEncryptionGenerationScope(captured)).toBe(true);
+            } finally { vi.useRealTimers(); }
+        },
+    );
+
     it('catches demanded Run activity up through the actual concurrent Home reconnect', async () => {
         const { subscribeExecutionRunActivity } = await import('@/sync/runtime/executionRuns/executionRunActivityBus');
         const activeActivity = vi.fn();

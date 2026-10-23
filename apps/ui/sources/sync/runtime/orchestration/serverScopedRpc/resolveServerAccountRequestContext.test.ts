@@ -7,6 +7,10 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { resolveServerAccountRequestContext, type ResolvedServerAccountRequestContext } from './resolveServerAccountRequestContext';
+import { resolveServerScopedContext } from './resolveServerScopedContext';
+import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
+import { encodeBase64 } from '@/encryption/base64';
+import { Encryption } from '@/sync/encryption/encryption';
 
 // The resolver statically reaches the real transport. Install its genuine SDK
 // boundary before that import and compile Sync outside a case-local IO budget.
@@ -41,6 +45,82 @@ async function resolve(params: Parameters<typeof resolveServerAccountRequestCont
 }
 
 describe('resolveServerAccountRequestContext', () => {
+  it('reuses opened material across both scoped readers with recaptured equal credentials', async () => {
+    const home = homes.homes.encrypted!;
+    const context = await resolve({ serverId: home.id, preferScoped: true });
+    if (context.scope !== 'scoped' || !context.encryption) throw new Error('Expected scoped material');
+    const worker = createFakeCryptoWorker();
+    let openings = 0;
+    context.encryption.configureNativeCryptoWorker({ worker: { ...worker,
+      decryptDataKeyEnvelopeV1: async request => {
+        openings += request.items.length;
+        return worker.decryptDataKeyEnvelopeV1(request);
+      },
+    }, routing: { mode: 'auto', minPayloadBytes: 0 } });
+    const key = new Uint8Array(32).fill(47);
+    const envelope = encodeBase64(await context.encryption.encryptEncryptionKey(key));
+    expect(await context.encryption.decryptEncryptionKey(envelope)).toEqual(key);
+    for (let index = 0; index < 8; index += 1) {
+      const next = index % 2 === 0
+        ? await resolve({ serverId: home.id, preferScoped: true })
+        : await resolveServerScopedContext({ serverId: home.id, machineId: 'warm-machine', forceScoped: true });
+      try {
+        if (next.scope !== 'scoped' || !next.encryption) throw new Error('Expected recaptured scoped material');
+        expect(next.credentials).not.toBe(context.credentials);
+        // Worker/SDK is the real boundary. Each fresh factory owner would otherwise
+        // take the unobserved reference path, so count every actual opening here.
+        if (!(next.encryption instanceof Encryption)) throw new Error('Expected canonical Account encryption owner');
+        next.encryption.configureNativeCryptoWorker({ worker: { ...worker,
+            decryptDataKeyEnvelopeV1: async request => {
+              openings += request.items.length;
+              return worker.decryptDataKeyEnvelopeV1(request);
+            },
+          }, routing: { mode: 'auto', minPayloadBytes: 0 } });
+        expect(await next.encryption.decryptEncryptionKey(envelope)).toEqual(key);
+      } finally { if (next.scope === 'scoped') await next.release?.(); }
+    }
+    expect(openings).toBe(1);
+  });
+
+  it.each(['replacement', 'original mutation', 'original-only mutation', 'sign out', 'plain replacement'] as const)(
+    'retires captured scoped material after %s without trusting an equal old recapture', async change => {
+      const home = homes.homes.encrypted!;
+      const original = await resolve({ serverId: home.id, preferScoped: true });
+      if (original.scope !== 'scoped' || !original.encryption || !original.credentials || !('secret' in original.credentials)) {
+        throw new Error('Expected exact legacy material');
+      }
+      const key = new Uint8Array(32).fill(49);
+      const envelope = encodeBase64(await original.encryption.encryptEncryptionKey(key));
+      expect(await original.encryption.decryptEncryptionKey(envelope)).toEqual(key);
+      const captured = original.encryption.getCurrentEncryptionGenerationScope();
+      if (change === 'replacement') {
+        await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+          token: encryptedCredentials.token, secret: Buffer.from(new Uint8Array(32).fill(51)).toString('base64url'),
+        });
+      } else if (change === 'plain replacement') {
+        await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+          token: encryptedCredentials.token,
+        });
+      } else if (change === 'sign out') {
+        await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+      } else {
+        // Storage still returns the old bytes. Mutation of the original custody
+        // object must nevertheless prevent reviving the retired owner's proof.
+        Object.assign(original.credentials, { secret: Buffer.from(new Uint8Array(32).fill(52)).toString('base64url') });
+      }
+      if (change === 'plain replacement') {
+        const next = await resolve({ serverId: home.id, preferScoped: true });
+        expect(next.scope === 'scoped' && next.encryption).toBeNull();
+      } else if (change !== 'sign out' && change !== 'original-only mutation') {
+        const next = await resolve({ serverId: home.id, preferScoped: true });
+        if (next.scope !== 'scoped' || !next.encryption) throw new Error('Expected replacement owner');
+        expect(await next.encryption.decryptEncryptionKey(envelope)).toEqual(change === 'replacement' ? null : key);
+      }
+      expect(original.encryption.isCurrentEncryptionGenerationScope(captured)).toBe(false);
+      expect(await original.encryption.decryptEncryptionKey(envelope)).toBeNull();
+    },
+  );
+
   it('returns the applied active scope when the target is omitted or uses its saved-profile alias', async () => {
     await expect(resolve({})).resolves.toEqual({ scope: 'active', timeoutMs: 30_000 });
     await expect(resolve({ serverId: homes.homes.focused!.profileId })).resolves.toEqual({ scope: 'active', timeoutMs: 30_000 });

@@ -77,7 +77,7 @@ export type ScopedServerRpcContext = Readonly<{
 export type ResolvedServerRpcContext = ActiveServerRpcContext | ScopedServerRpcContext;
 
 export type ScopedRpcEncryptionContext = Readonly<{
-    decryptEncryptionKey: (value: string) => Promise<Uint8Array | null>;
+    decryptEncryptionKey: Encryption['decryptEncryptionKey'];
     initializeMachines: Encryption['initializeMachines'];
     getMachineEncryption: (machineId: string) => ScopedMachineEncryption | null | undefined;
     captureMachineEncryptionContext: Encryption['captureMachineEncryptionContext'];

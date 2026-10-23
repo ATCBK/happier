@@ -143,6 +143,96 @@ it('retires a stalled Machine key opening when the scoped caller deadline expire
     }
 });
 
+it('issues a cold scoped cancel ahead of held bulk openings and never reopens its warm Machine key', async () => {
+    const { Encryption } = await import('@/sync/encryption/encryption');
+    const { installWebCryptoWorker } = await import('@/sync/encryption/nativeCryptoWorker/webCryptoWorkerRuntime');
+    const bulkEntered = createDeferred<void>();
+    const workers: OwnedWorker[] = [];
+    const held: Array<() => void> = [];
+    const opened: string[] = [];
+    let holding = true;
+    class OwnedWorker {
+        onmessage: ((event: MessageEvent) => void) | null = null;
+        onerror: ((event: ErrorEvent) => void) | null = null;
+        onmessageerror: (() => void) | null = null;
+        terminated = false;
+        constructor(_url: string | URL) { workers.push(this); }
+        postMessage(data: unknown, transfers: ArrayBuffer[]) {
+            const request: unknown = structuredClone(data, { transfer: transfers });
+            if (!Array.isArray(request)) throw new Error('Expected envelope batch');
+            for (const item of request) if (item?.envelope instanceof Uint8Array) opened.push(Buffer.from(item.envelope).toString('base64'));
+            const deliver = () => {
+                if (this.terminated) return;
+                const port = { onmessage: null as ((event: MessageEvent) => void) | null,
+                    postMessage: (value: unknown, buffers: ArrayBuffer[]) => {
+                        const response: unknown = structuredClone(value, { transfer: buffers });
+                        queueMicrotask(() => { if (!this.terminated) this.onmessage?.({ data: response } as MessageEvent); });
+                    } };
+                installWebCryptoWorker(port);
+                port.onmessage?.({ data: request } as MessageEvent);
+            };
+            if (holding) { held.push(deliver); bulkEntered.resolve(); }
+            else deliver();
+        }
+        terminate() { this.terminated = true; }
+    }
+    vi.stubGlobal('Worker', OwnedWorker);
+    const secret = new Uint8Array(32).fill(56), key = new Uint8Array(32).fill(57);
+    const bulkOwner = await Encryption.create(secret);
+    const envelope = Buffer.from(await bulkOwner.encryptEncryptionKey(key)).toString('base64');
+    await bulkOwner.initializeMachines(new Map([['cancel-bulk-machine', key]]));
+    const cipher = bulkOwner.getMachineEncryption('cancel-bulk-machine');
+    if (!cipher) throw new Error('Expected real Machine cipher');
+    const bulkEnvelopes = await Promise.all(Array.from({ length: 500 }, async (_, index) =>
+        Buffer.from(await bulkOwner.encryptEncryptionKey(new Uint8Array(32).fill(index % 255))).toString('base64')));
+    let received = 0, rows = 0;
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/read-batch') {
+            rows += 1;
+            response.end(serializeMachineReadFixture(request, { id: 'cancel-bulk-machine', dataEncryptionKey: envelope,
+                access: { custodian: { accountId: 'cancel-bulk-account', displayName: '' }, role: 'manage',
+                    resourceMode: 'e2ee', accessState: 'ready' } }));
+        } else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL,
+        async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            received += 1;
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'e2ee', cipher }, packet.params, packet.method);
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'e2ee', cipher }, { cancelled: true }, decoded.callId) });
+        }));
+    const bulk = bulkOwner.decryptEncryptionKeys(bulkEnvelopes);
+    let bulkFinished = false;
+    void bulk.then(() => { bulkFinished = true; }, () => { bulkFinished = true; });
+    try {
+        await bulkEntered.promise;
+        holding = false;
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'cancel-bulk-account' })).toString('base64url')}.signature`;
+        credentials.secret = Buffer.from(secret).toString('base64url');
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Cancel ahead of bulk' });
+        const request = { serverId: home.id, accountId: 'cancel-bulk-account', machineId: 'cancel-bulk-machine',
+            method: 'daemon.voiceInference.stt.stream.cancel', payload: {}, preferScoped: true, timeoutMs: 1_000 };
+        await expect(machineRpcWithServerScope(request)).resolves.toEqual({ cancelled: true });
+        expect(received).toBe(1);
+        expect(bulkFinished).toBe(false);
+        expect(opened.filter(value => value === envelope)).toHaveLength(1);
+        await expect(machineRpcWithServerScope(request)).resolves.toEqual({ cancelled: true });
+        expect(received).toBe(2);
+        expect(rows).toBe(2); // Fresh authority is still required for a warm opening.
+        expect(opened.filter(value => value === envelope)).toHaveLength(1);
+    } finally {
+        holding = false;
+        for (const deliver of held) deliver();
+        await bulk;
+        for (const worker of workers) worker.onerror?.({ error: new Error('Owned test Worker retired'), preventDefault() {} } as ErrorEvent);
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
+});
+
 it.each([false, true])('distinguishes held SCM setup boundaries from elapsed continuation time (clock stall: %s)', async stallContinuation => {
     const { Encryption } = await import('@/sync/encryption/encryption');
     const { ScmComparisonCaptureInputSchema, ScmComparisonCaptureOutputSchema } = await import('@happier-dev/protocol/scm');

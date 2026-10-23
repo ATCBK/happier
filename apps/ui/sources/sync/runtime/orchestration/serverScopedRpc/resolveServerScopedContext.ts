@@ -1,8 +1,5 @@
-import {
-    isTokenOnlyAuthCredentials,
-    TokenStorage,
-} from '@/auth/storage/tokenStorage';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { resolveScopedAccountEncryption } from '@/sync/encryption/scopedAccountEncryption';
 import {
     areServerProfileIdentifiersEquivalent,
     getServerProfileById,
@@ -65,6 +62,7 @@ export async function resolveServerScopedContext(params: Readonly<{
             ? {
             id: activeServerId,
             serverUrl: activeSnapshot.serverUrl,
+            canonicalServerUrl: activeSnapshot.serverUrl,
             name: activeSnapshot.serverUrl,
             }
             : null);
@@ -83,9 +81,11 @@ export async function resolveServerScopedContext(params: Readonly<{
     if (expectedAccountId && targetAccountId !== expectedAccountId) {
         throw new Error(`Scoped credentials do not match requested Account "${expectedAccountId}"`);
     }
-    const encryption = isTokenOnlyAuthCredentials(credentials)
-        ? null
-        : await createEncryptionFromAuthCredentials(credentials) as ScopedRpcEncryptionContext;
+    const encryption: ScopedRpcEncryptionContext | null = await resolveScopedAccountEncryption({
+        serverId: resolvedTargetServerId,
+        serverUrl: targetProfile.canonicalServerUrl ?? targetProfile.serverUrl,
+        credentials,
+    });
 
     const transport = await resolveServerScopedTransport({
         profile: targetProfile,

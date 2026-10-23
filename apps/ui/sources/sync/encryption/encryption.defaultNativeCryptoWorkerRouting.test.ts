@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { createDeferred } from '@/dev/testkit';
@@ -58,6 +59,47 @@ describe('Encryption native crypto worker routing default', () => {
         resetDefaultNativeCryptoWorkerRoutingForTests();
         resetNativeCryptoWorkerCapabilityCacheForTests();
         resetNativeCryptoWorkerQueueLifecycleForTests();
+    });
+
+    it('keeps later callers live after the first shared-owner dispatch is cancelled', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(54));
+        const { worker, batches } = createRecordingCryptoWorker();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let firstDispatch = true;
+        encryption.configureNativeCryptoWorker({ worker: { ...worker,
+            decryptDataKeyEnvelopeV1: async request => {
+                const result = await worker.decryptDataKeyEnvelopeV1(request);
+                if (firstDispatch) { firstDispatch = false; entered.resolve(); await release.promise; }
+                return result;
+            },
+        }, routing: { mode: 'auto', minBatchSize: 1, minPayloadBytes: 0, telemetryEnabled: true } });
+        const keys = [new Uint8Array(32).fill(61), new Uint8Array(32).fill(62), new Uint8Array(32).fill(63)];
+        const envelopes = await sealDataKeys(encryption, keys);
+        const first = new AbortController(), next = new AbortController();
+        syncPerformanceTelemetry.configure({ enabled: true });
+        syncPerformanceTelemetry.reset();
+        const abandoned = encryption.decryptEncryptionKey(envelopes[0]!, { signal: first.signal, workClass: 'interactive' });
+        const pending: Array<Promise<Uint8Array | null>> = [abandoned];
+        try {
+            await entered.promise;
+            const second = encryption.decryptEncryptionKey(envelopes[1]!, { signal: next.signal, workClass: 'interactive' });
+            const third = encryption.decryptEncryptionKey(envelopes[2]!, { signal: next.signal, workClass: 'interactive' });
+            pending.push(second, third);
+            await vi.waitFor(() => expect(syncPerformanceTelemetry.snapshot().events.find(event =>
+                event.name === 'sync.crypto.worker.queueDepth')?.fieldStats?.queueDepth?.max).toBe(2));
+            first.abort();
+            expect(await abandoned).toBeNull();
+            release.resolve();
+            expect(await Promise.all([second, third])).toEqual(keys.slice(1));
+            expect(batches.flatMap(batch => batch.items)).toHaveLength(3);
+        } finally {
+            release.resolve();
+            first.abort(); next.abort();
+            await Promise.allSettled(pending);
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        }
     });
 
     it('shares overlapping envelope opens while preserving ordering and independent key bytes', async () => {

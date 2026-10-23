@@ -6,13 +6,15 @@ import { EphemeralUpdateSchema, UpdateContainerSchema } from '@happier-dev/proto
 import { notifyExecutionRunActivityFromUpdate, notifyExecutionRunActivityReconnect } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import {
     TokenStorage,
+    areCredentialsEqual,
     type AuthCredentials,
     isTokenOnlyAuthCredentials,
     subscribeHomeCredentialMutations,
 } from '@/auth/storage/tokenStorage';
 import { Encryption, captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import { getActionOperation } from '@/sync/ops/actionOperations';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { resolveScopedAccountEncryption } from '@/sync/encryption/scopedAccountEncryption';
+import { AccountEncryptionMaterialUnavailableError } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { fetchAndApplyMachines, type MachineDataKeyCacheEntry } from '@/sync/engine/machines/syncMachines';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { fetchAndApplySessions } from '@/sync/engine/sessions/sessionSnapshot';
@@ -399,9 +401,21 @@ export function resolveConcurrentTargets(params: Readonly<{
 }
 
 async function getOrCreateEncryption(entry: ManagedConcurrentServer): Promise<Encryption | null> {
+    // A retained entry may still serve existing page demand while credential
+    // reconciliation is queued. Keep its retired cipher fail-closed; never
+    // register that entry's old material over a replacement Account owner.
     if (entry.encryption) return entry.encryption;
     if (isTokenOnlyAuthCredentials(entry.credentials)) return null;
-    entry.encryption = await createEncryptionFromAuthCredentials(entry.credentials);
+    const capturedCredentialScopeKey = resolveAuthCredentialsScopeKey(entry.credentials);
+    const credentials = await TokenStorage.getCredentialsForServerUrl(entry.serverUrl, { serverId: entry.id });
+    if (!isManagedServerActive(entry) || !credentials
+        || resolveAuthCredentialsScopeKey(entry.credentials) !== capturedCredentialScopeKey
+        || !areCredentialsEqual(credentials, entry.credentials)) {
+        throw new AccountEncryptionMaterialUnavailableError('The concurrent Home credential was retired');
+    }
+    entry.encryption = await resolveScopedAccountEncryption({
+        serverId: entry.id, serverUrl: entry.serverUrl, credentials,
+    });
     return entry.encryption;
 }
 

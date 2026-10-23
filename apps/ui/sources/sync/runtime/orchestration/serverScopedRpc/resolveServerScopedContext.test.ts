@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Encryption } from '@/sync/encryption/encryption';
 import { resolveServerScopedContext } from './resolveServerScopedContext';
 
 const getCredentialsSpy = vi.hoisted(() => vi.fn());
-const createEncryptionSpy = vi.hoisted(() => vi.fn());
 const listServerProfilesSpy = vi.hoisted(() => vi.fn());
 const getActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
 const getAppliedActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
 const isAppliedActiveServerRuntimeAvailableSpy = vi.hoisted(() => vi.fn());
+const SECRET_A = btoa('a'.repeat(32));
+const SECRET_B = btoa('b'.repeat(32));
 
 function tokenForSub(sub: string): string {
     const payload = globalThis.btoa(JSON.stringify({ sub }))
@@ -27,10 +29,6 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         },
     };
 });
-
-vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
-    createEncryptionFromAuthCredentials: (...args: unknown[]) => createEncryptionSpy(...args),
-}));
 
 vi.mock('@/sync/domains/server/serverProfiles', async () => {
     const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
@@ -56,7 +54,6 @@ describe('resolveServerScopedContext', () => {
 
     afterEach(() => {
         getCredentialsSpy.mockReset();
-        createEncryptionSpy.mockReset();
         listServerProfilesSpy.mockReset();
         getActiveServerSnapshotSpy.mockReset();
         getAppliedActiveServerSnapshotSpy.mockReset();
@@ -95,7 +92,7 @@ describe('resolveServerScopedContext', () => {
                 name: 'Server A',
             },
         ]);
-        getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: 'secret-a' });
+        getCredentialsSpy.mockResolvedValue({ token: 'token-a', secret: SECRET_A });
 
         const context = await resolveServerScopedContext({
             machineId: 'machine-1',
@@ -130,15 +127,9 @@ describe('resolveServerScopedContext', () => {
         const tokenB = tokenForSub('account-b');
         getCredentialsSpy.mockImplementation(async (_url: string, options: { serverId?: string }) => (
             options.serverId === 'server-a'
-                ? { token: tokenA, secret: 'secret-a' }
-                : { token: tokenB, secret: 'secret-b' }
+                ? { token: tokenA, secret: SECRET_A }
+                : { token: tokenB, secret: SECRET_B }
         ));
-        const fakeEncryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(),
-        };
-        createEncryptionSpy.mockResolvedValue(fakeEncryption);
 
         const [appliedContext, stagedContext] = await Promise.all([
             resolveServerScopedContext({ machineId: 'machine-a', serverId: 'server-a' }),
@@ -172,14 +163,8 @@ describe('resolveServerScopedContext', () => {
             { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' },
         ]);
         const token = tokenForSub('account-b');
-        const credentials = { token, secret: 'secret-b' } as const;
+        const credentials = { token, secret: SECRET_B } as const;
         getCredentialsSpy.mockResolvedValue(credentials);
-        const fakeEncryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(),
-        };
-        createEncryptionSpy.mockResolvedValue(fakeEncryption);
 
         const context = await resolveServerScopedContext({
             machineId: 'machine-1',
@@ -196,7 +181,7 @@ describe('resolveServerScopedContext', () => {
             targetAccountId: 'account-b',
             token,
             credentials,
-            encryption: fakeEncryption,
+            encryption: expect.any(Encryption),
         }));
     });
 
@@ -207,13 +192,7 @@ describe('resolveServerScopedContext', () => {
             generation: 1,
         });
         const token = tokenForSub('account-a');
-        getCredentialsSpy.mockResolvedValue({ token, secret: 'secret-a' });
-        const fakeEncryption = {
-            decryptEncryptionKey: vi.fn(async () => null),
-            initializeMachines: vi.fn(async () => {}),
-            getMachineEncryption: vi.fn(),
-        };
-        createEncryptionSpy.mockResolvedValue(fakeEncryption);
+        getCredentialsSpy.mockResolvedValue({ token, secret: SECRET_A });
 
         const context = await resolveServerScopedContext({
             machineId: 'machine-1',
@@ -229,7 +208,7 @@ describe('resolveServerScopedContext', () => {
             targetServerUrl: 'https://server-a.example.test',
             targetAccountId: 'account-a',
             token,
-            encryption: fakeEncryption,
+            encryption: expect.any(Encryption),
         }));
     });
 
@@ -239,7 +218,7 @@ describe('resolveServerScopedContext', () => {
             serverUrl: 'https://server-a.example.test',
             generation: 1,
         });
-        getCredentialsSpy.mockResolvedValue({ token: tokenForSub('account-b'), secret: 'secret-b' });
+        getCredentialsSpy.mockResolvedValue({ token: tokenForSub('account-b'), secret: SECRET_B });
 
         await expect(resolveServerScopedContext({
             machineId: 'machine-1',
@@ -247,6 +226,5 @@ describe('resolveServerScopedContext', () => {
             accountId: 'account-a',
             forceScoped: true,
         })).rejects.toThrow('do not match requested Account');
-        expect(createEncryptionSpy).not.toHaveBeenCalled();
     });
 });

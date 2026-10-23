@@ -59,10 +59,13 @@ export type CryptoWorkerScope = Readonly<{
     generation: number;
 }>;
 
+export type CryptoWorkerWorkClass = 'bulk' | 'interactive';
+
 export type CryptoWorkerBatchRequest<T> = Readonly<{
     scope: CryptoWorkerScope;
     items: readonly T[];
     signal?: AbortSignal;
+    workClass?: CryptoWorkerWorkClass;
 }>;
 
 export type NativeCryptoWorkerCapability = Readonly<{

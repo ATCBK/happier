@@ -459,6 +459,7 @@ async function machineRpcWithServerTransport<R, A>(
                                 decryptEncryptionKey: (value: string) =>
                                     context.encryption!.decryptEncryptionKey(value, {
                                         signal: setupCancellation.signal,
+                                        workClass: 'interactive',
                                         shouldContinue: () => !socketLifetime.finished,
                                     }),
                                 encryption: context.encryption,

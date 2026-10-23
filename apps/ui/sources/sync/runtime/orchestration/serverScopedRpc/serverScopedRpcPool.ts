@@ -16,6 +16,7 @@ import { getOrCreateScopedCacheTokenKey, resetScopedCacheTokenKeysForTests } fro
 import type { CapturedServerReadTransport } from './capturedServerReadTransport';
 import { readExplicitMachineTransportRow, readMachineRows, resetMachineRowReadsForTests, type PreparedMachineRows } from '@/sync/api/machines/machineRowsApi';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 
 type MachineContextAuthority = Pick<Encryption, 'captureMachineEncryptionContext' | 'captureMachineEncryptionContextForRead' | 'getMachineEncryptionContext'>;
 
@@ -72,21 +73,24 @@ async function fetchMachineTransport(params: Readonly<{
     timeoutMs: number;
     readTransport?: CapturedServerReadTransport;
     preparedMachineRows?: PreparedMachineRows;
+    signal?: AbortSignal;
 }>): Promise<MachineTransportEvidence | null> {
     const incumbentContext = params.encryption?.getMachineEncryptionContext(params.machineId);
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeoutId = controller
         ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs))
         : null;
+    const cancellation = mergeAbortSignals([params.signal, controller?.signal]);
 
     try {
         const payload = params.readTransport
             ? { machine: (await (params.preparedMachineRows
-                ? params.preparedMachineRows.read([params.machineId], controller?.signal)
+                ? params.preparedMachineRows.read([params.machineId], cancellation.signal)
                 : readMachineRows({ readTransport: params.readTransport, machineIds: [params.machineId],
-                    signal: controller?.signal }))).get(params.machineId) }
+                    signal: cancellation.signal }))).get(params.machineId) }
             : await readExplicitMachineTransportRow({ ...params, authorityKey: params.cacheKey,
-                signal: controller?.signal ?? new AbortController().signal });
+                signal: cancellation.signal ?? new AbortController().signal });
+        throwIfAborted(params.signal);
         const body = payload as {
             machine?: {
                 id?: unknown;
@@ -140,6 +144,7 @@ async function fetchMachineTransport(params: Readonly<{
             && params.decryptEncryptionKey
             ? await params.decryptEncryptionKey(published)
             : null;
+        throwIfAborted(params.signal);
         const current = machineTransportCache.get(params.cacheKey);
         if (context?.isCurrent() === false || current?.identity !== selected.identity) return null;
         // A fresh row with the same key/access identity does not retire an
@@ -148,11 +153,13 @@ async function fetchMachineTransport(params: Readonly<{
         return { ...current, openedDataEncryptionKey: dataKey, selectedContext: context ?? undefined };
     } catch (error) {
         // An unavailable transport is not evidence that the Machine has no key.
+        throwIfAborted(params.signal);
         if (isTerminalAuthError(error)) throw error;
         if (controller?.signal.aborted) throw machineRowTimeoutError();
         throw error;
     } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        cancellation.dispose();
     }
 }
 
@@ -173,6 +180,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     timeoutMs?: number;
     readTransport?: CapturedServerReadTransport;
     preparedMachineRows?: PreparedMachineRows;
+    signal?: AbortSignal;
 }>): Promise<ScopedMachineTransport | null> {
     const machineId = normalizeId(params.machineId);
     const serverId = normalizeId(params.serverId);
@@ -197,6 +205,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
             timeoutMs,
             readTransport: params.readTransport,
             preparedMachineRows: params.preparedMachineRows,
+            signal: params.signal,
         });
     if (!evidence) return null;
     const isLocalReadCurrent = () => {
@@ -207,6 +216,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     const isEvidenceCurrent = () => machineTransportCache.get(keyCacheKey)?.identity === evidence.identity;
     if (!isEvidenceCurrent() || !isLocalReadCurrent()) return null;
     const expectedAccountMode = params.expectedAccountMode ?? (evidence.machine.access === undefined ? await params.readAccountMode?.() : undefined);
+    throwIfAborted(params.signal);
     if (!isEvidenceCurrent() || !isLocalReadCurrent()) return null;
     const resolution = resolvePublishedMachineDataEncryptionKeyV1({
         ...evidence,

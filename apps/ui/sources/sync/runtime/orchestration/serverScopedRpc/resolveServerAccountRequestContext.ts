@@ -1,9 +1,8 @@
 import {
-  isTokenOnlyAuthCredentials,
   TokenStorage,
   type AuthCredentials,
 } from '@/auth/storage/tokenStorage';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { resolveScopedAccountEncryption } from '@/sync/encryption/scopedAccountEncryption';
 import type { Encryption } from '@/sync/encryption/encryption';
 import {
   areServerProfileIdentifiersEquivalent,
@@ -77,9 +76,11 @@ async function buildScopedContext(params: Readonly<{
     throw new Error(`No authentication credentials for target server "${params.serverId}"`);
   }
 
-  const encryption = isTokenOnlyAuthCredentials(credentials)
-    ? null
-    : await createEncryptionFromAuthCredentials(credentials);
+  const encryption = await resolveScopedAccountEncryption({
+    serverId: params.serverId,
+    serverUrl: params.profile?.canonicalServerUrl ?? params.serverUrl,
+    credentials,
+  });
   const transport = await resolveServerScopedTransport({
     profile: params.profile ?? { serverUrl: params.serverUrl },
     credentials,

@@ -1,9 +1,11 @@
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeFormatV1';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import {
     NATIVE_CRYPTO_WORKER_OPERATION,
     NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON,
     NativeCryptoWorkerUnavailableError,
     type CryptoWorkerBatchRequest,
+    type CryptoWorkerWorkClass,
     type NativeCryptoWorker,
     type NativeCryptoWorkerAesGcmJsonItem,
     type NativeCryptoWorkerBatchResult,
@@ -20,28 +22,37 @@ function unavailableResult<T>(request: CryptoWorkerBatchRequest<unknown>): Nativ
     throw new NativeCryptoWorkerUnavailableError(NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON.unsupportedPlatform);
 }
 
-// Encryption instances (including short-lived Action readers) keep distinct
-// queue/capability owners, but share this stateless document-lifetime transport.
-let worker: Worker | undefined;
-let transportTail = Promise.resolve();
-let failActiveDispatch: ((error: unknown) => void) | undefined;
+type WebCryptoWorkerTransport = {
+    worker?: Worker;
+    tail: Promise<void>;
+    pending: number;
+    failActiveDispatch?: (error: unknown) => void;
+};
 
-function discardWorker(discarded: Worker): void {
+// Encryption instances share stateless document-lifetime transports. Interactive
+// opens must not wait behind inventory batches; each demanded class lazily owns
+// one reusable Worker, independent of Account or request count.
+const transports: Record<CryptoWorkerWorkClass, WebCryptoWorkerTransport> = {
+    bulk: { tail: Promise.resolve(), pending: 0 },
+    interactive: { tail: Promise.resolve(), pending: 0 },
+};
+
+function discardWorker(transport: WebCryptoWorkerTransport, discarded: Worker): void {
     discarded.onmessage = null;
     discarded.onerror = null;
     discarded.onmessageerror = null;
     discarded.terminate();
-    if (worker === discarded) worker = undefined;
+    if (transport.worker === discarded) transport.worker = undefined;
 }
 
-function getWorker(): Worker {
-    if (worker) return worker;
+function getWorker(transport: WebCryptoWorkerTransport): Worker {
+    if (transport.worker) return transport.worker;
     const created = new Worker('/happier-crypto-worker.js');
-    worker = created;
+    transport.worker = created;
     const fail = (error: unknown) => {
-        if (worker !== created) return;
-        if (failActiveDispatch) failActiveDispatch(error);
-        else discardWorker(created);
+        if (transport.worker !== created) return;
+        if (transport.failActiveDispatch) transport.failActiveDispatch(error);
+        else discardWorker(transport, created);
     };
     // Keep lifetime error handlers while idle so a failed Worker can never be
     // retained for a later request. Retired Worker events cannot retire its replacement.
@@ -72,25 +83,47 @@ export function createNativeCryptoWorker(): NativeCryptoWorker {
             if (typeof Worker !== 'function') return unavailableResult(request);
             if (request.items.length === 0) return { status: 'ok', source: 'native', items: [] };
 
-            // Queues are scoped, but adapters can receive concurrent scopes.
-            // Serialize its request/reply transport so the existing array protocol
-            // can reuse one Worker without assigning one caller another's reply.
-            const previous = transportTail;
+            // Serialize each class's array request/reply protocol without
+            // assigning one scope another's reply or blocking interactive opens.
+            const transport = transports[request.workClass ?? 'bulk'];
+            const telemetryEnabled = syncPerformanceTelemetry.isEnabled();
+            const enqueuedAtMs = telemetryEnabled ? performance.now() : 0;
+            const fields = () => ({
+                items: request.items.length,
+                interactive: request.workClass === 'interactive' ? 1 : 0,
+                queued: transport.pending,
+                inFlight: transport.failActiveDispatch ? 1 : 0,
+            });
+            const recordDepth = () => {
+                if (telemetryEnabled) syncPerformanceTelemetry.count('sync.crypto.worker.web.transportDepth', fields());
+            };
+            transport.pending += 1;
+            recordDepth();
+            const previous = transport.tail;
             let release!: () => void;
             const completed = new Promise<void>((resolve) => { release = resolve; });
-            transportTail = previous.then(() => completed);
+            transport.tail = previous.then(() => completed);
             return new Promise((resolve, reject) => {
                 let dispatchedWorker: Worker | undefined;
+                let dispatchedAtMs: number | undefined;
+                let queued = true;
                 let settled = false;
                 const cleanup = (shouldDiscardWorker: boolean) => {
                     if (settled) return false;
                     settled = true;
                     request.signal?.removeEventListener('abort', onAbort);
+                    if (queued) transport.pending -= 1;
                     if (dispatchedWorker) {
                         dispatchedWorker.onmessage = null;
-                        failActiveDispatch = undefined;
-                        if (shouldDiscardWorker) discardWorker(dispatchedWorker);
+                        transport.failActiveDispatch = undefined;
+                        if (shouldDiscardWorker) discardWorker(transport, dispatchedWorker);
                     }
+                    if (dispatchedAtMs !== undefined) {
+                        // Elapsed transport service includes Worker startup, crypto,
+                        // delivery and cancellation; it does not measure Worker CPU.
+                        syncPerformanceTelemetry.recordDuration('sync.crypto.worker.web.serviceMs', performance.now() - dispatchedAtMs, fields());
+                    }
+                    recordDepth();
                     release();
                     return true;
                 };
@@ -106,11 +139,18 @@ export function createNativeCryptoWorker(): NativeCryptoWorker {
                 void previous.then(() => {
                     if (settled) return;
                     if (request.signal?.aborted) { onAbort(); return; }
+                    queued = false;
+                    transport.pending -= 1;
+                    if (telemetryEnabled) {
+                        dispatchedAtMs = performance.now();
+                        syncPerformanceTelemetry.recordDuration('sync.crypto.worker.web.queueWaitMs', dispatchedAtMs - enqueuedAtMs, fields());
+                    }
                     try {
                         // The Worker retains its code, never Account key state:
                         // its canonical handler wipes each request's recipient key.
-                        dispatchedWorker = getWorker();
-                        failActiveDispatch = fail;
+                        dispatchedWorker = getWorker(transport);
+                        transport.failActiveDispatch = fail;
+                        recordDepth();
                         dispatchedWorker.onmessage = ({ data }: MessageEvent<WebCryptoWorkerResponse>) => {
                             if (settled) return;
                             if (data?.status === 'error' && typeof data.error?.message === 'string'
