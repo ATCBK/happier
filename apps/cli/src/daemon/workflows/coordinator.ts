@@ -12,7 +12,7 @@ import { prepareActionCompletionV1, resumeActionCompletionV1 } from '@happier-de
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
-import type { createActionExecutor, ActionExecutorContext, ActionCompletionRun, ActionCompletionOperation, ActionCompletionStateV1, ExecutionRunTerminalObservation } from '@happier-dev/protocol/actions';
+import type { createActionExecutor, ActionExecuteResult, ActionExecutorContext, ActionCompletionRun, ActionCompletionOperation, ActionCompletionStateV1, ExecutionRunTerminalObservation } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
@@ -101,6 +101,7 @@ export type WorkflowCoordinatorInvocation = Readonly<{
   previousAttemptRecordId?: string;
   recovery?: WorkflowProgressEnvelopeV1['recovery'];
   input?: WorkflowAuthoredInputV1;
+  discussionReplyTo?: WorkflowProgressEnvelopeV1['discussionReplyTo'];
   resultContract?: WorkflowProgressEnvelopeV1['resultContract'];
   workspace?: WorkflowWorkspaceProgressV1;
   frame?: WorkflowInvocationFrameV1;
@@ -153,6 +154,7 @@ export type WorkflowCoordinatorStore = Readonly<{
     sharedConversationInvocationRecordId?: WorkflowProgressEnvelopeV1['sharedConversationInvocationRecordId'];
     observationDeadline?: WorkflowProgressEnvelopeV1['observationDeadline'];
     input?: WorkflowAuthoredInputV1;
+    discussionReplyTo?: WorkflowProgressEnvelopeV1['discussionReplyTo'];
     resultContract?: WorkflowProgressEnvelopeV1['resultContract'];
     workspace?: WorkflowWorkspaceProgressV1;
     container?: WorkflowContainerProgressV1;
@@ -279,6 +281,9 @@ export type WorkflowWorkspaceResolver = (params: Readonly<{
 
 export type WorkflowActionExecutor = Readonly<{
   executor: Pick<ReturnType<typeof createActionExecutor>, 'prepare'>;
+  /** Existing Artifact execution observer; it never decides or replays an effect. */
+  observeApproval?: (params: Readonly<{ artifactId: string; actionRequestId: string;
+    authorization: WorkflowAcceptedAuthorizationV1; signal: AbortSignal }>) => Promise<ActionExecuteResult>;
   buildContext: (params: Readonly<{ runId: string; authorization: WorkflowAcceptedAuthorizationV1;
     workDepth: number; originSessionId?: string; workspace: WorkflowWorkspaceDescriptorV1;
     origin?: WorkflowAcceptedOriginV1;
@@ -895,8 +900,10 @@ type WorkflowCoordinatorDependencies = Readonly<{
   allocateInvocationRecordId?: () => string;
   rootInvocationRecordId?: string;
   onReviewEntered?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
-  /** Publish accepted leaf output; replay repairs its external acknowledgement without executing again. */
-  onInvocationCompleted?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
+  /** Publish committed leaf outcomes, including terminal failures; replay repairs the same publication. */
+  onInvocationSettled?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
+  resolveDiscussionReplyParent?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) =>
+    Promise<NonNullable<WorkflowProgressEnvelopeV1['discussionReplyTo']>>;
 }>;
 
 export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies): Readonly<{
@@ -977,6 +984,16 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
             allocateInvocationRecordId: deps.allocateInvocationRecordId ?? randomUUID },
           admissionGate: new KeyedAdmissionGate(), signal, holds,
         } satisfies ExecutionContext, holds.controller.signal);
+        // Failed/stopped containers may never revisit their children. Recover
+        // those committed leaf publications before traversing the frontier.
+        if (deps.onInvocationSettled) {
+          const terminal = await trackedStore.listByLifecycle({ runId, lifecycles: ['failed', 'cancelled'] });
+          for (const invocation of terminal) {
+            if (invocation.blockKind === 'step' || invocation.blockKind === 'action') {
+              await deps.onInvocationSettled({ runId, invocation });
+            }
+          }
+        }
         await reserveOwnedNativeInputs(context);
         const frontier = await context.deps.store.readFrontier();
         for (let index = frontier.nextBlockOrdinal; index < definition.blocks.length; index += 1) {
@@ -1466,16 +1483,12 @@ async function executeBlock(
       return;
     }
   }
-  if (block.kind === 'step') {
-    await executeStepBlock(block, scope, frame, context, parentKey, memberOrdinal);
+  if (block.kind === 'step' || block.kind === 'action') {
+    await executePublishedLeaf(block, scope, frame, context, parentKey, memberOrdinal);
     return;
   }
   if (block.kind === 'wait') {
     await executeWaitBlock(block, scope, frame, context, parentKey, memberOrdinal);
-    return;
-  }
-  if (block.kind === 'action') {
-    await executeActionBlock(block, scope, frame, context, parentKey, memberOrdinal);
     return;
   }
   if (block.kind === 'workflow') {
@@ -1746,6 +1759,27 @@ async function resolveLeafWorkspace(
     await context.deps.store.commitFact({ key: row.key, lifecycle: row.lifecycle, workspace: { descriptor: resolution.workspace } });
   }
   return resolution.workspace;
+}
+
+async function executePublishedLeaf(
+  block: WorkflowStep | WorkflowActionLeafV1, scope: WorkflowInvocationPath['scope'], frame: Frame,
+  context: ExecutionContext, parentKey: string | undefined, memberOrdinal: string,
+  supplementalInputValues: readonly WorkflowJsonValue[] = [],
+): Promise<void> {
+  const address = { runId: context.runId, blockId: block.id, scope, memberOrdinal, ...(parentKey ? { parentKey } : {}) };
+  const prior = context.deps.onInvocationSettled ? await context.deps.store.readCurrent(address) : undefined;
+  try {
+    if (block.kind === 'step') await executeStepBlock(block, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
+    else await executeActionBlock(block, scope, frame, context, parentKey, memberOrdinal);
+  } finally {
+    // Existing failed/stopped rows were repaired before frontier traversal.
+    if (context.deps.onInvocationSettled && prior?.lifecycle !== 'failed' && prior?.lifecycle !== 'cancelled') {
+      const settled = await context.deps.store.readCurrent(address);
+      if (settled && ['completed', 'failed', 'cancelled'].includes(settled.lifecycle)) {
+        await context.deps.onInvocationSettled({ runId: context.runId, invocation: settled });
+      }
+    }
+  }
 }
 
 async function executeActionBlock(
@@ -2121,7 +2155,6 @@ async function executeStepBlock(
       });
     }
     const result = existing.result ?? null;
-    await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: existing });
     return result;
   }
   if (existing) {
@@ -2190,6 +2223,14 @@ async function executeStepBlock(
     ? { ...step, document: recoveryInput.value.document }
     : step;
   const persistedInput = admitted.input;
+  let replyParent = admitted.discussionReplyTo;
+  if (!replyParent && step.discussionReplyTo && context.deps.resolveDiscussionReplyParent) {
+    const producer = await createWorkflowProducerBinding({ runId: context.runId, store: context.deps.store, frame })
+      .resolve(step.discussionReplyTo);
+    if (!producer || producer.lifecycle !== 'completed') throw new WorkflowInputResolutionError('missing_reference');
+    replyParent = await context.deps.resolveDiscussionReplyParent({ runId: context.runId, invocation: producer });
+  }
+  const inputRuntime = createResolutionRuntime(context.inputs, frame, context.deps.store, context.deps.sessionContext);
   const input = step.inputMode === 'none' ? { text: '', references: [], attachments: [], values: [] } : await materializeWorkflowStepInput({
     automationCause: context.automationCause,
     document: persistedInput?.document ?? effectiveStep.document,
@@ -2201,7 +2242,9 @@ async function executeStepBlock(
             ...step.input,
             ...supplementalInputValues.map((value) => ({ kind: 'literal' as const, value })),
           ],
-    runtime: createResolutionRuntime(context.inputs, frame, context.deps.store, context.deps.sessionContext),
+    // Accepted input already contains the captured Discussion frontier. A
+    // reconstructed literal is not an invitation to append today's history.
+    runtime: persistedInput ? { ...inputRuntime, resolveDiscussionContext: undefined } : inputRuntime,
     ...(step.pauseForReview && !isReviewGeneration ? { reviewContext: { runId: context.runId,
       invocationRecordId: admitted.recordId, contentRevision: admitted.contentRevision ?? '0' } } : {}),
   });
@@ -2209,6 +2252,8 @@ async function executeStepBlock(
     document: persistedInput?.document ?? effectiveStep.document,
     input: [...input.values],
   };
+  const executionInput: MaterializedWorkflowStepInput = { ...input,
+    ...(replyParent ? { discussionReplyTo: replyParent } : {}) };
   let durableExecution = admitted.execution;
   const assertInputAuthorization = async () => {
     if (isReviewGeneration && !rejoining && !durableExecution && context.deps.checkReviewGenerationAuthority) {
@@ -2225,18 +2270,20 @@ async function executeStepBlock(
       await assertInputAuthorization();
       try {
         admitted = await context.deps.store.commitFact({ key, lifecycle: 'admitting', execution: correspondence,
-          input: { ...authoredInput, renderedText }, resultContract: step.result });
+          input: { ...authoredInput, renderedText }, resultContract: step.result,
+          ...(replyParent ? { discussionReplyTo: replyParent } : {}) });
         durableExecution = correspondence;
       } catch (error) {
         await assertAdmissionOpen(context);
         throw error;
       }
     } : undefined;
-  if (step.inputMode !== 'none' && !admitted.input) {
+  if ((step.inputMode !== 'none' && !admitted.input) || (replyParent && !admitted.discussionReplyTo)) {
     admitted = await context.deps.store.commitFact({
       key,
       lifecycle: admitted.lifecycle,
-      input: authoredInput,
+      ...(step.inputMode !== 'none' && !admitted.input ? { input: authoredInput } : {}),
+      ...(replyParent ? { discussionReplyTo: replyParent } : {}),
     });
   }
   const admissionKey = await resolveConversationAdmissionKey({ conversationBinding, producerBinding, admitted, context });
@@ -2372,7 +2419,7 @@ async function executeStepBlock(
       ...(recoveryPrevious?.workspace?.descriptor
         ? { recoveryPreviousWorkspace: recoveryPrevious.workspace.descriptor }
         : {}),
-      input,
+      input: executionInput,
       execution: selectedExecution,
       ...(selectedLeaf.participant ? { participant: selectedLeaf.participant } : {}),
       executionTarget,
@@ -2388,7 +2435,9 @@ async function executeStepBlock(
         await context.deps.waitForNewWorkAdmission?.(context.signal);
         await assertAdmissionOpen(context);
         await assertInputAuthorization();
-        if (!isOriginInput && (admitted.lifecycle === 'pending' || admitted.lifecycle === 'waiting_for_capacity' || admitted.lifecycle === 'admitting')) {
+        if (!isOriginInput && (admitted.lifecycle === 'pending' || admitted.lifecycle === 'waiting_for_capacity' || admitted.lifecycle === 'admitting'
+          || (admitted.lifecycle === 'waiting_for_approval' && admitted.execution?.kind === 'action'
+            && admitted.execution.actionId === 'discussion.invite'))) {
           try {
             admitted = await context.deps.store.commitFact({ key, lifecycle: 'admitting' });
           } catch (error) {
@@ -2455,13 +2504,23 @@ async function executeStepBlock(
           const incoming = observation.execution;
           const consent = observation.setupConsentOutput
             ? readWorkflowProjectSetupConsentHold(incoming.actionId, observation.setupConsentOutput) : null;
-          if (currentExecution && (currentExecution.kind !== 'action'
+          const invitation = incoming.actionId === 'discussion.invite'
+            ? ActionApprovalRequestCreatedResultSchema.safeParse(incoming.output) : null;
+          const creationKey = `workflow:${context.runId}:${admitted.recordId}`;
+          const invitationHold = executionTarget.kind === 'session' && selectedLeaf.participant?.kind === 'model'
+            && incoming.actionId === 'discussion.invite' && incoming.localInputId === creationKey
+            && incoming.actionRequestId === `${creationKey}:discussion.invite`
+            && invitation?.success === true && invitation.data.actionId === 'discussion.invite';
+          const invitationToStartup = currentExecution?.kind === 'action' && currentExecution.actionId === 'discussion.invite'
+            && incoming.actionId === 'session.spawn_new' && incoming.actionRequestId === creationKey
+            && currentExecution.localInputId === creationKey && incoming.input.creationKey === creationKey;
+          if (currentExecution && !invitationToStartup && (currentExecution.kind !== 'action'
             || currentExecution.actionId !== incoming.actionId || currentExecution.actionRequestId !== incoming.actionRequestId
             || !sameStrictJsonValue(currentExecution.input, incoming.input)
             || !sameStrictJsonValue(currentExecution.awaitedOperations, incoming.awaitedOperations))) {
             throw new Error('workflow_invocation_fact_conflict');
           }
-          if (incoming.actionId !== (executionTarget.kind === 'session' ? 'session.spawn_new' : 'execution.run.start')
+          if (!invitationHold && incoming.actionId !== (executionTarget.kind === 'session' ? 'session.spawn_new' : 'execution.run.start')
             || incoming.awaitedOperations?.some(operation => operation.machineId !== workspaceResolution.workspace.machineId)) {
             throw new Error('workflow_invocation_fact_conflict');
           }
@@ -2469,8 +2528,8 @@ async function executeStepBlock(
           if (current?.lifecycle === 'cancel_requested' || current?.lifecycle === 'cancelled'
             || context.signal?.aborted) return;
           durableExecution = incoming;
-          await context.deps.store.commitFact({ key, lifecycle: consent ? 'needs_attention' : 'running', execution: incoming,
-            ...(consent ? { reason: consent.code } : {}) });
+          await context.deps.store.commitFact({ key, lifecycle: invitationHold ? 'waiting_for_approval' : consent ? 'needs_attention' : 'running', execution: incoming,
+            ...(invitationHold ? { reason: 'approval_required' } : consent ? { reason: consent.code } : {}) });
           return;
         }
         if (currentExecution && (
@@ -2505,6 +2564,11 @@ async function executeStepBlock(
       },
       ...(context.signal ? { signal: context.signal } : {}),
     });
+    if (execution.kind === 'needs_attention' && (execution.code === 'approval_required' || execution.code === 'approval_unavailable')
+      && durableExecution?.kind === 'action' && durableExecution.actionId === 'discussion.invite') {
+      // A reclaimed or non-live observer retains the same existing Artifact.
+      throw new WorkflowControlBoundary('paused', execution.code);
+    }
     if (execution.kind === 'completed') {
       let result: WorkflowJsonValue;
       try {
@@ -2551,7 +2615,7 @@ async function executeStepBlock(
         await awaitReviewedInvocation(row, context);
         return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
       }
-      const completed = await context.deps.store.commitFact({
+      await context.deps.store.commitFact({
         key,
         lifecycle: 'completed',
         result,
@@ -2560,7 +2624,6 @@ async function executeStepBlock(
         ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
       });
       nativeTerminalCommitted = true;
-      await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: completed });
       return result;
     }
     const generationContinuationRefused = execution.kind === 'needs_attention' && !rejoining && !durableExecution
@@ -2926,12 +2989,7 @@ async function executeLoop(
         memberOrdinal: String(index),
         afterBlocks: repetition.kind === 'evaluate'
           ? async (iterationFrameKey) => {
-              if (repetition.evaluator.kind === 'action') {
-                await executeActionBlock(repetition.evaluator, iterationScope, iterationFrame, context,
-                  iterationFrameKey, String(block.body.length));
-                return;
-              }
-              await executeStepBlock(
+              await executePublishedLeaf(
                 repetition.evaluator,
                 iterationScope,
                 iterationFrame,

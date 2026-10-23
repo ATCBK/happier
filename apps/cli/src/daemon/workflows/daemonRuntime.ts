@@ -24,7 +24,7 @@ import {
   ConversationPermissionMediationSourceCurrentnessResultV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
-import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { resolveAutomationWorkerAccountEncryption } from '@/daemon/automation/automationWorker';
 import {
@@ -45,6 +45,9 @@ import type { StoredCredentials } from '@/persistence';
 import { waitForDaemonAdmission, type DaemonAdmissionDrain } from '../lifecycle/admissionDrain';
 import { createSpawnConnectedServicesTeamResourceCatalogResolver } from '@/session/services/spawnConnectedServicesDefaults';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import { sameAutomationAccountContentIdentityV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { createWorkflowDiscussionResultPublisher } from './workflowDiscussionPublication';
+import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 
 import {
   createProductionWorkflowRunCoordinator,
@@ -53,6 +56,9 @@ import {
 } from './production';
 import {
   createWorkflowRunRecoveryReader,
+  isWorkflowDiscussionModelReservationCurrent,
+  type WorkflowDiscussionModelReservationCustody,
+  type WorkflowDiscussionModelReservationReplay,
 } from './recovery';
 import { createWorkflowInvocationRecoveryObserver, resolveWorkflowAuthorizedSession, resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
 import { createWorkflowRunStorageClient } from './workflowRunStorageClient';
@@ -170,12 +176,17 @@ export function createWorkflowAcceptedAuthorizationCurrentness(params: Readonly<
     signal?: AbortSignal,
   ) => Promise<boolean>;
   now?: () => number;
+  discussionModelReservationCustody?: WorkflowDiscussionModelReservationCustody;
 }>) {
   const now = params.now ?? Date.now;
-  return async ({ authorization, signal }: Readonly<{
+  return async ({ authorization, reservation, signal }: Readonly<{
     authorization: WorkflowAcceptedAuthorizationV1;
+    reservation?: WorkflowDiscussionModelReservationReplay;
     signal?: AbortSignal;
   }>): Promise<boolean> => {
+    if (reservation && (!params.discussionModelReservationCustody
+      || !await isWorkflowDiscussionModelReservationCurrent({ ...params.discussionModelReservationCustody,
+        accountId: params.accountId, reservation, ...(signal ? { signal } : {}) }))) return false;
     // A failed authority read is unknown, not revocation. Propagate it to the
     // claim owner's interruption/reclaim path; only verified negatives return false.
     const principal = authorization.principal;
@@ -220,6 +231,7 @@ export function createCredentialedWorkflowAcceptedAuthorizationCurrentness(param
   serverHttpBaseUrl?: string;
 }>) {
   const serverId = params.serverId ?? configuration.activeServerId;
+  const serverHttpBaseUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const accountServerActionDeps = createAccountServerActionDeps({
     token: params.credentials.token,
     serverId,
@@ -227,6 +239,11 @@ export function createCredentialedWorkflowAcceptedAuthorizationCurrentness(param
   });
   return createWorkflowAcceptedAuthorizationCurrentness({
     accountId: params.accountId,
+    discussionModelReservationCustody: {
+      storage: createWorkflowRunStorageClient({ token: params.credentials.token, serverHttpBaseUrl }),
+      resolveAccountEncryption: async signal => await runWithServerHttpBaseUrl(serverHttpBaseUrl,
+        () => resolveAvailableEncryption(params.credentials, signal)),
+    },
     listAccountApiTokens: async (signal) => {
       const list = accountServerActionDeps.accountApiTokensListAction;
       if (!list) throw new Error('workflow_api_token_currentness_unavailable');
@@ -312,6 +329,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
     createCoordinatorForMachine(input: Readonly<{
       machineId: string;
       sessionStartup?: import('./sessionStepExecutor').WorkflowSessionStartup;
+      postWorkflowMessage?: import('./production').WorkflowProductionExecutionDeps['postWorkflowMessage'];
       requesterWorkAttributionV1?: RequesterWorkAttributionV1;
       machineAdmissionTransport: MachineAdmissionTransport;
       machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
@@ -476,6 +494,14 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           action: {
             executor: actionExecutor,
             buildContext: resolveWorkflowActionContext,
+            observeApproval: async ({ artifactId, actionRequestId, authorization, signal }) => {
+              if (!input.serverIdentityId) return { ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
+              return await actionExecutor.observeRecordedApprovalExecution({ artifactId, signal,
+                expectedOrigin: { actionId: 'discussion.invite', requestId: actionRequestId,
+                  accountId: params.accountId, serverIdentityId: input.serverIdentityId, machineId: input.machineId },
+                isCurrent: async () => await isAcceptedAuthorizationCurrent({ authorization, signal }),
+              });
+            },
             observeOperation: async (operation, observation) => {
               const observed = ActionOperationGetV1ResponseSchema.parse(await operationRpc(input.machineActionDirectTargetTransport,
                 operation, 'wait', observation.signal, true));
@@ -502,6 +528,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           },
           credentials: params.credentials,
           serverId,
+          ...(input.postWorkflowMessage ? { postWorkflowMessage: input.postWorkflowMessage } : {}),
           ...(input.serverIdentityId ? { serverIdentityId: input.serverIdentityId } : {}),
           ...(input.sessionStartup ? { sessionStartup: input.sessionStartup } : {}),
           machineAdmissionTransport: input.machineAdmissionTransport,
@@ -528,6 +555,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
     },
     createRecoveryForMachine(input: Readonly<{
       machineId: string;
+      postWorkflowMessage?: import('./production').WorkflowProductionExecutionDeps['postWorkflowMessage'];
       machineAdmissionTransport: MachineAdmissionTransport;
       machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
     }>) {
@@ -546,6 +574,22 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           expoPushSender: createWorkflowRunPushNotificationClient(params.credentials.token),
         }),
         resolveAccountEncryption: async (signal) => await resolveAvailableEncryption(params.credentials, signal),
+        onInvocationSettled: async ({ run, accepted, invocation, encryption, signal }) => {
+          if (accepted.resultDelivery?.kind !== 'originating_discussion') return;
+          const current = async () => !signal?.aborted
+            && sameAutomationAccountContentIdentityV1((await resolveAvailableEncryption(params.credentials, signal)).witness, encryption.witness)
+            && await isAcceptedAuthorizationCurrent({ authorization: accepted.authorization, ...(signal ? { signal } : {}) });
+          const publish = createWorkflowDiscussionResultPublisher({ credentials: params.credentials,
+            origin: accepted.resultDelivery, isCurrent: current, ...(signal ? { signal } : {}),
+            publish: createDiscussionReplyReturnPublisher({ credentials: params.credentials,
+              machineId: input.machineId, serverId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+              workflowAuthorization: accepted.authorization,
+              signal: signal ?? new AbortController().signal, isCurrent: current,
+              ...(input.postWorkflowMessage ? { postWorkflowMessage: input.postWorkflowMessage } : {}) }),
+          });
+          await publish({ runId: run.id, invocation,
+            ...(run.state === 'interrupted' ? { expectedParentRevision: run.revision } : {}) });
+        },
         reconcileInvocation: createWorkflowInvocationRecoveryObserver({
           credentials: params.credentials,
           machineId: input.machineId,

@@ -133,6 +133,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
           ...(record.execution ? { execution: record.execution } : {}),
           ...(record.result !== undefined ? { result: record.result } : {}),
           ...(record.replyOutcome ? { replyOutcome: record.replyOutcome } : {}),
+          ...(record.discussionReplyTo ? { discussionReplyTo: record.discussionReplyTo } : {}),
           ...(record.previousAttemptRecordId ? { previousAttemptRecordId: record.previousAttemptRecordId } : {}),
           ...(record.recovery ? { recovery: record.recovery } : {}),
           ...(record.frame ? { frame: record.frame } : {}), ...(record.container ? { container: record.container } : {}) } };
@@ -191,7 +192,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
         } });
       }
     },
-    commitFact: async ({ key, lifecycle, result, replyOutcome, usage, reason, reasonMessage, reasonDetails, runtimeIssueV1, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, resultContract, workspace, container, containerResult, resultProvenance }) => {
+    commitFact: async ({ key, lifecycle, result, replyOutcome, usage, reason, reasonMessage, reasonDetails, runtimeIssueV1, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, discussionReplyTo, resultContract, workspace, container, containerResult, resultProvenance }) => {
       const existing = records.get(key);
       if (!existing) throw new Error('workflow_invocation_intent_missing');
       if (existing.lifecycle === 'completed' || existing.lifecycle === 'failed'
@@ -209,6 +210,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
         ...(review ? { review } : {}), ...(result === undefined ? {} : { result }), ...(usage === undefined ? {} : { usage }), ...(reason ? { reason } : {}), ...(execution ? { execution } : {}), ...(sharedConversationInvocationRecordId ? { sharedConversationInvocationRecordId: { ...existing.sharedConversationInvocationRecordId, ...sharedConversationInvocationRecordId } } : {}), ...(observationDeadline ? { observationDeadline } : {}), ...(input ? { input } : {}), ...(workspace ? { workspace: { ...existing.workspace, ...workspace } } : {}), ...(container ? { container } : {}), ...(containerResult ? { containerResult } : {}) };
       const withContract = resultContract === undefined ? committed : { ...committed, resultContract };
       const withMessage = { ...withContract, ...(reasonMessage === undefined ? {} : { reasonMessage }),
+        ...(discussionReplyTo ? { discussionReplyTo } : {}),
         ...(replyOutcome ? { replyOutcome } : {}),
         ...(reasonDetails === undefined ? {} : { reasonDetails }),
         ...(runtimeIssueV1 === undefined ? {} : { runtimeIssueV1 }),

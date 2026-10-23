@@ -46,7 +46,7 @@ export type WorkflowMaterializationHostDeps = Readonly<{
   serverIdentityId?: string;
   serverHttpBaseUrl?: string;
   callMachineAction: (input: Readonly<{ machineId: string; method: string; request: unknown; signal?: AbortSignal }>) => Promise<unknown>;
-  readRoleSelection: (signal?: AbortSignal) => Promise<RoleSelection>;
+  readRoleSelection: (roleId: string, signal?: AbortSignal) => Promise<RoleSelection>;
   acpCatalogSnapshot?: AcpCatalogSnapshotV1;
   readAcpCatalog?: (signal?: AbortSignal) => Promise<AcpCatalogSnapshotV1>;
   readLaunchProfile: (profileId: string, signal?: AbortSignal) => Promise<AiLaunchProfile | null>;
@@ -104,7 +104,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
       }
       return observation;
     };
-    const roleSelection = { ...await deps.readRoleSelection(target.signal), ...target.roleSelection };
+    const roleSelection = { ...target.roleSelection };
     let catalogObservation: Promise<AcpCatalogSnapshotV1 | undefined> | undefined;
     const readDefinitionIds = async (required = false) => {
       catalogObservation ??= deps.readAcpCatalog
@@ -172,6 +172,12 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
     return {
       roleSelection,
       effects: {
+        readRoleSelection: async (roleId) => {
+          target.signal?.throwIfAborted();
+          const selected = await deps.readRoleSelection(roleId, target.signal);
+          target.signal?.throwIfAborted();
+          return { ...selected, ...roleSelection };
+        },
         readWorkflowDefinition: (ref) => deps.readWorkflowDefinition(ref, target.signal),
         readLaunchProfile: (profileId) => deps.readLaunchProfile(profileId, target.signal),
         readActionContract,
@@ -313,7 +319,6 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
           return current.rawSettings;
         },
       });
-      const roleSources = await sourceReader(target.signal);
       let launchProfiles: ReturnType<typeof readAccountLaunchProfiles> | undefined;
       const readLaunchProfile = async (profileId: string) => {
         launchProfiles ??= readAccountLaunchProfiles(current.settings, params.credentials, target.signal, undefined, operation);
@@ -337,12 +342,18 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
         readWorkflowDefinition: (ref, signal) => params.serverHttpBaseUrl
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => params.readWorkflowDefinition(ref, signal))
           : params.readWorkflowDefinition(ref, signal),
-        readRoleSelection: async () => {
-          // Demand the canonical catalog in the captured Account lifetime after
-          // Artifact inventory; unavailable authority cannot become defaults.
-          const roleOverrides = await prepareActiveAccountRoleOverrides(roleAccount);
-          if (roleOverrides.status !== 'ready') throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
-          return { roleSourceInventory: roleSources, settingsOverrides: roleOverrides.overrides };
+        readRoleSelection: (roleId, signal) => {
+          const read = async () => {
+            await assertCurrent(signal);
+            const roleSources = await sourceReader(signal, { roleIds: [roleId] });
+            await assertCurrent(signal);
+            // Open current Account overrides only when a Role is consumed.
+            const roleOverrides = await prepareActiveAccountRoleOverrides(roleAccount);
+            await assertCurrent(signal);
+            if (roleOverrides.status !== 'ready') throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
+            return { roleSourceInventory: roleSources, settingsOverrides: roleOverrides.overrides };
+          };
+          return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : read();
         },
         readLaunchProfile: (profileId) => params.serverHttpBaseUrl
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => readLaunchProfile(profileId)) : readLaunchProfile(profileId),

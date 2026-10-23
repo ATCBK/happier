@@ -7,6 +7,11 @@ import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountS
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { RoleArtifactV1Schema } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 const credentials = { token: 'workflow-session-admission', encryption: null } as const;
 const sessionId = 'c123456789012345678901234';
@@ -55,6 +60,122 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
 
 describe('exact-machine workflow materialization effects', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
+
+  it('reads only an explicitly consumed unfrozen Role without preparing the unrelated Artifact inventory', async () => {
+    const accountId = 'workflow-role-demand';
+    const scopedCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+    const roleId = 'selected-workflow-role';
+    let instructions = 'Original Role instructions';
+    let readable = true;
+    const artifactReads: string[] = [];
+    const storedRole = () => {
+      const role = RoleArtifactV1Schema.parse({ name: 'Selected', instructions, runsAs: { kind: 'session' },
+        engine: { agentTargetKey: 'agent:test.agent/agent' }, workspaceWrites: 'deny', enabled: true, secondOpinion: 'off' });
+      return { id: roleId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+        header: encodePlainArtifactStoredContent({ kind: 'role.v1', name: role.name }),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify(role) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    };
+    const unrelated = Array.from({ length: 501 }, (_, index) => ({ ...storedRole(), id: `unrelated-${index}`,
+      header: encodePlainArtifactStoredContent({ kind: 'document.v1', title: 'Unrelated document' }) }));
+    // Only authenticated HTTP and daemon RPC are replaced. Settings, source
+    // selection, Artifact opening, Role layering and materialization stay real.
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe('http://127.0.0.1:41371');
+      if (url.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (url.pathname === '/v1/account/entity-rows/prompt-library') return { status: 200, data: { status: 'listed',
+        rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: { t: 'plain', v: emptyPromptLibraryRecordV1(key, 1) } })) } };
+      if (url.pathname === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (url.pathname === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      if (url.pathname === '/v1/artifacts') {
+        artifactReads.push(url.pathname);
+        const inventory = [...unrelated, storedRole()];
+        const items = url.searchParams.has('cursor') ? inventory.slice(500) : inventory.slice(0, 500);
+        return { status: 200, data: url.searchParams.has('kind') ? { items, hasUnclassified: false } : items };
+      }
+      if (url.pathname === `/v1/artifacts/${roleId}`) {
+        artifactReads.push(url.pathname);
+        return readable ? { status: 200, data: storedRole() } : { status: 403, data: { error: 'forbidden' } };
+      }
+      if (url.pathname === `/v1/artifacts/${roleId}/access/grants`) {
+        artifactReads.push(url.pathname);
+        return { status: 200, data: { artifactId: roleId, ownerAccountId: accountId, access: 'owner', grants: [] } };
+      }
+      if (url.pathname === `/v1/artifacts/${roleId}/access/recipients`) {
+        artifactReads.push(url.pathname);
+        return { status: 200, data: { artifactId: roleId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, callerDataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+          provenanceDataEncryptionKey: null, callerProvenanceDataEncryptionKey: null, recipients: [] } };
+      }
+      throw new Error(`Unexpected Workflow Role HTTP boundary: ${url.pathname}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (input, body) => {
+      const path = new URL(String(input)).pathname;
+      expect(path).toBe('/v1/artifacts/read');
+      artifactReads.push(path);
+      return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items:
+        ArtifactReadBatchInputV1Schema.parse(body).artifactIds.map(artifactId => ({ artifactId, ok: true,
+          artifact: storedRole(), recipientCensus: null })) }) };
+    });
+    const resolve = createCredentialedWorkflowMaterializationHostV1({ credentials: scopedCredentials, accountId,
+      serverHttpBaseUrl: 'http://127.0.0.1:41371', readWorkflowDefinition: async () => null,
+      callMachineAction: async ({ method }) => {
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
+          protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { installed: {
+            id: 'installed', identity: { pluginId: 'test.agent', localId: 'agent' },
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+          } } } };
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+          'cli.installed': { ok: true, data: { installed: true, version: '1', latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'unknown', loginSupport: 'unsupported' },
+            platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
+        } };
+        throw new Error(`Unexpected Workflow machine boundary: ${method}`);
+      },
+    });
+    const target = { machineId: 'run-machine', directory: '/repo' };
+    const context = { source: { kind: 'inline' as const }, inputs: {}, machineId: target.machineId,
+      executionTarget: { kind: 'session' as const },
+      workspaceTarget: { project: { ...target, checkoutRootPath: target.directory } }, authorization: { principal: { kind: 'host' as const } } };
+    const authored = { version: 1, defaults: {}, blocks: [{ kind: 'step', id: 'work',
+      document: { text: 'Work', references: [], attachments: [] },
+      execution: { agentTarget: { kind: 'agent', identity: { pluginId: 'test.agent', localId: 'agent' } } } }] };
+    for (let index = 0; index < 3; index++) {
+      expect(await materializeWorkflowAcceptedSnapshotV1({ ...await resolve(target), definition: authored,
+        context, admission: { kind: 'user' } })).toMatchObject({ ok: true });
+    }
+    const host = await resolve(target);
+    expect(artifactReads).toEqual([]);
+    instructions = 'Freshly updated before first use';
+    const withRole = { ...authored, blocks: [{ ...authored.blocks[0], execution: { engine: { role: roleId } } }] };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ ...host, definition: withRole, context, admission: { kind: 'user' } });
+    expect(accepted).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ role: { roleId, instructions } }] } });
+    expect(artifactReads.filter(path => path === `/v1/artifacts/${roleId}`)).toHaveLength(1);
+    expect(artifactReads).not.toContain('/v1/artifacts');
+    expect(artifactReads).not.toContain('/v1/artifacts/read');
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+    const acceptedReads = [...artifactReads];
+    readable = false;
+    const replay = await materializeWorkflowAcceptedSnapshotV1({ ...await resolve(target), definition: withRole, context,
+      replay: { snapshot: accepted.snapshot }, admission: { kind: 'user' } });
+    expect(replay).toMatchObject({ ok: true, snapshot: { materializedLeaves: accepted.snapshot.materializedLeaves } });
+    expect(artifactReads).toEqual(acceptedReads);
+    await expect(materializeWorkflowAcceptedSnapshotV1({ ...await resolve(target), definition: withRole, context,
+      admission: { kind: 'user' } })).rejects.toMatchObject({ response: { status: 403 } });
+    expect(artifactReads.filter(path => path === `/v1/artifacts/${roleId}`)).toHaveLength(2);
+    const controller = new AbortController();
+    const cancelledHost = await resolve({ ...target, signal: controller.signal });
+    const cancelled = new Error('Workflow Role demand cancelled');
+    controller.abort(cancelled);
+    await expect(materializeWorkflowAcceptedSnapshotV1({ ...cancelledHost, definition: withRole, context,
+      admission: { kind: 'user' } })).rejects.toBe(cancelled);
+    expect(artifactReads.filter(path => path === `/v1/artifacts/${roleId}`)).toHaveLength(2);
+  });
 
   it('resolves typed Session inputs from exact authorized metadata rather than the coordinator Machine', async () => {
     const host = sessionAdmissionHost('review-machine');

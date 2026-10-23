@@ -387,7 +387,15 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
         });
         return observed.ok ? observed.result : null;
       } });
-      if (approval) return approval;
+      if (approval) {
+        if (input.progress.blockKind === 'step' && execution.actionId === 'discussion.invite' && approval.kind === 'completed') {
+          // A reserved slot is not a Session or a completed Workflow input.
+          // Rejoin the original step's ordinary creation/admission owner.
+          return input.terminalParent || input.cancellationRequested ? { kind: 'stopped', code: 'cancelled' }
+            : { kind: 'unresolved', code: 'workflow_native_startup_ready' };
+        }
+        return approval;
+      }
       const id = ActionIdSchema.safeParse(execution.actionId);
       if (execution.awaitedOperations?.length) {
         if (!id.success || execution.output === undefined) {

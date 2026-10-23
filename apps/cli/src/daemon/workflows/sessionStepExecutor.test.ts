@@ -23,8 +23,18 @@ import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetad
 import { verifyRequesterSessionCredentialBinding } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
+import { resolveWorkflowSessionConversation, createWorkflowInvocationRecoveryObserver } from './invocationRecoveryObserver';
 import { projectWorkflowConversationRoleSelection } from '@/session/actions/workflowMaterializationHost';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { createWorkflowCoordinator } from './coordinator';
+import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.testkit';
+import type { WorkflowActionExecutor } from './coordinator';
+import { createCoordinatorWorkspaceResolver, verifyWorkflowWorkspaceCurrentness } from './resolveWorkflowWorkspace';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 const spawnedSessionBirthMetadata = new Map<string, ReturnType<typeof buildCommittedLaunchMetadata>>();
 
@@ -1835,8 +1845,21 @@ describe('workflow Session step executor', () => {
     })]);
   });
 
-  it.each([{ denied: false, boundSessionId: 'new-session' }, { denied: true, boundSessionId: 'new-session' },
-    { denied: false, boundSessionId: 'stale-run-step' }])('creates a selected Discussion model only after reserving its retained ordinary participant slot (%j)', async ({ denied, boundSessionId }) => {
+  it.each([
+    { denied: false, boundSessionId: 'new-session', policy: 'waive', surface: 'agent' },
+    { denied: true, boundSessionId: 'new-session', policy: 'waive', surface: 'agent' },
+    { denied: false, boundSessionId: 'stale-run-step', policy: 'waive', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'require', surface: 'cli' },
+    { denied: false, boundSessionId: 'new-session', policy: 'require', surface: 'ui' },
+    { denied: false, boundSessionId: 'new-session', policy: 'default', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'reject', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'disabled', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'composed', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'composed-reclaim', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'composed-reject', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'composed-automation', surface: 'agent' },
+    { denied: false, boundSessionId: 'new-session', policy: 'composed-current-require', surface: 'agent' },
+  ] as const)('creates a selected Discussion model only after reserving its retained ordinary participant slot (%j)', async ({ denied, boundSessionId, policy, surface }) => {
     const launches = installSessionCreationTransport();
     const launch = { executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
       directory: { kind: 'path' as const, path: '/repo' },
@@ -1889,13 +1912,192 @@ describe('workflow Session step executor', () => {
       } };
       throw new Error(`Unexpected Discussion reservation request: ${method} ${url}`);
     });
-    const create = createProductionFreshWorkflowSessionConversation({ credentials: { token: 'token', encryption: null },
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`, encryption: null };
+    const composed = policy.startsWith('composed');
+    const originSurface = policy === 'composed-automation' ? 'agent' : 'ui';
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      ...(policy === 'waive' || (composed && policy !== 'composed-automation') ? { approvalWaivedSurfaces: { 'discussion.invite': [surface] } } : {}),
+      ...(policy === 'composed-current-require' ? { approvalWaivedSurfaces: { 'discussion.invite': [originSurface, surface] } } : {}),
+      ...(policy === 'require' || composed && policy !== 'composed-current-require' ? { actions: { 'discussion.invite': {
+        approvalRequiredSurfaces: [composed ? originSurface : surface],
+      } } } : {}),
+      ...(policy === 'disabled' ? { actions: { 'discussion.invite': { enabled: false } } } : {}),
+    });
+    let stored: ApprovalRequestV2 | undefined;
+    let retainedInvitationApproval: Extract<NonNullable<import('@happier-dev/protocol/workflows').WorkflowProgressEnvelopeV1['execution']>, { kind: 'action' }> | undefined;
+    const host = createCliActionExecutorHarness({ token: credentials.token, credentials, sessionId: 'workflow-host', mode: 'plain', ctx: null,
+      serverId: 'server-1', serverIdentityId: 'srv_home', serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+      // Production always supplies a provider. Its newer waiver cannot erase
+      // the Require policy captured when this Run was accepted.
+      actionsSettingsProvider: { getActionsSettings: () => policy === 'composed-current-require'
+        ? ActionsSettingsV1Schema.parse({ v: 1, actions: { 'discussion.invite': { approvalRequiredSurfaces: ['ui'] } } })
+        : composed ? ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'discussion.invite': ['ui', 'agent'] } }) : settings,
+        getAccountSettings: () => null },
+    }, {
+      ...createDiscussionActionDeps({ credentials, serverId: 'server-1', serverHttpBaseUrl: resolveServerHttpBaseUrl() }),
+      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'invitation-approval' }; },
+      approvalsGet: async () => stored ?? null,
+      approvalsUpdate: async ({ request }) => {
+        if (!stored) throw new Error('missing approval');
+        const transition = decideApprovalRequestTransition(stored, request);
+        if (!transition.ok) return transition;
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      // Current host/Account authority is the external replay-currentness boundary.
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const executor = host.executor;
+    const action: WorkflowActionExecutor = { executor, buildContext: async ({ authorization }) => ({ surface, authority: 'account_automation',
+        serverId: 'server-1', serverIdentityId: 'srv_home', runtimeAccountId: 'account-1', actionsSettings: settings,
+        externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } },
+        actionCaller: { kind: 'workflowRun', runId: 'discussion-run', authorization } }),
+        ...(composed && policy !== 'composed-reclaim' ? { observeApproval: async ({ artifactId, actionRequestId, signal }: Parameters<NonNullable<WorkflowActionExecutor['observeApproval']>>[0]) => host.observeRecordedApprovalExecution({
+          artifactId, signal, expectedOrigin: { actionId: 'discussion.invite', requestId: actionRequestId,
+            accountId: 'account-1', serverIdentityId: 'srv_home', machineId: 'machine-1' },
+          isCurrent: async () => !signal.aborted,
+        }) } : {}),
+        observeRun: async () => { throw new Error('reservation must not start an Execution Run'); } };
+    const discussionOrigin = { discussion: { serverId: 'server-1', discussionId: ref.discussionId }, messageId: 'question-1', throughSeq: 1 };
+    const create = createProductionFreshWorkflowSessionConversation({ credentials,
       serverId: 'server-1', machineId: 'machine-1', workDepth: 0, originRunId: 'discussion-run',
-      discussionOrigin: { discussion: { serverId: 'server-1', discussionId: ref.discussionId }, messageId: 'question-1', throughSeq: 1 },
+      discussionOrigin, action,
       machineAdmissionTransport: vi.fn() });
+    if (composed) {
+      const store = createInMemoryWorkflowCoordinatorStore();
+      const workspace = { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' };
+      const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, defaults: {}, inputs: [
+        { name: 'reviewer', valueType: 'json', required: true, inputType: { hostType: 'agentParticipant' } },
+      ], blocks: [{ kind: 'step', id: 'review', input: [], result: { kind: 'text' },
+        document: { text: 'Review the question', references: [], attachments: [] }, execution: { participant: { kind: 'input', name: 'reviewer' } } }] },
+      context: { source: { kind: 'inline' }, inputs: { reviewer: { kind: 'model', launch } }, machineId: workspace.machineId,
+        executionTarget: { kind: 'session' }, workspaceTarget: { project: workspace },
+        origin: { kind: 'direct', discussion: discussionOrigin,
+          actionPolicy: { surface: originSurface, authority: policy === 'composed-automation' ? 'account_automation' : 'present_user', actionsSettings: settings } },
+        authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+      if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
+      const inputs: unknown[] = [];
+      const conversations = createProductionWorkflowConversationOwner({ credentials, serverId: 'server-1', machineId: workspace.machineId,
+        createFreshConversation: create, resolveSharedRunConversation: async () => null,
+        resolveProducerConversation: async () => null, resolveExistingSessionConversation: async () => null });
+      const coordinator = createWorkflowCoordinator({ store, action, allocateInvocationRecordId: () => 'invocation-1',
+        prepareStep: async params => ({ preparedStep: await conversations.prepare(params),
+          conversationWorkspace: { machineId: launch.executionTarget.machineId, directory: launch.directory.path } }),
+        resolveWorkspace: createCoordinatorWorkspaceResolver({ store, projectWorkspace: workspace, scm: {
+          inspectLocation: async () => ({ inspection: { rootPath: workspace.checkoutRootPath } }),
+          verifyRecordedWorkspace: async (descriptor, creationIntent) => verifyWorkflowWorkspaceCurrentness(descriptor, {
+            creationIntent, pathIsDirectory: async () => true,
+            inspectLocation: async () => ({ inspection: { rootPath: workspace.checkoutRootPath } }),
+          }),
+        } }), isAcceptedAuthorizationCurrent: async () => true,
+        executeStep: createWorkflowSessionStepExecutor({ credentials, workDepth: 0,
+          prepareConversation: async params => await conversations.prepare(params),
+          materializeConversation: async (prepared, params) => ({ sessionId: (await conversations.materialize(prepared, params)).sessionId,
+            machineAdmissionTransport: vi.fn() }),
+          // Native Session input/observation transports are system boundaries;
+          // input classification and coordinator settlement remain real.
+          sessionInput: { enqueue: async request => {
+            expect(store.list().find(row => row.blockId === 'review')?.lifecycle).toBe('admitting');
+            inputs.push(request); return { status: 'accepted',
+            localId: deriveWorkflowSessionInputLocalIdV2(request.workflow) }; },
+            observe: async request => ({ ok: true, sessionId: request.sessionId, localId: request.localId,
+              result: { kind: 'final_text', text: 'review finished' } }),
+          } }),
+      });
+      const lifetime = new AbortController();
+      const run = { ...accepted.snapshot, runId: 'discussion-run', signal: lifetime.signal };
+      const running = coordinator.run(run).then(result => ({ result }), error => ({ error }));
+      try {
+        await vi.waitFor(() => {
+          const row = store.list().find(row => row.blockId === 'review');
+          expect(row, JSON.stringify({ reason: row?.reason, execution: row?.execution,
+            approvalStatus: stored?.status, reservations: reservations.length, launches: launches.length }))
+            .toMatchObject({ lifecycle: 'waiting_for_approval' });
+        });
+        const held = store.list().find(row => row.blockId === 'review');
+        expect(stored).toMatchObject({ requestedSurface: 'agent', executionOriginV1: { caller: {
+          kind: 'workflowRun', discussionModelReservation: { policySurface: originSurface },
+        } } });
+        expect(held).toMatchObject({ recordId: 'invocation-1', lifecycle: 'waiting_for_approval', execution: {
+          kind: 'action', actionId: 'discussion.invite', output: { kind: 'approval_request_created', artifactId: 'invitation-approval' },
+        } });
+        expect(reservations).toEqual([]); expect(launches).toEqual([]); expect(births).toEqual([]);
+        expect(inputs).toEqual([]);
+        if (policy === 'composed-reclaim') expect(await running).toMatchObject({ result: { state: 'paused', reason: 'approval_required' } });
+        expect(await executor.execute('approval.request.decide', { artifactId: 'invitation-approval',
+          decision: policy === 'composed-reject' ? 'reject' : 'approve' },
+          { surface: 'ui', authority: 'present_user', serverId: 'server-1', serverIdentityId: 'srv_home', runtimeAccountId: 'account-1' }))
+          .toMatchObject({ ok: true });
+        if (policy === 'composed-reject') {
+          expect(await running).toMatchObject({ result: { reason: 'approval_rejected' } });
+          expect(store.list().find(row => row.blockId === 'review')).toMatchObject({ lifecycle: 'failed', reason: 'approval_rejected' });
+          expect(reservations).toEqual([]); expect(launches).toEqual([]); expect(births).toEqual([]); expect(inputs).toEqual([]);
+          return;
+        }
+        if (policy === 'composed-reclaim') expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+        else expect(await running).toMatchObject({ result: { state: 'succeeded' } });
+        expect(store.list().find(row => row.blockId === 'review')).toMatchObject({ recordId: held?.recordId, lifecycle: 'completed' });
+        expect(reservations).toHaveLength(1); expect(launches).toHaveLength(1); expect(births).toHaveLength(1);
+        expect(inputs).toHaveLength(1);
+        expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+        expect(reservations).toHaveLength(1); expect(launches).toHaveLength(1); expect(births).toHaveLength(1);
+        expect(inputs).toHaveLength(1);
+      } finally {
+        lifetime.abort();
+        await running;
+      }
+      return;
+    }
     const invoke = () => create({ selection: {}, launch, creationKey,
+      origin: { kind: 'direct', actionPolicy: { surface, authority: policy === 'require' ? 'present_user' : 'account_automation',
+        actionsSettings: settings } },
+      ...(retainedInvitationApproval ? { retainedInvitationApproval } : {}),
+      onInvitationApproval: async execution => { retainedInvitationApproval = execution; },
       startupAuthorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } });
+    if (policy === 'disabled') {
+      await expect(invoke()).rejects.toMatchObject({ code: 'action_disabled' });
+      expect(reservations).toEqual([]); expect(launches).toEqual([]); expect(births).toEqual([]);
+      return;
+    }
+    if (policy !== 'waive') {
+      await expect(invoke()).rejects.toMatchObject({ code: 'approval_required' });
+      expect(stored).toMatchObject({ status: 'open', actionId: 'discussion.invite', requestedSurface: surface });
+      expect(reservations).toEqual([]); expect(launches).toEqual([]); expect(births).toEqual([]);
+      // Re-entry observes the same Artifact, without enrolling another request.
+      await expect(invoke()).rejects.toMatchObject({ code: 'approval_required' });
+      if (policy === 'require' && surface === 'cli') {
+        const retained = retainedInvitationApproval!;
+        retainedInvitationApproval = { ...retained, input: { ...retained.input, discussionId: 'another-discussion' } };
+        await expect(invoke()).rejects.toMatchObject({ code: 'approval_unavailable' });
+        retainedInvitationApproval = retained;
+        expect(reservations).toEqual([]);
+      }
+      const decision = await executor.execute('approval.request.decide', { artifactId: 'invitation-approval',
+        decision: policy === 'reject' ? 'reject' : 'approve' },
+      { surface: 'ui', authority: 'present_user', serverId: 'server-1', serverIdentityId: 'srv_home', runtimeAccountId: 'account-1' });
+      expect(decision).toMatchObject({ ok: true });
+      // Approval may reserve the exact slot, but the Workflow remains the sole Session creator.
+      expect(launches).toEqual([]); expect(births).toEqual([]);
+      if (policy === 'reject') {
+        await expect(invoke()).rejects.toMatchObject({ code: 'approval_rejected' });
+        expect(reservations).toEqual([]);
+        return;
+      }
+      expect(reservations).toHaveLength(1);
+      if (policy === 'require' && surface === 'cli') {
+        const observe = createWorkflowInvocationRecoveryObserver({ credentials, machineId: 'machine-1', actionExecutor: executor });
+        expect(await observe({ progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step',
+          invocationPath: { blockId: 'review', scope: [] }, attempt: '0', logicalInvocationRecordId: 'invocation-1',
+          execution: retainedInvitationApproval }, terminalParent: false, cancellationRequested: false }))
+          .toMatchObject({ kind: 'unresolved', code: 'workflow_native_startup_ready' });
+        expect(await executor.execute('approval.request.decide', { artifactId: 'invitation-approval', decision: 'approve' },
+          { surface: 'ui', authority: 'present_user', serverId: 'server-1', serverIdentityId: 'srv_home', runtimeAccountId: 'account-1' }))
+          .toMatchObject({ ok: true });
+        expect(reservations).toHaveLength(1);
+      }
+    }
     if (denied) {
       await expect(invoke()).rejects.toMatchObject({ code: 'discussion_access_forbidden' });
       expect(launches).toEqual([]);

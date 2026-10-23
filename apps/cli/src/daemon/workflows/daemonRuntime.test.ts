@@ -18,7 +18,7 @@ import { SessionMessageReplyCapabilityV1Schema, SessionMessageReplyReadResultV1S
 import { createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import { tmpdir } from 'node:os';
 import nacl from 'tweetnacl';
-import { AccountSettingsSchema, HomeConnectionDescriptorV1Schema, FeaturesResponseSchema, ManagedMachineV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
+import { AccountSettingsSchema, ResolvedRoleV1Schema, HomeConnectionDescriptorV1Schema, FeaturesResponseSchema, ManagedMachineV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
   computeExternalActionRequestEnvelopeDigestV1, StrictJsonValueSchema, zodSchemaToJsonSchemaObject } from '@happier-dev/protocol';
 import { updateSettings, writeStoredCredentialsForServerId } from '@/persistence';
 import { createDaemonManagedMachineActionAdapter } from '@/daemon/startup/managedMachineActionAdapter';
@@ -31,7 +31,7 @@ import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedSer
 import { createConnectedAccountRequestAuthSubjectRegistry } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
 import { commitActivePromptLibraryCatalog, getActiveAccountSettingsSnapshotLifetimeToken,
   resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -51,6 +51,8 @@ import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { join } from 'node:path';
 import { logger } from '@/ui/logger';
 import { createProductionWorkflowConversationOwner } from './sessionStepExecutor';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 // Physical daemon HTTP binding is an OS boundary; the startup/ingress composition stays real.
 vi.mock('@/daemon/controlServer', () => ({ startDaemonControlServer: async () => ({ port: 44322, stop: async () => {} }) }));
@@ -188,15 +190,28 @@ describe('production daemon retained operation target', () => {
       resolveAccountId: async () => match === 'foreign-account' ? 'foreign-account' : accountId,
       generateOperationId: () => 'original-startup' });
     let finishStartup = () => {};
-    if (late || ['exact', 'local-only', 'pending', 'foreign-account', 'foreign-machine'].includes(match)) await operations.observeExecution({ actionId: 'session.spawn_new',
-      input: { creationKey }, execute: async context => {
-        if (match === 'pending' || late) {
-          context.operationAcceptance?.accept({});
-          await new Promise<void>(resolve => { finishStartup = resolve; });
-        }
-        return late && match !== 'pending-failure' ? { ok: true, result: { sessionId: session.id } }
-          : { ok: false, errorCode: 'DAEMON_RPC_UNAVAILABLE', error: 'Requester Session custody unavailable' };
-      } });
+    let startup: ReturnType<typeof operations.observeExecution> | undefined;
+    let acknowledgeStartup = () => {};
+    const startupAccepted = new Promise<void>(resolve => { acknowledgeStartup = resolve; });
+    if (late || ['exact', 'local-only', 'pending', 'foreign-account', 'foreign-machine'].includes(match)) {
+      startup = operations.observeExecution({ actionId: 'session.spawn_new',
+        input: { creationKey }, execute: async context => {
+          if (match === 'pending' || late) {
+            context.operationAcceptance?.accept({});
+            await new Promise<void>(resolve => { finishStartup = resolve; acknowledgeStartup(); });
+          }
+          return late && match !== 'pending-failure' ? { ok: true, result: { sessionId: session.id } }
+            : { ok: false, errorCode: 'DAEMON_RPC_UNAVAILABLE', error: 'Requester Session custody unavailable' };
+        } });
+      // The keyed spawn caller waits for native startup's terminal result.
+      // Recovery observes the admitted operation while that caller is pending.
+      if (match === 'pending' || late) {
+        await startupAccepted;
+        expect(await operations.handlers.getV2({ operationId: 'original-startup' })).toMatchObject({
+          kind: 'found', operation: { operationId: 'original-startup', state: 'running' },
+        });
+      } else await startup;
+    }
     storage.requestControl('cancel_requested');
     if (match === 'cancelled-root-parent') {
       // Retained QA-FIN37: a cancelled root survived while the parent was reclaimed.
@@ -328,7 +343,7 @@ describe('production daemon retained operation target', () => {
         expect(opened.kind === 'available' ? opened.content : null).toMatchObject({
           execution: { kind: 'session', sessionId: session.id, localInputId: localId }, result: 'original result' });
       }
-    } finally { controller.abort(); finishStartup(); }
+    } finally { controller.abort(); finishStartup(); await startup; }
     if (match === 'exact' || match === 'local-only') {
       const row = storage.rowById(childId)!;
       const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
@@ -699,6 +714,91 @@ describe('production FIN managed Action composition', () => {
     const settled = await operations.handlers.getV2({ operationId: 'fin-native', waitForTerminal: true });
     expect(settled, JSON.stringify(settled)).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
     expect(effects).toContain('power');
+  });
+});
+
+describe('production daemon Workflow policy-only context preparation', () => {
+  let releaseHome = () => {};
+  beforeEach(() => { resetInMemoryAccountSettingsContextForTests(); });
+  afterEach(() => { releaseHome(); vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
+
+  it('checks fresh controller policy on repeated accepted work without listing Artifact or Role inventories', async () => {
+    const accountId = 'workflow-policy-owner';
+    const machineId = 'workflow-policy-machine';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const home = 'http://127.0.0.1:43187';
+    releaseHome = publishServerHttpRuntimeOrigin(home, 'https');
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 0,
+      provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
+    const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
+    const role = ResolvedRoleV1Schema.parse({ roleId: 'accepted-reviewer', name: 'Accepted reviewer', instructions: 'Keep the accepted instructions.',
+      engine: { agentTargetKey: buildBackendTargetKeyV2(agentTarget) },
+      runsAs: { kind: 'session' }, workspaceWrites: 'deny', secondOpinion: 'off', enabled: true });
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { engine: { role: role.roleId } }, blocks: [
+      { kind: 'step', id: 'review', document: { text: 'Review accepted work.', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+    ] };
+    // Freeze the Role through the real accepted-snapshot producer. Only the
+    // external target-availability observation is supplied by this fixture.
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId, directory: tmpdir(), checkoutRootPath: tmpdir() } },
+        origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+      roleSelection: { settingsRoles: { [role.roleId]: role } }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error(`Workflow policy fixture admission failed: ${accepted.error.code}`);
+    expect(accepted.snapshot.materializedLeaves[0]?.role).toMatchObject(role);
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot }));
+    const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    let settingsVersion = 1;
+    let settings = AccountSettingsSchema.parse({ workDepthLimit: 8, sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: [] } });
+    const reads: string[] = [];
+    mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    // Only authenticated Home HTTP is substituted. The coordinator, accepted
+    // snapshot codec, Settings bootstrap, policy and Role readers remain real.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const target = new URL(String(url));
+      expect(target.origin).toBe(home);
+      reads.push(target.pathname);
+      if (target.pathname === '/v1/account/profile') return { status: 200, data: { id: accountId } };
+      if (target.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (target.pathname === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: settings }, version: settingsVersion } };
+      if (target.pathname === '/v1/artifacts') return { status: 200, data: [] };
+      if (target.pathname === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [{ key: 'role-overrides', revision: 1,
+        content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } } }] } };
+      throw new Error(`Unexpected Workflow policy HTTP read ${target.pathname}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      if (new URL(String(url)).pathname === '/v3/automations/runs/workflow-storage') {
+        return { status: 200, data: await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+      }
+      throw new Error('Unexpected Workflow policy HTTP mutation');
+    });
+    const snapshot = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', honorAccountSettingsModeEnv: false });
+    if (!snapshot.scopeKey) throw new Error('Missing Workflow policy Account scope');
+    const catalog = await loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () =>
+      PromptLibraryRowsListResponseV1Schema.parse((await axios.get(`${home}${PROMPT_LIBRARY_ROWS_ROUTE_V1}`)).data) });
+    expect(commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey,
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog })).toBe(true);
+    reads.length = 0;
+    const unavailable = async (): Promise<never> => { throw new Error('Refused work must not reach a Machine'); };
+    const runtime = createProductionDaemonWorkflowRuntime({ credentials, accountId });
+    const coordinate = () => runtime.createCoordinatorForMachine({ machineId, machineAdmissionTransport: unavailable,
+      machineActionDirectTargetTransport: { machineId, invoke: unavailable } });
+    const claim = () => ({ runId, attempt: 0, expectedRevision: storage.run().revision, acceptedEnvelope,
+      workflowResumeRequestedRevision: storage.run().revision,
+      accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null } });
+    expect(await coordinate()(claim())).toMatchObject({ state: 'paused', reason: 'policy_denied_field' });
+    const firstSettingsReads = reads.filter(path => path === '/v2/account/settings').length;
+    expect(firstSettingsReads).toBeGreaterThan(0);
+    settingsVersion++;
+    settings = AccountSettingsSchema.parse({ workDepthLimit: 0, sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: null } });
+    expect(await coordinate()(claim())).toMatchObject({ state: 'paused', reason: 'work_depth_exceeded' });
+    expect(reads.filter(path => path === '/v2/account/settings').length).toBeGreaterThan(firstSettingsReads);
+    expect(storage.acceptedEnvelope()).toBe(acceptedEnvelope);
+    expect(reads.filter(path => path === '/v1/artifacts' || path === PROMPT_LIBRARY_ROWS_ROUTE_V1),
+      'already-accepted work needs fresh policy, not full source inventories').toEqual([]);
   });
 });
 

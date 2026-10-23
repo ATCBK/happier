@@ -3,7 +3,7 @@ import axios from 'axios';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DiscussionAgentPublisherRequestV1Schema as PublisherRequestV1Schema, DiscussionAgentPostRequestV1Schema, DiscussionDetailsResponseV1Schema, type DiscussionAgentPublisherRequestV1, type DiscussionAgentPublisherInputV1, type DiscussionAgentPublisherPublicationInputV1 } from '@happier-dev/protocol/discussions/api';
 import { bindDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
-import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
+import { DiscussionMessageContentV1Schema, type DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { SessionInputSourceSessionV1Schema, type SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -23,6 +23,8 @@ import { openSessionStoredContent } from '@/session/transport/encryption/session
 import { projectSessionMessageReplyOutcome, readSessionMessageReply } from '@/session/services/sessionMessageReply';
 import { readApprovedDiscussionPublication, type ApprovedDiscussionSourceActionExecute } from './approvedDiscussionPublication';
 import { WorkflowInvocationGetResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { projectWorkflowDiscussionResultContentV1 } from '@happier-dev/protocol/workflows/workflowDiscussionPublicationV1';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 /** Host-owned causal root shared by the active Session RPC and bound MCP host. */
 export function readDiscussionAgentPublisherSourceSession(
@@ -96,7 +98,7 @@ export const DiscussionAgentPublisherRequestV1Schema = z.union([
 export type DiscussionAgentPublisherPrivateRequestV1 = z.infer<typeof DiscussionAgentPublisherRequestV1Schema>;
 
 /** An Account RPC caller may name an original, but cannot author its terminal result. */
-async function isExactTerminalDiscussionReturn(params: Readonly<{
+async function verifyTerminalDiscussionReturn(params: Readonly<{
   request: DiscussionAgentPublisherRequestV1;
   credentials: StoredCredentials;
   serverId: string;
@@ -105,7 +107,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
   signal?: AbortSignal;
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
   reportStage?: (stage: 'discussion_reply_custody' | 'discussion_reply_result') => void;
-}>): Promise<boolean> {
+}>): Promise<boolean | 'unavailable'> {
   const { request, credentials, signal } = params;
   if ('operation' in request) return false;
   const marker = request.replyReturn;
@@ -137,38 +139,44 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
         || progress.outcome.publicationRef.discussion.serverId !== params.serverIdentityId
         || progress.outcome.publicationRef.discussion.discussionId !== request.discussionId)) return false;
     params.reportStage?.('discussion_reply_result');
-    let message: string;
+    let expectedContent: DiscussionMessageContentV1;
     if (workflow) {
       // Open through the existing Workflow Action owner, including its current
       // Run access/key census. A C2 terminal answer alone is not accepted output.
-      if (!params.executeSourceAction) return false;
+      if (!params.executeSourceAction) return 'unavailable';
       const result = await params.executeSourceAction('workflow.run.invocations.get', { runId: workflow.runId,
         invocationId: workflow.invocationRecordId }, { surface: 'cli', authority: 'account_automation',
         serverId: params.serverId, ...(signal ? { signal } : {}) });
-      const opened = result.ok ? WorkflowInvocationGetResultV1Schema.safeParse(result.result) : null;
-      if (!opened?.success) return false;
-      const delivery = opened.data.discussionResultDelivery;
-      if (!delivery || delivery.discussion.serverId !== params.serverIdentityId
+      // A failed read proves no denial unless its owner confirms access or
+      // policy refusal. Missing keys/storage/wiring must retain reply custody.
+      if (!result.ok) return ['run_access_denied', 'not_authenticated', 'run_not_found',
+        'action_disabled', 'present_user_required', 'approval_stale'].includes(result.errorCode ?? '') ? false : 'unavailable';
+      const opened = WorkflowInvocationGetResultV1Schema.safeParse(result.result);
+      if (!opened.success) return 'unavailable';
+      const { index, progress: invocation } = opened.data.invocation;
+      if (invocation.review && index.lifecycle !== 'completed' && invocation.review.decision?.kind !== 'use_result') return false;
+      const delivery = invocation.discussionReplyTo ?? opened.data.discussionResultDelivery;
+      if (!delivery || !areServerProfileIdentifiersEquivalent(delivery.discussion.serverId, params.serverId,
+        id => id === params.serverId || id === params.serverIdentityId ? params.serverIdentityId : null)
         || delivery.discussion.discussionId !== request.discussionId
         || delivery.messageId !== parentMessageId || delivery.throughSeq !== progress.discussion.throughSeq) return false;
-      const { index, progress: invocation } = opened.data.invocation;
-      if (index.lifecycle !== 'completed' || index.runId !== workflow.runId || index.id !== workflow.invocationRecordId
+      if (!['completed', 'failed', 'cancelled'].includes(index.lifecycle) || index.runId !== workflow.runId || index.id !== workflow.invocationRecordId
         || index.attempt !== workflow.invocationAttempt || invocation.attempt !== workflow.invocationAttempt
         || invocation.execution?.kind !== 'session' || invocation.execution.sessionId !== request.sessionId
-        || invocation.execution.localInputId !== marker.requestLocalId || invocation.result === undefined
-        || !['answer', 'pass'].includes(progress.outcome.kind)) return false;
-      if (progress.outcome.kind === 'pass') {
+        || invocation.execution.localInputId !== marker.requestLocalId || progress.outcome.kind === 'declined') return false;
+      if (progress.outcome.kind !== 'answer') {
         const projected = await projectSessionMessageReplyOutcome({ credentials, serverId: params.serverId,
           sessionId: request.sessionId, localId: marker.requestLocalId, outcome: progress.outcome,
           ...(signal ? { signal } : {}) });
         if (!projected) return false;
-        message = projected.message;
-      } else message = typeof invocation.result === 'string' ? invocation.result : JSON.stringify(invocation.result);
+        expectedContent = { v: 1, parts: [{ t: 'text', text: projected.message }] };
+      } else expectedContent = projectWorkflowDiscussionResultContentV1({ ...workflow,
+        lifecycle: index.lifecycle, ...(invocation.result !== undefined ? { result: invocation.result } : {}) });
     } else {
       const projected = await projectSessionMessageReplyOutcome({ credentials, serverId: params.serverId,
         sessionId: request.sessionId, localId: marker.requestLocalId, outcome: progress.outcome, ...(signal ? { signal } : {}) });
       if (!projected) return false;
-      message = projected.message;
+      expectedContent = { v: 1, parts: [{ t: 'text', text: projected.message }] };
     }
     const bound = bindDiscussionActionHttpRequestV1('discussion.get', { discussionId: request.discussionId });
     const response = await axios.get(params.serverUrl.replace(/\/+$/, '') + bound.path,
@@ -181,7 +189,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
       : { mode: 'e2ee' as const, ctx: { encryptionKey: key.dataKey, encryptionVariant: 'dataKey' as const } };
     const content = DiscussionMessageContentV1Schema.parse(openSessionStoredContent({ ...crypto, content: request.request.content }));
     signal?.throwIfAborted();
-    return sameStrictJsonValue(content, { v: 1, parts: [{ t: 'text', text: message }] });
+    return sameStrictJsonValue(content, expectedContent);
   });
 }
 
@@ -251,10 +259,14 @@ export function createDiscussionAgentPublisher(params: Readonly<{
         });
         if (!approved || (await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
         const { terminalReturn, draftReview, serverIdentityId, ...reviewedOrigin } = approved;
-        if (terminalReturn && (!serverIdentityId || !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
-          serverId: params.serverId, serverIdentityId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
-          reportStage,
-          ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) }))) return denied();
+        if (terminalReturn) {
+          if (!serverIdentityId) return denied();
+          const verified = await verifyTerminalDiscussionReturn({ request: parsed.data.request, credentials,
+            serverId: params.serverId, serverIdentityId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
+            reportStage, ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) });
+          if (verified === 'unavailable') return refused('discussions_unavailable');
+          if (!verified) return denied();
+        }
         const { runId: _authoredRun, toolCallId: _authoredTool, sourceSession: _authoredSource, ...reviewedRequest } = parsed.data.request;
         if (approved.replyReturn) {
           if ('operation' in reviewedRequest) return denied();
@@ -283,11 +295,14 @@ export function createDiscussionAgentPublisher(params: Readonly<{
       if (!serverIdentityId || !('replyReturn' in request) || request.replyReturn?.serverId !== serverIdentityId) return denied();
       try {
         const credentials = await params.readOwnerAccountCredentials();
-        if (!credentials || !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
+        if (!credentials) return denied();
+        const verified = await verifyTerminalDiscussionReturn({ request: parsed.data.request, credentials,
           serverId: params.serverId, serverIdentityId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
           reportStage,
-          ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) })
-          || (await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
+          ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) });
+        if ((await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
+        if (verified === 'unavailable') return refused('discussions_unavailable');
+        if (!verified) return denied();
       } catch (error) { return readFailed(error); }
       // The append owner stamps factual original provenance. Raw Account
       // operands supply neither a different causal root nor Run attribution.

@@ -30,9 +30,92 @@ import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createDiscussionActionDeps } from './discussionActionDeps';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { DiscussionReplyInputV1Schema } from '@happier-dev/protocol/discussions/actions';
+import type { DiscussionWorkflowPostPublicationV1, DiscussionPostRequestV1 } from '@happier-dev/protocol/discussions/api';
+import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
+import { WorkflowInvocationGetResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { projectWorkflowDiscussionProducerV1, projectWorkflowDiscussionResultContentV1 } from '@happier-dev/protocol/workflows/workflowDiscussionPublicationV1';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 export type ApprovedDiscussionSourceActionExecute = (actionId: ActionId, input: unknown,
   context: ActionExecutorContext) => Promise<ActionExecuteResult>;
+
+async function readExecutingDiscussionApproval(params: Readonly<{
+  artifactId: string; credentials: StoredCredentials; serverId: string; serverUrl: string;
+}>) {
+  const store = createCliApprovalsArtifactStore({ credentials: params.credentials, serverId: params.serverId, serverHttpBaseUrl: params.serverUrl });
+  const parsed = StoredApprovalRequestSchema.safeParse(await store.approvalsGet({ artifactId: params.artifactId, serverId: null }));
+  return parsed.success && parsed.data.v === 2 && parsed.data.status === 'executing'
+    && parsed.data.decision?.kind === 'approve' && parsed.data.execution === undefined ? parsed.data : null;
+}
+
+/** Same approved Artifact and accepted-result owner, without inventing Session custody. */
+export async function readApprovedWorkflowDiscussionPublication(params: Readonly<{
+  artifactId: string;
+  request: Readonly<{ discussionId: string; request: DiscussionPostRequestV1 }>;
+  content: DiscussionMessageContentV1;
+  credentials: StoredCredentials; machineId: string; serverId: string; serverUrl: string; signal?: AbortSignal;
+  callerAuthority?: ActionExecutorContext['authority'];
+  executeSourceAction: ApprovedDiscussionSourceActionExecute;
+  isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>;
+}>): Promise<DiscussionWorkflowPostPublicationV1 | null> {
+  if (params.callerAuthority !== 'present_user') return null;
+  return await runWithServerHttpBaseUrl(params.serverUrl, async () => {
+    const approval = await readExecutingDiscussionApproval(params);
+    if (!approval || approval.actionId !== 'discussion.reply' || approval.decision?.authority !== 'present_user') return null;
+    const origin = approval.executionOriginV1;
+    const marker = origin.discussionReplyReturn;
+    if (!marker || !('kind' in marker) || origin.caller.kind !== 'workflowRun' || origin.caller.runId !== marker.producer.runId || origin.serverId !== params.serverId
+      || origin.machineId !== params.machineId || marker.serverId !== origin.serverIdentityId
+      || origin.accountId !== readAccountIdFromToken(params.credentials.token)
+      || !await params.isApprovalExecutionOriginCurrent({ origin, request: approval, ...(params.signal ? { signal: params.signal } : {}) })) return null;
+    const approved = DiscussionReplyInputV1Schema.safeParse(approval.actionArgs);
+    const localId = deriveWorkflowDiscussionReplyLocalIdV1(marker.producer);
+    if (!approved.success || origin.requestId !== localId || approved.data.localId !== localId
+      || params.request.request.localId !== localId || params.request.discussionId !== marker.origin.discussion.discussionId
+      || approved.data.discussionId !== params.request.discussionId
+      || approved.data.replyTarget.kind !== 'message' || approved.data.replyTarget.messageId !== marker.origin.messageId
+      || !sameStrictJsonValue(params.request.request.replyTarget, approved.data.replyTarget)
+      || !sameStrictJsonValue(params.content, approved.data.content)
+      || params.request.request.mentionedAccountIds.length !== 0 || (params.request.request.mentionedSessionIds?.length ?? 0) !== 0) return null;
+    const workflow = marker.producer;
+    const result = await params.executeSourceAction('workflow.run.invocations.get', { runId: workflow.runId, invocationId: workflow.invocationRecordId },
+      { surface: 'cli', authority: 'account_automation', serverId: params.serverId, ...(params.signal ? { signal: params.signal } : {}) });
+    const opened = result.ok ? WorkflowInvocationGetResultV1Schema.safeParse(result.result) : null;
+    if (!opened?.success) return null;
+    const { index, progress } = opened.data.invocation;
+    if (index.id !== workflow.invocationRecordId || index.runId !== workflow.runId
+      || index.attempt !== workflow.invocationAttempt || progress.attempt !== workflow.invocationAttempt
+      || progress.review && index.lifecycle !== 'completed' && progress.review.decision?.kind !== 'use_result') return null;
+    const delivery = progress.discussionReplyTo ?? opened.data.discussionResultDelivery;
+    if (!delivery || delivery.discussion.discussionId !== marker.origin.discussion.discussionId
+      || delivery.messageId !== marker.origin.messageId || delivery.throughSeq !== marker.origin.throughSeq
+      || !areServerProfileIdentifiersEquivalent(delivery.discussion.serverId, params.serverId,
+        id => id === params.serverId || id === origin.serverIdentityId ? origin.serverIdentityId : null)) return null;
+    const expectedProducer = projectWorkflowDiscussionProducerV1({ runId: index.runId, invocationRecordId: index.id,
+      invocationAttempt: index.attempt, blockKind: progress.blockKind, lifecycle: index.lifecycle,
+      ...(progress.execution ? { execution: progress.execution } : {}), ...(progress.result !== undefined ? { result: progress.result } : {}) });
+    const expectedContent = projectWorkflowDiscussionResultContentV1({ runId: index.runId, invocationRecordId: index.id,
+      invocationAttempt: index.attempt, lifecycle: index.lifecycle, ...(progress.result !== undefined ? { result: progress.result } : {}) });
+    if (!expectedProducer || !sameStrictJsonValue(workflow, expectedProducer) || !sameStrictJsonValue(params.content, expectedContent)) return null;
+    const response = await axios.get(params.serverUrl.replace(/\/+$/, '') + bindDiscussionActionHttpRequestV1('discussion.get', {
+      discussionId: params.request.discussionId }).path, { headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+        Authorization: `Bearer ${params.credentials.token}` }, validateStatus: () => true, ...(params.signal ? { signal: params.signal } : {}) });
+    if (response.status !== 200) return null;
+    const summary = DiscussionDetailsResponseV1Schema.parse(response.data).discussion;
+    if (summary.id !== params.request.discussionId || !summary.keyReadiness) return null;
+    const resourceKey = await openResourceDataKey({ credentials: params.credentials, mode: summary.encryptionMode, dataEncryptionKey: summary.dataEncryptionKey });
+    let openedContent;
+    try { openedContent = DiscussionMessageContentV1Schema.safeParse(openSessionStoredContent({ content: params.request.request.content,
+      ...(resourceKey.mode === 'plain' ? { mode: 'plain', ctx: null } : { mode: 'e2ee',
+        ctx: { encryptionKey: resourceKey.dataKey, encryptionVariant: 'dataKey' } }) })); }
+    catch { return null; }
+    if (!openedContent.success || !sameStrictJsonValue(openedContent.data, expectedContent)) return null;
+    return { ...params.request, producer: expectedProducer, origin: marker.origin,
+      ...(marker.expectedParentRevision !== undefined ? { expectedParentRevision: opened.data.invocation.parentRevision } : {}) };
+  });
+}
 
 /** Reopens the existing approved Artifact; neither a reference nor caller metadata is authority. */
 export async function readApprovedDiscussionPublication(params: Readonly<{
@@ -52,12 +135,8 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
 }>): Promise<Readonly<{ serverIdentityId?: string; sourceSession?: SessionInputSourceSessionV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
   draftReview?: DiscussionDraftReviewV1; terminalReturn?: true; runId?: string; toolCallId: string }> | null> {
   return await runWithServerHttpBaseUrl(params.serverUrl, async () => {
-    const store = createCliApprovalsArtifactStore({ credentials: params.credentials, serverId: params.serverId,
-      serverHttpBaseUrl: params.serverUrl });
-    const parsed = StoredApprovalRequestSchema.safeParse(await store.approvalsGet({ artifactId: params.artifactId, serverId: null }));
-    if (!parsed.success || parsed.data.v !== 2 || parsed.data.status !== 'executing'
-      || parsed.data.decision?.kind !== 'approve' || parsed.data.execution !== undefined) return null;
-    const approval = parsed.data;
+    const approval = await readExecutingDiscussionApproval(params);
+    if (!approval) return null;
     const docMutation = approval.actionId === 'doc.comment.reply' || approval.actionId === 'doc.edit.propose'
       ? prepareDocDiscussionMutationV1(approval.actionId, approval.actionArgs, params.serverId) : undefined;
     let actionId: string = docMutation?.actionId ?? approval.actionId;
@@ -70,7 +149,9 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
     if (requiresPresentUserDecisionForActionInputV1(getActionSpec(approval.actionId), approval.actionArgs)
       && params.callerAuthority !== 'present_user') return null;
     const origin = approval.executionOriginV1;
-    const terminalReturn = origin.caller.kind === 'host' && origin.discussionReplyReturn !== undefined
+    if (origin.discussionReplyReturn && 'kind' in origin.discussionReplyReturn) return null;
+    const terminalReturn = (origin.caller.kind === 'host' || origin.caller.kind === 'workflowRun'
+      && origin.caller.runId === origin.discussionReplyReturn?.workflow?.runId) && origin.discussionReplyReturn !== undefined
       && origin.sessionId === params.sessionId && Boolean(origin.machineId);
     if (origin.serverId !== params.serverId || origin.accountId !== readAccountIdFromToken(params.credentials.token)
       || !(origin.caller.kind === 'session' && origin.caller.sessionId === params.sessionId || terminalReturn)

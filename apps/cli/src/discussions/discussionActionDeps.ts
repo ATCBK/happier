@@ -97,6 +97,10 @@ export function createDiscussionActionDeps(options: Readonly<{
     signal?: AbortSignal;
     approvedActionReplay?: ActionExecutorContext['approvedActionReplay'];
   }>) => Promise<DiscussionAgentPublisherResponseV1>;
+  /** Exact accepted Workflow custody, supplied only by its host publication owner. */
+  postWorkflowMessage?: (request: Readonly<{ discussionId: string; request: import('@happier-dev/protocol/discussions/api').DiscussionPostRequestV1 }>,
+    options: Readonly<{ signal?: AbortSignal; context: ActionExecutorContext;
+      content: import('@happier-dev/protocol/discussions/content').DiscussionMessageContentV1 }>) => Promise<import('@happier-dev/protocol/discussions/api').DiscussionAgentPostResponseV1>;
 }> & ExternalActionHomeBinding & DiscussionActionFixedHome): Pick<ActionExecutorDeps, 'discussionAction'> {
   if ((options.serverId === undefined) !== (options.serverHttpBaseUrl === undefined)
     || (options.serverId !== undefined && !options.serverId.trim())
@@ -129,6 +133,8 @@ export function createDiscussionActionDeps(options: Readonly<{
     if (signal?.aborted) return failure('cancelled');
     const isPost = actionId === 'discussion.post' || actionId === 'discussion.reply';
     const agentOrigin = context.surface === 'agent' || context.actionCaller?.kind === 'session';
+    const workflowReturn = context.discussionReplyReturn && 'kind' in context.discussionReplyReturn
+      ? context.discussionReplyReturn : undefined;
     const admittedSessionId = context.actionCaller?.kind === 'session' ? context.actionCaller.sessionId : context.defaultSessionId;
     const source = context.sessionInputSource !== null && typeof context.sessionInputSource === 'object'
       ? context.sessionInputSource as Record<string, unknown> : null;
@@ -139,7 +145,7 @@ export function createDiscussionActionDeps(options: Readonly<{
       ...(context.approvedActionReplay ? { approvedActionReplay: { artifactId: context.approvedActionReplay.artifactId } } : {}) };
     const omittedLocalId = (purpose: Parameters<typeof deriveApprovedDiscussionMutationLocalId>[0]['purpose']) =>
       context.approvedActionReplay ? deriveApprovedDiscussionMutationLocalId({ artifactId: context.approvedActionReplay.artifactId, purpose }) : randomUUID();
-    if (agentOrigin && (isPost || actionId === 'discussion.create')
+    if (agentOrigin && !(isPost && options.postWorkflowMessage && workflowReturn) && (isPost || actionId === 'discussion.create')
       && (!admittedSessionId || (context.defaultSessionId !== undefined && context.defaultSessionId !== admittedSessionId)
         || (context.approvalOrigin !== undefined && (!origin.success || origin.data.sessionId !== admittedSessionId))
         || !options.postAgentMessage)) return failure('discussion_post_denied');
@@ -199,6 +205,12 @@ export function createDiscussionActionDeps(options: Readonly<{
     async function request(bound: ReturnType<typeof bindDiscussionActionHttpRequestV1>, body = bound.body): Promise<unknown> {
       const response = await rawRequest(bound.method, bound.path, body);
       if (response.status !== 200) {
+        // The shared route authority guard refuses before the domain mutation.
+        // Its definite refusal is separate from the Discussion error union.
+        if (response.status === 403 && response.data && typeof response.data === 'object'
+          && 'error' in response.data && response.data.error === 'present_user_required') {
+          throw new DiscussionRequestError('present_user_required');
+        }
         const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
         const error = DiscussionErrorResponseV1Schema.safeParse(response.data);
         throw new DiscussionRequestError(rollback?.code ?? (error.success ? error.data.error
@@ -391,7 +403,14 @@ export function createDiscussionActionDeps(options: Readonly<{
               canonicalIntent: serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...intent }) }) } } : {}),
         });
         let value;
-        if (agentOrigin) {
+        if (options.postWorkflowMessage && workflowReturn) {
+          let response;
+          try { response = DiscussionAgentPostResponseV1Schema.parse(await options.postWorkflowMessage({
+            discussionId: args.discussionId, request: postRequest }, { context, content: args.content, ...(signal ? { signal } : {}) })); }
+          catch { return failure('outcome_unknown'); }
+          if (!response.ok) return failure(response.error);
+          value = response.value;
+        } else if (agentOrigin) {
           if (!options.postAgentMessage || !admittedSessionId) return failure('discussion_post_denied');
           const toolCallId = origin.success ? origin.data.toolCallId : context.actionRequestId;
           let response;

@@ -455,8 +455,9 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
       case 'pause':
       case 'resume':
       case 'cancel': {
-        expectRevision();
         if (kind === 'cancel') {
+          if (typeof operation.expectedRevision !== 'number' || operation.expectedRevision > revision
+            || TERMINAL_RUN_STATES.some(candidate => candidate === state)) throw storageError('currentness_conflict');
           const immediate = state === 'paused' || state === 'waiting_for_review'
             || (rows.size === 0 && (state === 'queued' || state === 'claimed' || state === 'pause_requested'));
           requestControl(immediate ? 'cancelled' : 'cancel_requested');
@@ -470,6 +471,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
           }
           return { run: summary(), intent: immediate ? 'cancelled' : 'cancel_requested' };
         }
+        expectRevision();
         revision += 1;
         if (kind === 'pause') state = 'pause_requested';
         if (kind === 'resume') state = 'running';

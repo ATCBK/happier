@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
-import { createActionExecutor, FeaturesResponseSchema, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor, FeaturesResponseSchema, accountSettingsParse, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema, DiscussionAgentPostRequestV1Schema } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSummaryV1Schema, type DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
 import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
@@ -20,8 +20,8 @@ import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/acti
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
-const { axiosRequest, axiosGet } = vi.hoisted(() => ({ axiosRequest: vi.fn(), axiosGet: vi.fn() }));
-vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet } }));
+const { axiosRequest, axiosGet, axiosPost } = vi.hoisted(() => ({ axiosRequest: vi.fn(), axiosGet: vi.fn(), axiosPost: vi.fn() }));
+vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet, post: axiosPost } }));
 
 import { createDiscussionActionDeps, createDiscussionAutonomousCheckInReader } from './discussionActionDeps';
 import { DiscussionAgentPublisherRequestV1Schema } from './discussionAgentPublisher';
@@ -32,6 +32,20 @@ import { openSessionStoredContent, sealSessionStoredContent, type SessionStoredC
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { createDiscussionReplyReturnPublisher } from './discussionReplyReturnPublisher';
+import { projectWorkflowDiscussionResultContentV1 } from '@happier-dev/protocol/workflows/workflowDiscussionPublicationV1';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+  sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
+  serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol';
+import { createWorkflowRunStorageTestkit } from '@/daemon/workflows/workflowRunStorage.testkit';
+import { createWorkflowRunRecoveryReader } from '@/daemon/workflows/recovery';
+import { createWorkflowDiscussionResultPublisher } from '@/daemon/workflows/workflowDiscussionPublication';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { logger } from '@/ui/logger';
+import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 const credentials = { token: 'token-1', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } };
 const keyless = { token: 'token-1', encryption: null };
@@ -91,6 +105,180 @@ function discussionExecutor(deps: Pick<ActionExecutorDeps, 'discussionAction'> &
 }
 
 describe('Home Discussion resource transport', () => {
+  it.each(['material_unavailable', 'session_not_found', 'identity_denied'] as const)(
+    'retains terminal publication custody for unavailable Session material but settles proved refusal (%s)', async scenario => {
+    const accountId = 'account-1';
+    const machineId = 'machine-1';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const sessionId = 'c123456789012345678901234';
+    const recordId = 'invocation';
+    const rootId = 'root';
+    const workflow = { runId, invocationRecordId: recordId, invocationAttempt: '0' };
+    const inputLocalId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId, invocationRecordId: recordId });
+    const origin = { discussion: { serverId: 'server-1', discussionId: 'discussion-1' }, messageId: 'message-1', throughSeq: 1 };
+    const addressing = { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 1, participantSessionId: sessionId };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, inputs: [], defaults: {
+      agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'test' } },
+    }, blocks: [{ kind: 'step', id: 'answer', document: { text: 'Answer', references: [], attachments: [] },
+      input: [], result: { kind: 'text' } }] }, context: { source: { kind: 'inline' }, inputs: {}, machineId,
+      executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+      origin: { kind: 'direct', discussion: origin }, resultDelivery: { kind: 'originating_discussion', ...origin },
+      authorization: { principal: { kind: 'host' } } }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error('Workflow fixture admission failed');
+    const kit = createWorkflowRunStorageTestkit({ runId, accountId, machineId, origin: { kind: 'direct' },
+      acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot })) });
+    const checkpoint = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'checkpoint', accountId, runId }, checkpoint: { kind: 'happier.workflow-checkpoint.v1',
+        rootRecordId: rootId, nextSequence: '2', frontier: { nextBlockOrdinal: 1, paused: false } } }));
+    const seal = (root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: root ? rootId : recordId,
+        sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+        invocationPath: { blockId: root ? '$root' : 'answer', scope: [] }, attempt: '0', logicalInvocationRecordId: root ? rootId : recordId,
+        ...(root ? {} : { result: 'Accepted answer', execution: { kind: 'session' as const, sessionId, localInputId: inputLocalId } }) } }));
+    await kit.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: checkpoint,
+      rootInvocation: { id: rootId, contentEnvelope: seal(true) } });
+    await kit.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope: checkpoint,
+      invocations: [{ id: recordId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'completed', contentEnvelope: seal(false) }] });
+    kit.requestControl('cancelled');
+    // Only the HTTP boundary reports absence; the canonical resolver must
+    // prove it through the exact read and both accessible inventories.
+    axiosPost.mockResolvedValue({ status: 200, data: { sessions: [] } });
+    const session = createCurrentSessionProjectionRecordFixture({ id: sessionId, encryptionMode: 'e2ee',
+      metadata: 'unavailable', dataEncryptionKey: null, share: null,
+      effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+        capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) } });
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness('e2ee') };
+      if (path === `/v2/sessions/${sessionId}`) return scenario === 'session_not_found'
+        ? { status: 404, data: { error: 'Session not found' } } : { status: 200, data: { session } };
+      if (path === '/v2/sessions' || path === '/v2/sessions/archived') {
+        return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
+      }
+      if (path.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
+        v: 1, mode: 'wait', workflow: { purpose: 'invocation', runId, invocationRecordId: recordId },
+        discussion: addressing, acceptedTurnId: 'turn', disposition: 'observing',
+        outcome: { kind: 'answer', result: { sessionId, messageId: 'native-final' } },
+      } } };
+      return { status: 200, data: features.features };
+    });
+    const defaultRequest = axiosRequest.getMockImplementation()!;
+    axiosRequest.mockImplementation(async (request: { url: string; method: string; data?: string }) => {
+      if (request.url.endsWith('/participants')) return { status: 200, data: DiscussionParticipantsListResponseV1Schema.parse({
+        discussionId: 'discussion-1', ownerAccountId: accountId, access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 }],
+      }) };
+      return defaultRequest(request);
+    });
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ...features.features,
+      capabilities: { serverIdentity: { serverIdentityId: 'srv_home' } } }), { status: 200 }));
+    onTestFinished(() => fetch.mockRestore());
+    await runWithServerHttpBaseUrl('https://home.example.test', async () => {
+      expect(await resolveSessionTransportContext({ credentials: keyless, idOrPrefix: sessionId }))
+        .toMatchObject({ ok: false, code: scenario === 'session_not_found' ? 'session_not_found' : 'encryption_material_unavailable' });
+      axiosGet.mockClear();
+      const diagnostics = vi.spyOn(logger, 'warnLocalFile');
+      onTestFinished(() => diagnostics.mockRestore());
+      const publish = createDiscussionReplyReturnPublisher({ credentials: keyless, machineId,
+        serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test', signal: new AbortController().signal,
+        workflowAuthorization: accepted.snapshot.authorization, isCurrent: async () => scenario !== 'identity_denied',
+        actionsSettingsProvider: { getAccountSettings: () => accountSettingsParse({}),
+          getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }) } });
+      const recover = createWorkflowRunRecoveryReader({ accountId, machineId, storage: { execute: async (operation, options) =>
+        operation.operation === 'recovery.list' ? { candidates: [{ run: kit.run(), parentAttempt: 0 }] }
+          : kit.execute(operation, options) },
+        resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+        reconcileInvocation: async () => { throw new Error('A terminal result must not execute again'); },
+        onInvocationSettled: async ({ invocation }) => createWorkflowDiscussionResultPublisher({ credentials: keyless, origin,
+          isCurrent: async () => true, publish })({ runId, invocation }) });
+      await recover('startup');
+      expect(axiosGet.mock.calls.some(([url]) => new URL(String(url)).pathname === `/v2/sessions/${sessionId}`), JSON.stringify({
+        reads: axiosGet.mock.calls.map(([url]) => new URL(String(url)).pathname),
+        requests: axiosRequest.mock.calls.map(([request]) => ({ method: request.method, path: new URL(request.url).pathname })),
+        diagnostics: diagnostics.mock.calls, custody: kit.run().workflowCustodyState,
+      }))
+        .toBe(scenario !== 'identity_denied');
+      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: scenario === 'material_unavailable' ? 'pending' : 'settled' });
+      expect(kit.rowById(recordId)?.index.lifecycle).toBe('completed');
+      const result = await publish({ serverId: 'server-1', requestSessionId: sessionId, requestLocalId: inputLocalId,
+        acceptedTurnId: 'turn', workflow, discussion: addressing,
+        outcome: { kind: 'answer', result: { sessionId, messageId: 'native-final' } }, message: 'Accepted answer' });
+      expect(result).toMatchObject({ ok: false, error: scenario === 'material_unavailable' ? 'discussions_unavailable' : 'discussion_post_denied' });
+      expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
+    });
+  });
+  it.each([
+    { originHome: 'server-1', outcome: 'published' }, { originHome: 'srv_home', outcome: 'published' },
+    { originHome: 'foreign-home', outcome: 'published' }, { originHome: 'server-1', outcome: 'post_denied' },
+    { originHome: 'server-1', outcome: 'post_unavailable' }, { originHome: 'server-1', outcome: 'lost_ack' },
+    { originHome: 'server-1', outcome: 'missing_publisher' }, { originHome: 'server-1', outcome: 'home_unavailable' },
+    { originHome: 'server-1', outcome: 'action_disabled' },
+  ] as const)('binds accepted Workflow custody through the real return publisher, Action policy and sole resource codec to the Machine transport ($originHome, $outcome)', async ({ originHome, outcome }) => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    axiosGet.mockResolvedValue({ status: 200, data: features.features });
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ...features.features,
+      capabilities: { ...features.features.capabilities, serverIdentity: { serverIdentityId: 'srv_home' } } }), {
+      status: outcome === 'home_unavailable' ? 503 : 200, headers: { 'content-type': 'application/json' },
+    }));
+    onTestFinished(() => fetch.mockRestore());
+    const sent: import('@happier-dev/protocol/discussions/api').DiscussionWorkflowPostPublicationV1[] = [];
+    const workflow = { runId: 'run', invocationRecordId: 'invocation', invocationAttempt: '0' };
+    const typedContent = projectWorkflowDiscussionResultContentV1({ ...workflow, lifecycle: 'completed', result: { checked: true } });
+    const publication = createDiscussionReplyReturnPublisher({ credentials: { token, encryption: null }, machineId: 'machine',
+      workflowAuthorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+      serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test', signal: new AbortController().signal,
+      isCurrent: async () => true, actionsSettingsProvider: { getAccountSettings: () => accountSettingsParse({}),
+        getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
+          ...(outcome === 'action_disabled' ? { actions: { 'discussion.reply': { enabled: false } } } : {}) }) },
+      ...(outcome === 'missing_publisher' ? {} : { postWorkflowMessage: async (publication: import('@happier-dev/protocol/discussions/api').DiscussionWorkflowPostPublicationV1) => {
+        if (outcome === 'post_denied') return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
+        if (outcome === 'post_unavailable') return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
+        if (outcome === 'lost_ack') throw new Error('committed_reply_ack_lost');
+        sent.push(publication);
+        return { v: 1 as const, ok: true as const, value: { message: { ...wireMessage(), localId: publication.request.localId,
+          producerV1: publication.producer, content: publication.request.content, replyTarget: publication.request.replyTarget }, messageSeq: 1 } };
+      } }),
+    })({ kind: 'workflow_invocation', serverId: originHome, workflow,
+      discussion: { discussion: { serverId: originHome, discussionId: 'discussion-1' }, messageId: 'question', throughSeq: 1 },
+      producer: { v: 1, kind: 'workflow', ...workflow, execution: { kind: 'action', actionId: 'plugin:external/check' }, outcome: 'answer' },
+      content: typedContent });
+    if (outcome === 'lost_ack') {
+      await expect(publication).rejects.toThrow('committed_reply_ack_lost');
+      expect(sent).toEqual([]);
+      return;
+    }
+    const result = await publication;
+    if (outcome !== 'published') {
+      expect(result).toMatchObject({ ok: false, error: outcome === 'post_denied' || outcome === 'action_disabled'
+        ? 'discussion_post_denied' : 'discussions_unavailable' });
+      expect(sent).toEqual([]);
+      return;
+    }
+    if (originHome === 'foreign-home') {
+      expect(result).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+      expect(sent).toEqual([]);
+      return;
+    }
+    expect(result, JSON.stringify({ reads: axiosRequest.mock.calls.map(([request]) => ({ method: request.method, path: new URL(request.url).pathname })), sent: sent.length })).toMatchObject({ ok: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.request).toMatchObject({ localId: deriveWorkflowDiscussionReplyLocalIdV1(workflow),
+      replyTarget: { kind: 'message', messageId: 'question' }, content: { t: 'plain', v: typedContent } });
+    expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
+  });
+  it('preserves a definite present-user refusal instead of reporting unknown invitation outcome', async () => {
+    axiosRequest.mockImplementation(async (request: { method: string }) => request.method === 'GET'
+      ? { status: 200, data: { discussion: wireSummary() } }
+      : { status: 403, data: { error: 'present_user_required' } });
+    expect(await action()({ actionId: 'discussion.invite', input: {
+      discussionId: 'discussion-1', participant: { kind: 'account', accountId: 'invited' },
+    }, context: { ...context, authority: 'account_automation' } })).toMatchObject({
+      ok: false, errorCode: 'present_user_required',
+    });
+  });
+
   it('reads the captured Home check-in override without keys and holds unavailable or mismatched results', async () => {
     const read = createDiscussionAutonomousCheckInReader({ credentials: keyless, serverId: 'server-1',
       serverHttpBaseUrl: 'https://home.example.test', resolveServerFeaturesSnapshot: () => features });
@@ -242,19 +430,19 @@ describe('Home Discussion resource transport', () => {
     expect(axiosRequest).toHaveBeenCalledTimes(1);
   });
 
-  it('signs selector participant and uncached feature reads with the original SessionTarget root', async () => {
+  it.each(['session.status.get', 'session.targets.resolve'] as const)('signs selector participant and uncached feature reads with the original SessionTarget root (%s)', async rootActionId => {
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'machine' as const, machineId: 'machine-1' };
     const authorization = { v: 1, token: 'selector-proof', binding: {
       serverIdentityId: 'server-1', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
-      grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1', actionId: 'session.status.get', requestId: 'selector-request',
+      grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1', actionId: rootActionId, requestId: 'selector-request',
       custodianAccountId: 'account-1', installationId: 'installation-1', requestEnvelopeDigest: 'd'.repeat(43), target,
     } } satisfies ExternalActionExecutionAuthorizationV1;
     const proofs: { path: string; bearer: string | null; effectActionId: string | null; valid: boolean }[] = [];
     const verify = (headers: Headers, path: string) => {
       proofs.push({ path, bearer: headers.get('authorization'), effectActionId: headers.get(EXTERNAL_ACTION_EFFECT_ACTION_HEADER),
         valid: verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token,
-        effectActionId: 'session.status.get', target, installationId: 'installation-1', requestId: 'selector-request',
+        effectActionId: rootActionId, target, installationId: 'installation-1', requestId: 'selector-request',
         method: 'GET', path, publicKey: keyPair.publicKey,
         signature: headers.get(EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER)! }) });
     };
@@ -277,7 +465,7 @@ describe('Home Discussion resource transport', () => {
         externalActionExecutionAuthorization: authorization, externalActionTarget: target,
       } })).toMatchObject({ discussionId: 'discussion-1', participants: [] });
       expect(proofs).toEqual(['/v1/features', '/v1/discussions/discussion-1/participants'].map(path => ({
-        path, bearer: null, effectActionId: 'session.status.get', valid: true,
+        path, bearer: null, effectActionId: rootActionId, valid: true,
       })));
     } finally { vi.unstubAllGlobals(); }
   });

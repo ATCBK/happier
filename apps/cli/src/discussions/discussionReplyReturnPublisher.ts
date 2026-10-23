@@ -11,6 +11,11 @@ import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { logger } from '@/ui/logger';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import type { DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /** Account composition supplies policy and resource crypto, never a second writer. */
 export function createDiscussionReplyReturnPublisher(params: Readonly<{
@@ -21,18 +26,74 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
   signal: AbortSignal;
   isCurrent(): Promise<boolean>;
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
+  workflowAuthorization?: import('@happier-dev/protocol/workflows').WorkflowAcceptedSnapshotV1['authorization'];
+  postWorkflowMessage?: (publication: DiscussionWorkflowPostPublicationV1, options?: Readonly<{ signal?: AbortSignal }>) => Promise<DiscussionAgentPostResponseV1>;
 }>): DiscussionReplyReturnPublisher {
   const resolveCurrentOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: params.serverHttpBaseUrl,
     resolveCurrentMachineId: () => params.machineId });
+  const isCapturedHome = (serverId: string, identity: string) => areServerProfileIdentifiersEquivalent(serverId, params.serverId,
+    id => id === params.serverId || id === identity ? identity : null);
   return async (original, options) => {
     const denied = (): DiscussionAgentPostResponseV1 => ({ v: 1, ok: false, error: 'discussion_post_denied' });
+    const unavailable = (): DiscussionAgentPostResponseV1 => ({ v: 1, ok: false, error: 'discussions_unavailable' });
+    const withoutReceipt = (result: ActionExecuteResult): DiscussionAgentPostResponseV1 => {
+      // Approval and unknown admission/transport outcomes are still pending.
+      // Preserve only a typed domain refusal as proof that publication failed.
+      if (result.ok) return unavailable();
+      if (result.errorCode === 'action_disabled' || result.errorCode === 'present_user_required'
+        || result.errorCode === 'run_access_denied' || result.errorCode === 'approval_stale') return denied();
+      const failure = DiscussionAgentPostResponseV1Schema.safeParse({ v: 1, ok: false, error: result.errorCode });
+      return failure.success ? failure.data : unavailable();
+    };
     const signal = options?.signal && options.signal !== params.signal
       ? AbortSignal.any([params.signal, options.signal]) : params.signal;
     const current = async () => !signal.aborted && await params.isCurrent() && !signal.aborted;
-    if (original.serverId !== params.serverId
+    if ('kind' in original) {
+      if (!params.postWorkflowMessage || !params.workflowAuthorization) return unavailable();
+      if (!await current()) return denied();
+      const origin = await resolveCurrentOrigin(signal);
+      const accountId = readAccountIdFromToken(params.credentials.token);
+      if (!origin) return unavailable();
+      if (!accountId || !isCapturedHome(original.serverId, origin.serverIdentityId)
+        || !isCapturedHome(original.discussion.discussion.serverId, origin.serverIdentityId) || !await current()) return denied();
+      const localId = deriveWorkflowDiscussionReplyLocalIdV1(original.workflow);
+      const receipt: { value?: DiscussionAgentPostResponseV1; failure?: unknown } = {};
+      const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
+      const executor = createCliActionExecutor({ token: params.credentials.token, credentials: params.credentials,
+        sessionId: '', mode: 'plain', ctx: null, serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl,
+        serverIdentityId: origin.serverIdentityId, isCredentialCurrent: current,
+        ...(params.actionsSettingsProvider ? { actionsSettingsProvider: params.actionsSettingsProvider } : {}),
+        postWorkflowDiscussionMessage: async request => {
+          if (!await current() || request.discussionId !== original.discussion.discussion.discussionId
+            || request.request.localId !== localId || request.request.replyTarget?.kind !== 'message'
+            || request.request.replyTarget.messageId !== original.discussion.messageId) return denied();
+          try { receipt.value = await params.postWorkflowMessage!({ ...request, producer: original.producer, origin: original.discussion,
+            ...(original.expectedParentRevision !== undefined ? { expectedParentRevision: original.expectedParentRevision } : {}) }, { signal }); }
+          catch (error) { receipt.failure = error; throw error; }
+          return receipt.value;
+        } });
+      const result = await executor.execute('discussion.reply', { discussionId: original.discussion.discussion.discussionId, localId,
+        replyTarget: { kind: 'message', messageId: original.discussion.messageId }, content: original.content }, {
+        serverId: params.serverId, surface: 'agent', authority: 'account_automation',
+        actionCaller: { kind: 'workflowRun', runId: original.workflow.runId, authorization: params.workflowAuthorization },
+        runtimeAccountId: accountId, defaultSessionMachineId: params.machineId,
+        discussionReplyReturn: { kind: 'workflow_invocation', serverId: origin.serverIdentityId,
+          producer: original.producer, origin: original.discussion,
+          ...(original.expectedParentRevision !== undefined ? { expectedParentRevision: original.expectedParentRevision } : {}) },
+        actionRequestId: localId, signal,
+      });
+      if (receipt.failure) throw receipt.failure;
+      if (!receipt.value) logger.warnLocalFile('[Discussion reply return] Action has no publication receipt', {
+        errorCode: result.ok ? 'publication_pending' : result.errorCode, phase: 'workflow_publication',
+      });
+      return receipt.value ?? withoutReceipt(result);
+    }
+    if (!original.workflow && original.serverId !== params.serverId
       || original.discussion.participantSessionId !== original.requestSessionId || !await current()) return denied();
+    if (original.workflow && !params.workflowAuthorization) return denied();
     const origin = await resolveCurrentOrigin(signal);
-    if (!origin || !await current()) return denied();
+    if (!origin) return unavailable();
+    if (original.workflow && !isCapturedHome(original.serverId, origin.serverIdentityId) || !await current()) return denied();
     const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: original.requestSessionId,
       localId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId });
     if (!original.workflow) {
@@ -71,7 +132,8 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
         phase = 'session_transport';
         const transport = await resolveSessionTransportContext({ credentials: params.credentials,
           idOrPrefix: original.requestSessionId, signal });
-        if (!transport.ok || transport.sessionId !== original.requestSessionId || !await current()) return denied();
+        if (!transport.ok) return transport.code === 'session_not_found' ? denied() : unavailable();
+        if (transport.sessionId !== original.requestSessionId || !await current()) return denied();
         const replyReturn = { serverId: origin.serverIdentityId, requestLocalId: original.requestLocalId,
           ...(original.workflow ? { workflow: original.workflow } : {}),
           ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
@@ -98,10 +160,11 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
     }) : undefined;
     const result = await executor.execute('discussion.reply', { discussionId: original.discussion.discussionId, localId,
       replyTarget: { kind: 'message', messageId: original.discussion.messageId },
-      content: { v: 1, parts: [{ t: 'text', text: original.message }] },
+      content: original.content ?? { v: 1, parts: [{ t: 'text', text: original.message }] },
     }, { serverId: params.serverId, surface: 'agent', authority: 'account_automation',
       defaultSessionId: original.requestSessionId, defaultSessionMachineId: params.machineId,
-      actionCaller: { kind: 'host' },
+      actionCaller: original.workflow && params.workflowAuthorization
+        ? { kind: 'workflowRun', runId: original.workflow.runId, authorization: params.workflowAuthorization } : { kind: 'host' },
       discussionReplyReturn: { serverId: origin.serverIdentityId, requestLocalId: original.requestLocalId,
         ...(original.workflow ? { workflow: original.workflow } : {}),
         ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) },
@@ -114,7 +177,6 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
     if (!receipt.value) logger.warnLocalFile('[Discussion reply return] Action has no publication receipt', {
       errorCode: result.ok ? 'publication_pending' : result.errorCode, phase,
     });
-    // Approval/denial/unavailable publication leaves the original obligation pending.
-    return receipt.value ?? denied();
+    return receipt.value ?? withoutReceipt(result);
   };
 }

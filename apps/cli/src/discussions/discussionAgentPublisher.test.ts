@@ -94,8 +94,15 @@ describe('trusted Discussion reply publisher', () => {
     }));
   });
 
-  it.each(['absent', 'origin_only', 'other_delivery', 'delivery'] as const)('opens the actual completed Workflow invocation and its frozen Discussion delivery (%s)', async binding => {
-    const bound = binding === 'delivery';
+  it.each(['absent', 'origin_only', 'other_delivery', 'delivery', 'profile_delivery', 'foreign_delivery', 'unknown_delivery', 'profile_marker', 'profile_publication_ref', 'typed_delivery', 'failed_delivery', 'cancelled_delivery',
+    'storage_unavailable', 'run_access_denied', 'missing_source_reader'] as const)('opens the actual completed Workflow invocation and its frozen Discussion delivery (%s)', async binding => {
+    const bound = ['delivery', 'profile_delivery', 'typed_delivery', 'failed_delivery', 'cancelled_delivery'].includes(binding);
+    const serverId = 'local-profile';
+    const serverIdentityId = 'srv_publication_home';
+    const deliveryHome = binding === 'profile_delivery' ? serverId : binding === 'foreign_delivery' ? 'srv_foreign'
+      : binding === 'unknown_delivery' ? 'unknown-profile' : serverIdentityId;
+    const lifecycle = binding === 'failed_delivery' ? 'failed' : binding === 'cancelled_delivery' ? 'cancelled' : 'completed';
+    const resultValue = binding === 'typed_delivery' ? { checked: true } : 'accepted answer';
     const throughSeq = binding === 'other_delivery' ? 3 : 2;
     const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
     const accountId = 'account';
@@ -110,10 +117,10 @@ describe('trusted Discussion reply publisher', () => {
         input: [], result: { kind: 'text' }, execution: { conversation: { kind: 'fresh' } } }] },
       context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine', executionTarget: { kind: 'session' },
         workspaceTarget: { project: { machineId: 'machine', directory: '/repo', checkoutRootPath: '/repo' } },
-        origin: { kind: 'direct', ...(binding !== 'absent' ? { discussion: { discussion: { serverId: 'home', discussionId: 'discussion' },
+        origin: { kind: 'direct', ...(binding !== 'absent' ? { discussion: { discussion: { serverId: deliveryHome, discussionId: 'discussion' },
           messageId: 'question', throughSeq } } : {}) },
-        ...(bound || binding === 'other_delivery' ? { resultDelivery: { kind: 'originating_discussion' as const,
-          discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq } } : {}),
+        ...(bound || ['other_delivery', 'foreign_delivery', 'unknown_delivery', 'profile_marker', 'profile_publication_ref', 'storage_unavailable', 'run_access_denied', 'missing_source_reader'].includes(binding) ? { resultDelivery: { kind: 'originating_discussion' as const,
+          discussion: { serverId: deliveryHome, discussionId: 'discussion' }, messageId: 'question', throughSeq } } : {}),
         authorization: { principal: { kind: 'host' } } },
       admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
     if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
@@ -135,9 +142,18 @@ describe('trusted Discussion reply publisher', () => {
     const key = workflowInvocationKey({ runId, blockId: 'answer', scope: [], attempt: 0 });
     await store.ensureIntent({ key, recordId, runId, blockId: 'answer', path: { blockId: 'answer', scope: [] },
       blockKind: 'step', memberOrdinal: '0', attempt: 0, acceptedAtMs: 1, lifecycle: 'pending' });
-    await store.commitFact({ key, lifecycle: 'completed', result: 'accepted answer',
+    await store.commitFact({ key, lifecycle, ...(lifecycle === 'completed' ? { result: resultValue } : {}),
       execution: { kind: 'session', sessionId: 'receiver', localInputId: localId } });
-    const owner = createWorkflowAccountRunActionOwner({ storage, resolveAccountId: async () => accountId,
+    const owner = createWorkflowAccountRunActionOwner({ storage: { execute: async (operation, options) => {
+      // Only the opaque HTTP/storage boundary is unavailable/refused; the
+      // invocation Action owner and terminal verifier stay real.
+      if (binding === 'storage_unavailable' || binding === 'run_access_denied') {
+        throw Object.assign(new Error('Private storage details'), {
+          response: { status: binding === 'storage_unavailable' ? 503 : 403, data: { error: binding } },
+        });
+      }
+      return storage.execute(operation, options);
+    } }, resolveAccountId: async () => accountId,
       definitions: { get: async () => { throw new Error('No mutable definition read'); } },
       resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
       normalizeAbsolutePath: path => path, randomBytes: () => { throw new Error('Plain keys are absent'); } });
@@ -145,8 +161,8 @@ describe('trusted Discussion reply publisher', () => {
     vi.mocked(axios.get).mockImplementation(async url => {
       if (String(url).endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
         v: 1, mode: 'wait', workflow, discussion: addressing, acceptedTurnId: 'turn', disposition: 'inline',
-        outcome: committed ? { kind: 'answer', publicationRef: { kind: 'discussion',
-          discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'published' } }
+        outcome: lifecycle !== 'completed' ? { kind: lifecycle } : committed || binding === 'profile_publication_ref' ? { kind: 'answer', publicationRef: { kind: 'discussion',
+          discussion: { serverId: binding === 'profile_publication_ref' ? serverId : serverIdentityId, discussionId: 'discussion' }, messageId: 'published' } }
           : { kind: 'answer', result: { sessionId: 'receiver', messageId: 'native-final' } },
       } } };
       return { status: 200, data: { discussion: { id: 'discussion', ownerAccountId: accountId, encryptionMode: 'plain',
@@ -163,27 +179,39 @@ describe('trusted Discussion reply publisher', () => {
     const rpc = new RpcHandlerManager({ scopePrefix: 'receiver', encryptionMode: 'plain', logger });
     const posts: unknown[] = [];
     registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
-      serverId: 'home', serverUrl: 'https://home.test', readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
-      getServerIdentityId: () => 'home',
+      serverId, serverUrl: 'https://home.test', readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
+      getServerIdentityId: () => serverIdentityId,
       isApprovalExecutionOriginCurrent: async () => false,
-      executeSourceAction: async (actionId, input, context) => actionId === 'workflow.run.invocations.get'
-        ? { ok: true, result: await owner.execute({ actionId, input: WorkflowInvocationGetRequestV1Schema.parse(input), context }) }
-        : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' },
+      ...(binding === 'missing_source_reader' ? {} : { executeSourceAction: async (actionId, input, context) => {
+        if (actionId !== 'workflow.run.invocations.get') return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+        try { return { ok: true, result: await owner.execute({ actionId, input: WorkflowInvocationGetRequestV1Schema.parse(input), context }) }; }
+        catch (error) {
+          if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'string') throw error;
+          return { ok: false, errorCode: error.code, error: 'Workflow read failed' };
+        }
+      } } satisfies Pick<Parameters<typeof registerDiscussionAgentPublisher>[0], 'executeSourceAction'>),
       session: { sessionId: 'receiver', postAgentDiscussionMessage: async request => {
         posts.push(request); committed = true; return { v: 1, ok: false, error: 'discussion_post_denied' };
       } },
     });
     const handler = (request: unknown) => rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, request);
     const publication = (text: string, attempt = '0') => ({ request: { v: 1, sessionId: 'receiver', discussionId: 'discussion',
-      replyReturn: { serverId: 'home', requestLocalId: localId, acceptedTurnId: 'turn',
+      replyReturn: { serverId: binding === 'profile_marker' ? serverId : serverIdentityId, requestLocalId: localId, acceptedTurnId: 'turn',
         workflow: { runId, invocationRecordId: recordId, invocationAttempt: attempt } },
       request: { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId, acceptedTurnId: 'turn' }),
-        content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text }] } }, mentionedAccountIds: [], mentionedSessionIds: [],
+        content: { t: 'plain', v: text !== 'accepted answer' ? { v: 1, parts: [{ t: 'text', text }] }
+          : binding === 'typed_delivery' ? { kind: 'workflow_result', value: resultValue, summary: 'Workflow result',
+            source: { runId, invocationRecordId: recordId, invocationAttempt: '0' } }
+            : { v: 1, parts: [{ t: 'text', text: lifecycle === 'failed' ? 'The requested session failed.'
+              : lifecycle === 'cancelled' ? 'The requested work was cancelled.' : text }] } }, mentionedAccountIds: [], mentionedSessionIds: [],
         replyTarget: { kind: 'message', messageId: 'question' } },
     } });
-    await handler(publication('forged output'));
+    const unavailable = binding === 'storage_unavailable' || binding === 'missing_source_reader';
+    expect(await handler(publication('forged output'))).toMatchObject({ ok: false,
+      error: unavailable ? 'discussions_unavailable' : 'discussion_post_denied' });
     expect(logger).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
-      outcomeCode: 'discussion_post_denied', admissionPredicate: 'discussion_reply_result',
+      outcomeCode: unavailable ? 'discussions_unavailable' : 'discussion_post_denied', admissionPredicate: binding === 'profile_marker' || binding === 'profile_publication_ref'
+        ? 'discussion_reply_custody' : 'discussion_reply_result',
     }));
     expect(JSON.stringify(logger.mock.calls)).not.toContain('forged output');
     await handler(publication('accepted answer', '1'));

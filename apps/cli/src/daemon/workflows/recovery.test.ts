@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
@@ -45,6 +45,8 @@ import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/a
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { createWorkflowDiscussionResultPublisher } from './workflowDiscussionPublication';
+import { logger } from '@/ui/logger';
 
 const accountId = 'account-1';
 const machineId = 'machine-1';
@@ -338,8 +340,10 @@ function isPlainAccountCurrentness(value: unknown): boolean {
 }
 
 function directAcceptedEnvelope(params: Readonly<{
+  runId?: string;
   definition?: WorkflowDefinitionV1;
   materializedLeaves?: WorkflowMaterializedLeafV1[];
+  discussion?: import('@happier-dev/protocol/workflows/workflowDestinationsV1').WorkflowDiscussionOriginV1;
   sealMode?: { mode: 'plain' } | Pick<Extract<Parameters<typeof sealWorkflowAcceptedSnapshotStoredEnvelopeV1>[0], { mode: 'e2ee' }>, 'mode' | 'runDataKey' | 'randomBytes'>;
 }> = {}) {
   const definition: WorkflowDefinitionV1 = params.definition ?? { version: 1, inputs: [], defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'agent.test', localId: 'test' } } }, blocks: [{
@@ -347,7 +351,7 @@ function directAcceptedEnvelope(params: Readonly<{
   }] };
   return serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
     ...(params.sealMode ?? { mode: 'plain' as const }),
-    binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId },
+    binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId: params.runId ?? runId },
     acceptedSnapshot: {
       startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {},
       materializedLeaves: params.materializedLeaves ?? [{ sourceKey: '$root', blockId: 'step', kind: 'step',
@@ -355,17 +359,18 @@ function directAcceptedEnvelope(params: Readonly<{
       source: { kind: 'inline' }, inputs: {}, machineId,
       executionTarget: { kind: 'session' },
       workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo', workspaceRefId: 'workspace-1' }, originalCommittedRevision: 'a'.repeat(40) },
-      origin: { kind: 'direct', originSessionId: 'session-origin' },
+      origin: { kind: 'direct', originSessionId: 'session-origin', ...(params.discussion ? { discussion: params.discussion } : {}) },
       authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
-      resultDelivery: { kind: 'originating_session', originSessionId: 'session-origin' },
+      resultDelivery: params.discussion ? { kind: 'originating_discussion', ...params.discussion }
+        : { kind: 'originating_session', originSessionId: 'session-origin' },
     },
   }));
 }
 
-function checkpointEnvelope(rootRecordId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c') {
+function checkpointEnvelope(rootRecordId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c', ownerRunId = runId) {
   return serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({
     mode: 'plain',
-    binding: { v: 1, purpose: 'checkpoint', accountId, runId },
+    binding: { v: 1, purpose: 'checkpoint', accountId, runId: ownerRunId },
     checkpoint: {
       kind: 'happier.workflow-checkpoint.v1',
       rootRecordId,
@@ -963,14 +968,16 @@ describe('workflow Run startup/reconnect recovery', () => {
     }
   });
 
-  it.each(['later', 'before_observation', 'running_parent', 'lost_stop_response'] as const)('settles stopped Action child custody when terminal arrives %s without another recovery trigger', async (timing) => {
+  it.each(['later', 'before_observation', 'running_parent', 'lost_stop_response', 'publication_ack_lost', 'publication_denied', 'publication_unavailable', 'missing_publisher'] as const)('settles stopped Action child custody only after publishing the accepted terminal result (%s)', async (timing) => {
     const rootId = '33333333-3333-4333-8333-333333333333';
     const childId = '44444444-4444-4444-8444-444444444444';
     const completion = freezeActionCompletionContractV1(getActionSpec('review.start').completion!);
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {},
       blocks: [{ kind: 'action', id: 'review', actionId: 'review.start', input: {} }] };
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, now, origin: { kind: 'direct' },
-      acceptedEnvelope: directAcceptedEnvelope({ definition, materializedLeaves: [{ sourceKey: '$root', blockId: 'review',
+      acceptedEnvelope: directAcceptedEnvelope({ definition,
+        discussion: { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 1 },
+        materializedLeaves: [{ sourceKey: '$root', blockId: 'review',
         kind: 'action', actionId: 'review.start', selection: {}, executionTarget: { kind: 'detached_run' },
         authoredWorkspace: { kind: 'inherit' }, actionContract: { inputSchema: {}, outputSchema: {}, completion } }] }) });
     const seal = (id: string, root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
@@ -1003,6 +1010,30 @@ describe('workflow Run startup/reconnect recovery', () => {
       },
         wait: async () => { await terminalEvent; return snapshot(); } } });
     let indexed = false;
+    const published = new Map<string, JsonValue | undefined>();
+    let allowPublicationAck = timing !== 'publication_ack_lost' && timing !== 'publication_unavailable';
+    let publicationOffered = false;
+    const failureLog = vi.spyOn(logger, 'warn');
+    onTestFinished(() => failureLog.mockRestore());
+    const onInvocationSettled: NonNullable<Parameters<typeof createWorkflowRunRecoveryReader>[0]['onInvocationSettled']> = async ({ invocation, accepted }) => {
+      expect(kit.run().workflowCustodyState).toBe('pending');
+      const origin = accepted.resultDelivery;
+      if (origin?.kind !== 'originating_discussion') throw new Error('Expected Discussion delivery');
+      expect(kit.rowById(invocation.recordId)?.index.lifecycle).toBe('completed');
+      await createWorkflowDiscussionResultPublisher({ credentials: { token: 'token', encryption: null }, origin,
+        isCurrent: async () => true, publish: async publication => {
+          publicationOffered = true;
+          if (timing === 'publication_denied') return { v: 1, ok: false, error: 'discussion_post_denied' };
+          if (timing === 'publication_unavailable' && !allowPublicationAck) return { v: 1, ok: false, error: 'discussions_unavailable' };
+          published.set(invocation.recordId, invocation.result);
+          if (!allowPublicationAck) throw new Error('committed_reply_ack_lost');
+          if (!('kind' in publication)) throw new Error('Expected Workflow result');
+          return { v: 1, ok: true, value: { messageSeq: 2, message: { id: 'reply', localId: 'reply', seq: 2,
+            discussionId: origin.discussion.discussionId, authorAccountId: accountId,
+            accountActor: { v: 1, accountId, profile: null }, producerV1: publication.producer,
+            content: { t: 'plain', v: publication.content }, mentionedAccountIds: [], createdAt: 2 } } };
+        } })({ runId, invocation });
+    };
     const recover = createWorkflowRunRecoveryReader({ accountId, machineId,
       storage: { execute: async (operation, options) => {
         if (operation.operation !== 'recovery.list') return await kit.execute(operation, options);
@@ -1012,6 +1043,7 @@ describe('workflow Run startup/reconnect recovery', () => {
         return { candidates: [{ run: kit.run(), parentAttempt: 0 }] };
       } },
       resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      ...(timing === 'missing_publisher' ? {} : { onInvocationSettled }),
       reconcileInvocation: observe });
     await recover('startup');
     if (timing !== 'before_observation') {
@@ -1019,12 +1051,78 @@ describe('workflow Run startup/reconnect recovery', () => {
       expect(kit.rowById(childId)?.index.lifecycle).toBe('cancel_requested');
       finish();
     }
+    if (timing === 'missing_publisher') {
+      await vi.waitFor(() => expect(kit.rowById(childId)?.index.lifecycle).toBe('completed'));
+      indexed = false;
+      await recover('reconnect');
+      expect(kit.run().workflowCustodyState).toBe('pending');
+      expect(published.size).toBe(0);
+      return;
+    }
+    if (timing === 'publication_ack_lost' || timing === 'publication_unavailable') {
+      await vi.waitFor(() => expect(publicationOffered).toBe(true));
+      expect(kit.run().workflowCustodyState).toBe('pending');
+      allowPublicationAck = true;
+      indexed = false;
+      await recover('reconnect');
+    }
     await vi.waitFor(() => expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled' }));
     const writer = createWorkflowInvocationRecoveryFactWriter({ accountId, run: kit.run(), parentAttempt: 0, storage: kit,
       encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
     expect((await writer.readInvocation(childId))?.progress.result).toMatchObject({ commentIds: ['comment'],
       perEngineOutcome: [{ key: 'codex', runId: 'native-review', outcome: 'completed' }] });
     expect(kit.rowById(childId)?.index.lifecycle).toBe('completed');
+    if (timing === 'publication_denied') {
+      expect(published.size).toBe(0);
+      expect(failureLog).toHaveBeenCalledWith(expect.stringContaining('publication'), expect.objectContaining({
+        runId, invocationId: childId, errorCode: 'discussion_post_denied',
+      }));
+    } else {
+      expect(published.get(childId)).toMatchObject({ commentIds: ['comment'] });
+      expect(published.size).toBe(1);
+    }
+  });
+
+  it.each(['same_page', 'next_page'] as const)('continues independent Run recovery after an unavailable publication (%s)', async placement => {
+    const secondRunId = '5bdb1c35-94f7-4b17-884c-101b6956edd6';
+    const rootId = '33333333-3333-4333-8333-333333333333';
+    const childId = '44444444-4444-4444-8444-444444444444';
+    const origin = { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 1 };
+    const createStopped = async (id: string, discussion: boolean) => {
+      const kit = createWorkflowRunStorageTestkit({ accountId, runId: id, machineId, now, origin: { kind: 'direct' },
+        acceptedEnvelope: directAcceptedEnvelope({ runId: id, ...(discussion ? { discussion: origin } : {}) }) });
+      const seal = (root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId: id, recordId: root ? rootId : childId,
+          sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+        progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+          invocationPath: { blockId: root ? '$root' : 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: root ? rootId : childId } }));
+      await kit.execute({ operation: 'initialize', runId: id, expectedRevision: 0, checkpointEnvelope: checkpointEnvelope(rootId, id),
+        rootInvocation: { id: rootId, contentEnvelope: seal(true) } });
+      await kit.execute({ operation: 'invocations.admit', runId: id, expectedRevision: 1, checkpointEnvelope: checkpointEnvelope(rootId, id),
+        invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'cancelled', contentEnvelope: seal(false) }] });
+      kit.requestControl('cancelled');
+      return kit;
+    };
+    const first = await createStopped(runId, true);
+    const second = await createStopped(secondRunId, false);
+    const recover = createWorkflowRunRecoveryReader({ accountId, machineId,
+      storage: { execute: async (operation, options) => {
+        if (operation.operation !== 'recovery.list') return await (operation.runId === secondRunId ? second : first).execute(operation, options);
+        const candidate = (kit: typeof first) => ({ run: kit.run(), parentAttempt: 0 });
+        return operation.cursor ? { candidates: [candidate(second)] }
+          : { candidates: [candidate(first), ...(placement === 'same_page' ? [candidate(second)] : [])],
+            ...(placement === 'next_page' ? { nextCursor: 'next' } : {}) };
+      } },
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      reconcileInvocation: async () => { throw new Error('Completed native work must not execute again'); },
+      onInvocationSettled: async ({ invocation }) => {
+        await createWorkflowDiscussionResultPublisher({ credentials: { token: 'token', encryption: null }, origin,
+          isCurrent: async () => true, publish: async () => ({ v: 1, ok: false, error: 'discussions_unavailable' }) })({ runId, invocation });
+      } });
+    await recover('startup');
+    expect(first.run().workflowCustodyState).toBe('pending');
+    expect(first.rowById(childId)?.index.lifecycle).toBe('cancelled');
+    expect(second.run().workflowCustodyState).toBe('settled');
   });
 
   it('pages terminal candidates and settles custody while origin updates remain unacknowledged', async () => {

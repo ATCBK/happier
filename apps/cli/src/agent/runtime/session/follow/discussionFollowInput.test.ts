@@ -14,6 +14,7 @@ import { createDiscussionFollowInputIntake } from './discussionFollowInput';
 import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { projectWorkflowDiscussionProducerV1, projectWorkflowDiscussionResultContentV1 } from '@happier-dev/protocol/workflows/workflowDiscussionPublicationV1';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only the HTTP and authenticated Machine socket are replaced; resource opening,
@@ -227,6 +228,9 @@ it.each([
   { state: 'available', kind: 'agent_session', bot: false, modelSession: 'other' },
   { state: 'private', kind: 'agent_session', bot: false, modelSession: null },
   { state: 'missing_original', kind: 'agent_session', bot: false, modelSession: null },
+  { state: 'workflow_result', kind: 'agent_session', bot: false, modelSession: null },
+  { state: 'workflow_result_missing_original', kind: 'agent_session', bot: false, modelSession: null },
+  { state: 'workflow_result_missing_source', kind: 'agent_session', bot: false, modelSession: null },
 ] as const)('labels the authorized $kind sender and retains its causal ceiling ($state, model=$modelSession, bot=$bot)', async ({ state, kind, bot, modelSession }) => {
   const sourceId = 'c223456789012345678901234';
   const sourceSession = { sourceSessionId: sourceId, sourceTurnId: 'source-turn', sourceInputId: 'source-input', via: 'action' as const };
@@ -253,7 +257,12 @@ it.each([
       ],
     }) };
     return new URL(request.url).pathname.endsWith('/messages') ? { ...response, data: { ...response.data, messages: [
-      { ...message, producerV1: { v: 1, kind: 'agent', sessionId: sourceId, sourceSession } },
+      { ...message, producerV1: { v: 1, kind: 'agent', sessionId: sourceId,
+        ...(state === 'workflow_result_missing_source' ? {} : { sourceSession }) },
+        ...(state.startsWith('workflow_result') ? { content: { t: 'plain', v: projectWorkflowDiscussionResultContentV1({
+          runId: 'run', invocationRecordId: 'result', invocationAttempt: '0', lifecycle: 'completed',
+          result: { privateStructuredValue: 'DO_NOT_INLINE_WORKFLOW_VALUE' },
+        }) } } : {}) },
     ] } } : response;
   });
   http.get.mockImplementation(async (url: string, ...options: unknown[]) => {
@@ -263,7 +272,7 @@ it.each([
         metadata: JSON.stringify({ machineId: 'machine', path: '/repo',
           ...(kind === 'model' ? { summary: { text: 'Release reviewer', updatedAt: 1 } } : { name: 'Release reviewer' }),
           ...(bot ? { bot: { kind: 'bot' } } : {}) }) } } };
-    if (path.endsWith('/messages/by-local-id/source-input')) return state === 'missing_original'
+    if (path.endsWith('/messages/by-local-id/source-input')) return state === 'missing_original' || state === 'workflow_result_missing_original'
       ? { status: 404, data: { error: 'Message not found' } } : { status: 200, data: { message: {
         id: 'original', localId: 'source-input', seq: 1, sidechainId: null, createdAt: 1, updatedAt: 1, messageRole: 'user', inputAdmissionReceipt,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Original mediated input' },
@@ -281,13 +290,20 @@ it.each([
     observation: { source: { kind: 'discussion', discussionId: addressing.discussionId }, destinationSessionId: sessionId, addressing, ...route },
     signal: new AbortController().signal,
   });
-  expect(http.get).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sourceId}`), expect.anything());
-  if (state !== 'available') {
+  if (state !== 'workflow_result_missing_source') expect(http.get).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sourceId}`), expect.anything());
+  if (state !== 'available' && state !== 'workflow_result') {
     expect(admitted).toBe(false);
     expect(admission).not.toHaveBeenCalled();
     return;
   }
   expect(admitted).toBe(true);
+  if (state === 'workflow_result') {
+    expect(admission.mock.calls[0]?.[0].content).toMatchObject({ t: 'plain', v: { content: {
+      text: expect.stringContaining('Workflow result'),
+    } } });
+    expect(JSON.stringify(admission.mock.calls)).not.toContain('DO_NOT_INLINE_WORKFLOW_VALUE');
+    expect(http.get.mock.calls.some(([url]) => String(url).includes('/artifacts/'))).toBe(false);
+  }
   expect(admission.mock.calls[0]?.[0].content).toMatchObject({ t: 'plain', v: { content: {
     text: expect.stringContaining(`discussion_sender_kind="${kind}"`),
   } } });
@@ -301,6 +317,34 @@ it.each([
       actionRequestAttributionV1: originalAttribution,
     }) }) }) },
   }), expect.anything());
+});
+
+it.each(['typed', 'text'] as const)('refuses a non-Session Workflow producer without inventing person or Session admission (%s)', async kind => {
+  const result = { runId: 'run', invocationRecordId: 'result', invocationAttempt: '0', lifecycle: 'completed' };
+  const producer = projectWorkflowDiscussionProducerV1({ ...result, blockKind: 'action', result: { ok: true },
+    execution: { kind: 'action', actionId: 'external.check' } });
+  expect(producer).not.toBeNull();
+  const content = projectWorkflowDiscussionResultContentV1({ ...result,
+    result: kind === 'typed' ? { privateValue: 'DO_NOT_DISCLOSE' } : 'Committed Workflow answer' });
+  const resourceTransport = http.request.getMockImplementation()!;
+  http.request.mockImplementation(async (request: { url: string }) => {
+    const response = await resourceTransport(request);
+    return new URL(request.url).pathname.endsWith('/messages') ? { ...response, data: { ...response.data, messages: [
+      { ...message, producerV1: producer, content: { t: 'plain', v: content } },
+    ] } } : response;
+  });
+  const admission = vi.fn<CliActionMachineAdmissionTransport>(async () => ({ status: 'accepted', localId: 'unused' }));
+  const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
+    getServerFeaturesSnapshot: () => features, getMachineAdmissionTransport: () => admission,
+    runSessionFollowSourceRequest: ({ request }) => request(),
+  } });
+  expect(await createDiscussionFollowInputIntake({ session, credentials: { token: 'token', encryption: null } })({
+    observation: { source: { kind: 'discussion', discussionId: addressing.discussionId }, destinationSessionId: sessionId, addressing, ...route },
+    signal: new AbortController().signal,
+  })).toBe(false);
+  expect(admission).not.toHaveBeenCalled();
+  expect(http.get).not.toHaveBeenCalled();
+  expect(http.request.mock.calls.some(([request]) => new URL(request.url).pathname.endsWith('/participants'))).toBe(false);
 });
 
 it.each(['private', 'unavailable', 'shared_bot'] as const)('labels a foreign sender from authorized presentation while leaving private input authority to held custody (%s)', async state => {

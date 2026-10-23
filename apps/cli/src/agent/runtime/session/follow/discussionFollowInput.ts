@@ -54,6 +54,10 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         || opened.data.discussionId !== addressing.discussionId) return false;
       const question = opened.data.messages.find(message => message.id === addressing.messageId && message.seq === addressing.throughSeq);
       if (!question?.content || !question.addressingV1?.participantSessionIds.includes(input.session.sessionId)) return false;
+      // Workflow attribution names an execution, not a causal Session original.
+      // It cannot become a person-authored request or fabricate Session authority.
+      if (question.producerV1?.kind === 'workflow') return false;
+      const producer = question.producerV1;
       const reply = { mode: 'return' as const, discussion: addressing };
       // One C1 resolver distinguishes an actual addressed C2 ask from level-
       // controlled watch/information using the opened committed original.
@@ -75,7 +79,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
       }
       const rootSource = root.replyTarget?.kind === 'doc_passage' ? root.replyTarget.doc : null;
       const passage = 'kind' in question.content ? question.content.kind === 'doc_passage_comment'
-        ? question.content.passage : question.content.proposal.target : null;
+        ? question.content.passage : question.content.kind === 'doc_edit_proposal' ? question.content.proposal.target : null : null;
       if (passage && (!rootSource || passage.ref.artifactId !== rootSource.ref.artifactId)) return false;
       if (root.messageRef.discussion.serverId !== binding.serverId
         || root.messageRef.discussion.discussionId !== addressing.discussionId) return false;
@@ -85,10 +89,11 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
       const source = rootSource ? { ref: { ...rootSource.ref, serverId: root.messageRef.discussion.serverId },
         revision: passage?.revision ?? rootSource.revision } : null;
       const content = 'kind' in question.content ? question.content.kind === 'doc_passage_comment'
-        ? question.content.content : { v: 1 as const, parts: [{ t: 'text' as const, text: question.content.proposal.reason }] }
+        ? question.content.content : question.content.kind === 'doc_edit_proposal'
+          ? { v: 1 as const, parts: [{ t: 'text' as const, text: question.content.proposal.reason }] } : question.content
         : question.content;
       // A typed Doc payload must never fall back to serializing its sealed source.
-      if ('kind' in question.content && !source) return false;
+      if (passage && !source) return false;
       let doc: Readonly<{ docRef: NonNullable<typeof source>['ref']; title: string | null;
         revision: NonNullable<typeof source>['revision']; openCommentCount: number | null; threadRef: typeof question.messageRef }> | undefined;
       if (source) {
@@ -107,16 +112,16 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
           openCommentCount, threadRef: root.messageRef };
       }
       const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
-      const displayName = !question.producerV1 && question.accountActor?.profile
+      const displayName = !producer && question.accountActor?.profile
         ? resolveAccountDisplayLabelV1(question.accountActor.profile) : null;
       const sender: DiscussionPromptAuthorV1 = {
-        kind: question.producerV1 ? 'agent_session' : 'person',
+        kind: producer ? 'agent_session' : 'person',
         ...(question.authorAccountId ? { accountId: question.authorAccountId } : {}),
-        ...(question.producerV1 ? { sessionId: question.producerV1.sessionId } : {}),
+        ...(producer ? { sessionId: producer.sessionId } : {}),
         ...(displayName ? { displayName } : {}),
       };
-      if (question.producerV1) {
-        const producerSessionId = question.producerV1.sessionId;
+      if (producer) {
+        const producerSessionId = producer.sessionId;
         const roster = DiscussionParticipantsListResponseV1Schema.safeParse(await discussionAction({
           actionId: 'discussion.participants.list', input: { discussionId: addressing.discussionId },
           context: { surface: 'cli', authority: 'account_automation', serverId: binding.serverId }, signal,
@@ -143,8 +148,8 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         origin: { kind: 'discussion', discussion: { serverId: serverIdentityId, discussionId: addressing.discussionId }, messageId: question.id },
       });
       let admission = buildTrustedHostSessionInputAdmissionV1('agent');
-      if (question.producerV1) {
-        const sourceSession = question.producerV1.sourceSession;
+      if (producer) {
+        const sourceSession = producer.sourceSession;
         if (!sourceSession?.sourceInputId) return false;
         const serverFeaturesSnapshot = input.session.getServerFeaturesSnapshot();
         const accountId = readAccountIdFromToken(input.credentials.token);
@@ -157,7 +162,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         if (source?.ok && source.sessionId === sourceSession.sourceSessionId) {
           const sourceMetadata = readSessionPresentationContent({ credentials: input.credentials, rawSession: source.rawSession,
             accountEncryptionMode: source.accountEncryptionCurrentness.mode }).metadata;
-          if (source.sessionId === question.producerV1.sessionId) {
+          if (source.sessionId === producer.sessionId) {
             if (sender.kind !== 'model' && readSessionBotV1(sourceMetadata?.bot)) sender.kind = 'bot';
             const summary = sourceMetadata?.summary;
             const summaryText = summary && typeof summary === 'object' && 'text' in summary ? summary.text : null;

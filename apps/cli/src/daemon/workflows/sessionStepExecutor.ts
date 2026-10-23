@@ -43,7 +43,10 @@ import {
   type WorkflowStepExecutionResult,
   type WorkflowStepExecutor,
   type WorkflowStepPreparer,
+  type WorkflowActionExecutor,
 } from './coordinator';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { readWorkflowActionApprovalSettlement } from './actionApproval';
 import {
   classifyWorkflowSessionInputResult,
   enqueueWorkflowSessionInput,
@@ -127,6 +130,9 @@ export type CreateFreshWorkflowSessionConversation = (params: Readonly<{
   retainedStartupOperation?: ActionCompletionOperation;
   retainedStartupOperationSnapshot?: unknown;
   startupAuthorization?: Parameters<WorkflowStepExecutor>[0]['authorization'];
+  origin?: WorkflowAcceptedOriginV1;
+  retainedInvitationApproval?: Extract<NonNullable<WorkflowProgressEnvelopeV1['execution']>, { kind: 'action' }>;
+  onInvitationApproval?: (execution: Extract<NonNullable<WorkflowProgressEnvelopeV1['execution']>, { kind: 'action' }>) => Promise<void>;
   onStartupObservation?: (operation: ActionOperationSnapshotV1, serverId: string) => Promise<void>;
   signal?: AbortSignal;
 }>) => Promise<WorkflowSessionConversation>;
@@ -162,8 +168,10 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
   machineAdmissionTransport: NonNullable<Parameters<typeof enqueueWorkflowSessionInput>[0]['machineAdmissionTransport']>;
   resolveTeamCredentialResourceCatalog?: ResolveSpawnConnectedServicesTeamResourceCatalog;
   sessionStartup?: WorkflowSessionStartup;
+  /** The Run's canonical Action policy and approval/replay owner. */
+  action?: WorkflowActionExecutor;
 }>): CreateFreshWorkflowSessionConversation {
-  return async ({ selection: authoredSelection, launch, workspace, creationKey, initialTitle, frozenRole, observationOnly, retainedStartupOperation, retainedStartupOperationSnapshot, startupAuthorization, onStartupObservation, signal }) => {
+  return async ({ selection: authoredSelection, launch, workspace, creationKey, initialTitle, frozenRole, observationOnly, retainedStartupOperation, retainedStartupOperationSnapshot, startupAuthorization, origin: acceptedOrigin, retainedInvitationApproval, onInvitationApproval, onStartupObservation, signal }) => {
     signal?.throwIfAborted();
     if (workspace.machineId !== deps.machineId) {
       throw new WorkflowSessionCompositionError('target_unavailable');
@@ -229,13 +237,62 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       const sameHome = deps.discussionOrigin.discussion.serverId === deps.serverId
         || await isServerProfileHomeIdentity(deps.serverId, deps.discussionOrigin.discussion.serverId);
       if (!sameHome) throw new WorkflowSessionCompositionError('target_unavailable');
-      const result = await discussionAction!({
-          actionId: 'discussion.invite',
-          input: { discussionId: discussionParticipant.discussionId,
-            participant: { kind: 'model', participantSlotId: creationKey, launch } },
-          context: { serverId: deps.serverId, surface: 'api', authority: 'account_automation' },
-          ...(signal ? { signal } : {}),
-        });
+    }
+    if (discussionParticipant && launch && !retainedStartupOperation) {
+      if (!deps.action || !startupAuthorization) throw new WorkflowSessionCompositionError('approval_context_unavailable');
+      const context = await deps.action.buildContext({ runId: deps.originRunId, authorization: startupAuthorization,
+        workDepth: deps.workDepth, workspace, ...(acceptedOrigin ? { origin: acceptedOrigin } : {}),
+        ...(deps.originSessionId ? { originSessionId: deps.originSessionId } : {}), ...(signal ? { signal } : {}) });
+      const actionRequestId = `${creationKey}:discussion.invite`;
+      const policy = acceptedOrigin?.actionPolicy;
+      const actionContext = { ...context,
+        ...(policy?.actionsSettings ? { actionsSettings: policy.actionsSettings } : {}),
+        // Starting a safe Run as a person is not invitation consent. C3's
+        // confirmed Second opinion path already supplies invited Sessions.
+        authority: 'account_automation' as const,
+        actionRequestId, actionCaller: { kind: 'workflowRun' as const,
+        runId: deps.originRunId, authorization: startupAuthorization, discussionModelReservation: {
+          ...discussionParticipant, ...(policy?.surface ? { policySurface: policy.surface } : {}),
+        } } };
+      const input = { discussionId: discussionParticipant.discussionId,
+        participant: { kind: 'model', participantSlotId: creationKey, launch: projectNativeJsonValueForTransport(launch) } };
+      const execute = async (actionId: 'discussion.invite' | 'approval.request.get', input: unknown) => {
+        const prepared = await deps.action!.executor.prepare(actionId, input, actionContext);
+        return prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
+      };
+      const settleApproval = async (execution: NonNullable<typeof retainedInvitationApproval>) => {
+        const settled = await readWorkflowActionApprovalSettlement({ execution,
+          read: async artifactId => { const observed = await execute('approval.request.get', { artifactId });
+            return observed.ok ? observed.result : null; } });
+        if (settled?.kind === 'completed') return settled.result;
+        if (settled?.kind === 'unresolved' && settled.code === 'approval_required' && deps.action?.observeApproval) {
+          const approval = ActionApprovalRequestCreatedResultSchema.parse(execution.output);
+          const observed = await deps.action.observeApproval({ artifactId: approval.artifactId, actionRequestId,
+            authorization: startupAuthorization, signal: signal ?? new AbortController().signal });
+          if (!observed.ok) throw new WorkflowSessionCompositionError(observed.errorCode);
+          return observed.result;
+        }
+        throw new WorkflowSessionCompositionError(settled?.code ?? 'approval_unavailable');
+      };
+      let result: unknown;
+      if (retainedInvitationApproval) {
+        if (retainedInvitationApproval.actionRequestId !== actionRequestId
+          || createCanonicalJsonSigningInput(retainedInvitationApproval.input) !== createCanonicalJsonSigningInput(input)) {
+          throw new WorkflowSessionCompositionError('approval_unavailable');
+        }
+        result = await settleApproval(retainedInvitationApproval);
+      } else {
+        const invoked = await execute('discussion.invite', input);
+        if (!invoked.ok) throw new WorkflowSessionCompositionError(invoked.errorCode);
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(invoked.result);
+        if (approval.success) {
+          if (approval.data.actionId !== 'discussion.invite') throw new WorkflowSessionCompositionError('invalid_action_output');
+          const execution = { kind: 'action' as const, actionId: 'discussion.invite', actionRequestId,
+            localInputId: creationKey, input, output: approval.data };
+          await onInvitationApproval?.(execution);
+          result = await settleApproval(execution);
+        } else result = invoked.result;
+      }
       const reserved = DiscussionInviteResultV1Schema.safeParse(result);
       if (!reserved.success || reserved.data.discussionId !== discussionParticipant.discussionId
         || reserved.data.modelParticipant?.participant.participantSlotId !== creationKey) {
@@ -670,7 +727,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
       }
     };
     if (params.invocation.execution && !(params.invocation.execution.kind === 'action'
-      && params.invocation.execution.actionId === 'session.spawn_new')) {
+      && (params.invocation.execution.actionId === 'session.spawn_new' || params.invocation.execution.actionId === 'discussion.invite'))) {
       if (params.invocation.execution.kind === 'session_ready') {
         return params.step.inputMode === 'none' ? { kind: 'completed', result: '' }
           : { kind: 'failed', code: 'workflow_execution_target_mismatch' };
@@ -716,6 +773,9 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
         : await deps.prepareConversation(params);
     } catch (error) {
       if (params.signal?.aborted) return settleBeforeAdmissionAfterAbort();
+      if (error instanceof WorkflowSessionCompositionError && (error.code === 'approval_required' || error.code === 'approval_unavailable')) {
+        return { kind: 'needs_attention', code: error.code };
+      }
       if (error instanceof WorkflowSessionCompositionError) return { kind: 'failed', code: error.code,
         ...(error.details ? { reasonDetails: error.details } : {}),
         ...(error.message === error.code ? {} : { message: error.message }) };
@@ -764,6 +824,9 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
         return { kind: 'failed', code: error.code, message: error.message };
       }
       if (params.signal?.aborted) return settleBeforeAdmissionAfterAbort();
+      if (error instanceof WorkflowSessionCompositionError && (error.code === 'approval_required' || error.code === 'approval_unavailable')) {
+        return { kind: 'needs_attention', code: error.code };
+      }
       if (error instanceof WorkflowSessionCompositionError) return { kind: 'failed', code: error.code,
         ...(error.details ? { reasonDetails: error.details } : {}),
         ...(error.message === error.code ? {} : { message: error.message }) };
@@ -851,6 +914,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
     }
     await params.beforeInputAdmission();
     assertWorkflowAdmissionSignal(params.signal);
+    const discussionDestination = params.input.discussionReplyTo ?? params.origin?.discussion;
     const admission = await sessionInput.enqueue({
       credentials: deps.credentials,
       sessionId: conversation.sessionId,
@@ -873,10 +937,10 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
       ...(params.origin?.actionRequestAttributionV1
         ? { actionRequestAttributionV1: params.origin.actionRequestAttributionV1 }
         : {}),
-      ...(params.origin?.discussion ? { discussionAddressing: {
-        discussionId: params.origin.discussion.discussion.discussionId,
-        messageId: params.origin.discussion.messageId,
-        throughSeq: params.origin.discussion.throughSeq,
+      ...(discussionDestination ? { discussionAddressing: {
+        discussionId: discussionDestination.discussion.discussionId,
+        messageId: discussionDestination.messageId,
+        throughSeq: discussionDestination.throughSeq,
         participantSessionId: conversation.sessionId,
       } } : {}),
       ...(params.execution.modelSelection === undefined
@@ -1055,7 +1119,9 @@ export function createProductionWorkflowConversationOwner(deps: Readonly<{
           throw new WorkflowSessionCompositionError('workflow_execution_target_mismatch');
         }
       }
-      if (params.invocation.execution?.kind === 'action' && params.invocation.execution.actionId === 'session.spawn_new') {
+      if (params.invocation.execution?.kind === 'action'
+        && (params.invocation.execution.actionId === 'session.spawn_new'
+          || (params.invocation.execution.actionId === 'discussion.invite' && params.participant?.kind === 'model'))) {
         return { kind: 'workflow_session_conversation', existing: null };
       }
       const isOrigin = params.conversationBinding?.kind === 'origin_session'
@@ -1206,6 +1272,10 @@ export function createProductionWorkflowConversationOwner(deps: Readonly<{
         workspace: params.workspace,
         creationKey: `workflow:${params.runId}:${params.invocationRecordId ?? params.invocation.logicalInvocationRecordId}`,
         startupAuthorization: params.authorization,
+        ...(params.origin ? { origin: params.origin } : {}),
+        ...(params.invocation.execution?.kind === 'action' && params.invocation.execution.actionId === 'discussion.invite'
+          ? { retainedInvitationApproval: params.invocation.execution } : {}),
+        onInvitationApproval: async execution => await params.onExecutionObservation?.({ execution }),
         ...(params.invocation.execution?.kind === 'action' && params.invocation.execution.actionId === 'session.spawn_new'
           && params.invocation.execution.awaitedOperations?.[0]
           ? { retainedStartupOperation: params.invocation.execution.awaitedOperations[0],

@@ -337,6 +337,7 @@ export type MaterializedWorkflowStepInput = Readonly<{
   references: WorkflowStepComposerDocument['references'];
   attachments: WorkflowStepComposerDocument['attachments'];
   values: readonly WorkflowJsonValue[];
+  discussionReplyTo?: import('@happier-dev/protocol/workflows/workflowDestinationsV1').WorkflowDiscussionOriginV1;
 }>;
 
 export async function materializeWorkflowStepInput(params: Readonly<{

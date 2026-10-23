@@ -23,6 +23,7 @@ import {
   AutomationStoredWorkflowDefinitionV2Schema,
   admitAgentStartV1,
   materializeWorkflowAcceptedSnapshotV1,
+  formatWorkflowDefinitionRefV1,
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
   openWorkflowProgressStoredEnvelopeV1,
   openWorkflowAcceptedSnapshotStoredEnvelopeV1,
@@ -66,6 +67,8 @@ import { resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
+import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 
 import {
   createProductionWorkflowRunCoordinator,
@@ -78,6 +81,10 @@ import {
 } from './production';
 import { executeClaimedRun } from '@/daemon/automation/automationRunExecutor';
 import { createAutomationClaimClient } from '@/daemon/automation/automationClaimClient';
+import { AutomationV3WorkerFailRequestSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { createCredentialedWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { createRoleSourceReader } from '@/session/roles/roleSources';
 import { resolveAutomationPollingConfig } from '@/daemon/automation/automationScheduler';
 import {  workflowInvocationKey } from './coordinator';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
@@ -365,15 +372,18 @@ describe('production workflow coordinator', () => {
     }
   });
 
-  it.each(['none', 'lost_ack', 'denied'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
+  it.each(['none', 'lost_ack', 'denied', 'review', 'review_stable_home'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
     const publication = scenario !== 'none';
-    const discussion = { serverId: 'server-1', discussionId: 'discussion-1' };
+    const hasReview = scenario === 'review' || scenario === 'review_stable_home';
+    const discussion = { serverId: scenario === 'review_stable_home' ? 'srv_workflow_home' : 'server-1', discussionId: 'discussion-1' };
     const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null } as const;
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
       conversation: { kind: 'existing_session', sessionId: 'session-1', machineId },
     }, blocks: [{ ...onlyStep, input: [{ kind: 'discussion_context', scope: 'addressing_message' },
-      { kind: 'discussion_context', scope: 'so_far' }] }] };
+      { kind: 'discussion_context', scope: 'so_far' }] }, ...(hasReview ? [{ ...onlyStep, id: 'review',
+        discussionReplyTo: { blockId: 'work', scope: { kind: 'current' as const } },
+        input: [{ kind: 'result' as const, producer: { blockId: 'work', scope: { kind: 'current' as const } }, path: [] }] }] : [])] };
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
       context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
         workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
@@ -395,9 +405,11 @@ describe('production workflow coordinator', () => {
     const settings = accountSettingsParse({});
     setActiveAccountSettingsSnapshot({ settings, source: 'network', rawSettings: {}, settingsVersion: 1,
       loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
-    const wireMessage = (seq: number) => ({ id: seq === 2 ? 'question' : `message-${seq}`,
+    const wireMessage = (seq: number) => ({ id: seq === 2 ? 'question' : seq === 4 ? 'published-answer' : `message-${seq}`,
       discussionId: discussion.discussionId, localId: `local-${seq}`, seq, authorAccountId: accountId,
-      accountActor: { v: 1, accountId, profile: null }, producerV1: null, createdAt: seq,
+      accountActor: { v: 1, accountId, profile: null }, producerV1: seq === 4 ? { v: 1, kind: 'agent', sessionId: 'session-1', runId,
+        replyReturn: { serverId: discussion.serverId, requestLocalId: [...admittedInputs.keys()][0], acceptedTurnId: 'accepted-turn',
+          workflow: { runId, invocationRecordId: [...admittedInputs.values()][0]!.workflow.invocationRecordId, invocationAttempt: '0' }, outcome: 'answer' } } : null, createdAt: seq,
       content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: seq === 3 ? 'peer sentinel' : `message ${seq}` }] } },
       mentionedAccountIds: [] });
     vi.spyOn(axios, 'request').mockImplementation(async request => {
@@ -419,7 +431,7 @@ describe('production workflow coordinator', () => {
           archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
       } } };
       if (url.pathname.endsWith('/messages')) {
-        const throughSeq = Number(url.searchParams.get('throughSeq') ?? 3);
+        const throughSeq = Number(url.searchParams.get('throughSeq') ?? (publishedInputs.size ? 4 : 3));
         const beforeSeq = url.searchParams.has('beforeSeq') ? Number(url.searchParams.get('beforeSeq')) : undefined;
         reads.push({ throughSeq, ...(beforeSeq === undefined ? {} : { beforeSeq }) });
         const seq = Math.min(throughSeq, (beforeSeq ?? throughSeq + 1) - 1);
@@ -431,42 +443,54 @@ describe('production workflow coordinator', () => {
     let workflow: SessionInputWorkflowV2 | undefined;
     let inputLocalId = '';
     const committedPosts = new Map<string, string>();
+    const publishedInputs = new Map<string, string>();
+    const admittedInputs = new Map<string, { workflow: SessionInputWorkflowV2;
+      discussion: NonNullable<Parameters<NonNullable<WorkflowProductionExecutionDeps['sessionInput']>['enqueue']>[0]['discussionAddressing']> }>();
+    const parents: string[] = [];
     const publicationDiagnostics: unknown[] = [];
     vi.spyOn(logger, 'warnLocalFile').mockImplementation((...args) => { publicationDiagnostics.push(args); });
-    let published = false;
     let denied = false;
     const previousGet = vi.mocked(axios.get).getMockImplementation()!;
     vi.mocked(axios.get).mockImplementation(async (url, config) => {
       transportRequests.push(`get ${url}`);
-      if (url.includes('/by-local-id/') && url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
-        v: 1, mode: 'wait', workflow, acceptedTurnId: 'accepted-turn', disposition: published ? 'returned' : 'observing',
-        discussion: { discussionId: discussion.discussionId, messageId: 'question', throughSeq: 2, participantSessionId: 'session-1' },
-        outcome: published ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion, messageId: 'published-answer' } }
+      if (url.includes('/by-local-id/') && url.endsWith('/reply')) {
+        const localId = decodeURIComponent(/\/by-local-id\/([^/]+)\/reply$/.exec(url)![1]!);
+        const admitted = admittedInputs.get(localId)!;
+        const publicationId = publishedInputs.get(localId);
+        return { status: 200, data: { v: 1, status: 'available', progress: {
+        v: 1, mode: 'wait', workflow: admitted.workflow, acceptedTurnId: 'accepted-turn', disposition: publicationId ? 'returned' : 'observing',
+        discussion: admitted.discussion,
+        outcome: publicationId ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion, messageId: publicationId } }
           : { kind: 'answer', result: { sessionId: 'session-1', messageId: 'exact-result' } },
       } } };
+      }
       return previousGet(url, config);
     });
     const previousRpc = readinessMachineRpc.callMachineRpc.getMockImplementation()!;
     readinessMachineRpc.callMachineRpc.mockImplementation(async args => {
       if (args.method !== SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1) return previousRpc(args);
       const request = args.request.request;
+      const isReview = admittedInputs.get(inputLocalId)!.workflow.invocationRecordId !== [...admittedInputs.values()][0]!.workflow.invocationRecordId;
+      const expectedParent = isReview ? 'published-answer' : 'question';
       const expectedLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'session-1', localId: inputLocalId,
         acceptedTurnId: 'accepted-turn' });
       expect(request).toMatchObject({ sessionId: 'session-1', discussionId: discussion.discussionId,
         replyReturn: { requestLocalId: inputLocalId, acceptedTurnId: 'accepted-turn', workflow: {
           runId, invocationRecordId: workflow!.invocationRecordId, invocationAttempt: '0',
-        } }, request: { localId: expectedLocalId, replyTarget: { kind: 'message', messageId: 'question' },
-          content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'answer' }] } } } });
+        } }, request: { localId: expectedLocalId, replyTarget: { kind: 'message', messageId: expectedParent },
+          content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: isReview ? 'reviewed' : 'answer' }] } } } });
       if (scenario === 'denied' && !denied) {
         denied = true;
         return { v: 1, ok: false, error: 'discussion_post_denied' };
       }
       // This is the native RPC network boundary: the real append owner commits
       // one reply and C2 publicationRef, then its acknowledgement is lost.
-      committedPosts.set(expectedLocalId, 'published-answer');
-      published = true;
-      if (scenario === 'denied') return { v: 1, ok: true, value: {
-        message: { ...wireMessage(4), id: 'published-answer', localId: expectedLocalId, content: request.request.content }, messageSeq: 4,
+      const publicationId = isReview ? 'published-review' : 'published-answer';
+      committedPosts.set(expectedLocalId, publicationId);
+      publishedInputs.set(inputLocalId, publicationId);
+      parents.push(expectedParent);
+      if (scenario === 'denied' || hasReview) return { v: 1, ok: true, value: {
+        message: { ...wireMessage(4), id: publicationId, localId: expectedLocalId, content: request.request.content }, messageSeq: 4,
       } };
       throw new Error('committed_reply_ack_lost');
     });
@@ -475,10 +499,12 @@ describe('production workflow coordinator', () => {
         inputs.push(request.text);
         workflow = request.workflow;
         inputLocalId = deriveWorkflowSessionInputLocalIdV2(request.workflow);
+        admittedInputs.set(inputLocalId, { workflow: request.workflow, discussion: request.discussionAddressing! });
         return { status: 'accepted', localId: inputLocalId };
       }, observe: async ({ sessionId, localId }) => ({ ok: true, sessionId, localId,
-        result: { kind: 'final_text', text: 'answer' }, replyOutcome: { kind: 'answer',
-          result: { sessionId, messageId: 'exact-result' } } }) }), credentials },
+        result: { kind: 'final_text', text: admittedInputs.size > 1 ? 'reviewed' : 'answer' }, replyOutcome: { kind: 'answer',
+          result: { sessionId, messageId: 'exact-result' } } }) }), credentials,
+        ...(scenario === 'review_stable_home' ? { serverIdentityId: 'srv_workflow_home' } : {}) },
       resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation' }),
       resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
       isAcceptedAuthorizationCurrent: async () => true,
@@ -494,21 +520,36 @@ describe('production workflow coordinator', () => {
       expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
       expect(boundary.rows().find(row => row.index.parentRecordId === null)?.index.lifecycle).toBe('needs_attention');
       expect(committedPosts.size).toBe(0);
+    } else if (hasReview) {
+      expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
+      expect(parents).toEqual(['question', 'published-answer']);
+      expect(committedPosts.size).toBe(2);
+      const openedRows = boundary.rows().map(row => openWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: row.index.id,
+          sequence: row.index.sequence, parentRecordId: row.index.parentRecordId,
+          memberOrdinal: row.index.memberOrdinal, attempt: row.index.attempt },
+        envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope) }));
+      const review = openedRows.find(row => row.kind === 'available' && row.content.invocationPath.blockId === 'review');
+      expect(review).toMatchObject({ kind: 'available', content: { discussionReplyTo: {
+        discussion, messageId: 'published-answer', throughSeq: 4,
+      } } });
+      if (review?.kind !== 'available') throw new Error('review_progress_unavailable');
+      expect(review.content.input).not.toHaveProperty('discussionReplyTo');
     } else if (publication) {
       await expect(coordinate(claim)).rejects.toThrow('committed_reply_ack_lost');
       expect(boundary.run().state).toBe('running');
       expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
       expect(committedPosts.size, JSON.stringify({ publicationDiagnostics, transportRequests })).toBe(1);
     } else expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
-    expect(inputs).toHaveLength(1);
-    const values = JSON.parse(inputs[0]!.split('**Workflow inputs**\n\n')[1]!);
-    expect(values[0].value).toMatchObject({ throughSeq: 2, messages: [
-      { id: 'message-1' }, { id: 'question' },
-    ] });
-    expect(JSON.stringify(values[0].value)).not.toContain('peer sentinel');
-    expect(values[1].value).toMatchObject({ throughSeq: 3, messages: [
-      { id: 'message-1' }, { id: 'question' }, { id: 'message-3' },
-    ] });
+    expect(inputs).toHaveLength(hasReview ? 2 : 1);
+    const values = inputs[0]!.split('\n').filter(line => line.startsWith('{"author":'))
+      .map(line => JSON.parse(JSON.parse(line).text));
+    const fixed = values.filter(value => value.reference.scope === 'addressing_message');
+    const current = values.filter(value => value.reference.scope === 'so_far');
+    expect(fixed.map(value => value.value.id)).toEqual(['message-1', 'question']);
+    expect(fixed.every(value => value.source.throughSeq === 2)).toBe(true);
+    expect(JSON.stringify(fixed)).not.toContain('peer sentinel');
+    expect(current.map(value => value.value.id)).toEqual(['message-1', 'question', 'message-3']);
     const previousReads = reads.length;
     if (scenario === 'denied') {
       const root = boundary.rows().find(row => row.index.parentRecordId === null)!;
@@ -531,7 +572,7 @@ describe('production workflow coordinator', () => {
       });
     }
     expect(await coordinate({ ...claim, expectedRevision: boundary.run().revision })).toMatchObject({ state: 'succeeded' });
-    expect(inputs).toHaveLength(1);
+    expect(inputs).toHaveLength(hasReview ? 2 : 1);
     expect(reads).toHaveLength(previousReads);
   });
   it.each([
@@ -1501,8 +1542,12 @@ describe('production workflow coordinator', () => {
         scopeSessionId: callerOriginId, accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
       })).resolves.toEqual({ state: 'succeeded' });
       expect(sentInputs).toHaveLength(2);
-      expect(sentInputs[0]).toContain('"usage":{"kind":"accounted","tokensUsed":3}');
-      expect(sentInputs[1]).toContain('"usage":{"kind":"accounted","tokensUsed":10}');
+      const capturedContexts = sentInputs.map(text => text.split('\n')
+        .filter(line => line.startsWith('{"author":')).map(line => JSON.parse(JSON.parse(line).text)));
+      expect(capturedContexts).toMatchObject([
+        [{ reference: { kind: 'session_context' }, value: { usage: { kind: 'accounted', tokensUsed: 3 } } }],
+        [{ reference: { kind: 'session_context' }, value: { usage: { kind: 'accounted', tokensUsed: 10 } } }],
+      ]);
       for (const text of sentInputs) {
         expect(text).toContain('Frozen origin goal');
         expect(text).not.toContain('9999');
@@ -3004,6 +3049,222 @@ describe('production workflow coordinator', () => {
     })).rejects.toBe(captured);
     expect(preferenceRead).toHaveBeenCalledTimes(deliver ? 1 : 0);
     preferenceRead.mockRestore();
+  });
+
+  it.each(['artifact_http_500', 'workflow_http_500', 'nested_workflow_http_500', 'nested_workflow_typed', 'nested_workflow_cancelled',
+    'external_plugin', 'external_plugin_typed', 'retired_account', 'cancelled_claim'] as const)(
+    'settles unavailable required admission sources through the real claim failure transport (%s)', async fault => {
+    const release = publishServerHttpRuntimeOrigin('https://role-claim.example.test/', 'https');
+    const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null } as const;
+    const worker = new AbortController();
+    const nested = fault.startsWith('nested_workflow');
+    const pluginRole = fault.startsWith('external_plugin');
+    const roleId = pluginRole ? 'plugin:external.roles/scout' : 'required-role';
+    const reads: string[] = [];
+    const childReads: string[] = [];
+    const pluginReads: string[] = [];
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      reads.push(path);
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (path === `/v1/artifacts/${runId}` && (fault === 'workflow_http_500' || nested)) {
+        if (fault === 'nested_workflow_cancelled') worker.abort(new Error('claim_retired'));
+        return { status: 500, data: { code: 'internal_error' } };
+      }
+      if (path === `/v1/artifacts/${roleId}`) {
+        if (fault === 'cancelled_claim') worker.abort(new Error('claim_retired'));
+        return { status: 500, data: { code: 'internal_error' } };
+      }
+      throw new Error(`unexpected_role_admission_read:${path}`);
+    });
+    const failures: ReturnType<typeof AutomationV3WorkerFailRequestSchema.parse>[] = [];
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      expect(url).toBe(`https://role-claim.example.test/v3/automations/runs/${runId}/fail`);
+      // The real transport producer must be accepted by the server's exact strict consumer.
+      failures.push(AutomationV3WorkerFailRequestSchema.parse(body));
+      return { status: 200, data: {} };
+    });
+    const nativeStart = vi.fn(async () => { throw new Error('must_not_start_native_work'); });
+    const execute = vi.fn(async () => { throw new Error('must_not_create_accepted_workflow'); });
+    const readWorkflowDefinition: Parameters<typeof createCredentialedWorkflowMaterializationHostV1>[0]['readWorkflowDefinition'] = async (ref, signal) => {
+      const key = formatWorkflowDefinitionRefV1(ref);
+      childReads.push(key);
+      // Definition acquisition is the external source boundary; materialization
+      // and the refusal classifier remain real for typed plugin read errors.
+      if (fault === 'nested_workflow_typed') throw Object.assign(new Error('child_target_unavailable'), { code: 'target_unavailable' });
+      const source = await resolveWorkflowTriggerClaimSource({ target: { kind: 'workflow', ref: key }, credentials,
+        encryption: { kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } },
+        ...(signal ? { signal } : {}),
+      });
+      return source ? { ...source, sourceKey: key } : null;
+    };
+    const resolveMaterializer = createCredentialedWorkflowMaterializationHostV1({ credentials, accountId,
+      callMachineAction: nativeStart, readWorkflowDefinition,
+      readRoleSources: createRoleSourceReader({ artifactStore: createCredentialedAccountArtifactStore(credentials),
+        accountId, readRawAccountSettings: async () => ({}), readPluginRoles: () => {
+          pluginReads.push(roleId);
+          if (fault === 'external_plugin') throw new Error('external_role_projection_unavailable');
+          if (fault === 'external_plugin_typed') throw Object.assign(new Error('external_role_content_unavailable'), { code: 'content_unavailable' });
+          return [];
+        } }),
+    });
+    const coordinate = createProductionWorkflowRunCoordinator({
+      token: credentials.token, accountId, machineId,
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      isAcceptedAuthorizationCurrent: async () => true,
+      execution: { ...productionExecution(), credentials, machineAdmissionTransport: nativeStart },
+      onCommittedTransition: vi.fn(), storage: { observeChanges: quietStorageChanges, execute },
+      prepareAcceptedWorkspaceTarget: async () => ({ ok: true,
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationHost: async target => {
+        if (nested) {
+          const host = await productionMaterializationHost(target);
+          return { ...host, effects: { ...host.effects,
+            readWorkflowDefinition: ref => readWorkflowDefinition(ref, target.signal) } };
+        }
+        const host = await resolveMaterializer({ machineId, directory: target.directory, signal: target.signal });
+        return { ...host, admitLeaf: (await productionMaterializationHost(target)).admitLeaf };
+      },
+    });
+    try {
+      await executeClaimedRun({ machineId, coordinateWorkflowRun: coordinate, signal: worker.signal,
+        heartbeatMs: 60_000, leaseDurationMs: 120_000,
+        claimClient: createAutomationClaimClient({ token: credentials.token, createPublisherHeader: async () => null }),
+        resolveAutomationAccountEncryption: async () => {
+          if (fault === 'retired_account') throw new Error('account_currentness_unavailable');
+          return { kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } };
+        },
+        claimed: { protocol: 'v3', accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
+          automation: { id: 'automation-1', name: 'Role source outage', enabled: true,
+            ...(fault === 'workflow_http_500' ? { workflowDefinitionId: runId } : {}) },
+          run: { id: runId, automationId: 'automation-1', attempt: 3, leaseExpiresAt: Date.now() + 120_000,
+            revision: 4, recipeKind: 'workflow-v2', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
+            causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: JSON.stringify({ t: 'plain', v: {
+              ...(fault === 'workflow_http_500' ? {} : { inlineDefinition: { version: 1, inputs: [],
+                defaults: nested ? {} : { engine: { role: roleId } },
+                blocks: nested ? [{ kind: 'workflow', id: 'nested', workflowRef: runId, input: {} }] : [onlyStep] } }),
+              workspace: { directory: '/repo' }, executionTarget: { kind: 'session' },
+            } }),
+          },
+        },
+      });
+      if (nested) expect(childReads).toEqual([runId]);
+      if (pluginRole) expect(pluginReads).toEqual([roleId]);
+      else if (fault !== 'nested_workflow_typed') expect(reads).toContain(nested || fault === 'workflow_http_500'
+        ? `/v1/artifacts/${runId}` : `/v1/artifacts/${roleId}`);
+      expect(reads).not.toContain('/v1/artifacts');
+      expect(execute).not.toHaveBeenCalled();
+      expect(nativeStart).not.toHaveBeenCalled();
+      expect(failures).toEqual(fault === 'retired_account' || fault === 'cancelled_claim' || fault === 'nested_workflow_cancelled' ? []
+        : [expect.objectContaining({ machineId, attempt: 3,
+          accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
+          errorCode: fault === 'nested_workflow_typed' ? 'target_unavailable'
+            : fault === 'external_plugin_typed' ? 'content_unavailable' : 'source_unavailable',
+          errorDetailEnvelope: expect.any(String) })]);
+    } finally { get.mockRestore(); post.mockRestore(); release(); }
+  });
+
+  it('avoids Artifact inventory walks across repeated pre-acceptance claim attempts', async () => {
+    const release = publishServerHttpRuntimeOrigin('https://role-claim.example.test/', 'https');
+    const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null } as const;
+    const currentness = { mode: 'plain' as const, version: 1, contentKeyFingerprint: null };
+    const reads: string[] = [];
+    const attempts: number[] = [];
+    const policyDepthLimits: number[] = [];
+    let attempt = 0;
+    const unrelated = Array.from({ length: 501 }, (_, index) => ({ id: `unrelated-${index}`,
+      ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+      header: encodePlainArtifactStoredContent({ kind: 'document.v1', title: 'Unrelated document' }),
+      body: encodePlainArtifactStoredContent({ body: 'Unrelated document' }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
+      seq: index + 1, createdAt: 1, updatedAt: 1 }));
+    const get = vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe('https://role-claim.example.test');
+      reads.push(url.pathname);
+      if (url.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        ...currentness, signingKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (url.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.pathname === '/v2/account/settings') return { status: 200, data: { version: attempt + 1,
+        content: { t: 'plain', v: { workDepthLimit: attempt + 1 } } } };
+      if (url.pathname === '/v1/account/entity-rows/prompt-library') return { status: 200,
+        data: PromptLibraryRowsListResponseV1Schema.parse({ status: 'listed', rows:
+          PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+            content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) }) };
+      if (url.pathname === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (url.pathname === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      if (url.pathname === '/v1/artifacts') {
+        const items = url.searchParams.has('cursor') ? unrelated.slice(500) : unrelated.slice(0, 500);
+        return { status: 200, data: url.searchParams.has('kind') ? { items, hasUnclassified: false } : items };
+      }
+      throw new Error(`unexpected_no_role_claim_read:${url.pathname}`);
+    });
+    const failures: ReturnType<typeof AutomationV3WorkerFailRequestSchema.parse>[] = [];
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      expect(url).toBe(`https://role-claim.example.test/v3/automations/runs/${runId}/fail`);
+      failures.push(AutomationV3WorkerFailRequestSchema.parse(body));
+      return { status: 200, data: {} };
+    });
+    const nativeStart = vi.fn(async () => { throw new Error('must_not_start_native_work'); });
+    const storageUnavailable = new Error('accepted_snapshot_storage_unavailable');
+    const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
+      expect(operation.operation).toBe('accepted-snapshot.resolve');
+      const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId },
+        envelope: parseWorkflowStoredContentEnvelopeV1(operation.acceptedEnvelope),
+      });
+      expect(opened).toMatchObject({ kind: 'available', content: { materializedLeaves: [{ kind: 'wait' }] } });
+      attempts.push(attempt);
+      // A pre-acceptance storage outage leaves no accepted envelope for the
+      // next server-granted attempt; the incumbent claim path must re-admit.
+      throw storageUnavailable;
+    });
+    const resolveMaterializer = createCredentialedWorkflowMaterializationHostV1({ credentials, accountId,
+      callMachineAction: nativeStart, readWorkflowDefinition: async () => null });
+    const coordinate = createProductionWorkflowRunCoordinator({
+      token: credentials.token, accountId, machineId,
+      resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'yolo' }),
+      resolveAccountEncryption: async () => ({ kind: 'available', witness: currentness }),
+      isAcceptedAuthorizationCurrent: async () => true,
+      execution: { ...productionExecution(), credentials, machineAdmissionTransport: nativeStart },
+      onCommittedTransition: vi.fn(), storage: { observeChanges: quietStorageChanges, execute },
+      prepareAcceptedWorkspaceTarget: async () => ({ ok: true,
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } } }),
+      resolveMaterializationHost: async target => {
+        const host = await resolveMaterializer({ machineId, directory: target.directory, signal: target.signal });
+        policyDepthLimits.push(host.agentStartPolicySnapshot.workDepthLimit);
+        return { ...host, admitLeaf: (await productionMaterializationHost(target)).admitLeaf };
+      },
+    });
+    try {
+      for (attempt of [0, 1, 2]) await executeClaimedRun({ machineId, coordinateWorkflowRun: coordinate,
+        heartbeatMs: 60_000, leaseDurationMs: 120_000,
+        claimClient: createAutomationClaimClient({ token: credentials.token, createPublisherHeader: async () => null }),
+        resolveAutomationAccountEncryption: async () => ({ kind: 'available', witness: currentness }),
+        claimed: { protocol: 'v3', accountCurrentness: currentness,
+          automation: { id: 'automation-1', name: 'No Role claim', enabled: true },
+          run: { id: runId, automationId: 'automation-1', attempt, leaseExpiresAt: Date.now() + 120_000,
+            revision: 0, recipeKind: 'workflow-v2', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
+            causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: JSON.stringify({ t: 'plain', v: {
+              inlineDefinition: { version: 1, defaults: {}, blocks: [{ kind: 'wait', id: 'review',
+                document: { text: 'Review', references: [], attachments: [] } }] },
+              workspace: { directory: '/repo' }, executionTarget: { kind: 'session' },
+            } }),
+          },
+        },
+      });
+      expect(attempts).toEqual([0, 1, 2]);
+      expect(policyDepthLimits).toEqual([1, 2, 3]);
+      expect(reads.filter(path => path === '/v2/account/settings')).toHaveLength(3);
+      expect(reads.filter(path => path.startsWith('/v1/artifacts'))).toEqual([]);
+      expect(nativeStart).not.toHaveBeenCalled();
+      expect(failures).toEqual([]);
+    } finally { get.mockRestore(); post.mockRestore(); release(); }
   });
 
   it('settles invalid trigger constants as a typed pre-start refusal without row or Session effects', async () => {

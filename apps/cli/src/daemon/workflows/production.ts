@@ -66,7 +66,8 @@ import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import type { StoredCredentials } from '@/persistence';
 import type { AgentState } from '@/api/types';
 import { createProductionWorkflowSessionContextReader } from './workflowSessionContext';
-import { createProductionWorkflowDiscussionContextReader } from './workflowDiscussion';
+import { createProductionWorkflowDiscussionContextReader, resolveWorkflowDiscussionOrigin } from './workflowDiscussion';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import { createWorkflowDiscussionResultPublisher, WorkflowDiscussionPublicationUnavailable } from './workflowDiscussionPublication';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import {
@@ -318,6 +319,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
       ...(progress.sharedConversationInvocationRecordId ? { sharedConversationInvocationRecordId: progress.sharedConversationInvocationRecordId } : {}),
       ...(progress.observationDeadline ? { observationDeadline: progress.observationDeadline } : {}),
       ...(progress.input === undefined ? {} : { input: WorkflowAuthoredInputV1Schema.parse(progress.input) }),
+      ...(progress.discussionReplyTo ? { discussionReplyTo: progress.discussionReplyTo } : {}),
       ...(progress.previousAttemptRecordId ? { previousAttemptRecordId: progress.previousAttemptRecordId } : {}),
       ...(progress.recovery ? { recovery: progress.recovery } : {}),
       ...(progress.workspace ? { workspace: progress.workspace } : {}),
@@ -688,6 +690,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
         && (effectiveFact.execution === undefined || sameStrictJsonValue(refreshed.execution, effectiveFact.execution))
         && (fact.observationDeadline === undefined || sameStrictJsonValue(refreshed.observationDeadline, fact.observationDeadline))
         && (fact.input === undefined || sameStrictJsonValue(refreshed.input, fact.input))
+        && (fact.discussionReplyTo === undefined || sameStrictJsonValue(refreshed.discussionReplyTo, fact.discussionReplyTo))
         && (fact.container === undefined || sameStrictJsonValue(refreshed.container, fact.container))
         && (fact.containerResult === undefined || sameStrictJsonValue(refreshed.containerResult, fact.containerResult))
         && (fact.resultProvenance === undefined || Object.entries(fact.resultProvenance).every(([id, provenance]) =>
@@ -1214,6 +1217,7 @@ export type WorkflowProductionExecutionDeps = Readonly<{
   resolveExistingSessionConversation: Parameters<typeof createProductionWorkflowSessionStepExecutor>[0]['resolveExistingSessionConversation'];
   /** Canonical Session I/O boundary adapter; production uses the incumbent default owner. */
   sessionInput?: Parameters<typeof createProductionWorkflowSessionStepExecutor>[0]['sessionInput'];
+  postWorkflowMessage?: Parameters<typeof createDiscussionReplyReturnPublisher>[0]['postWorkflowMessage'];
   originSessionInput?: Parameters<typeof createWorkflowSessionStepExecutor>[0]['originSessionInput'];
   detachedRun: Omit<WorkflowDetachedExecutionRunStepExecutorDeps, 'resolveSharedRunConversation' | 'resolveProducerConversation' | 'workDepth' | 'resolveRoleInstructions'>;
   action?: import('./coordinator').WorkflowActionExecutor;
@@ -1340,6 +1344,12 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         });
         return refuseWorkflowTriggerAdmission(reason, blockId);
       };
+      const refuseSourceRead = (stage: string, error: unknown) => {
+        claim.signal?.throwIfAborted();
+        const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
+        return refuse(stage, code === 'source_unavailable' || code === 'content_unavailable' || code === 'target_unavailable'
+          ? code : 'source_unavailable');
+      };
       if (!claim.automationId || !claim.automationCause) return refuse('claim', 'content_unavailable');
       let storedInput: unknown;
       try { storedInput = JSON.parse(claim.definitionEnvelope); } catch { storedInput = null; }
@@ -1378,10 +1388,15 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       const target = readTriggerTargetV1({ workflowDefinitionId: frozen.success ? null : claim.workflowDefinitionId,
         scopeSessionId }, definitionContent);
       if (!storedDefinition.success || target.kind !== 'available') return refuse('definition_payload', 'source_unavailable');
-      const source = await resolveWorkflowTriggerClaimSource({
-        target: target.target, credentials: params.execution.credentials, encryption: accountEncryption,
-        ...(claim.signal ? { signal: claim.signal } : {}),
-      });
+      let source: WorkflowTriggerClaimSource | null;
+      try {
+        source = await resolveWorkflowTriggerClaimSource({
+          target: target.target, credentials: params.execution.credentials, encryption: accountEncryption,
+          ...(claim.signal ? { signal: claim.signal } : {}),
+        });
+      } catch (error) {
+        return refuseSourceRead('source', error);
+      }
       if (!source || claim.causeWorkDepth === undefined
         || !Number.isSafeInteger(claim.causeWorkDepth) || claim.causeWorkDepth < 0) {
         return refuse('source', 'source_unavailable');
@@ -1456,40 +1471,44 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           ...(claim.signal ? { signal: claim.signal } : {}),
         });
       } catch (error) {
-        claim.signal?.throwIfAborted();
-        const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
-        if (code === 'source_unavailable' || code === 'content_unavailable' || code === 'target_unavailable') {
-          return refuse('materialization_host', code);
-        }
-        throw error;
+        // Host preparation only reads required admission sources here; no
+        // accepted snapshot or execution exists yet. An unavailable inventory
+        // must settle this occurrence rather than silently repeat on reclaim.
+        return refuseSourceRead('materialization_host', error);
       }
       // A saved or plugin Workflow names its Run; every other source (inline,
       // legacy, a built-in) has only the Automation that fired it to name it.
       const automationTitle = claim.automationName?.trim();
       const runMetadata = (source.kind === 'inline' ? undefined : source.metadata)
         ?? (automationTitle ? { title: automationTitle } : undefined);
-      const created = await materializeWorkflowAcceptedSnapshotV1({
-        definition: source.definition,
-        ...host,
-        roleOverrides: storedDefinition.data.roleOverrides,
-        admission: { kind: 'trigger', workDepth: claim.causeWorkDepth, admitLeaf: host.admitLeaf },
-        context: {
-          actionCaller: { kind: 'automationRun', runId: claim.runId, automationId: claim.automationId, cause: claim.automationCause },
-          inputs, machineId: params.machineId,
-          executionTarget: storedDefinition.data.executionTarget,
-          workspaceTarget: workspace.workspaceTarget,
-          authorization: { principal: { kind: 'host' } },
-          source: source.kind === 'catalog' ? { kind: 'catalog', ref: source.ref, version: source.version }
-            : { kind: 'automation', automationId: claim.automationId,
-              ...(source.kind === 'saved' ? { definitionId: source.definitionId, revision: source.revision,
-                savedBy: source.savedBy ?? null } : {}) },
-          ...(runMetadata ? { metadata: runMetadata } : {}),
-          ...(originSessionId ? { origin: { kind: 'direct', originSessionId } } : {}),
-          ...(storedDefinition.data.onComplete?.kind === 'originating_session' && originSessionId ? {
-            resultDelivery: { kind: 'originating_session', originSessionId, reportPolicy },
-          } : {}),
-        },
-      });
+      let created: Awaited<ReturnType<typeof materializeWorkflowAcceptedSnapshotV1>>;
+      try {
+        created = await materializeWorkflowAcceptedSnapshotV1({
+          definition: source.definition,
+          ...host,
+          roleOverrides: storedDefinition.data.roleOverrides,
+          admission: { kind: 'trigger', workDepth: claim.causeWorkDepth, admitLeaf: host.admitLeaf },
+          context: {
+            actionCaller: { kind: 'automationRun', runId: claim.runId, automationId: claim.automationId, cause: claim.automationCause },
+            inputs, machineId: params.machineId,
+            executionTarget: storedDefinition.data.executionTarget,
+            workspaceTarget: workspace.workspaceTarget,
+            authorization: { principal: { kind: 'host' } },
+            source: source.kind === 'catalog' ? { kind: 'catalog', ref: source.ref, version: source.version }
+              : { kind: 'automation', automationId: claim.automationId,
+                ...(source.kind === 'saved' ? { definitionId: source.definitionId, revision: source.revision,
+                  savedBy: source.savedBy ?? null } : {}) },
+            ...(runMetadata ? { metadata: runMetadata } : {}),
+            ...(originSessionId ? { origin: { kind: 'direct', originSessionId } } : {}),
+            ...(storedDefinition.data.onComplete?.kind === 'originating_session' && originSessionId ? {
+              resultDelivery: { kind: 'originating_session', originSessionId, reportPolicy },
+            } : {}),
+          },
+        });
+      } catch (error) {
+        // Nested definitions are still required source reads before acceptance.
+        return refuseSourceRead('materialization', error);
+      }
       if (!created.ok) return refuse('materialization', created.error.code, created.error.blockId);
       // Only a lifecycle event has a source turn that can feed back into itself.
       // A manual/scheduled scoped habit intentionally continues its destination.
@@ -1750,6 +1769,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       ...(accepted.origin?.discussion ? { discussionOrigin: accepted.origin.discussion } : {}),
       machineAdmissionTransport: params.execution.machineAdmissionTransport,
       visibleTeamId: initial.keyCensus.visibleTeamId,
+      ...(params.execution.action ? { action: params.execution.action } : {}),
       ...(params.execution.sessionStartup ? { sessionStartup: params.execution.sessionStartup } : {}),
       ...(params.execution.resolveTeamCredentialResourceCatalog
         ? { resolveTeamCredentialResourceCatalog: params.execution.resolveTeamCredentialResourceCatalog }
@@ -1837,12 +1857,25 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       ...(params.waitForNewWorkAdmission ? { waitForNewWorkAdmission: params.waitForNewWorkAdmission } : {}),
       ...(params.execution.action ? { action: params.execution.action } : {}),
       onReviewEntered: async ({ runId }) => await onReviewEntered({ runId }),
-      ...(accepted.resultDelivery?.kind === 'originating_discussion' ? { onInvocationCompleted: createWorkflowDiscussionResultPublisher({
+      ...(accepted.resultDelivery?.kind === 'originating_discussion' ? { resolveDiscussionReplyParent: async ({ runId, invocation }) => {
+        const destination = accepted.resultDelivery!;
+        if (destination.kind !== 'originating_discussion') throw new WorkflowDiscussionPublicationUnavailable();
+        const discussionAction = createDiscussionActionDeps({ credentials: params.execution.credentials,
+          serverId: params.execution.serverId, serverHttpBaseUrl: resolveServerHttpBaseUrl() }).discussionAction!;
+        return await resolveWorkflowDiscussionOrigin({ origin: { kind: 'discussion', discussion: destination.discussion,
+          addressingMessageId: destination.messageId }, context: { serverId: params.execution.serverId,
+          surface: 'cli', authority: 'account_automation', ...(claim.signal ? { signal: claim.signal } : {}) },
+          discussionAction, replyTo: { credentials: params.execution.credentials, runId, invocation,
+            ...(params.execution.serverIdentityId ? { serverIdentityId: params.execution.serverIdentityId } : {}) } });
+      } } : {}),
+      ...(accepted.resultDelivery?.kind === 'originating_discussion' ? { onInvocationSettled: createWorkflowDiscussionResultPublisher({
         credentials: params.execution.credentials, origin: accepted.resultDelivery,
         isCurrent: isOpenedAuthorizationCurrent,
         publish: createDiscussionReplyReturnPublisher({ credentials: params.execution.credentials,
           machineId: params.machineId, serverId: params.execution.serverId,
+          workflowAuthorization: accepted.authorization,
           serverHttpBaseUrl: resolveServerHttpBaseUrl(), signal: claim.signal ?? new AbortController().signal,
+          ...(params.execution.postWorkflowMessage ? { postWorkflowMessage: params.execution.postWorkflowMessage } : {}),
           isCurrent: isOpenedAuthorizationCurrent }),
         ...(claim.signal ? { signal: claim.signal } : {}),
       }) } : {}),
@@ -1856,6 +1889,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         serverId: params.execution.serverId,
         serverHttpBaseUrl: resolveServerHttpBaseUrl(),
         origin: accepted.origin?.discussion,
+        ...(params.execution.serverIdentityId ? { serverIdentityId: params.execution.serverIdentityId } : {}),
         ...(claim.signal ? { signal: claim.signal } : {}),
       }) : {}) },
       rootInvocationRecordId: rootInvocation.recordId,

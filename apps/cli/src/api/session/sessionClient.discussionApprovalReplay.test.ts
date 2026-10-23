@@ -33,6 +33,7 @@ import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/res
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { openSessionStoredContent, sealSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
 import type { StoredCredentials } from '@/persistence';
 import { writeStoredCredentialsForServerId } from '@/persistence';
@@ -46,6 +47,20 @@ import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextFor
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { createConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
+import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventV1Schema } from '@happier-dev/protocol';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { runSessionLoopLifecycle } from '@/agent/runtime/session/loop/lifecycle';
+import { createLifecycleParams } from '@/agent/runtime/session/loop/lifecycle.testkit';
+import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/runnerTerminationHandlers';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
+import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
 const io = vi.hoisted(() => vi.fn());
 // Socket.IO is the sole publication/absent-Session network boundary.
@@ -63,6 +78,7 @@ afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMo
 
 it.each([
   { mode: 'plain', scope: 'draft creation' }, { mode: 'e2ee', scope: 'draft creation' },
+  { mode: 'plain', scope: 'completed then late Stop' },
   { mode: 'plain', scope: 'publication replay' }, { mode: 'e2ee', scope: 'publication replay' },
   { mode: 'plain', scope: 'satisfied return' }, { mode: 'e2ee', scope: 'satisfied return' },
   { mode: 'plain', scope: 'pending explicit' }, { mode: 'e2ee', scope: 'pending explicit' },
@@ -76,6 +92,7 @@ it.each([
   let failedPhase: string | undefined;
   onTestFailed(() => console.error('Discussion approval replay failed during:', mode, failedPhase ?? phase));
   const sessionId = 'cmv3discussionparticipant';
+  const completedOutcome = { kind: 'answer' as const, result: { sessionId, messageId: 'native-final-message' } };
   const opinionSourceSessionId = sessionId;
   const serverId = 'discussion-approval-home';
   const machineId = 'participant-machine';
@@ -86,7 +103,9 @@ it.each([
     approvalWaivedSurfaces: { 'discussion.reply': ['agent'] } }) });
   const key = await createResourceDataKey({ credentials, mode });
   const contentKeyFingerprint = credentials.encryption?.type === 'legacy'
-    ? computeContentPublicKeyFingerprint(libsodiumPublicKeyFromSecretKey(await deriveKey(credentials.encryption.secret, 'Happy EnCoder', ['content']))) : null;
+    ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(computeContentPublicKeyFingerprint(
+      libsodiumPublicKeyFromSecretKey(await deriveKey(credentials.encryption.secret, 'Happy EnCoder', ['content'])),
+    )) : null;
   const crypto = key.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
     : { mode: 'e2ee' as const, ctx: { encryptionKey: key.dataKey, encryptionVariant: 'dataKey' as const } };
   const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'An approved participant answer' }] };
@@ -153,7 +172,7 @@ it.each([
       progress: { v: 1, mode: 'return', disposition: 'return_pending',
         acceptedTurnId: path.includes('/pending-original/') ? 'retired-turn' : 'native-draft-turn',
         discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
-        outcome: { kind: 'failed' } } });
+        outcome: scope === 'completed then late Stop' ? completedOutcome : { kind: 'failed' } } });
     if (path.startsWith('/v2/sessions/')) return reply({ session: createSessionRecordFixture({ id: sessionId, share: null }) });
     if (path === '/v1/discussions/discussion-1' && request.method === 'GET') return reply({ discussion: summary });
     if (path === '/v1/discussions/created-discussion' && request.method === 'GET') return reply({ discussion: createdDiscussion });
@@ -604,6 +623,131 @@ it.each([
         expect(humanWrites).toBe(0);
         expect(httpCalls).toContainEqual({ method: 'GET',
           path: `/v2/sessions/${sessionId}/messages/by-local-id/satisfied-original/reply` });
+        return;
+      }
+      if (scope === 'completed then late Stop') {
+        phase = 'completed native turn then idle host Stop';
+        const restoreProjectHome = installEmptyProjectAccountRowsHttpBoundary();
+        const base = createLifecycleParams({ policyAgentId: 'codex', runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+        const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+          mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+        let nativeListener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        let abortRequested: (() => void | Promise<void>) | undefined;
+        let termination: ReturnType<typeof registerRunnerTerminationHandlers> | undefined;
+        const cancel = vi.fn<NonNullable<AgentSessionRuntime['cancel']>>(async request => ({
+          status: 'requested', turnId: request.turnId,
+        }));
+        // Only the native Agent and acknowledged Session transport are
+        // boundaries. Host Stop, prompt loop, native turn state, ordered
+        // transcript projection and the approval publisher remain real.
+        const provider: AgentSessionRuntime = {
+          async send() { throw new Error('This provider-owned turn has no host prompt'); },
+          cancel,
+          watch(listener) { nativeListener = listener; return { dispose() { nativeListener = undefined; } }; },
+          dispose() {},
+        };
+        const lifecycleSession = Object.assign(base.session, {
+          sessionId,
+          getLastObservedMessageSeq: () => 42,
+          getCommittedUserMessageSeq: (localId: string) => localId === 'native-draft-input' ? 40 : null,
+          enqueueAgentMessageCommitted: vi.fn<NonNullable<typeof base.session.enqueueAgentMessageCommitted>>(async (_agent, body) => ({
+            persisted: true, delivered: true, committedSequence: body.type === 'message' ? 42 : 43,
+          })),
+        });
+        const declaration = readAgentCatalogSnapshot().agentDefinitionsById.get('codex');
+        if (!declaration?.richDefinition || !declaration.pluginId) throw new Error('Missing Codex Agent declaration');
+        const runtimeScope = new AbortController();
+        const services = createUnavailablePluginServices();
+        const contextFixture = createAcpSessionRuntimeContextFixture({
+          agent: declaration.richDefinition.definition, pluginId: declaration.pluginId,
+          sessionId, directory: '/workspace', signal: runtimeScope.signal, session: client, services,
+          protocols: createPublicAcpRuntimeProtocols({ pluginId: declaration.pluginId, agentId: declaration.id,
+            signal: runtimeScope.signal, isCurrent: () => !runtimeScope.signal.aborted, services }),
+        });
+        const runtime = createNativeAgentSessionOperations(provider, sessionId, undefined, undefined, undefined, undefined, undefined, {
+          context: contextFixture.context, cwd: '/workspace', connectedAccounts: [],
+          capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
+          cancellation: { declared: true, cancel }, configuration: { declared: false }, manualCompaction: { declared: false },
+        });
+        const running = runSessionLoopLifecycle({
+          ...base, session: lifecycleSession, runtime, hookRuntime: runtime,
+          config: { ...base.config, startRuntimeBeforeFirstPrompt: true },
+          permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+          setAbortRequestedCallback: callback => { abortRequested = callback; },
+          deps: { ...base.deps,
+            registerRunnerTerminationHandlersFn: options => {
+              termination = registerRunnerTerminationHandlers({
+                ...options, processLifecycleOwnership: 'caller', sessionExitReport: null, exit: () => undefined,
+              });
+              return termination;
+            },
+          },
+        });
+        let sequence = 0;
+        const emit = (event: Readonly<Record<string, unknown>>) => nativeListener?.(AgentSessionRuntimeEventV1Schema.parse({
+          ...event, sessionId, sequence: ++sequence, emittedAtMs: Date.now(),
+        }));
+        try {
+          phase = 'provider-owned runtime subscription';
+          await vi.waitFor(() => { expect(nativeListener).toBeTypeOf('function'); expect(abortRequested).toBeTypeOf('function'); });
+          emit({ kind: 'turn-start', turnId: 'native-draft-turn', startedBy: 'provider' });
+          emit({ kind: 'input-accepted', inputIds: ['native-draft-input'], delivery: { kind: 'newTurn', turnId: 'native-draft-turn' } });
+          emit({ kind: 'transcript-message-committed', turnId: 'native-draft-turn', messageId: completedOutcome.result.messageId,
+            role: 'assistant', text: 'The complete answer survives a late Stop' });
+          emit({ kind: 'turn-complete', turnId: 'native-draft-turn' });
+          phase = 'ordered completed answer custody';
+          await vi.waitFor(() => expect(lifecycleSession.enqueueSessionTurnMutation).toHaveBeenCalledWith(
+            expect.objectContaining({ action: 'complete', turnId: 'native-draft-turn' })));
+          phase = 'idle host Stop';
+          await abortRequested?.();
+          const mutations = vi.mocked(lifecycleSession.enqueueSessionTurnMutation!).mock.calls.map(([mutation]) => mutation);
+          expect(mutations.some(mutation => mutation.action === 'cancel' || mutation.action === 'fail')).toBe(false);
+          expect(mutations.some(mutation => 'transcriptAnchors' in mutation
+            && mutation.transcriptAnchors?.finalAssistantMessageSeq === 42)).toBe(true);
+          expect(cancel).not.toHaveBeenCalled();
+          const final = lifecycleSession.enqueueAgentMessageCommitted.mock.calls.find(([, body]) => body.type === 'message')?.[1];
+          if (final?.type !== 'message') throw new Error('Missing committed completed answer');
+          // The Home return read above is the server boundary. Its exact
+          // completed result is consumed by the real daemon publication path.
+          restoreProjectHome();
+          const publish = createDiscussionReplyReturnPublisher({ credentials, machineId, serverId,
+            serverHttpBaseUrl: serverUrl, signal: lifetime.signal, isCurrent: async () => true,
+            actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}),
+              allowEnvironmentOverride: false }),
+          });
+          const original = { serverId, requestSessionId: sessionId, requestLocalId: 'native-draft-input',
+            acceptedTurnId: 'native-draft-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+              throughSeq: 1, participantSessionId: sessionId }, message: final.message, outcome: completedOutcome };
+          phase = 'completed answer fallback approval';
+          await publish(original);
+          const first = await store.approvalsList({ status: 'open', limit: 10, serverId });
+          expect(first.items).toHaveLength(1);
+          const artifactId = first.items[0]!.artifactId;
+          const approval = await store.approvalsGet({ artifactId, serverId });
+          expect(approval).toMatchObject({ status: 'open', actionId: 'discussion.reply',
+            actionArgs: { replyTarget: { kind: 'message', messageId: 'question-1' },
+              content: { parts: [{ t: 'text', text: final.message }] } },
+            executionOriginV1: { discussionReplyReturn: { requestLocalId: original.requestLocalId,
+              acceptedTurnId: original.acceptedTurnId } } });
+          phase = 'late Stop and return recovery rejoin';
+          await abortRequested?.();
+          await publish(original);
+          expect((await store.approvalsList({ status: 'open', limit: 10, serverId })).items).toEqual(first.items);
+          expect(await store.approvalsGet({ artifactId, serverId })).toEqual(approval);
+          expect(publications).toEqual([]);
+          expect(humanWrites).toBe(0);
+        } catch (error) {
+          failedPhase = phase;
+          throw error;
+        } finally {
+          phase = 'completed turn fixture shutdown';
+          emit({ kind: 'runtime-ended', cause: 'providerEnded', retryable: false });
+          termination?.requestTermination({ kind: 'killSession' });
+          await running;
+          runtimeScope.abort();
+          await contextFixture.dispose();
+          restoreProjectHome();
+        }
         return;
       }
       if (scope === 'draft creation') {
