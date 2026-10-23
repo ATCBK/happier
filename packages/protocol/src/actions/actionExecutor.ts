@@ -466,6 +466,7 @@ import {
 } from '../sessions/messages/sessionInputAdmission.js';
 import { DiscussionSelectionSourceV1Schema } from '../discussions/content.js';
 import { PendingRequestedActionV1Schema, SessionPendingActionSetInputV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartCancelInputV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
+import { PendingLocalIdSchema } from '../sessions/pending/pendingLocalId.js';
 import {
   SessionPermissionRemoteGrantRevokeInputV1Schema,
   SessionPermissionRemoteGrantsListInputV1Schema,
@@ -9605,8 +9606,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof data.idempotencyKey === 'string' ? { idempotencyKey: data.idempotencyKey } : {}),
             // A plugin input's identity is host-derived from its idempotency
             // key, so only a non-plugin caller may retain its own localId.
-            ...(actionCaller.kind !== 'plugin' && typeof data.localId === 'string' && data.localId.trim().length > 0
-              ? { localId: data.localId }
+            ...(retainedLocalId
+              ? { localId: retainedLocalId }
               : {}),
             ...(parsedSource?.success ? { source: parsedSource.data } : {}),
             ...(parsedAttachments?.success ? { attachments: parsedAttachments.data } : {}),
