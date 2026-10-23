@@ -51,8 +51,10 @@ async function mountBody(
   calls.length = 0;
   openFails = false;
   const surface = defineUiSurface(function EntryBody(_context: RenderContext): React.ReactElement {
+    const [selectedSessionId, setSelectedSessionId] = React.useState<string | null>(null);
     return (
-      <TriageDetailWholeBody sessions={sessions} entryRef={ENTRY} onUnlinked={onUnlinked}>
+      <TriageDetailWholeBody sessions={sessions} entryRef={ENTRY} onUnlinked={onUnlinked}
+        selectedSessionId={selectedSessionId} onSelectSession={setSelectedSessionId}>
         <Text value="The source's own detail" />
       </TriageDetailWholeBody>
     );
@@ -163,10 +165,11 @@ describe('Triage entry Session tab', () => {
       await body.press(await body.getByRole('tab', { name: 'Details' }));
     });
     await expect(body.queryByRole('group', { name: 'Session session-other' })).resolves.toBeUndefined();
+    expect(document.querySelector('[role="group"][aria-label="Session session-other"]')).toBeNull();
     await act(async () => {
       await body.press(await body.getByRole('tab', { name: 'Session' }));
     });
-    // Tab changes preserve the linked-session selection and its controller.
+    // The detail owner preserves the linked-session selection while the live controller is recreated.
     await expect(body.getByRole('group', { name: 'Session session-other' })).resolves.toBeDefined();
 
     await act(async () => {

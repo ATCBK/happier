@@ -103,8 +103,8 @@ function SourceDetailInstance(props: Readonly<{
 /**
  * The detail's tabbed body (r0.42): Triage's strip over the shared vocabulary
  * and any source-only tabs. One source detail instance receives changing panel
- * input. Source Tabs own their panel intervals; the retained source and Session
- * slots below withdraw activity when the reader leaves that entire slot.
+ * input. Source Tabs own their panel intervals; retained source slots withdraw
+ * activity, while the live Session slot retires when the reader leaves it.
  */
 export function TriageDetailTabbedBody(props: Readonly<{
   tabSelection?: TriageDetailTabSelectionV1;
@@ -195,7 +195,7 @@ export function TriageDetailTabbedBody(props: Readonly<{
                   </Stack>
                 )}
               </Tabs.Item>
-              <Tabs.Item value="session" title="" retention="retain">{props.session}</Tabs.Item>
+              <Tabs.Item value="session" title="" retention="discard">{props.session}</Tabs.Item>
               <Tabs.Item value="none" title="">
                 <ScrollArea style={FILL_STYLE}>
                   <Stack gap="large">{props.overviewLead}{props.overviewTail}</Stack>

@@ -39,6 +39,36 @@ async function withSource(run: (kit: Awaited<ReturnType<typeof createPluginTestk
 }
 
 describe('registered internal Happier task source', () => {
+  it('indexes child relationships once for a scan page over a large personal inventory', async () => {
+    let parentReads = 0;
+    const todos = Array.from({ length: 1000 }, (_, index) => ({
+      id: `task-${index}`, title: `Task ${index}`, state: index % 2 === 0 ? 'unstarted' : 'completed',
+      done: index % 2 !== 0, createdAt: 17, updatedAt: 18,
+      get parentId() {
+        parentReads++;
+        return index === 0 ? undefined : `task-${Math.floor((index - 1) / 2)}`;
+      },
+    }));
+    await withSource(async (kit, calls) => {
+      const scan = TriageScanResultV1Schema.parse(await kit.invokeAction('internal/tasks/scan-v1', {
+        v: 1, instance, page: { kind: 'initial', limit: 100 },
+      }));
+      expect(scan.kind).toBe('page');
+      if (scan.kind !== 'page') throw new Error('Expected a continuation over the large inventory');
+      expect(scan.observations).toHaveLength(100);
+      for (const index of [0, 99]) expect(scan.observations[index]).toMatchObject({
+        kind: 'present', snapshot: { relations: { children: {
+          total: 2, completed: 1, complete: true,
+          entries: [index * 2 + 1, index * 2 + 2].map(child => ({ source, kindId: 'task', collisionScope: 'personal', entryId: `task-${child}` })),
+        } } },
+      });
+      // One inventory pass plus each visible row's own parent projection.
+      // A per-row scan costs 100,000 visits on this fixture.
+      expect(parentReads).toBeLessThanOrEqual(todos.length + scan.observations.length * 2);
+      expect(calls.filter(call => call.id === 'tasks.internal.list')).toHaveLength(1);
+    }, { status: 'ok', scope, todos, undoneOrder: todos.map(task => task.id), completedOrder: [] });
+  });
+
   it('reads active and recently completed personal tasks from the same Account list without inferring unknown completion dates', async () => {
     const todos = [
       { ...predecessor, id: 'active', state: 'unstarted' },

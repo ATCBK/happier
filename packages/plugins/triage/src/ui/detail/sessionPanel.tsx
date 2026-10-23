@@ -187,7 +187,7 @@ export function TriageDetailWholeBody(props: Readonly<{
       <Tabs.Item value="details" title={text('plugins.triage.surface.detail.tab.details', 'Details')} retention="retain">
         {props.children}
       </Tabs.Item>
-      <Tabs.Item value="session" title={text('plugins.triage.surface.detail.tab.session', 'Session')} retention="retain">
+      <Tabs.Item value="session" title={text('plugins.triage.surface.detail.tab.session', 'Session')} retention="discard">
         <TriageSessionPanel sessions={props.sessions} entryRef={props.entryRef} onUnlinked={props.onUnlinked}
           selectedSessionId={props.selectedSessionId} onSelectSession={props.onSelectSession} />
       </Tabs.Item>

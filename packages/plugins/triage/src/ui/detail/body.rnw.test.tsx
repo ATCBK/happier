@@ -259,6 +259,30 @@ describe('the tabbed detail body (r0.42)', () => {
     await body.dispose();
     expect(intervals.every((signal) => signal.aborted)).toBe(true);
   });
+  it('retires the live Session tree whenever its tab is hidden', async () => {
+    let mounts = 0;
+    let active = 0;
+    function SessionProbe() {
+      React.useEffect(() => {
+        mounts += 1;
+        active += 1;
+        return () => { active -= 1; };
+      }, []);
+      return <Text value="Linked Session probe" />;
+    }
+    const body = await mountBody(
+      PR_TABS.kind === 'tabs' ? PR_TABS.tabs : [],
+      undefined,
+      <SessionProbe />,
+    );
+    expect({ mounts, active }).toEqual({ mounts: 0, active: 0 });
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    expect({ mounts, active }).toEqual({ mounts: 1, active: 1 });
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Overview' })); });
+    expect({ mounts, active }).toEqual({ mounts: 1, active: 0 });
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    expect({ mounts, active }).toEqual({ mounts: 2, active: 1 });
+  });
   it('lets the source open a sibling panel through the frame\'s own selection, and only one it offers', async () => {
     function SourceOpener() {
       const openFiles = useTriageDetailPanelOpener('files');
