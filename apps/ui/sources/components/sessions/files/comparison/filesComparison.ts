@@ -122,8 +122,13 @@ export function listFilesComparisonScopeOptions(
         if (offer('turn_agent_reported')) comparisons.push({ kind: 'turnCheckpoint', turnId: latestTurnId, evidence: 'agent_reported' });
         if (offer('turn_checkpoint')) comparisons.push({ kind: 'turnCheckpoint', turnId: latestTurnId, evidence: 'checkpoint' });
     }
-    if (current && !comparisons.some((candidate) => scmComparisonKey(candidate) === scmComparisonKey(current))) {
-        comparisons.push(current);
+    if (current) {
+        // The picker has one slot per turn/evidence kind; retain that slot's exact saved receipt.
+        const currentIndex = comparisons.findIndex(candidate => candidate.kind === 'turnCheckpoint' && current.kind === 'turnCheckpoint'
+            ? candidate.turnId === current.turnId && candidate.evidence === current.evidence
+            : sourceKey(candidate) === sourceKey(current));
+        if (currentIndex >= 0) comparisons[currentIndex] = current;
+        else comparisons.push(current);
     }
     const options: FilesComparisonScopeOption[] = comparisons.map((comparison) => {
         const fileCount = current && scmComparisonKey(comparison) === scmComparisonKey(current) && counts.currentFileCount !== undefined

@@ -21,6 +21,16 @@ const NONE = {
 };
 
 describe('Files comparison (one owner for what Files shows)', () => {
+    it.each([{}, { checkpointReceiptId: 'saved-receipt' }])('offers a pinned latest turn once while retaining its exact capture and distinct evidence choices (%j)', receipt => {
+        const current = { kind: 'turnCheckpoint', turnId: 'turn-7', comparisonId: 'saved-turn', ...receipt } as const;
+        const options = listFilesComparisonScopeOptions(ALL, 'turn-7', current, { currentFileCount: 6 });
+        const turnOptions = options.filter(option => option.comparison?.kind === 'turnCheckpoint');
+        expect(turnOptions).toHaveLength(3);
+        expect(turnOptions.filter(option => option.comparison?.kind === 'turnCheckpoint' && !option.comparison.evidence))
+            .toMatchObject([{ comparison: current, fileCount: 6 }]);
+        expect(new Set(turnOptions.map(option => option.label)).size).toBe(3);
+    });
+
     it('shows exactly the comparison the link names, with its evidence', () => {
         expect(resolveFilesComparisonPresentation({ kind: 'workingTree' }, ALL)).toEqual({ kind: 'changedFiles', mode: 'repository' });
         expect(resolveFilesComparisonPresentation({ kind: 'session' }, ALL)).toEqual({ kind: 'captured' });
