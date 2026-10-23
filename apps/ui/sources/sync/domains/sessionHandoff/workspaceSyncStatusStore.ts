@@ -1,7 +1,12 @@
 import type { WorkspaceSyncStatusV1 } from '@happier-dev/protocol';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
-import { getWorkspaceSyncStatus, listWorkspaceSyncStatuses } from '@/sync/ops/workspaceSync';
+import { getWorkspaceSyncStatus, listWorkspaceSyncStatuses, watchWorkspaceSyncStatuses } from '@/sync/ops/workspaceSync';
+import type { WorkspaceSyncStatusWatchSnapshotV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { isMachineRpcTimeoutError } from '@happier-dev/protocol/rpcErrors';
+import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
+import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
+import { invalidateWorkspaceSyncConflicts } from './workspaceSyncConflictStore';
 
 export type WorkspaceSyncStatusScope = Readonly<{
     serverId?: string | null;
@@ -33,7 +38,102 @@ type ControllerRead = {
 };
 
 const controllerReads = new Map<string, ControllerRead>();
+type StatusObservation = {
+    entries: Set<Entry>;
+    stop: (() => void) | null;
+};
+const statusObservations = new Map<string, StatusObservation>();
 const IDLE_SNAPSHOT: WorkspaceSyncStatusSnapshot = { phase: 'idle', status: null, error: null };
+
+type ControllerScope = Pick<WorkspaceSyncStatusScope, 'serverId' | 'controllerMachineId'>;
+type WatchSnapshot = Readonly<{
+    snapshot: WorkspaceSyncStatusWatchSnapshotV1;
+    admissions: readonly Readonly<{ entry: Entry; generation: number }>[];
+}>;
+
+// The shared owner supplies cancellation, parked renewal and transport recovery.
+// Per-relationship entries remain the sole retained display/status owner.
+const controllerWatches = createSharedSubscriptionStore<ControllerScope, number | undefined, WatchSnapshot, typeof watchWorkspaceSyncStatuses, typeof watchWorkspaceSyncStatuses>({
+    emptyState: undefined,
+    createState: () => undefined,
+    normalizeInput: input => ({ ...input, serverId: input.serverId ?? null }),
+    storeKey: controllerKeyFor,
+    defaultSnapshotClient: watchWorkspaceSyncStatuses,
+    watchAfterRefresh: true,
+    shouldWatch: revision => revision !== undefined,
+    // A fresh snapshot on arrival/reconnect also clears an observation error
+    // when the daemon's material status has not changed since the last reply.
+    refresh: async ({ input, snapshotClient, signal }) => {
+        const admissions = statusWatchAdmissions(input);
+        try {
+            const reply = await snapshotClient({ ...input, signal });
+            if (signal?.aborted || !reply.changed) return undefined;
+            applyStatusWatchSnapshot({ snapshot: reply.snapshot, admissions });
+            return reply.snapshot.revision;
+        } catch (error) {
+            if (!signal?.aborted) publishStatusWatchError(admissions, error);
+            return undefined;
+        }
+    },
+    defaultWatchClient: watchWorkspaceSyncStatuses,
+    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({
+        serverId: input.serverId, machineId: input.controllerMachineId,
+    }, recover),
+    applySnapshot: (_state, reply) => reply.snapshot.revision,
+    onWatchSnapshot: (_input, reply) => applyStatusWatchSnapshot(reply),
+    watch: async ({ input, state, watchClient, signal }) => {
+        const admissions = statusWatchAdmissions(input);
+        try {
+            const reply = await watchClient({ ...input, sinceRevision: state, signal });
+            return reply.changed
+                ? { status: 'changed', snapshot: { snapshot: reply.snapshot, admissions } }
+                : { status: 'idle' };
+        } catch (error) {
+            if (signal?.aborted) return { status: 'unavailable' };
+            if (isMachineRpcTimeoutError(error)) return { status: 'retry' };
+            publishStatusWatchError(admissions, error);
+            return { status: 'unavailable' };
+        }
+    },
+});
+
+function statusWatchAdmissions(input: ControllerScope): WatchSnapshot['admissions'] {
+    return [...(statusObservations.get(controllerKeyFor(input))?.entries ?? [])]
+        .map(entry => ({ entry, generation: entry.admissionGeneration }));
+}
+
+function applyStatusWatchSnapshot(reply: WatchSnapshot): void {
+    const byId = new Map(reply.snapshot.statuses.map(status => [status.relationshipId, status] as const));
+    for (const { entry, generation } of reply.admissions) {
+        if (entry.listeners.size === 0 || entry.admissionGeneration !== generation) continue;
+        applyObservedStatus(entry, byId.get(entry.scope.relationshipId) ?? null);
+    }
+}
+
+function publishStatusWatchError(admissions: WatchSnapshot['admissions'], error: unknown): void {
+    for (const { entry, generation } of admissions) {
+        if (entry.listeners.size > 0 && entry.admissionGeneration === generation) {
+            publish(entry, { phase: 'error', status: entry.snapshot.status, error });
+        }
+    }
+}
+
+function pauseStatusObservation(observation: StatusObservation | undefined): void {
+    observation?.stop?.();
+    if (observation) observation.stop = null;
+}
+
+function startStatusObservation(key: string, observation: StatusObservation): void {
+    if (observation.stop || controllerReads.has(key) || [...observation.entries].some(entry => entry.inFlight)) return;
+    const scope = observation.entries.values().next().value?.scope;
+    if (scope) observation.stop = controllerWatches.subscribe(scope, () => {});
+}
+
+function applyObservedStatus(entry: Entry, status: WorkspaceSyncStatusV1 | null): void {
+    const previous = entry.snapshot.status;
+    publish(entry, { phase: 'ready', status, error: null });
+    if (previous && entry.snapshot.status !== previous) invalidateWorkspaceSyncConflicts(entry.scope);
+}
 
 function keyFor(scope: WorkspaceSyncStatusScope): string {
     return JSON.stringify([scope.serverId ?? null, scope.controllerMachineId, scope.relationshipId]);
@@ -78,17 +178,30 @@ export function getWorkspaceSyncStatusSnapshot(scope: WorkspaceSyncStatusScope):
 export function subscribeWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope, listener: () => void): () => void {
     const entry = entryFor(scope);
     entry.listeners.add(listener);
+    const key = controllerKeyFor(scope);
+    const observation = statusObservations.get(key);
+    if (observation) observation.entries.add(entry);
+    else {
+        const created: StatusObservation = { entries: new Set([entry]), stop: null };
+        statusObservations.set(key, created);
+        startStatusObservation(key, created);
+    }
     return () => {
         entry.listeners.delete(listener);
         if (entry.listeners.size > 0) return;
+        const observation = statusObservations.get(key);
+        observation?.entries.delete(entry);
+        if (observation?.entries.size === 0) {
+            pauseStatusObservation(observation);
+            statusObservations.delete(key);
+        }
         entry.admissionGeneration += 1;
         entry.requestController?.abort();
         entry.requestController = null;
         entry.inFlight = null;
-        if (entry.snapshot.phase === 'loading' || entry.snapshot.phase === 'refreshing') {
-            publish(entry, { ...entry.snapshot, phase: 'idle', error: null });
-        }
-        const key = controllerKeyFor(scope);
+        // Reopening a view must read the engine again even if no daemon command
+        // published an invalidation while the relationship was unobserved.
+        publish(entry, { ...entry.snapshot, phase: 'idle', error: null });
         const read = controllerReads.get(key);
         read?.scopes.delete(keyFor(scope));
         // Mounted summary consumers subscribe before admitting a shared list read.
@@ -116,6 +229,7 @@ export function invalidateWorkspaceSyncStatuses(controller: Readonly<{
     serverId: string | null;
     controllerMachineId: string;
 }>): void {
+    controllerWatches.invalidate(controller);
     const scopes: WorkspaceSyncStatusScope[] = [];
     const currentRead = controllerReads.get(controllerKeyFor(controller));
     if (currentRead) {
@@ -135,6 +249,8 @@ export function invalidateWorkspaceSyncStatuses(controller: Readonly<{
 export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Promise<WorkspaceSyncStatusV1 | null> {
     const entry = entryFor(scope);
     if (entry.inFlight) return entry.inFlight;
+    const key = controllerKeyFor(scope);
+    pauseStatusObservation(statusObservations.get(key));
     publish(entry, {
         phase: entry.snapshot.status ? 'refreshing' : 'loading',
         status: entry.snapshot.status,
@@ -159,6 +275,8 @@ export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Pro
         if (entry.inFlight === inFlight) {
             entry.inFlight = null;
             entry.requestController = null;
+            const observation = statusObservations.get(key);
+            if (observation) startStatusObservation(key, observation);
         }
     });
     entry.inFlight = inFlight;
@@ -166,7 +284,9 @@ export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Pro
 }
 
 /** One daemon list read serves every demanded relationship on this controller. */
-export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyncStatusScope[]): Promise<void> {
+export async function refreshWorkspaceSyncStatuses(
+    scopes: readonly WorkspaceSyncStatusScope[],
+): Promise<void> {
     const controllers = new Map<string, WorkspaceSyncStatusScope>();
     for (const scope of scopes) controllers.set(controllerKeyFor(scope), scope);
     await Promise.all([...controllers].map(async ([key, controller]) => {
@@ -186,6 +306,9 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
             }
         }
         if (current) return await current.inFlight;
+        // A fresh explicit read supersedes the old parked reply. Re-arm only
+        // after this read settles, so an older watch cannot overwrite it.
+        pauseStatusObservation(statusObservations.get(key));
         read.inFlight = listWorkspaceSyncStatuses({ ...controller, signal: read.controller.signal }).then((statuses) => {
             if (read.invalidated || read.controller.signal.aborted) return;
             const byId = new Map(statuses
@@ -195,7 +318,7 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
                 const entry = entryFor(scope);
                 if (entry.admissionGeneration !== generation) continue;
                 const status = byId.get(scope.relationshipId) ?? null;
-                publish(entry, { phase: 'ready', status, error: null });
+                applyObservedStatus(entry, status);
             }
         }, (error: unknown) => {
             for (const { scope, generation } of read.scopes.values()) {
@@ -214,6 +337,8 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
                 }).map(({ scope }) => scope);
                 if (pending.length > 0) await refreshWorkspaceSyncStatuses(pending);
             }
+            const observation = statusObservations.get(key);
+            if (observation) startStatusObservation(key, observation);
         });
         controllerReads.set(key, read);
         await read.inFlight;
@@ -221,6 +346,11 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
 }
 
 export function resetWorkspaceSyncStatusStoreForTests(): void {
+    for (const observation of statusObservations.values()) {
+        pauseStatusObservation(observation);
+    }
+    statusObservations.clear();
+    controllerWatches.reset();
     for (const entry of entries.values()) entry.requestController?.abort();
     for (const read of controllerReads.values()) read.controller.abort();
     entries.clear();

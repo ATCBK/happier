@@ -7,6 +7,9 @@ import type { WorkspaceSyncCommittedCopyPreviewV1, WorkspaceSyncCommittedCopyPre
 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncCommittedCopyV1';
 
 import { randomUUID } from '@/platform/randomUUID';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { WorkspaceSyncStatusWatchRequestV1Schema, WorkspaceSyncStatusWatchResultV1Schema,
+    type WorkspaceSyncStatusWatchRequestV1, type WorkspaceSyncStatusWatchResultV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 type WorkspaceSyncControllerScope = Readonly<{
     controllerMachineId: string;
@@ -60,6 +63,7 @@ async function callWorkspaceSync<R>(
     scope: WorkspaceSyncControllerScope,
     method: string,
     payload: unknown,
+    timeoutMs?: number,
 ): Promise<R> {
     const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
     const response = await machineRpcWithServerScope<R, unknown>({
@@ -67,6 +71,7 @@ async function callWorkspaceSync<R>(
         serverId: scope.serverId,
         method,
         payload,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(scope.signal ? { signal: scope.signal } : {}),
     });
     // An encrypted transport hands a daemon handler's refusal back as the response value. Raise it here, once,
@@ -164,6 +169,23 @@ export async function listWorkspaceSyncStatuses(
         statuses.push(parsed.data);
     }
     return statuses;
+}
+
+export async function watchWorkspaceSyncStatuses(
+    input: WorkspaceSyncControllerScope & WorkspaceSyncStatusWatchRequestV1,
+): Promise<WorkspaceSyncStatusWatchResultV1> {
+    const method = RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH;
+    const payload = WorkspaceSyncStatusWatchRequestV1Schema.parse({
+        ...(input.sinceRevision === undefined ? {} : { sinceRevision: input.sinceRevision }),
+    });
+    const parsed = WorkspaceSyncStatusWatchResultV1Schema.safeParse(
+        await callWorkspaceSync(input, method, payload, MACHINE_WATCH_WINDOW_MS + 10_000),
+    );
+    if (!parsed.success) unsupported(method);
+    if (parsed.data.changed && parsed.data.snapshot.statuses.some(status => status.controllerMachineId !== input.controllerMachineId)) {
+        unsupported(method);
+    }
+    return parsed.data;
 }
 
 export async function inspectWorkspaceSyncLegacyState(

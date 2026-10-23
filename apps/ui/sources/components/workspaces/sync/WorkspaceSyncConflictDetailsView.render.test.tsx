@@ -6,6 +6,9 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { createCapturingLegendListMock, pressTestInstance, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createWorkspaceSyncHarness } from '@/dev/testkit/harness/workspaceSyncHarness';
+import { createWorkspaceSyncStatusWatchBoundary } from '@/dev/testkit/harness/workspaceSyncStatusWatchBoundary';
+
+const statusWatches = createWorkspaceSyncStatusWatchBoundary();
 
 const machineRpc = vi.hoisted(() => vi.fn());
 const confirmResolution = vi.hoisted(() => vi.fn(async (_title: string, _body: string) => false));
@@ -30,11 +33,13 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: { confirm: confirmResolution } }).module;
 });
 vi.mock('@legendapp/list/react-native', () => capturedLegendList);
-const workspace = createWorkspaceSyncHarness(request => machineRpc(request));
+const workspace = createWorkspaceSyncHarness(request => request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH
+    ? statusWatches.watch({ ...(request.payload as Readonly<{ sinceRevision?: number }>), signal: request.signal })
+    : machineRpc(request));
 await workspace.ready;
 const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
 
-beforeEach(async () => { await workspace.reset(); });
+beforeEach(async () => { statusWatches.reset(); await workspace.reset(); });
 
 const alpha = { kind: 'file' as const, digest: 'a'.repeat(40), executable: false, size: 3 };
 const beta = { kind: 'file' as const, digest: 'b'.repeat(40), executable: true, size: 3 };
@@ -70,9 +75,67 @@ afterEach(async () => {
     includeThirdEndpoint = false;
     machineDisplayNames = {};
     await workspace.dispose();
+    statusWatches.reset();
 });
 
 describe('workspace conflict comparison', () => {
+    it('updates the open conflict surface after an engine-only change without a Machine publication', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        let visibility = 'visible';
+        const document = new EventTarget();
+        Object.defineProperty(document, 'visibilityState', { get: () => visibility });
+        vi.stubGlobal('document', document);
+        let currentPath = 'before.txt';
+        let cycle = 1;
+        const currentStatuses = () => [{
+            relationshipId: 'link-1', controllerMachineId: 'machine-a', state: 'conflicted' as const,
+            alphaPath: '/hub', betaPath: '/spoke', mode: 'keep_both_in_sync' as const,
+            endpointStates: { alpha: null, beta: null }, conflictCount: 1, lastCycleObservedAtMs: cycle,
+        }];
+        machineRpc.mockImplementation(async (input: { method: string; payload: { path?: string; preview?: { workspaceRefId: string } } }) => {
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: currentStatuses() };
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST) return {
+                status: 'page', relationshipId: 'link-1', totalCount: 1, nextCursor: null, conflicts: [conflict(currentPath)],
+            };
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_INSPECT) {
+                return inspection(input.payload.path ?? currentPath, input.payload.preview?.workspaceRefId);
+            }
+            throw new Error(`Unexpected RPC ${input.method}`);
+        });
+        try {
+            const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
+                kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
+                controllerMachineId: 'machine-a', serverId: workspace.serverId,
+            }} />);
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('before.txt'));
+            currentPath = 'after.txt';
+            cycle = 2;
+            await act(async () => { statusWatches.publish(currentStatuses()); await vi.advanceTimersByTimeAsync(0); });
+            expect(screen.getTextContent()).toContain('after.txt');
+            expect(screen.getTextContent()).not.toContain('before.txt');
+
+            await act(async () => {
+                visibility = 'hidden';
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+            const readsWhileVisible = machineRpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST).length;
+            expect(statusWatches.parkedCount()).toBe(0);
+            currentPath = 'returned.txt';
+            cycle = 3;
+            statusWatches.publish(currentStatuses());
+            await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+            expect(machineRpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST)).toHaveLength(readsWhileVisible);
+            await act(async () => {
+                visibility = 'visible';
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('returned.txt'));
+            await screen.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('retires the observer of an unanswered resolution when the conflict view unmounts', async () => {
         let resolutionSignal: AbortSignal | undefined;
         machineRpc.mockImplementation(async (input: { method: string; signal: AbortSignal;

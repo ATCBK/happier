@@ -54,6 +54,7 @@ import {
     getWorkspaceSyncStatus,
     listWorkspaceSyncConflicts,
     listWorkspaceSyncStatuses,
+    watchWorkspaceSyncStatuses,
     readWorkspaceSyncFile,
     disableWorkspaceSyncRelationship,
     enableWorkspaceSyncRelationship,
@@ -216,6 +217,28 @@ describe('workspace sync UI operations', () => {
             method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_GET,
             payload: { relationshipId: 'relationship-1' },
         });
+    });
+
+    it('reads parked watch replies through the current controller and preserves the revision cursor', async () => {
+        const snapshot = { revision: 42, statuses: [status] };
+        machineRpcWithServerScope.mockResolvedValueOnce({ changed: true, snapshot }).mockResolvedValueOnce({ changed: false });
+        const scope = { controllerMachineId: 'machine-controller', serverId: actionServerId };
+        await expect(watchWorkspaceSyncStatuses(scope)).resolves.toEqual({ changed: true, snapshot });
+        await expect(watchWorkspaceSyncStatuses({ ...scope, sinceRevision: 42 })).resolves.toEqual({ changed: false });
+        expect(machineRpcWithServerScope.mock.calls.map(([request]) => [request.method, request.payload])).toEqual([
+            [RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH, {}],
+            [RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH, { sinceRevision: 42 }],
+        ]);
+    });
+
+    it.each([
+        { changed: true, snapshot: { revision: 42, statuses: [{ ...status, controllerMachineId: 'another-machine' }] } },
+        { changed: true, snapshot: { revision: 42, statuses: [status], privateData: 'unexpected' } },
+        { changed: false, statuses: [status] },
+    ])('rejects a watch reply outside its strict controller-scoped envelope', async reply => {
+        machineRpcWithServerScope.mockResolvedValueOnce(reply);
+        await expect(watchWorkspaceSyncStatuses({ controllerMachineId: 'machine-controller', serverId: actionServerId })).rejects.toThrow();
+        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
     });
 
     it('maps transient and conflict commands without inventing client-side state', async () => {

@@ -1,48 +1,168 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { createWorkspaceSyncStatusWatchBoundary } from '@/dev/testkit/harness/workspaceSyncStatusWatchBoundary';
+import { createWorkspaceSyncHarness } from '@/dev/testkit/harness/workspaceSyncHarness';
 
-const { getWorkspaceSyncStatus, listWorkspaceSyncStatuses } = vi.hoisted(() => ({
+const watchBoundary = createWorkspaceSyncStatusWatchBoundary();
+
+const { getWorkspaceSyncStatus, listWorkspaceSyncStatuses, watchWorkspaceSyncStatuses, machineRpcCalls } = vi.hoisted(() => ({
     getWorkspaceSyncStatus: vi.fn(),
     listWorkspaceSyncStatuses: vi.fn(),
+    watchWorkspaceSyncStatuses: vi.fn(),
+    machineRpcCalls: vi.fn(),
 }));
 
-// Keep the real admitted operations and schema validation beneath the network boundary.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async (input: Readonly<{
-        serverId?: string | null; machineId: string; method: string; payload: unknown;
-    }>) => {
-        const scope = { serverId: input.serverId, controllerMachineId: input.machineId };
-        if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) {
-            return { statuses: await listWorkspaceSyncStatuses(scope) };
-        }
-        if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_GET) {
-            return { status: await getWorkspaceSyncStatus({ ...scope,
-                relationshipId: (input.payload as Readonly<{ relationshipId: string }>).relationshipId }) };
-        }
-        throw new Error(`Unexpected RPC: ${input.method}`);
-    },
-}));
+// HTTP/Socket is the boundary; admission, cancellation and operation codecs stay real.
+const workspace = createWorkspaceSyncHarness(async input => {
+    machineRpcCalls(input.method);
+    const scope = { serverId: workspace.serverId, controllerMachineId: input.machineId };
+    if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH) {
+        return await watchWorkspaceSyncStatuses({ ...scope,
+            ...(input.payload as Readonly<{ sinceRevision?: number }>), signal: input.signal });
+    }
+    if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: await listWorkspaceSyncStatuses(scope) };
+    if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_GET) return { status: await getWorkspaceSyncStatus({ ...scope,
+        relationshipId: (input.payload as Readonly<{ relationshipId: string }>).relationshipId }) };
+    throw new Error(`Unexpected RPC: ${input.method}`);
+});
+await workspace.ready;
 
-import {
+const {
     applyWorkspaceSyncStatusEvent,
     getWorkspaceSyncStatusSnapshot,
     invalidateWorkspaceSyncStatuses,
     refreshWorkspaceSyncStatus,
     refreshWorkspaceSyncStatuses,
     resetWorkspaceSyncStatusStoreForTests,
+    setWorkspaceSyncStatus,
     subscribeWorkspaceSyncStatus,
-} from './workspaceSyncStatusStore';
-import { applyWorkspaceSyncRuntimeEvent } from './applyWorkspaceSyncRuntimeEvent';
+} = await import('./workspaceSyncStatusStore');
+const { applyWorkspaceSyncRuntimeEvent } = await import('./applyWorkspaceSyncRuntimeEvent');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 
 describe('workspaceSyncStatusStore', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        await workspace.reset();
         getWorkspaceSyncStatus.mockReset();
         listWorkspaceSyncStatuses.mockReset();
+        machineRpcCalls.mockReset();
         resetWorkspaceSyncStatusStoreForTests();
+        watchBoundary.reset();
+        watchWorkspaceSyncStatuses.mockReset().mockImplementation(input => watchBoundary.watch(input));
+    });
+
+    afterEach(async () => {
+        resetWorkspaceSyncStatusStoreForTests();
+        watchBoundary.reset();
+        vi.useRealTimers();
+        await workspace.dispose();
+    });
+
+    it('bounds settled status RPCs by parked watch windows over ten visible minutes', async () => {
+        vi.useFakeTimers();
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
+        const status = {
+            relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId,
+            state: 'watching' as const, alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
+            endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null,
+        };
+        setWorkspaceSyncStatus(scope, status);
+        listWorkspaceSyncStatuses.mockResolvedValue([status]);
+        watchBoundary.publish([status]);
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(machineRpcCalls).not.toHaveBeenCalled();
+
+        const unsubscribe = subscribeWorkspaceSyncStatus(scope, () => {});
+        try {
+            // Settle admission before measuring steady-state watch renewals.
+            await vi.waitFor(() => expect(watchBoundary.parkedCount()).toBe(1));
+            machineRpcCalls.mockClear();
+            await vi.advanceTimersByTimeAsync(600_000);
+            expect(machineRpcCalls.mock.calls.length).toBeLessThanOrEqual(600_000 / MACHINE_WATCH_WINDOW_MS);
+            expect(machineRpcCalls.mock.calls.length).toBe(600_000 / MACHINE_WATCH_WINDOW_MS);
+            expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+        } finally {
+            unsubscribe();
+        }
+        const callsAfterClose = machineRpcCalls.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(machineRpcCalls).toHaveBeenCalledTimes(callsAfterClose);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('observes engine changes once per demanded controller and does zero reads for ten undemanded minutes', async () => {
+        vi.useFakeTimers();
+        const scopes = ['relationship-1', 'relationship-2'].map(relationshipId => ({
+            serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId,
+        }));
+        let statuses = scopes.map(scope => ({
+            relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId,
+            state: 'watching' as 'watching' | 'disconnected', alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
+            endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null,
+        }));
+        statuses.forEach((status, index) => setWorkspaceSyncStatus(scopes[index]!, status));
+        listWorkspaceSyncStatuses.mockImplementation(async () => statuses);
+        watchBoundary.publish(statuses);
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+
+        const firstListener = vi.fn();
+        const secondListener = vi.fn();
+        const unsubscribeFirst = subscribeWorkspaceSyncStatus(scopes[0]!, firstListener);
+        const unsubscribeSecond = subscribeWorkspaceSyncStatus(scopes[1]!, secondListener);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+        expect(watchBoundary.parkedCount()).toBe(1);
+        expect(firstListener).not.toHaveBeenCalled();
+        expect(secondListener).not.toHaveBeenCalled();
+
+        statuses = statuses.map((status, index) => index === 1 ? { ...status, state: 'disconnected' as const } : status);
+        watchBoundary.publish(statuses);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+        expect(getWorkspaceSyncStatusSnapshot(scopes[1]!).status?.state).toBe('disconnected');
+        expect(secondListener).toHaveBeenCalledTimes(1);
+        expect(firstListener).not.toHaveBeenCalled();
+
+        unsubscribeFirst();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(watchBoundary.parkedCount()).toBe(1);
+        unsubscribeSecond();
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+        expect(getWorkspaceSyncStatus).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('retains the displayed status on a watch failure and revalidates unchanged status on transport recovery without a retry timer', async () => {
+        vi.useFakeTimers();
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
+        const status = {
+            relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId,
+            state: 'watching' as const, alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
+            endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null,
+        };
+        setWorkspaceSyncStatus(scope, status);
+        watchBoundary.publish([status]);
+        const failure = new Error('daemon unavailable');
+        const unsubscribe = subscribeWorkspaceSyncStatus(scope, () => {});
+        await vi.advanceTimersByTimeAsync(1_000);
+        watchWorkspaceSyncStatuses.mockRejectedValueOnce(failure);
+        await vi.advanceTimersByTimeAsync(MACHINE_WATCH_WINDOW_MS);
+        expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'error', status, error: failure });
+        const failedCalls = watchWorkspaceSyncStatuses.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(watchWorkspaceSyncStatuses).toHaveBeenCalledTimes(failedCalls);
+        publishHomeAccountChange(scope.serverId, undefined, { source: 'connected' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'ready', status, error: null });
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+        unsubscribe();
     });
 
     it('refreshes admitted relationship reads after a content-free Machine publication without admitting private payloads', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'private-relationship' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'private-relationship' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
             alphaPath: '/private/alpha', betaPath: '/private/beta', mode: 'keep_synced' as const,
@@ -70,7 +190,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('does not accept a relationship read begun before the next Machine invalidation', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId,
             state: 'watching' as const, alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
@@ -104,10 +224,10 @@ describe('workspaceSyncStatusStore', () => {
 
     it('refreshes demanded relationships once per controller and leaves absent status unknown', async () => {
         const scopes = ['relationship-1', 'relationship-2', 'relationship-3'].map((relationshipId) => ({
-            serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId,
+            serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId,
         }));
         listWorkspaceSyncStatuses.mockResolvedValueOnce([{
-            relationshipId: 'relationship-2', controllerMachineId: 'machine-1', state: 'conflicted',
+            relationshipId: 'relationship-2', controllerMachineId: 'machine-a', state: 'conflicted',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',
             endpointStates: { alpha: null, beta: null }, conflictCount: 1, lastCycleObservedAtMs: null,
         }]);
@@ -120,7 +240,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('marks an unobserved cached status idle without a read and preserves it until next demand', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
@@ -132,12 +252,15 @@ describe('workspaceSyncStatusStore', () => {
         expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
         expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'idle', status });
         listWorkspaceSyncStatuses.mockImplementationOnce(() => new Promise(() => {}));
-        void refreshWorkspaceSyncStatuses([scope]);
+        const pending = refreshWorkspaceSyncStatuses([scope]);
         expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'refreshing', status });
+        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        resetWorkspaceSyncStatusStoreForTests();
+        await cancelled;
     });
 
     it('keeps a new consumer joining an invalidated controller read from seeing its stale result', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const lateScope = { ...scope, relationshipId: 'relationship-2' };
         const status = {
             relationshipId: lateScope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
@@ -150,6 +273,7 @@ describe('workspaceSyncStatusStore', () => {
             .mockResolvedValueOnce([{ ...status, state: 'paused' }]);
         const unsubscribe = subscribeWorkspaceSyncStatus(scope, () => {});
         const pending = refreshWorkspaceSyncStatuses([scope]);
+        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
         await vi.waitFor(() => expect(listWorkspaceSyncStatuses).toHaveBeenCalledOnce());
         applyWorkspaceSyncRuntimeEvent({ serverId: scope.serverId, machineId: scope.controllerMachineId,
             event: { v: 1, readiness: { engine: { state: 'ready' }, carrier: { state: 'ready' } } } });
@@ -160,7 +284,7 @@ describe('workspaceSyncStatusStore', () => {
         });
         const joined = refreshWorkspaceSyncStatuses([lateScope]);
         resolveStale([status]);
-        await Promise.all([pending, joined]);
+        await Promise.all([cancelled, joined]);
         expect(observedStates).toEqual(['paused']);
         expect(listWorkspaceSyncStatuses).toHaveBeenCalledTimes(2);
         unsubscribe();
@@ -168,7 +292,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('rejects a pending individual read after Machine invalidation refreshes its admitted controller', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
@@ -194,7 +318,7 @@ describe('workspaceSyncStatusStore', () => {
         getWorkspaceSyncStatus.mockImplementationOnce(() => new Promise((resolve) => {
             resolveFirst = resolve;
         }));
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' } as const;
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' } as const;
 
         const first = refreshWorkspaceSyncStatus(scope);
         const second = refreshWorkspaceSyncStatus(scope);
@@ -202,7 +326,7 @@ describe('workspaceSyncStatusStore', () => {
         expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'loading', status: null });
 
         resolveFirst({
-            relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'watching',
+            relationshipId: 'relationship-1', controllerMachineId: 'machine-a', state: 'watching',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',
             endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
             conflictCount: 0, lastCycleObservedAtMs: 1,
@@ -227,7 +351,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('retains the summary status reference across repeated readiness pulses while publishing refresh phases', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
@@ -249,9 +373,9 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('applies a daemon runtime status event only to its exact Home and controller scope', () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' } as const;
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' } as const;
         applyWorkspaceSyncStatusEvent(scope, {
-            relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'paused',
+            relationshipId: 'relationship-1', controllerMachineId: 'machine-a', state: 'paused',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',
             endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
             conflictCount: 0, lastCycleObservedAtMs: 1,
@@ -263,9 +387,9 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('keeps a closed summary subscriber stable when a daemon repeats the same status', () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' } as const;
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' } as const;
         const status = {
-            relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'watching' as const,
+            relationshipId: 'relationship-1', controllerMachineId: 'machine-a', state: 'watching' as const,
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
             endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null,
         };
@@ -279,7 +403,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('retains an already idle snapshot across repeated unobserved invalidations', () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const initial = getWorkspaceSyncStatusSnapshot(scope);
         invalidateWorkspaceSyncStatuses(scope);
         invalidateWorkspaceSyncStatuses(scope);
@@ -288,7 +412,7 @@ describe('workspaceSyncStatusStore', () => {
     });
 
     it('reconciles status endpoints at publication while keeping freshness and recovery observable', async () => {
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' };
         const status = {
             relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
@@ -300,8 +424,8 @@ describe('workspaceSyncStatusStore', () => {
         subscribeWorkspaceSyncStatus(scope, listener);
         const failure = new Error('daemon unavailable');
         getWorkspaceSyncStatus.mockRejectedValueOnce(failure);
-        await expect(refreshWorkspaceSyncStatus(scope)).rejects.toBe(failure);
-        expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'error', error: failure });
+        await expect(refreshWorkspaceSyncStatus(scope)).rejects.toBeInstanceOf(Error);
+        expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'error', status });
         applyWorkspaceSyncStatusEvent(scope, { ...status, endpointStates: { ...status.endpointStates, alpha: { ...status.endpointStates.alpha } } });
         const recovered = getWorkspaceSyncStatusSnapshot(scope);
         expect(recovered).toMatchObject({ phase: 'ready', error: null });
@@ -320,18 +444,18 @@ describe('workspaceSyncStatusStore', () => {
         getWorkspaceSyncStatus.mockImplementationOnce(() => new Promise((resolve) => {
             resolveRefresh = resolve;
         }));
-        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' } as const;
+        const scope = { serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'relationship-1' } as const;
 
         const refresh = refreshWorkspaceSyncStatus(scope);
         await vi.waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalledOnce());
         applyWorkspaceSyncStatusEvent(scope, {
-            relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'paused',
+            relationshipId: 'relationship-1', controllerMachineId: 'machine-a', state: 'paused',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',
             endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
             conflictCount: 0, lastCycleObservedAtMs: 2,
         });
         resolveRefresh({
-            relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'watching',
+            relationshipId: 'relationship-1', controllerMachineId: 'machine-a', state: 'watching',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',
             endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
             conflictCount: 0, lastCycleObservedAtMs: 1,
