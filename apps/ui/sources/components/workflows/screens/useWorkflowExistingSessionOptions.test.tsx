@@ -1,8 +1,10 @@
 import { act } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import { createSessionFixture, renderHook } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
 describe('Workflow existing Session options', () => {
     it('does no detailed option work across Session arrivals while closed, then reads current options on open and reopen', async () => {
@@ -54,13 +56,18 @@ describe('Workflow existing Session options', () => {
     it.each([false, true])('does no hydrated-option work for unrelated publications (chooser enabled: %s)', async (enabled) => {
         const previous = storage.getState();
         let nameReads = 0;
+        let unchangedSessionNameReads = 0;
         const sessions = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => {
             const session = createSessionFixture({ id: `cost-${index}`, serverId: 'home-a', metadata: {
                 ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: `resume-${index}`,
                 claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo',
             } });
             // Count real display projection work without replacing candidacy, target or label logic.
-            Object.defineProperty(session.metadata, 'name', { enumerable: true, get: () => { nameReads += 1; return `Session ${index}`; } });
+            Object.defineProperty(session.metadata, 'name', { enumerable: true, get: () => {
+                nameReads += 1;
+                if (index !== 0) unchangedSessionNameReads += 1;
+                return `Session ${index}`;
+            } });
             return [session.id, session];
         }));
         storage.setState({ isDataReady: true, sessions });
@@ -78,9 +85,50 @@ describe('Workflow existing Session options', () => {
             });
             expect(nameReads).toBe(0);
             expect(hook.getCurrent()).toBe(before);
+            unchangedSessionNameReads = 0;
+            await act(async () => {
+                for (let index = 0; index < 20; index += 1) storage.setState(state => ({
+                    sessions: { ...state.sessions, 'cost-0': {
+                        ...state.sessions['cost-0']!, updatedAt: state.sessions['cost-0']!.updatedAt + 1,
+                    } },
+                }));
+            });
+            expect(unchangedSessionNameReads).toBe(0);
+            expect(hook.getCurrent()).toBe(before);
         } finally {
             await hook.unmount();
             storage.getState().applyLocalSettings({ uiFontScale: previous.localSettings.uiFontScale }, { persist: false });
+            storage.setState(previous);
+        }
+    });
+
+    it('refreshes translated fallback names when the ready locale changes without Session facts changing', async () => {
+        const previous = storage.getState();
+        const previousLanguage = getPreferredLanguage();
+        await preloadTranslations('en');
+        setPreferredLanguageFromSettings('en');
+        const session = createSessionFixture({ id: 'locale-option', serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: 'resume-id',
+            claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/', name: '',
+        } });
+        storage.setState({ isDataReady: true, sessions: { [session.id]: session }, sessionListRowsByServerId: {} });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled: true }));
+        try {
+            const before = t('session.untitled');
+            expect(hook.getCurrent().existingSessions[0]?.label).toBe(before);
+            await act(async () => {
+                await preloadTranslations('fr');
+                setPreferredLanguageFromSettings('fr');
+                // Ready locale publication follows asynchronous chunk loading;
+                // unrelated root publications must not pin an older label.
+                storage.setState(state => ({ localSettings: { ...state.localSettings } }));
+            });
+            expect(t('session.untitled')).not.toBe(before);
+            expect(hook.getCurrent().existingSessions[0]?.label).toBe(t('session.untitled'));
+        } finally {
+            await hook.unmount();
+            await preloadTranslations(previousLanguage);
+            setPreferredLanguageFromSettings(previousLanguage);
             storage.setState(previous);
         }
     });

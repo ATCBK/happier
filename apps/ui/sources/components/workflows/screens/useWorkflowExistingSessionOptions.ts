@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { shallow } from 'zustand/shallow';
+import { usePreferredLanguage } from '@/text';
 
 import { isAutomationSessionCandidate, isAutomationSessionCandidateVisible } from '@/sync/domains/automations/isAutomationSessionCandidate';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -9,7 +10,7 @@ import type { StorageState } from '@/sync/store/types';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { ensureSessionMetadataInventoryForServerAccountScope } from '@/sync/domains/session/fetchSessionMetadataInventoryForServerAccountScope';
-import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
+import { readSessionListRowForServerId, readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { captureServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
@@ -79,37 +80,50 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
     // This hook owns the displayed options, not the Session/settings containers.
     // Keep the selected projection stable without retaining a second data source.
     let previous: WorkflowSessionOptions = { existingSessions: [], sessionDropCandidates: [] };
-    let candidateInputs: Pick<StorageState, 'sessions' | 'settings' | 'isDataReady'> | null = null;
-    let candidates: StorageState['sessions'][string][] = [];
+    let environmentInputs: readonly unknown[] | null = null;
+    let optionsBySession = new WeakMap<StorageState['sessions'][string], Readonly<{
+        row: SessionListRenderableSession | null;
+        option: WorkflowExistingSessionOption | null;
+    }>>();
     let projectionInputs: readonly unknown[] | null = null;
-    return (state: StorageState): WorkflowSessionOptions => {
+    return (state: StorageState, language: ReturnType<typeof usePreferredLanguage>): WorkflowSessionOptions => {
         // Subscribe the projection to its inputs, not to every root publication.
         // Target resolution also reads Machine and list-row facts through the
         // canonical resolver; those remain live even when Session records do not change.
         const inputs = [state.sessions, state.settings, state.isDataReady, state.machines,
             state.machineListByServerId, state.machineListStatusByServerId,
-            state.sessionListRowsByServerId, state.getProjectForSession];
+            state.sessionListRowsByServerId, state.getProjectForSession, language];
         if (projectionInputs !== null && shallow(inputs, projectionInputs)) return previous;
         projectionInputs = inputs;
-        // Eligibility parses Agent/backend policy. Unrelated store publications
-        // must not repeat it for every Session. Keep target attribution below
-        // live: Machine, project and list-row changes can alter that answer
-        // without changing a Session's eligibility.
-        if (candidateInputs === null || candidateInputs.sessions !== state.sessions
-            || candidateInputs.settings !== state.settings || candidateInputs.isDataReady !== state.isDataReady) {
-            candidates = state.isDataReady ? Object.values(state.sessions).filter(session => (
-                (serverId === null || areServerProfileIdentifiersEquivalent(session.serverId, serverId))
-                && isAutomationSessionCandidate(session, state.settings)
-            )) : [];
-            candidateInputs = { sessions: state.sessions, settings: state.settings, isDataReady: state.isDataReady };
+        // A peer's arrival changes the collection, not this Session's policy,
+        // target or name. Retain each immutable record's projection; canonical
+        // list-row changes invalidate only that row, shared target/policy/locale
+        // changes invalidate all. Membership still follows the current store.
+        const environment = [state.settings, state.isDataReady, state.machines,
+            state.machineListByServerId, state.machineListStatusByServerId, state.getProjectForSession, language];
+        if (environmentInputs === null || !shallow(environment, environmentInputs)) {
+            optionsBySession = new WeakMap();
+            environmentInputs = environment;
         }
         const options: WorkflowExistingSessionOption[] = [];
-        for (const session of candidates) {
-            const sessionMachineId = resolveDisplayMachineIdForSessionFromState({
-                state, serverId: session.serverId, sessionId: session.id, metadata: session.metadata,
-            });
-            if (sessionMachineId.length === 0) continue;
-            options.push({ sessionId: session.id, machineId: sessionMachineId, label: getSessionName(session) });
+        for (const session of state.isDataReady ? Object.values(state.sessions) : []) {
+            if (serverId !== null && !areServerProfileIdentifiersEquivalent(session.serverId, serverId)) continue;
+            const row = readSessionListRowForServerId(state.sessionListRowsByServerId, session.serverId, session.id);
+            let cached = optionsBySession.get(session);
+            if (!cached || cached.row !== row) {
+                let option: WorkflowExistingSessionOption | null = null;
+                if (isAutomationSessionCandidate(session, state.settings)) {
+                    const sessionMachineId = resolveDisplayMachineIdForSessionFromState({
+                        state, serverId: session.serverId, sessionId: session.id, metadata: session.metadata,
+                    });
+                    if (sessionMachineId.length > 0) option = {
+                        sessionId: session.id, machineId: sessionMachineId, label: getSessionName(session),
+                    };
+                }
+                cached = { row, option };
+                optionsBySession.set(session, cached);
+            }
+            if (cached.option) options.push(cached.option);
         }
         if (sameOptions(options, previous.sessionDropCandidates)) return previous;
         const existing = machineId === null ? options : options.filter(option => option.machineId === machineId);
@@ -286,8 +300,11 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     // of this server: the drop target needs them to state *why* a Session on
     // another Machine is refused (07 J19), while the picker offers only the
     // Where Machine's.
-    const selector = React.useMemo(() => enabled ? createOptionsSelector(serverId, machineId) : selectNoOptions, [enabled, serverId, machineId]);
-    const hydrated = getStorage()(selector);
+    const language = usePreferredLanguage();
+    const selector = React.useMemo(() => createOptionsSelector(serverId, machineId), [serverId, machineId]);
+    const selectHydrated = React.useCallback((state: StorageState) => enabled ? selector(state, language) : selectNoOptions(),
+        [enabled, language, selector]);
+    const hydrated = getStorage()(selectHydrated);
     return React.useMemo<WorkflowSessionOptionsState>(() => {
         const ids = new Set(unopenedRows.map(row => row.id));
         const extra = unopened.binding === binding && binding?.isCurrent()
