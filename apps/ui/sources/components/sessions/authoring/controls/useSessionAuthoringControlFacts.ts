@@ -18,7 +18,8 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useDaemonScopedMachineCapabilitiesCache } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import { CAPABILITIES_REQUEST_NEW_SESSION } from '@/capabilities/requests';
 import { useAiLaunchProfilesWithReadState } from '@/sync/store/useAiLaunchProfiles';
-import { useAllMachines, useSetting, useSettings } from '@/sync/domains/state/storage';
+import { useSetting, useSettings } from '@/sync/domains/state/storage';
+import { useServerScopedMachine } from '@/sync/domains/machines/useServerScopedMachine';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolvePluginLocalizedText } from '@/sync/domains/plugins/ui/i18n';
 import { getPreferredLanguage } from '@/text';
@@ -58,7 +59,7 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
     const { machineId } = params;
     const serverId = params.serverId ?? null;
     const directory = params.directory?.trim() ?? '';
-    const machines = useAllMachines();
+    const selectedMachine = useServerScopedMachine(serverId, machineId);
     const settings = useSettings();
     const preferredLanguage = getPreferredLanguage();
     const { snapshot: acpCatalog } = useAcpCatalogForServer(params.serverId);
@@ -208,10 +209,6 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
         }));
     }, [launchProfiles, useProfiles]);
 
-    const selectedMachine = React.useMemo(
-        () => (machineId === null ? null : machines.find((machine) => machine.id === machineId) ?? null),
-        [machineId, machines],
-    );
     const targetIsWindows = selectedMachine?.metadata?.platform === 'win32';
     const machineName = selectedMachine === null ? null : getMachineDisplayName(selectedMachine);
     const { state: machineCapabilities } = useDaemonScopedMachineCapabilitiesCache({
