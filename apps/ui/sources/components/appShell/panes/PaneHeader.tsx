@@ -1,4 +1,5 @@
 import { PaneMainRestoreChip, usePaneMainRestoreChipVisible } from './mainColumn/PaneMainColumnControls';
+import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 import * as React from 'react';
 import { Platform, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -21,6 +22,8 @@ import { t } from '@/text';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 
 import type { PaneHeaderLine, PaneHeaderLineSegment } from './paneHeaderSlot';
+import { PaneHeaderShade } from './paneHeaderScroll';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 
 export type { PaneHeaderLine, PaneHeaderLineSegment } from './paneHeaderSlot';
 
@@ -234,6 +237,18 @@ export type PaneHeaderProps = PaneHeaderContent & Readonly<{
     /** Leads the band with Back: the pane is a sub-page of the column it sits in (lab AR1 EFv). */
     onBack?: () => void;
     /**
+     * A phone screen's navigation band (calm-shell `cshead.H1p`): Back to the previous screen leads it,
+     * and with `includeTopInset` the band also clears the status bar.
+     */
+    navigation?: Readonly<{ onBack: () => void; includeTopInset?: boolean; backTestID?: string }>;
+    /** A real fact above the title (a reporting Session's leads). */
+    overline?: React.ReactNode;
+    /**
+     * Whether this band draws the scroll-linked shade beneath itself (default). A host that stacks rows
+     * under the band (Details controls, a notice) draws the one shade under its whole stack instead.
+     */
+    shade?: boolean;
+    /**
      * This pane is the hidden main column's neighbour: while main is hidden its restore chip leads
      * the band (lab ade-shell H1–H3).
      */
@@ -261,9 +276,24 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
     const large = props.size === 'large';
     const line = props.line ?? (props.subtitle ? { segments: [props.subtitle] } : null);
     const chipVisible = usePaneMainRestoreChipVisible() && props.mainRestoreChip === true;
+    const insets = useChromeSafeAreaInsets();
+    const onNavigationPlane = useContainingGlassSurfaceGroup() === 'sidebar';
+    const topInset = props.navigation?.includeTopInset ? insets.top : 0;
     const hasTitle = props.title.trim().length > 0 || Boolean(props.leading) || Boolean(props.titleControl) || chipVisible;
     return (
-        <View testID={testID} style={[large ? styles.large : [styles.band, { height }], props.onBack ? styles.bandWithBack : null, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+        <View testID={testID} style={[large ? styles.large : [styles.band, { height: height + topInset, paddingTop: topInset }],
+            props.onBack || props.navigation ? styles.bandWithBack : null,
+            // On the navigation plane (a side panel standing on the canvas) the band takes the plane's paint.
+            { backgroundColor: onNavigationPlane ? 'transparent' : materialColor(theme.colors.surface.base, 'transparent') }]}>
+            {props.navigation ? (
+                <IconButton
+                    testID={props.navigation.backTestID ?? `${testID}.back`}
+                    iconName={Platform.OS === 'ios' ? 'caret-left' : 'arrow-left'}
+                    accessibilityLabel={t('common.back')}
+                    variant="plain"
+                    onPress={props.navigation.onBack}
+                />
+            ) : null}
             {props.onBack ? (
                 <IconButton
                     testID={`${testID}.back`}
@@ -275,6 +305,7 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                 />
             ) : null}
             <View style={styles.titleBlock}>
+                {props.overline ?? null}
                 {/* A host that already names the thing (a breadcrumb ending on it) passes no title: the live line stands alone. */}
                 {hasTitle ? <View style={styles.titleRow}>
                 {chipVisible ? <PaneMainRestoreChip /> : null}
@@ -320,15 +351,19 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                     onPress={props.onClose}
                 />
             ) : null}
+            {props.shade === false ? null : <PaneHeaderShade />}
         </View>
     );
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // The band stands above its body, so the shade beneath it overlays the content scrolling under it.
     band: {
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 0,
+        position: 'relative',
+        zIndex: 1,
         paddingLeft: HEADER_BAND_HORIZONTAL_PADDING_PX,
         paddingRight: HEADER_BAND_HORIZONTAL_PADDING_PX / 2,
         gap: theme.space.s2,
@@ -342,6 +377,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'flex-start',
         flexShrink: 0,
+        position: 'relative',
+        zIndex: 1,
         paddingHorizontal: HEADER_BAND_HORIZONTAL_PADDING_PX,
         paddingTop: theme.space.s12,
         paddingBottom: theme.space.s12,

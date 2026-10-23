@@ -68,6 +68,7 @@ import {
 } from './legend/heldIntent';
 import { useLegendHeldIntent } from './legend/useLegendHeldIntent';
 import { useLegendRevealRevalidation } from './legend/useLegendRevealRevalidation';
+import { usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
 
 export { resolveLegendRendererAtEndStateFromWebMetrics } from './legend/atEnd';
 
@@ -182,6 +183,8 @@ function LegendListTranscriptRendererInner<TItem>(
         !initialPlacementAtEnd,
     );
     const isWebFrame = props.frame.platform === 'web';
+    // The pane header's shade follows this list's physical distance from its top (no React state).
+    const paneHeaderScrollSink = usePaneHeaderScrollSink();
     const findClearancePx = useTranscriptFindClearance();
     const nativeItemRevealRef = React.useRef({ onReveal: props.onRevealNativeItem, clearancePx: findClearancePx });
     useCommittedTranscriptRef(nativeItemRevealRef, { onReveal: props.onRevealNativeItem, clearancePx: findClearancePx });
@@ -435,7 +438,13 @@ function LegendListTranscriptRendererInner<TItem>(
     const onContentSizeChangeRef = React.useRef(props.onContentSizeChange);
     // Publish before child layout callbacks, but never from an abandoned same-session render.
     useCommittedTranscriptRef(onContentSizeChangeRef, props.onContentSizeChange);
+    const paneHeaderScrollSinkRef = React.useRef(paneHeaderScrollSink);
+    useCommittedTranscriptRef(paneHeaderScrollSinkRef, paneHeaderScrollSink);
     const emitSynthesizedContentSize = React.useCallback(() => {
+        // A landing, restore or prepend moves the list without a scroll event of its own: the header's
+        // shade reads the settled offset on the same layout commit.
+        const settledOffset = webScrollableElementRef.current?.scrollTop ?? legendListRef.current?.getState().scroll;
+        if (typeof settledOffset === 'number') paneHeaderScrollSinkRef.current?.reportTopDistance(settledOffset);
         const emit = onContentSizeChangeRef.current;
         if (!emit) return;
         const height = legendListRef.current?.getState().contentLength;
@@ -776,6 +785,8 @@ function LegendListTranscriptRendererInner<TItem>(
             offset: nextScrollOffset,
             platform: isWebFrame ? 'web' : 'native',
         });
+        // Every observed offset, programmatic and restored included; the list is laid out top-down.
+        paneHeaderScrollSink?.reportTopDistance(nextScrollOffset);
         const webMovementFact: WebScrollMovementFact | undefined = (() => {
             if (!isWebFrame) return undefined;
             const metrics = readWebScrollMetrics();
@@ -975,7 +986,7 @@ function LegendListTranscriptRendererInner<TItem>(
             props.onScroll?.(event);
         }
         if (pendingViewportCauseRef.current === cause) pendingViewportCauseRef.current = 'layout';
-    }, [emitRendererAtEndState, hasLiveKeyedHeldIntent, hasPendingHeldIntentCorrection, heldIntentSettleUntilRef, invalidateNativePhysicalViewportCapture, isWebFrame, latchHeldEndIntent, props.frame.rendererOptions.continuousFollow.endThresholdRatio, props.onScroll, props.onStartReachedThreshold, props.webDomObservation, readRendererAtEndState, readWebScrollMetrics, releaseHeldScrollIntent, requestHeldIntentSettle, tryAcknowledgeInitialPresentationSettlement, userScrollIntent]);
+    }, [emitRendererAtEndState, hasLiveKeyedHeldIntent, hasPendingHeldIntentCorrection, heldIntentSettleUntilRef, invalidateNativePhysicalViewportCapture, isWebFrame, latchHeldEndIntent, paneHeaderScrollSink, props.frame.rendererOptions.continuousFollow.endThresholdRatio, props.onScroll, props.onStartReachedThreshold, props.webDomObservation, readRendererAtEndState, readWebScrollMetrics, releaseHeldScrollIntent, requestHeldIntentSettle, tryAcknowledgeInitialPresentationSettlement, userScrollIntent]);
 
     const handleLegendWheel = React.useCallback((event: unknown) => {
         invalidateNativePhysicalViewportCapture();

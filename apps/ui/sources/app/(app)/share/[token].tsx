@@ -24,7 +24,8 @@ import type { ReducerState } from "@happier-dev/session-core/reducer";
 import { TranscriptList } from '@/components/sessions/transcript/TranscriptList';
 import { createReadOnlySessionTranscriptSource } from '@/components/sessions/transcript/source/readOnlySessionTranscriptSource';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
-import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
+import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
+import { PaneHeaderScrollScope } from '@/components/appShell/panes/paneHeaderScroll';
 import type { Message } from "@happier-dev/session-core/messages";
 import { serverFetch } from '@/sync/http/client';
 import type { TranscriptOlderPageLoadResult } from "@happier-dev/session-core/messages";
@@ -667,13 +668,13 @@ export default memo(function PublicShareViewerScreen() {
         <>
             <Stack.Screen options={SHARE_SCREEN_OPTIONS} />
             <View style={{ flex: 1, backgroundColor: theme.colors.surface.base }}>
+                <PaneHeaderScrollScope>
                 <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000 }}>
-                    <ChatHeaderView
+                    <PaneHeader
+                        testID="share-header"
                         title={sessionName}
                         subtitle={t('session.sharing.sharedBy', { name: ownerName })}
-                        onBackPress={() => router.back()}
-                        isConnected={false}
-                        flavor={null}
+                        navigation={{ onBack: () => router.back(), includeTopInset: true }}
                     />
                 </View>
                 <View style={{ flex: 1, paddingTop: safeArea.top + headerHeight }}>
@@ -684,6 +685,7 @@ export default memo(function PublicShareViewerScreen() {
                         loadOlder={loadOlder}
                     />
                 </View>
+                </PaneHeaderScrollScope>
             </View>
         </>
     );

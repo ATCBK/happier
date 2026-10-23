@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { PaneHeaderScrollScope } from '@/components/appShell/panes/paneHeaderScroll';
 import { View } from 'react-native';
 import type { PluginUiDetailsPaneHost, PluginUiDetailsPanePresentation } from '@happier-dev/plugin-ui/advanced';
 
@@ -137,6 +138,7 @@ const DetailsPaneSlotBodyView = React.memo(function DetailsPaneSlotBodyView(prop
     const testID = props.frame.testID ?? 'details-pane';
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+            <PaneHeaderScrollScope>
             {props.frame.title ? (
                 <PaneHeader
                     testID={`${testID}.header`}
@@ -152,6 +154,7 @@ const DetailsPaneSlotBodyView = React.memo(function DetailsPaneSlotBodyView(prop
                 />
             ) : null}
             <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>{body?.children}</View>
+            </PaneHeaderScrollScope>
         </View>
     );
 });

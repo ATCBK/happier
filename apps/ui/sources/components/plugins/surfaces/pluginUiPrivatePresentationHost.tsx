@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
 import { COMPANION_WEB_POINTER_BINDING } from '@/components/companion/interaction/useCompanionPointerDragSession';
 import { NativeFloatingFrame } from '@/components/companion/interaction/NativeFloatingFrame';
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol';
@@ -490,9 +491,15 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
 
 const PLUGIN_UI_PRIVATE_PRESENTATION_RENDERERS = createPluginUiPrivatePresentationRenderers();
 
+/** A plugin surface's primary scroll area reports to the containing pane header's shade, when there is one. */
+const PLUGIN_UI_PANE_HEADER_SCROLL = Object.freeze({
+    useReporter: (): ((distancePx: number) => void) | null => usePaneHeaderScrollSink()?.reportTopDistance ?? null,
+});
+
 export type PluginUiPrivatePresentationHost = Readonly<
     typeof PLUGIN_UI_PRIVATE_PRESENTATION_RENDERERS & {
         createScrollActivityTracker(scrollRef: React.RefObject<unknown>, horizontal: boolean): PluginUiScrollActivityTracker;
+        paneHeaderScroll: Readonly<{ useReporter(): ((distancePx: number) => void) | null }>;
         /** The host's real type-role styles for same-realm plugin text. */
         typography: ReturnType<typeof readPluginUiHostTypography>;
         /** The host's configuration-page colour roles, when the mount supplies its theme. */
@@ -667,6 +674,7 @@ export function createPluginUiPrivatePresentationHost(
             },
         } }),
         createScrollActivityTracker: createScrollViewNearViewportTracker,
+        paneHeaderScroll: PLUGIN_UI_PANE_HEADER_SCROLL,
         ...(options?.renderDragSource === undefined ? {} : { renderDragSource: options.renderDragSource }),
         ...(options?.renderDropTarget === undefined ? {} : { renderDropTarget: options.renderDropTarget }),
         ...(options?.renderLiveStream ? { renderLiveStream: options.renderLiveStream } : {}),

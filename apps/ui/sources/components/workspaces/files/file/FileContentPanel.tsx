@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
 import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
@@ -254,8 +255,14 @@ function FileContentPanelInner({
     scrollTestID,
     onLayout,
     onContentSizeChange,
-    onScroll,
+    onScroll: onScrollProp,
 }: FileContentPanelProps) {
+    // The file's one primary scroller (code, diff or Markdown) drives its tab header's shade.
+    const paneHeaderScroll = usePaneHeaderScrollSink();
+    const onScroll = React.useCallback((event: any) => {
+        paneHeaderScroll?.reportTopDistance(event?.nativeEvent?.contentOffset?.y ?? 0);
+        onScrollProp?.(event);
+    }, [onScrollProp, paneHeaderScroll]);
     const codeScrollRef = React.useRef<ScrollView | null>(null);
     const codeScrollContentRef = React.useRef<View>(null);
     const codeScrollOffsetRef = React.useRef(0);

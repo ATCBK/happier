@@ -1,4 +1,5 @@
 import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
+import { PaneHeaderScrollScope } from '@/components/appShell/panes/paneHeaderScroll';
 import { PaneMainRestoreChip, usePaneMainRestoreChipVisible } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
@@ -97,7 +98,8 @@ const DetailsTabSurface = React.memo((props: Readonly<{
             {...a11yHiddenProps}
         >
             <PluginSurfaceFocusEligibilityProvider active={props.isActive}>
-                {props.children}
+                {/* Each retained tab is its own header/body pair: its scroll drives only its header's shade. */}
+                <PaneHeaderScrollScope>{props.children}</PaneHeaderScrollScope>
             </PluginSurfaceFocusEligibilityProvider>
         </AccessibleTabPanelView>
     );

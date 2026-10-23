@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Animated, Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { MultiPaneHost, type MultiPaneHostProps } from './MultiPaneHost';
+import { PaneHeaderScrollIsolation } from '@/components/appShell/panes/paneHeaderScroll';
 import type { ResolvedBottomPanePresentation } from './resolveBottomPaneLayout';
 import { ResizableDockedPaneVertical } from './resizable/ResizableDockedPaneVertical';
 import { PaneAnimatedScrimPressable } from './motion/PaneAnimatedScrimPressable';
@@ -186,7 +187,7 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
                                 >
                                     <GlassSurface surfaceGroup="content" solidColor={theme.colors.surface.base} finishRole={null}
                                         nested={bottomPresentation !== 'overlay'} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-                                        {renderedBottomPane}
+                                        <PaneHeaderScrollIsolation>{renderedBottomPane}</PaneHeaderScrollIsolation>
                                     </GlassSurface>
                                 </PluginSurfaceFocusEligibilityProvider>
                             </ModalPaneBoundaryView>

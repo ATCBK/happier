@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { PaneHeaderScrollScope } from '@/components/appShell/panes/paneHeaderScroll';
 import { View } from 'react-native';
 
 import { AppScopePaneHost } from '../AppScopePaneHost';
@@ -54,6 +55,7 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
                 accessibilityLabel={details.accessibilityLabel ?? details.header?.title}
             >
                 <PopoverScope boundaryRef={paneBoundaryRef}>
+                <PaneHeaderScrollScope>
                 {details.header ? (
                     <PaneHeader
                         testID={`${testID}.header`}
@@ -66,6 +68,7 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
                     />
                 ) : null}
                 <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>{details.content}</View>
+                </PaneHeaderScrollScope>
                 </PopoverScope>
             </View>
         ),

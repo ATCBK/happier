@@ -71,9 +71,6 @@ vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ credentials: { token: 'auth-token' } }),
 }));
 
-vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
-    ChatHeaderView: () => null,
-}));
 
 vi.mock('@/components/sessions/transcript/TranscriptList', () => ({
     TranscriptList: (props: any) => {

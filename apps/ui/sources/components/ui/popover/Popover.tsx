@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { PaneHeaderScrollIsolation } from '@/components/appShell/panes/paneHeaderScroll';
 import { BackHandler, Keyboard, Platform, StyleSheet as RNStyleSheet, View, type StyleProp, type ViewProps, type ViewStyle, useWindowDimensions } from 'react-native';
 import { usePopoverBoundaryRef } from './PopoverBoundary';
 import { usePopoverScrollSourceRef } from './PopoverScrollSource';
@@ -333,9 +334,12 @@ export function Popover(props: PopoverProps) {
     const deviceType = useDeviceType();
     // Placement measurements belong to the anchored presentation's mounted tree. A sheet
     // replaces that tree, so returning to desktop measures its new anchor and content afresh.
-    return props.phonePresentation === 'sheet' && deviceType === 'phone'
-        ? <PhonePopoverSheet {...props} />
-        : <AnchoredPopover {...props} />;
+    // A menu's or picker's own scroll never drives the shade under the pane header it opens from.
+    return <PaneHeaderScrollIsolation>
+        {props.phonePresentation === 'sheet' && deviceType === 'phone'
+            ? <PhonePopoverSheet {...props} />
+            : <AnchoredPopover {...props} />}
+    </PaneHeaderScrollIsolation>;
 }
 
 function PhonePopoverSheet(props: PopoverProps) {

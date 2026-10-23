@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_ICON_BUTTON_SIZE, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
@@ -13,6 +14,18 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
 import { DETAILS_TAB_HEADER_METRICS } from './detailsTabHeaderMetrics';
+import { PaneHeaderShade } from '@/components/appShell/panes/paneHeaderScroll';
+
+/**
+ * True while an entity header's actions (`actionsFit="compact"`) would leave its title less room than
+ * they take: actions with a compact form take it (the "need you" pill becomes its count, rare entries
+ * fold into ⋯), so the name stays readable. The header's one fit decision; consumers only read it.
+ */
+export const DetailsTabHeaderActionsCompactContext = React.createContext(false);
+
+export function useDetailsTabHeaderActionsCompact(): boolean {
+    return React.useContext(DetailsTabHeaderActionsCompactContext);
+}
 
 /**
  * One fact on the header's live line, in reading order. `strong` is the one noun the line is about
@@ -69,6 +82,18 @@ export type DetailsTabHeaderProps = Readonly<{
     controls?: React.ReactNode;
     /** One line under the header (freshness, the file changed under an edit). */
     notice?: React.ReactNode;
+    /** A real fact above the title (a reporting Session's leads). */
+    overline?: React.ReactNode;
+    /**
+     * A phone screen's own navigation band (an entity page pushed on a phone): Back leads a compact band
+     * instead of the large in-content title, and `includeTopInset` clears the status bar.
+     */
+    navigation?: Readonly<{ onBack: () => void; includeTopInset?: boolean; backTestID?: string }>;
+    /**
+     * `wrap` (default): actions that do not fit beside the title move to a row beneath. `compact`: an entity
+     * header's actions stay in the band and take their compact form instead (`DetailsTabHeaderActionsCompactContext`).
+     */
+    actionsFit?: 'wrap' | 'compact';
     testID?: string;
 }>;
 
@@ -109,6 +134,15 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
 
     // The pane's own controls (⤢, close), when the pane showing this tab has no bar of its own.
     const paneControls = useClaimedStackHeaderActions({ scopeOnly: true });
+    // On the navigation plane (a side panel standing on the canvas) the header takes the plane's paint.
+    const onNavigationPlane = useContainingGlassSurfaceGroup() === 'sidebar';
+    // An entity page's navigation band on a phone stays a band; elsewhere a phone takes the large title.
+    const largeTitle = phone && !props.navigation;
+    // Entity headers keep their actions beside the title and compact them when room runs short. Their
+    // full width is measured only in the full form, so taking the compact form never flips the decision back.
+    const [entityFit, setEntityFit] = React.useState({ root: 0, actions: 0 });
+    const actionsCompact = props.actionsFit === 'compact' && entityFit.root > 0 && entityFit.actions > 0
+        && entityFit.root - metrics.paddingStartPx - metrics.paddingEndPx - entityFit.actions < entityFit.actions;
     // The view controls sit on the facts line while they leave the facts at least as much room as they
     // take; a narrower band would push them over its actions, so they take their own row beneath it.
     const [band, setBand] = React.useState({ root: 0, actions: 0, controls: 0, trailing: 0, trailingMenu: false });
@@ -233,6 +267,8 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     const phoneQuietButtonsAlone = phone && props.menu === undefined && !props.controls && !props.actions && !paneControls
         && buttonList.length > 0 && buttonList.every((button) => button.tone !== 'primary');
     if (phoneQuietButtonsAlone) folded = new Set(buttonList.map(keyOf));
+    // An entity header's few buttons (an inline rename's Cancel and Save) never fold.
+    if (props.actionsFit === 'compact') folded = new Set<string>();
     const visibleButtons = buttonList.filter((button) => !folded.has(keyOf(button)));
     const buttons = visibleButtons.length > 0 ? visibleButtons.map((button) => {
         const key = keyOf(button);
@@ -305,7 +341,25 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 ) : null}
             </View>
         ) : undefined;
-    const phoneToolbar = phone && (props.controls || (props.actions && !phoneIconsInBand) || buttons || paneControls) ? (
+    // An entity header (`actionsFit="compact"`): its actions, then ⋯ and the pane's own controls, stay in the band.
+    const entityActions = props.actionsFit === 'compact' && (props.actions || buttons || menu || paneControls) ? (
+        <View style={styles.bandActions}>
+            {props.actions ? (
+                <View testID={`${testID}.actions`} style={styles.measured} onLayout={actionsCompact ? undefined : (event) => {
+                    const width = Math.round(event.nativeEvent.layout.width);
+                    setEntityFit((current) => current.actions === width ? current : { ...current, actions: width });
+                }}>
+                    <DetailsTabHeaderActionsCompactContext.Provider value={actionsCompact}>{props.actions}</DetailsTabHeaderActionsCompactContext.Provider>
+                </View>
+            ) : null}
+            {buttons}
+            {menu}
+            {paneControls}
+        </View>
+    ) : null;
+    const phoneToolbar = props.actionsFit === 'compact' ? (props.controls ? (
+        <View style={styles.controls}>{controls}</View>
+    ) : null) : phone && (props.controls || (props.actions && !phoneIconsInBand) || buttons || paneControls) ? (
         <View style={styles.controls}>
             {controls}
             <View style={styles.grow} />
@@ -331,16 +385,25 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     ) : null;
 
     return (
-        <View testID={`${testID}.root`} onLayout={measure('root')} style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+        <View testID={`${testID}.root`} onLayout={(event) => {
+            measure('root')(event);
+            if (props.actionsFit === 'compact') {
+                const width = Math.round(event.nativeEvent.layout.width);
+                setEntityFit((current) => current.root === width ? current : { ...current, root: width });
+            }
+        }} style={[styles.root, { backgroundColor: onNavigationPlane ? 'transparent' : materialColor(theme.colors.surface.base, 'transparent') }]}>
             <PaneHeader
                 testID={testID}
                 title={props.title}
                 leading={props.leading}
                 titleControl={props.titleControl}
                 titleTextStyle={props.titleTextStyle}
-                titleNumberOfLines={phone ? null : 1}
-                onTitleNaturalWidth={phone ? undefined : setTitleNeed}
-                lineTrailing={!phone && !controlsBelow ? controls : undefined}
+                overline={props.overline}
+                navigation={props.navigation}
+                shade={false}
+                titleNumberOfLines={largeTitle ? null : 1}
+                onTitleNaturalWidth={largeTitle ? undefined : setTitleNeed}
+                lineTrailing={props.actionsFit !== 'compact' && !phone && !controlsBelow ? controls : undefined}
                 lineEnd={props.metaTrailing}
                 line={segments.length > 0 || props.metaLeading ? {
                     segments,
@@ -349,8 +412,8 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                     </View> : undefined,
                     leadingSeparated: leadingWords,
                 } : null}
-                actions={bandActions}
-                size={phone ? 'large' : 'band'}
+                actions={props.actionsFit === 'compact' ? entityActions ?? undefined : bandActions}
+                size={largeTitle ? 'large' : 'band'}
             />
             {props.body || phoneToolbar ? (
                 <View style={[styles.below, { paddingLeft: metrics.paddingStartPx, paddingRight: metrics.paddingEndPx }]}>
@@ -364,14 +427,18 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
             ) : null}
             {props.notice ?? null}
             {lineMeasure}
+            {/* One shade under the whole header stack: band, controls row, body and notice. */}
+            <PaneHeaderShade />
         </View>
     );
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // No hairline under the header: the scroll-linked shade separates it from content beneath (`cshead.H1`).
+    // It stands above its body so that shade overlays what scrolls under it.
     root: {
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: theme.colors.border.subtle,
+        position: 'relative',
+        zIndex: 1,
         backgroundColor: theme.colors.surface.base,
     },
     bandActions: {
