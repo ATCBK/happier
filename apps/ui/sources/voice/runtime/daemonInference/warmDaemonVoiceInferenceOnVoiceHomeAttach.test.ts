@@ -165,7 +165,10 @@ describe('warmDaemonVoiceInferenceOnVoiceHomeAttach', () => {
             : DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [warmed] }));
         const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
         const reading = pendingRead ? observation.read({ client: new DaemonVoiceInferenceClient(), packIds: [packId] }) : null;
-        if (pendingRead) await vi.waitFor(() => expect(network.requests.some(request => request.method === 'daemon.voiceInference.models.status')).toBe(true));
+        if (pendingRead) {
+            await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.models.status');
+            expect(network.requests.some(request => request.method === 'daemon.voiceInference.models.status')).toBe(true);
+        }
         const { warmDaemonVoiceInferenceOnVoiceHomeAttach } = await import('./warmDaemonVoiceInferenceOnVoiceHomeAttach');
         await warmDaemonVoiceInferenceOnVoiceHomeAttach({ settings: { voice: {
             providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1, config: {

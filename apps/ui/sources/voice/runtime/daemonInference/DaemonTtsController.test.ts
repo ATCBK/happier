@@ -365,9 +365,9 @@ describe('DaemonTtsController', () => {
             onSpeaking,
         });
 
-        await vi.waitFor(() => {
-            expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
-        });
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.ack');
+        await network.waitForRpcRequest((request, all) => request.method === 'daemon.voiceInference.tts.stream.next' && all.filter(entry => entry.method === request.method).length === 2);
+        expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
         expect(onSpeaking).toHaveBeenCalledTimes(1);
         expect(ackSegment).toHaveBeenCalledWith(expect.objectContaining({
             segmentId: 'tts-stream-1:0',
@@ -524,7 +524,8 @@ describe('DaemonTtsController', () => {
         // The real client refuses a later next once playback failure retires
         // its lifetime; the old injected client reached a third call instead.
         expect(next).toHaveBeenCalledTimes(2);
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.cancel');
+        expect(cancel).toHaveBeenCalledTimes(1);
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
         expect(ackSegment).not.toHaveBeenCalled();
     });
@@ -595,7 +596,8 @@ describe('DaemonTtsController', () => {
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(2);
         expect(ackSegment).toHaveBeenCalledTimes(1);
         expect(stopActivePlayback).toHaveBeenCalledTimes(1);
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.cancel');
+        expect(cancel).toHaveBeenCalledTimes(1);
     });
 
     it('does not enter speaking before the first daemon segment is available', async () => {
@@ -634,9 +636,8 @@ describe('DaemonTtsController', () => {
             onSpeaking,
         });
 
-        await vi.waitFor(() => {
-            expect(startSegmentedTts).toHaveBeenCalledTimes(1);
-        });
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.start');
+        expect(startSegmentedTts).toHaveBeenCalledTimes(1);
         expect(onSpeaking).not.toHaveBeenCalled();
 
         firstSegment.resolve({
@@ -698,7 +699,8 @@ describe('DaemonTtsController', () => {
 
         expect(onSpeaking).not.toHaveBeenCalled();
         expect(ackSegment).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.cancel');
+        expect(cancel).toHaveBeenCalledTimes(1);
     });
 
     it('aborts queued daemon TTS playback when a prefetched segment fails to play', async () => {
@@ -756,7 +758,8 @@ describe('DaemonTtsController', () => {
 
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
         expect(ackSegment).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.cancel');
+        expect(cancel).toHaveBeenCalledTimes(1);
     });
 
     it('does not enter speaking when segmented stream start fails before audio is playable', async () => {
@@ -817,9 +820,9 @@ describe('DaemonTtsController', () => {
             onSpeaking: vi.fn(),
             signal: abortController.signal,
         });
-        await vi.waitFor(() => {
-            expect(startSegmentedTts).toHaveBeenCalledTimes(1);
-        });
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.start');
+        expect(startSegmentedTts).toHaveBeenCalledTimes(1);
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.next');
         abortController.abort();
         delayedSegment.resolve({
             type: 'segment',
@@ -834,7 +837,8 @@ describe('DaemonTtsController', () => {
         });
 
         await speaking;
-        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.cancel');
+        expect(cancel).toHaveBeenCalledTimes(1);
         expect(playAudioBytesWithStopper).not.toHaveBeenCalled();
     });
 
@@ -867,9 +871,8 @@ describe('DaemonTtsController', () => {
             signal: abortController.signal,
         });
         const cancelled = expect(speaking).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
-        await vi.waitFor(() => {
-            expect(startSegmentedTts).toHaveBeenCalledTimes(1);
-        });
+        await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.stream.start');
+        expect(startSegmentedTts).toHaveBeenCalledTimes(1);
 
         abortController.abort();
         resolveStream({

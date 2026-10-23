@@ -1,3 +1,4 @@
+import { createDeferred } from '@/dev/testkit';
 import { describe, expect, it, vi } from 'vitest';
 import { AGENT_SESSION_REALTIME_SDP_MAX_BYTES } from '@happier-dev/protocol';
 import type { AgentSessionRealtimeHandle } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -51,7 +52,8 @@ async function exerciseProviderFacingOperation(input: Readonly<{
   operation: DiagnosticOperation;
   result(): Promise<unknown>;
 }>): Promise<unknown> {
-  const terminal = vi.fn();
+  const terminalEntered1 = createDeferred<void>();
+  const terminal = vi.fn((_event: unknown) => { if (terminal.mock.calls.length === 1) terminalEntered1.resolve(); });
   const onStarted = vi.fn((handle: AgentSessionRealtimeHandle) => {
     handle.watch(terminal);
   });
@@ -82,7 +84,8 @@ async function exerciseProviderFacingOperation(input: Readonly<{
 
   if (input.operation === 'stop') return await started.handle.stop();
 
-  await vi.waitFor(() => expect(terminal).toHaveBeenCalledTimes(1));
+  await terminalEntered1.promise;
+  expect(terminal).toHaveBeenCalledTimes(1);
   return terminal.mock.calls[0]?.[0];
 }
 
@@ -177,7 +180,8 @@ describe('bound Agent-session realtime service', () => {
   it('registers the attempt owner against the public handle before returning a successful start', async () => {
     let resolveWatch!: (value: unknown) => void;
     const calls: string[] = [];
-    const ownerTerminal = vi.fn();
+    const ownerTerminalEntered1 = createDeferred<void>();
+    const ownerTerminal = vi.fn((_event: unknown) => { if (ownerTerminal.mock.calls.length === 1) ownerTerminalEntered1.resolve(); });
     const onStarted = vi.fn((handle: AgentSessionRealtimeHandle) => {
       handle.watch(ownerTerminal);
     });
@@ -226,7 +230,8 @@ describe('bound Agent-session realtime service', () => {
       status: 'terminal',
       event: { kind: 'terminal', reason: 'upstream_closed' },
     });
-    await vi.waitFor(() => expect(ownerTerminal).toHaveBeenCalledTimes(1));
+    await ownerTerminalEntered1.promise;
+    expect(ownerTerminal).toHaveBeenCalledTimes(1);
     expect(ownerTerminal).toHaveBeenCalledWith({
       kind: 'terminal',
       reason: 'upstream_closed',
@@ -243,7 +248,8 @@ describe('bound Agent-session realtime service', () => {
     'does not replace a retained $reason WATCH fact when STOP first reports already_stopped',
     async ({ reason }) => {
       let resolveWatch!: (value: unknown) => void;
-      const ownerTerminal = vi.fn();
+      const ownerTerminalEntered1 = createDeferred<void>();
+      const ownerTerminal = vi.fn((_event: unknown) => { if (ownerTerminal.mock.calls.length === 1) ownerTerminalEntered1.resolve(); });
       const onStarted = vi.fn((handle: AgentSessionRealtimeHandle) => {
         handle.watch(ownerTerminal);
       });
@@ -284,10 +290,9 @@ describe('bound Agent-session realtime service', () => {
         status: 'terminal',
         event: retainedTerminal,
       });
-      await vi.waitFor(() => {
-        expect(ownerTerminal).toHaveBeenCalledOnce();
-        expect(ownerTerminal).toHaveBeenCalledWith(retainedTerminal);
-      });
+      await ownerTerminalEntered1.promise;
+      expect(ownerTerminal).toHaveBeenCalledOnce();
+      expect(ownerTerminal).toHaveBeenCalledWith(retainedTerminal);
 
       const late = vi.fn();
       started.handle.watch(late);
@@ -298,7 +303,8 @@ describe('bound Agent-session realtime service', () => {
 
   it('stops and disposes the remote attachment once when the attempt aborts', async () => {
     let resolveWatch!: (value: unknown) => void;
-    const stop = vi.fn(async () => ({ ok: true, status: 'stopped' }));
+    const stopEntered1 = createDeferred<void>();
+    const stop = vi.fn(async () => { if (stop.mock.calls.length === 1) stopEntered1.resolve(); return ({ ok: true, status: 'stopped' }); });
     const controller = new AbortController();
     const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => {
       if (method.endsWith('.start')) {
@@ -327,7 +333,8 @@ describe('bound Agent-session realtime service', () => {
     });
     expect(started.status).toBe('started');
     controller.abort();
-    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    await stopEntered1.promise;
+    expect(stop).toHaveBeenCalledTimes(1);
     if (started.status === 'started') {
       await started.handle.stop();
       await started.handle.dispose();
@@ -363,7 +370,8 @@ describe('bound Agent-session realtime service', () => {
     const startAttempt = new AbortController();
     const stopRpc = vi.fn(async () => ({ ok: true, status: 'stopped' }));
     const onStarted = vi.fn();
-    const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => {
+    const sessionRpcEntered1 = createDeferred<void>();
+    const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => { if (sessionRpc.mock.calls.length === 1) sessionRpcEntered1.resolve();
       if (method.endsWith('.start')) return await pendingStart;
       if (method.endsWith('.stop')) return await stopRpc();
       if (method.endsWith('.watch')) return await new Promise<never>(() => undefined);
@@ -380,7 +388,8 @@ describe('bound Agent-session realtime service', () => {
     const starting = startService.start({
       transport: { kind: 'webrtc', offerSdp: 'v=0\r\na=pending-offer\r\n' },
     });
-    await vi.waitFor(() => expect(sessionRpc).toHaveBeenCalledTimes(1));
+    await sessionRpcEntered1.promise;
+    expect(sessionRpc).toHaveBeenCalledTimes(1);
 
     inspectAttempt.abort();
     startAttempt.abort();
@@ -418,18 +427,21 @@ describe('bound Agent-session realtime service', () => {
     const pendingStart = new Promise((resolve) => {
       resolveStart = resolve;
     });
-    const stopRpc = vi.fn(async () => {
+    const stopRpcEntered2 = createDeferred<void>();
+    const stopRpcEntered4 = createDeferred<void>();
+    const stopRpc = vi.fn(async () => { if (stopRpc.mock.calls.length === 2) stopRpcEntered2.resolve(); if (stopRpc.mock.calls.length === 4) stopRpcEntered4.resolve();
       if (stopRpc.mock.calls.length < 4) {
         throw new Error('stop_transport_closed');
       }
       return { ok: true, status: 'stopped' };
     });
+    const sessionRpcEntered1 = createDeferred<void>();
     const sessionRpc = vi.fn(async (request: Readonly<{
       sessionAddress: Readonly<{ serverId: string; sessionId: string }>;
       method: string;
       payload: unknown;
       signal: AbortSignal;
-    }>) => {
+    }>) => { if (sessionRpc.mock.calls.length === 1) sessionRpcEntered1.resolve();
       if (request.method.endsWith('.start')) return await pendingStart;
       if (request.method.endsWith('.stop')) return await stopRpc();
       if (request.method.endsWith('.watch')) {
@@ -454,11 +466,10 @@ describe('bound Agent-session realtime service', () => {
       },
       { signal: caller.signal },
     );
-    await vi.waitFor(() => {
-      expect(sessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+    await sessionRpcEntered1.promise;
+    expect(sessionRpc).toHaveBeenCalledWith(expect.objectContaining({
         method: 'session.agentRealtime.start',
       }));
-    });
 
     caller.abort();
     await expect(Promise.race([
@@ -467,10 +478,12 @@ describe('bound Agent-session realtime service', () => {
         setTimeout(() => resolve('still_pending'), 25);
       }),
     ])).resolves.toEqual({ status: 'aborted' });
-    await vi.waitFor(() => expect(stopRpc).toHaveBeenCalledTimes(2));
+    await stopRpcEntered2.promise;
+    expect(stopRpc).toHaveBeenCalledTimes(2);
 
     resolveStart(successfulStart);
-    await vi.waitFor(() => expect(stopRpc).toHaveBeenCalledTimes(4));
+    await stopRpcEntered4.promise;
+    expect(stopRpc).toHaveBeenCalledTimes(4);
     await Promise.resolve();
 
     const stopRequests = sessionRpc.mock.calls
@@ -502,7 +515,8 @@ describe('bound Agent-session realtime service', () => {
       resolveStart = resolve;
     });
     let resolveFirstStop!: (value: unknown) => void;
-    const stopRpc = vi.fn(async () => {
+    const stopRpcEntered1 = createDeferred<void>();
+    const stopRpc = vi.fn(async () => { if (stopRpc.mock.calls.length === 1) stopRpcEntered1.resolve();
       if (stopRpc.mock.calls.length === 1) {
         return await new Promise((resolve) => {
           resolveFirstStop = resolve;
@@ -510,7 +524,8 @@ describe('bound Agent-session realtime service', () => {
       }
       return { ok: true, status: 'stopped' };
     });
-    const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => {
+    const sessionRpcEntered1 = createDeferred<void>();
+    const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => { if (sessionRpc.mock.calls.length === 1) sessionRpcEntered1.resolve();
       if (method.endsWith('.start')) return await pendingStart;
       if (method.endsWith('.stop')) return await stopRpc();
       if (method.endsWith('.watch')) return await new Promise<never>(() => undefined);
@@ -530,9 +545,10 @@ describe('bound Agent-session realtime service', () => {
       { transport: { kind: 'webrtc', offerSdp: 'v=0\r\na=pending-offer\r\n' } },
       { signal: caller.signal },
     );
-    await vi.waitFor(() => expect(sessionRpc).toHaveBeenCalledWith(
+    await sessionRpcEntered1.promise;
+    expect(sessionRpc).toHaveBeenCalledWith(
       expect.objectContaining({ method: 'session.agentRealtime.start' }),
-    ));
+    );
 
     caller.abort();
     await expect(Promise.race([
@@ -541,7 +557,8 @@ describe('bound Agent-session realtime service', () => {
         setTimeout(() => resolve('still_pending'), 25);
       }),
     ])).resolves.toEqual({ status: 'aborted' });
-    await vi.waitFor(() => expect(stopRpc).toHaveBeenCalledOnce());
+    await stopRpcEntered1.promise;
+    expect(stopRpc).toHaveBeenCalledOnce();
 
     let cleanupSettled = false;
     const cleanup = cleanupBoundAgentSessionRealtimeService(service).then(() => {
@@ -604,7 +621,8 @@ describe('bound Agent-session realtime service', () => {
   it('retries mandatory disposal after an in-flight caller stop is aborted', async () => {
     let resolveWatch!: (value: unknown) => void;
     let resolveFirstStop!: (value: unknown) => void;
-    const stopRpc = vi.fn(async () => {
+    const stopRpcEntered1 = createDeferred<void>();
+    const stopRpc = vi.fn(async () => { if (stopRpc.mock.calls.length === 1) stopRpcEntered1.resolve();
       if (stopRpc.mock.calls.length === 1) {
         return await new Promise((resolve) => {
           resolveFirstStop = resolve;
@@ -652,7 +670,8 @@ describe('bound Agent-session realtime service', () => {
     if (started.status !== 'started') return;
     const caller = new AbortController();
     const callerStop = started.handle.stop({ signal: caller.signal });
-    await vi.waitFor(() => expect(stopRpc).toHaveBeenCalledTimes(1));
+    await stopRpcEntered1.promise;
+    expect(stopRpc).toHaveBeenCalledTimes(1);
 
     caller.abort();
     const disposing = started.handle.dispose();
@@ -932,7 +951,8 @@ describe('bound Agent-session realtime service', () => {
     const pendingStop = new Promise((resolve) => {
       resolveStop = resolve;
     });
-    const stopRpc = vi.fn(async () => await pendingStop);
+    const stopRpcEntered1 = createDeferred<void>();
+    const stopRpc = vi.fn(async () => { if (stopRpc.mock.calls.length === 1) stopRpcEntered1.resolve(); return await pendingStop; });
     const sessionRpc = vi.fn(async ({ method }: Readonly<{ method: string }>) => {
       if (method.endsWith('.start')) return successfulStart;
       if (method.endsWith('.watch')) {
@@ -961,7 +981,8 @@ describe('bound Agent-session realtime service', () => {
     const disposing = Promise.resolve(started.handle.dispose()).then(() => {
       disposeSettled = true;
     });
-    await vi.waitFor(() => expect(stopRpc).toHaveBeenCalledOnce());
+    await stopRpcEntered1.promise;
+    expect(stopRpc).toHaveBeenCalledOnce();
     const caller = new AbortController();
     const callerStop = started.handle.stop({ signal: caller.signal });
     caller.abort();

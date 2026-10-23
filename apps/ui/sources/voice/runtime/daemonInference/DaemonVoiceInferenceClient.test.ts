@@ -249,8 +249,8 @@ describe('DaemonVoiceInferenceClient', () => {
     await chunkEntered.promise;
     caller.abort();
     // Let the real RPC owner and transfer unwind; a nonreplying chunk must not retain the request.
-    await vi.waitFor(() => expect(outcome).toBe('cancelled'));
     await pending;
+    expect(outcome).toBe('cancelled');
     await expect(client.synthesizeText(request)).resolves.toMatchObject({ bytes: new Uint8Array([97]) });
   });
 
@@ -559,9 +559,10 @@ describe('DaemonVoiceInferenceClient', () => {
     // Issued Socket requests can deliver the daemon's canonical cancelled reply;
     // a transport cancellation can instead produce its public AbortError.
     expect(outcome.error.name === 'AbortError' || ('code' in outcome.error && outcome.error.code === 'cancelled')).toBe(true);
-    await vi.waitFor(() => expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+    await network.waitForRpcRequest(request => request.method === 'daemon.voiceInference.tts.cancel');
+    expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
       targetId: 'machine-1', method: 'daemon.voiceInference.tts.cancel',
-    })));
+    }));
     expect(network.requests.some(request => request.method === 'daemon.voiceInference.tts.chunk')).toBe(false);
   });
 

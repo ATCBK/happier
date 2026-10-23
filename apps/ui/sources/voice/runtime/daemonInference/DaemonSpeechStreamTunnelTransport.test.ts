@@ -18,6 +18,7 @@ import {
 } from '@happier-dev/protocol';
 import type { PeerTcpTunnelFrame } from '@happier-dev/peer-transport/duplexFrames';
 import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { openAes256GcmBytes, sealAes256GcmBytes } from '@/encryption/aes256GcmBytes';
@@ -46,6 +47,7 @@ async function loadModule(path: string): Promise<DynamicModule> {
 }
 
 function createWebSocketFixture() {
+  const frameSent = createDeferred<void>();
   let socket: TestWebSocket | null = null;
   const getSocket = (): TestWebSocket => {
     if (!socket) throw new Error('expected websocket fixture');
@@ -56,12 +58,13 @@ function createWebSocketFixture() {
       sent: [],
       send(payload: unknown) {
         this.sent.push(payload);
+        frameSent.resolve();
       },
       close: vi.fn(),
     };
     return getSocket();
   });
-  return { getSocket, WebSocketCtor };
+  return { getSocket, WebSocketCtor, frameSent: frameSent.promise };
 }
 
 const open: PeerTcpTunnelOpenV1 = {
@@ -606,7 +609,7 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
     expect(createTransport).toBeTypeOf('function');
     if (typeof openLoopbackStream !== 'function' || typeof createTransport !== 'function') return;
 
-    const { getSocket, WebSocketCtor } = createWebSocketFixture();
+    const { getSocket, WebSocketCtor, frameSent } = createWebSocketFixture();
     const streamPromise = openLoopbackStream({
       endpointUrl: 'http://127.0.0.1:1234/base',
       open,
@@ -659,7 +662,8 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
       compatibilityTransport: null,
     });
 
-    await vi.waitFor(() => expect(getSocket().sent.length).toBe(1));
+    await frameSent;
+    expect(getSocket().sent.length).toBe(1);
     const responsePayload = new TextEncoder().encode(JSON.stringify({
       ok: true,
       streamId: 'stream-1',

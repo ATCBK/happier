@@ -60,7 +60,16 @@ const methods = {
 };
 const requests = (name: keyof typeof methods) => network.requests.filter(request => request.method === methods[name]);
 function createSink() {
-  return { onAudioStarted: vi.fn(), onPartial: vi.fn(), onFinal: vi.fn(), onEndpoint: vi.fn(), onError: vi.fn() };
+  const partial = createDeferred<void>();
+  const endpoint = createDeferred<void>();
+  const error = createDeferred<void>();
+  return {
+    onAudioStarted: vi.fn(), onFinal: vi.fn(),
+    onPartial: vi.fn((_text: string) => { partial.resolve(); }),
+    onEndpoint: vi.fn((_reason: string) => { endpoint.resolve(); }),
+    onError: vi.fn((_error: unknown) => { error.resolve(); }),
+    events: { partial: partial.promise, endpoint: endpoint.promise, error: error.promise },
+  };
 }
 
 async function respond(request: SessionOpsRpcRequest): Promise<unknown> {
@@ -104,7 +113,8 @@ function controller(endpointController?: NonNullable<Parameters<typeof createDae
   return activeController;
 }
 function startParams(overrides: Partial<SttStartParams> = {}) {
-  return { sessionId: 'active-control-session', micSession: browser.micSession, sink: createSink(), ...overrides };
+  const sink = createSink();
+  return { sessionId: 'active-control-session', micSession: browser.micSession, sink, ...overrides, events: sink.events };
 }
 function emitPcm() {
   // Physical 24 kHz browser frame; actual capture resamples/encodes 20 ms PCM.
@@ -170,12 +180,14 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     try {
       await runtime.start(params);
       emitPcm();
-      await vi.waitFor(() => expect(requests('chunk')).toHaveLength(1));
+      await network.waitForRpcRequest(request => request.method === methods.chunk);
+      expect(requests('chunk')).toHaveLength(1);
       browser.micSession.setMuted(true);
       // Recognition has not finished, but physical mute is already confirmed.
       await runtime.setMuted(true);
       chunkReply.resolve();
-      await vi.waitFor(() => expect(requests('finish')).toHaveLength(1));
+      await network.waitForRpcRequest(request => request.method === methods.finish);
+      expect(requests('finish')).toHaveLength(1);
       expect(params.sink.onEndpoint).not.toHaveBeenCalled();
       browser.micSession.setMuted(false);
       const unmute = runtime.setMuted(false);
@@ -192,13 +204,15 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
   });
 
   it('streams canonical mic PCM into the daemon sender and maps partial/endpoint/final events into the sink', async () => {
-    const onSignal = vi.fn();
+    const signalReceived = createDeferred<void>();
+    const onSignal = vi.fn(() => { signalReceived.resolve(); });
     const runtime = controller(createTurnEndpointController({ onSignal }));
     const params = startParams();
     chunkEvents = [{ type: 'endpoint', seq: 0, transcript: '', reason: 'vad' }];
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onEndpoint).toHaveBeenCalledWith('vad'));
+    await params.events.endpoint;
+    expect(params.sink.onEndpoint).toHaveBeenCalledWith('vad');
     // The recognizer reports silence endpoints while the Agent prepares its
     // reply. They must not consume the next real utterance's endpoint admission.
     expect(onSignal).not.toHaveBeenCalled();
@@ -212,9 +226,10 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
       provider: 'local_neural', localNeural: { assetId: 'stt-pack-1', language: 'en', execution: 'daemon' },
     });
     emitPcm();
-    await vi.waitFor(() => expect(onSignal).toHaveBeenCalledWith(expect.objectContaining({
+    await signalReceived.promise;
+    expect(onSignal).toHaveBeenCalledWith(expect.objectContaining({
       source: 'daemon_stream', transcript: 'open notes',
-    })));
+    }));
     await expect(runtime.stop()).resolves.toEqual({ finalText: 'open notes' });
     expect(DaemonVoiceInferenceSttStreamStartRequestSchema.parse(requests('start')[0]?.payload)).toMatchObject({
       packId: 'stt-pack-1', language: 'en', streamingMode: 'runtime', format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
@@ -255,7 +270,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const params = startParams();
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    await params.events.partial;
+    expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words');
     expect(params.sink.onFinal).not.toHaveBeenCalled();
     await expect(runtime.stop()).resolves.toEqual({ finalText: '' });
     expect(requests('finish')).toHaveLength(1);
@@ -272,7 +288,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const params = startParams();
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    await params.events.partial;
+    expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words');
     const entered = createDeferred<void>();
     rpc.mockImplementation(async request => {
       if (request.method !== methods.finish) return respond(request);
@@ -311,7 +328,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const params = startParams({ signal: abort.signal });
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    await params.events.partial;
+    expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words');
     const first = runtime.stop();
     const concurrent = runtime.stop();
     await entered.promise;
@@ -325,7 +343,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     expect(params.sink.onFinal).not.toHaveBeenCalled();
     expect(params.sink.onError).not.toHaveBeenCalled();
     expect(requests('finish')).toHaveLength(1);
-    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
+    await network.waitForRpcRequest(request => request.method === methods.cancel);
+    expect(requests('cancel')).toHaveLength(1);
   });
 
   it('retains the daemon finish refusal privately without publishing a provisional transcript', async () => {
@@ -338,7 +357,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const params = startParams();
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words'));
+    await params.events.partial;
+    expect(params.sink.onPartial).toHaveBeenCalledWith('provisional words');
     const result = await runtime.stop();
     expect(result).toMatchObject({ error: { kind: 'provider_error', reason: 'daemon_streaming_stt_finalization_failed' } });
     if (!('error' in result)) throw new Error('Expected finalization failure');
@@ -415,7 +435,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
         { type: 'endpoint', seq: 0, transcript: 'late final words', reason: 'vad' },
       ],
     }));
-    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
+    await network.waitForRpcRequest(request => request.method === methods.cancel);
+    expect(requests('cancel')).toHaveLength(1);
     expect(finished).toBe(false);
     expect(context.processor.onaudioprocess).toBeNull();
     expect(params.sink.onPartial).not.toHaveBeenCalled();
@@ -444,11 +465,12 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const runtime = controller();
     const params = startParams();
     await runtime.start(params);
-    await vi.waitFor(() => expect(params.sink.onError).toHaveBeenCalledWith({
+    await params.events.error;
+    expect(params.sink.onError).toHaveBeenCalledWith({
       kind: 'provider_error', phase: 'runtime', presentation: 'notice',
       reason: 'daemon_streaming_stt_web_mic_media_source_failed', recoverable: true,
       recoveryAction: 'retry', retryPolicy: 'user_action',
-    }));
+    });
     await expect(runtime.stop()).resolves.toEqual({ finalText: '' });
     expect(requests('cancel')).toHaveLength(1);
     expect(requests('finish')).toHaveLength(0);
@@ -467,7 +489,8 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     browser.micTrack.dispatchEvent(new Event('ended'));
     let finished = false;
     const stopping = runtime.stop().then(result => { finished = true; return result; });
-    await vi.waitFor(() => expect(requests('cancel')).toHaveLength(1));
+    await network.waitForRpcRequest(request => request.method === methods.cancel);
+    expect(requests('cancel')).toHaveLength(1);
     expect(params.sink.onError).not.toHaveBeenCalled();
     expect(finished).toBe(false);
     expect(context.processor.onaudioprocess).toBeNull();
@@ -526,16 +549,18 @@ describe('createDaemonStreamingSttController with actual capture and daemon clie
     const params = startParams();
     await runtime.start(params);
     emitPcm();
-    await vi.waitFor(() => expect(params.sink.onError).toHaveBeenCalledWith({
+    await params.events.error;
+    expect(params.sink.onError).toHaveBeenCalledWith({
       kind: 'provider_error', phase: 'runtime', presentation: 'notice',
       reason: 'daemon_streaming_stt_pcm_chunk_failed', recoverable: true,
       recoveryAction: 'retry', retryPolicy: 'user_action',
-    }));
+    });
     const failure: unknown = vi.mocked(params.sink.onError).mock.calls[0]?.[0];
     expect(failure).toHaveProperty('cause');
     expect(Object.getOwnPropertyDescriptor(failure, 'cause')?.enumerable).toBe(false);
     expect(Reflect.get(failure as object, 'cause')).toMatchObject({ code: 'request_timeout' });
     expect(failure).toHaveProperty('cause.cause.error', 'daemon_voice_inference_substream_response_timeout');
+    await network.waitForRpcRequest(request => request.method === methods.cancel);
     expect(requests('cancel')).toHaveLength(1);
     expect(requests('finish')).toHaveLength(0);
     expect(context.processor.onaudioprocess).toBeNull();

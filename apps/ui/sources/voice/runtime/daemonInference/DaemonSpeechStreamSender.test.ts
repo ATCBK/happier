@@ -10,16 +10,7 @@ import {
   type DaemonSpeechStreamTransportChunkRequest,
 } from './DaemonSpeechStreamSender';
 import { createDaemonSpeechStreamCarrierAdapter } from './DaemonSpeechStreamCarrier';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import { createDeferred as deferred } from '@/dev/testkit';
 
 async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -386,7 +377,11 @@ describe('DaemonSpeechStreamSender', () => {
 
   it('sends multiple 20 ms chunks before the first application acknowledgement', async () => {
     const responses = [deferred<any>(), deferred<any>()];
-    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => responses[seq]!.promise);
+    const bothChunksEntered = deferred<void>();
+    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => {
+      if (seq === 1) bothChunksEntered.resolve();
+      return responses[seq]!.promise;
+    });
     const sender = createDaemonSpeechStreamSender({
       requestId: 'request-1',
       maxBufferedChunks: 4,
@@ -401,7 +396,8 @@ describe('DaemonSpeechStreamSender', () => {
     await sender.start();
     const first = sender.pushChunk(new Uint8Array(640));
     const second = sender.pushChunk(new Uint8Array(640));
-    await vi.waitFor(() => expect(chunk).toHaveBeenCalledTimes(2));
+    await bothChunksEntered.promise;
+    expect(chunk).toHaveBeenCalledTimes(2);
 
     responses[1]!.resolve({
       ok: true,
@@ -448,7 +444,13 @@ describe('DaemonSpeechStreamSender', () => {
 
   it('bounds the in-flight frame and byte window and releases it with cumulative ACKs', async () => {
     const responses = [deferred<any>(), deferred<any>(), deferred<any>()];
-    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => responses[seq]!.promise);
+    const initialWindowEntered = deferred<void>();
+    const thirdChunkEntered = deferred<void>();
+    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => {
+      if (seq === 1) initialWindowEntered.resolve();
+      if (seq === 2) thirdChunkEntered.resolve();
+      return responses[seq]!.promise;
+    });
     const sender = createDaemonSpeechStreamSender({
       requestId: 'request-window',
       maxBufferedChunks: 4,
@@ -468,11 +470,13 @@ describe('DaemonSpeechStreamSender', () => {
       sender.pushChunk(new Uint8Array(640)),
       sender.pushChunk(new Uint8Array(640)),
     ];
-    await vi.waitFor(() => expect(chunk).toHaveBeenCalledTimes(2));
+    await initialWindowEntered.promise;
+    expect(chunk).toHaveBeenCalledTimes(2);
     expect(chunk.mock.calls.map(([input]) => input.seq)).toEqual([0, 1]);
 
     responses[1]!.resolve({ ok: true, streamId: 'stream-window', generation: 1, ackSeq: 1, events: [] });
-    await vi.waitFor(() => expect(chunk).toHaveBeenCalledTimes(3));
+    await thirdChunkEntered.promise;
+    expect(chunk).toHaveBeenCalledTimes(3);
     responses[2]!.resolve({ ok: true, streamId: 'stream-window', generation: 1, ackSeq: 2, events: [] });
     responses[0]!.resolve({ ok: true, streamId: 'stream-window', generation: 1, ackSeq: 0, events: [] });
     await Promise.all(chunks);
@@ -523,7 +527,11 @@ describe('DaemonSpeechStreamSender', () => {
   }, 60_000);
 
   it('fails closed when a response acknowledges a frame that was never sent', async () => {
-    const cancel = vi.fn(async () => ({ ok: true as const, streamId: 'stream-invalid-ack', generation: 1 }));
+    const cancelEntered = deferred<void>();
+    const cancel = vi.fn(async () => {
+      cancelEntered.resolve();
+      return { ok: true as const, streamId: 'stream-invalid-ack', generation: 1 };
+    });
     const sender = createDaemonSpeechStreamSender({
       requestId: 'request-invalid-ack',
       transport: {
@@ -543,7 +551,8 @@ describe('DaemonSpeechStreamSender', () => {
     await expect(sender.pushChunk(new Uint8Array([0, 0]))).rejects.toMatchObject({
       code: 'daemon_speech_stream_invalid_ack',
     });
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    await cancelEntered.promise;
+    expect(cancel).toHaveBeenCalledOnce();
     await expect(sender.waitForDrain()).resolves.toBeUndefined();
   });
 
@@ -702,7 +711,11 @@ describe('DaemonSpeechStreamSender', () => {
 
   it('cancels the active stream and rejects later sends without leaking buffered chunks', async () => {
     const responses = Array.from({ length: 8 }, () => deferred<any>());
-    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => responses[seq]!.promise);
+    const windowEntered = deferred<void>();
+    const chunk = vi.fn(({ seq }: DaemonSpeechStreamTransportChunkRequest) => {
+      if (seq === 7) windowEntered.resolve();
+      return responses[seq]!.promise;
+    });
     const cancel = vi.fn(async () => ({ ok: true as const, streamId: 'stream-1', generation: 1 }));
     const sender = createDaemonSpeechStreamSender({
       requestId: 'request-1',
@@ -728,7 +741,8 @@ describe('DaemonSpeechStreamSender', () => {
         },
       )
     ));
-    await vi.waitFor(() => expect(chunk).toHaveBeenCalledTimes(8));
+    await windowEntered.promise;
+    expect(chunk).toHaveBeenCalledTimes(8);
     await sender.cancel();
 
     expect(cancel).toHaveBeenCalledWith({ streamId: 'stream-1', generation: 1 });

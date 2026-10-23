@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createWebSocketPcmConnection } from './VoiceRealtimeConnection';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { createDeferred } from '@/dev/testkit';
 
 import {
   createWebSocketPcmMedia,
@@ -24,7 +25,8 @@ describe('WebSocketPcmMedia', () => {
     const { micSession: mic } = browser;
     await mic.ensureActive();
     const { micTrack: track, micStream: stream } = browser;
-    const onInputChunk = vi.fn();
+    const inputChunkReceived = createDeferred<void>();
+    const onInputChunk = vi.fn((_chunk: string) => { inputChunkReceived.resolve(); });
     const onInputError = vi.fn();
     const onOutputLevel = vi.fn();
     const media = createWebSocketPcmMedia({
@@ -39,7 +41,8 @@ describe('WebSocketPcmMedia', () => {
     );
     const emitInput = (samples: Float32Array) => context.emitInput(samples);
     return { media, mic, context, sources, gain, disconnectGain, enqueueSeconds,
-      processor, captureSource, track, stream, onInputChunk, onInputError, onOutputLevel, emitInput };
+      processor, captureSource, track, stream, onInputChunk, onInputError, onOutputLevel, emitInput,
+      inputChunkReceived: inputChunkReceived.promise };
   }
 
   it('accepts faster-than-realtime output beyond five seconds in order and drains only after the complete burst', async () => {
@@ -153,7 +156,8 @@ describe('WebSocketPcmMedia', () => {
     await media.pcm.start(new AbortController().signal);
     expect(context.createMediaStreamSource).toHaveBeenCalledWith(stream);
     harness.emitInput(new Float32Array(2_400).fill(0.25));
-    await vi.waitFor(() => expect(onInputChunk).toHaveBeenCalledWith(encodePcm16LeBase64(new Int16Array(2_400).fill(8_192))));
+    await harness.inputChunkReceived;
+    expect(onInputChunk).toHaveBeenCalledWith(encodePcm16LeBase64(new Int16Array(2_400).fill(8_192)));
     expect(media.inputLevel()).toBe(0.25);
     expect(harness.enqueueSeconds(4, 16_384)).toBe(true);
     expect(media.outputLevel()).toBeCloseTo(0.5);
@@ -244,7 +248,14 @@ describe('WebSocketPcmMedia', () => {
     let finishResume!: () => void;
     const pendingResume = new Promise<void>((resolve) => { finishResume = resolve; });
     let suspended = true;
-    const resume = vi.fn(() => pendingResume);
+    const resumeEntered = createDeferred<void>();
+    const resume = vi.fn(() => {
+      if (resume.mock.calls.length === 1) {
+        expect(resume).toHaveBeenCalledOnce();
+        resumeEntered.resolve();
+      }
+      return pendingResume;
+    });
     Object.defineProperties(harness.context, {
       state: { get: () => suspended ? 'suspended' : 'running' },
       resume: { value: resume },
@@ -252,7 +263,7 @@ describe('WebSocketPcmMedia', () => {
     const abortController = new AbortController();
     const starting = harness.media.pcm.start(abortController.signal).then(() => null, (error: unknown) => error);
     try {
-      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+      await resumeEntered.promise;
       if (cancellation === 'stop') await harness.media.pcm.stop();
       else abortController.abort();
       suspended = false;
@@ -262,7 +273,8 @@ describe('WebSocketPcmMedia', () => {
       if (cancellation === 'abort') await harness.media.pcm.start(new AbortController().signal);
       expect(harness.enqueueSeconds(1, 1_000)).toBe(true);
       harness.emitInput(new Float32Array(2_400).fill(0.25));
-      await vi.waitFor(() => expect(harness.onInputChunk).toHaveBeenCalled());
+      await harness.inputChunkReceived;
+      expect(harness.onInputChunk).toHaveBeenCalled();
       expect(harness.onInputError).not.toHaveBeenCalled();
     } finally {
       finishResume();

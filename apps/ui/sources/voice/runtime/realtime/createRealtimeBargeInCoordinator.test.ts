@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createVoiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { useVoiceConversationRuntimeStore } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { createXaiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/xaiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createPublicPcmVoiceConversationForTest } from '@/voice/registry/externalVoiceProviderActivation.testkit';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 vi.mock('react-native', async () => (
   await import('@/dev/testkit/mocks/reactNative')
@@ -28,6 +30,11 @@ afterEach(async () => {
 
 const startPublicPcmConversation = () => createPublicPcmVoiceConversationForTest(cleanup => cleanups.push(cleanup));
 
+async function waitForInterrupted(conversation: Awaited<ReturnType<typeof startPublicPcmConversation>>, entryId: string) {
+  const { storage } = await import('@/sync/domains/state/storage');
+  await waitForTestEvent(storage.subscribe, () => conversation.isVoiceTurnInterrupted(entryId), Boolean);
+}
+
 describe('public SDK PCM interruption conformance', () => {
   it('marks only the actual persisted assistant final after real PCM retention and confirmation', async () => {
     const conversation = await startPublicPcmConversation();
@@ -37,13 +44,15 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     conversation.context.currentTime = 0.45;
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[0]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[0]!.stopped;
+    expect(conversation.context.sources[0]!.stop).toHaveBeenCalled();
     expect(conversation.playbackCursorMs()).toBe(450);
     expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(false);
     conversation.emit({ kind: 'speech.started' });
     expect(conversation.context.sources[0]!.stop).toHaveBeenCalledTimes(1);
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true));
+    await waitForInterrupted(conversation, entryId);
+    expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true);
     expect(conversation.sent).toContainEqual({ kind: 'cancel' });
     expect(conversation.readMessages()).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'agent-text', text: 'current response' }),
@@ -58,7 +67,8 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true));
+    await waitForInterrupted(conversation, entryId);
+    expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true);
     expect(conversation.sent).toContainEqual({ kind: 'cancel' });
   });
 
@@ -70,7 +80,8 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.sent).toContainEqual({ kind: 'cancel' }));
+    await conversation.sdk.controlSent('cancel');
+    expect(conversation.sent).toContainEqual({ kind: 'cancel' });
     expect(conversation.isVoiceTurnInterrupted(previousEntryId)).toBe(false);
   });
 
@@ -79,11 +90,13 @@ describe('public SDK PCM interruption conformance', () => {
     await conversation.startOutput();
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[0]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[0]!.stopped;
+    expect(conversation.context.sources[0]!.stop).toHaveBeenCalled();
     const entryId = await conversation.finalizeAssistant();
     expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(false);
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true));
+    await waitForInterrupted(conversation, entryId);
+    expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true);
   });
 
   it('marks the exact persisted final arriving after interruption confirmation', async () => {
@@ -92,9 +105,11 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.sent).toContainEqual({ kind: 'cancel' }));
+    await conversation.sdk.controlSent('cancel');
+    expect(conversation.sent).toContainEqual({ kind: 'cancel' });
     const entryId = await conversation.finalizeAssistant();
-    await vi.waitFor(() => expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true));
+    await waitForInterrupted(conversation, entryId);
+    expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(true);
   });
 
   it('does not mark either persisted final when overlapping output invalidates the candidate identity', async () => {
@@ -103,11 +118,13 @@ describe('public SDK PCM interruption conformance', () => {
     const entryId = await conversation.finalizeAssistant();
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[0]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[0]!.stopped;
+    expect(conversation.context.sources[0]!.stop).toHaveBeenCalled();
     await conversation.startOutput('turn-overlap');
     const overlapEntryId = await conversation.finalizeAssistant('turn-overlap', 'overlapping response');
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please stop and answer this question' });
-    await vi.waitFor(() => expect(conversation.sent).toContainEqual({ kind: 'cancel' }));
+    await conversation.sdk.controlSent('cancel');
+    expect(conversation.sent).toContainEqual({ kind: 'cancel' });
     expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(false);
     expect(conversation.isVoiceTurnInterrupted(overlapEntryId)).toBe(false);
   });
@@ -118,11 +135,13 @@ describe('public SDK PCM interruption conformance', () => {
     const entryId = await conversation.finalizeAssistant();
     conversation.advanceClock(1_500);
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[0]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[0]!.stopped;
+    expect(conversation.context.sources[0]!.stop).toHaveBeenCalled();
     conversation.emit({ kind: 'audio.stopped' });
     conversation.emit({ kind: 'final', role: 'user', item: 'user-n', text: 'please answer my next question' });
     await conversation.waitForUser('please answer my next question');
-    await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'connected' }));
+    await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot(), snapshot => snapshot.state === 'connected');
+    expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'connected' });
     expect(conversation.sent).not.toContainEqual({ kind: 'cancel' });
     expect(conversation.isVoiceTurnInterrupted(entryId)).toBe(false);
   });
@@ -133,16 +152,20 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     conversation.context.currentTime = 0.45;
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[0]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[0]!.stopped;
+    expect(conversation.context.sources[0]!.stop).toHaveBeenCalled();
     conversation.emit({ kind: 'final', role: 'user', item: 'backchannel', text: 'okay' });
-    await vi.waitFor(() => expect(conversation.context.sources).toHaveLength(2));
+    await conversation.context.sourceCreated(1);
+    expect(conversation.context.sources).toHaveLength(2);
     expect(conversation.context.sources[1]!.buffer!.samples).toHaveLength(13_200);
     expect(conversation.context.sources[1]!.start).toHaveBeenCalledWith(0.45);
 
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[1]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[1]!.stopped;
+    expect(conversation.context.sources[1]!.stop).toHaveBeenCalled();
     conversation.emit({ kind: 'audio.stopped' });
-    await vi.waitFor(() => expect(conversation.context.sources).toHaveLength(3));
+    await conversation.context.sourceCreated(2);
+    expect(conversation.context.sources).toHaveLength(3);
 
     // The browser finishes the resumed tail before the next vendor output.
     // Otherwise both tails legitimately exceed the owner's retention budget.
@@ -153,7 +176,8 @@ describe('public SDK PCM interruption conformance', () => {
     conversation.advanceClock(1_500);
     vi.useFakeTimers();
     conversation.emit({ kind: 'speech.started' });
-    await vi.waitFor(() => expect(conversation.context.sources[3]!.stop).toHaveBeenCalled());
+    await conversation.context.sources[3]!.stopped;
+    expect(conversation.context.sources[3]!.stop).toHaveBeenCalled();
     const sourcesBeforeTimeout = conversation.context.sources.length;
     conversation.emit({ kind: 'speech.stopped' });
     await vi.advanceTimersByTimeAsync(0);
@@ -163,7 +187,8 @@ describe('public SDK PCM interruption conformance', () => {
 
     conversation.emit({ kind: 'speech.started' });
     const oldContext = conversation.context;
-    await vi.waitFor(() => expect(oldContext.sources.at(-1)!.stop).toHaveBeenCalled());
+    await oldContext.sources.at(-1)!.stopped;
+    expect(oldContext.sources.at(-1)!.stop).toHaveBeenCalled();
     const oldConnection = conversation.getConnection()!;
     const oldTrack = conversation.browser.micTrack;
     const sourcesBeforeReconnect = oldContext.sources.length;
@@ -199,8 +224,13 @@ async function startActualOpenAiConversation() {
   // The physical browser realm selects the host's existing web audio path;
   // no native audio-mode owner or lease is substituted.
   vi.stubGlobal('window', Object.assign(new EventTarget(), {}));
-  const remoteAudio = { autoplay: false, srcObject: null as MediaStream | null, volume: 1,
-    play: vi.fn(async () => {}), pause: vi.fn(), remove: vi.fn() };
+  const playbackEntered = createDeferred<void>();
+  const audioListeners = new Set<() => void>();
+  let volume = 1;
+  const remoteAudio = { autoplay: false, srcObject: null as MediaStream | null,
+    get volume() { return volume; },
+    set volume(value: number) { volume = value; for (const listener of audioListeners) listener(); },
+    play: vi.fn(async () => { playbackEntered.resolve(); }), pause: vi.fn(), remove: vi.fn() };
   vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible',
     createElement: (tag: string) => {
       if (tag !== 'audio') throw new Error(`Unexpected browser element: ${tag}`);
@@ -223,12 +253,15 @@ async function startActualOpenAiConversation() {
   });
   const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
   void starting.catch(() => {});
-  await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+  const peer = await browser.peerCreated();
+  await peer.dataChannelCreated;
+  expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
   browser.peer.channel.open();
   await starting;
   const controller = composed.controller;
   if (!controller) throw new Error('The actual OpenAI controller was not constructed');
   const { readCanonicalVoiceTranscriptSnapshot } = await import('@/voice/transcript/voiceConversationTranscript');
+  const { storage } = await import('@/sync/domains/state/storage');
   let sequence = 0;
   const emit = (event: Readonly<Record<string, unknown>>) => browser.peer.channel.message(JSON.stringify({
     event_id: `coordinator-provider-${++sequence}`, ...event,
@@ -240,9 +273,11 @@ async function startActualOpenAiConversation() {
   }).filter(type => type === 'response.cancel' || type === 'response.create' || type === 'output_audio_buffer.clear');
   const startOutput = async () => {
     emit({ type: 'output_audio_buffer.started', response_id: 'coordinator-response' });
-    await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({
+    const machine = createVoiceConversationRuntimeMachine();
+    await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, machine.getSnapshot, snapshot => snapshot.state === 'speaking');
+    expect(machine.getSnapshot()).toMatchObject({
       state: 'speaking', controlSessionId: composed.controlSessionId,
-    }));
+    });
   };
   const startSpeech = () => emit({ type: 'input_audio_buffer.speech_started', item_id: 'coordinator-user', audio_start_ms: 0 });
   const stopSpeech = () => emit({ type: 'input_audio_buffer.speech_stopped', item_id: 'coordinator-user', audio_end_ms: 1_500 });
@@ -251,10 +286,22 @@ async function startActualOpenAiConversation() {
     type: 'conversation.item.input_audio_transcription.completed', item_id: 'coordinator-user', content_index: 0,
     transcript: text, usage: { type: 'duration', seconds: 1 },
   });
-  const waitForUser = (text: string) => vi.waitFor(() => expect(
-    readCanonicalVoiceTranscriptSnapshot(environment.historySessionId),
-  ).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text })])));
+  const waitForUser = async (text: string) => {
+    await waitForTestEvent(storage.subscribe, () => readCanonicalVoiceTranscriptSnapshot(environment.historySessionId),
+      entries => entries.some(entry => entry.role === 'user' && entry.text === text));
+    expect(readCanonicalVoiceTranscriptSnapshot(environment.historySessionId))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text })]));
+  };
+  const waitForControl = (type: string) => peer.channel.controlSent(serialized => {
+    const event: unknown = JSON.parse(serialized);
+    return event !== null && typeof event === 'object' && 'type' in event && event.type === type;
+  });
+  const waitForVolume = (predicate: (value: number) => boolean) => waitForTestEvent(
+    notify => { audioListeners.add(notify); return () => { audioListeners.delete(notify); }; },
+    () => remoteAudio.volume, predicate,
+  );
   return { composed, controller, browser, remoteAudio, emit, controls, startOutput, stopOutput, startSpeech, stopSpeech, finalizeUser, waitForUser,
+    waitForControl, waitForVolume, playbackEntered: playbackEntered.promise,
     advanceClock: (milliseconds: number) => { now += milliseconds; } };
 }
 
@@ -262,16 +309,19 @@ describe('realtime barge-in through the actual OpenAI producer', () => {
   it('ducks actual attached RTC audio for speech and restores it for a finalized backchannel', async () => {
     const conversation = await startActualOpenAiConversation();
     conversation.browser.peer.remoteTrack(conversation.browser.micTrack, [conversation.browser.micStream]);
-    await vi.waitFor(() => expect(conversation.remoteAudio.play).toHaveBeenCalled());
+    await conversation.playbackEntered;
+    expect(conversation.remoteAudio.play).toHaveBeenCalled();
     await conversation.startOutput();
     conversation.advanceClock(1_500);
     conversation.startSpeech();
-    await vi.waitFor(() => expect(conversation.remoteAudio.volume).toBeLessThan(1));
+    await conversation.waitForVolume(volume => volume < 1);
+    expect(conversation.remoteAudio.volume).toBeLessThan(1);
     expect(conversation.remoteAudio.volume).toBeGreaterThan(0);
     expect(conversation.controller.playbackCursorMs()).toBeNull();
     conversation.finalizeUser('okay');
     await conversation.waitForUser('okay');
-    await vi.waitFor(() => expect(conversation.remoteAudio.volume).toBe(1));
+    await conversation.waitForVolume(volume => volume === 1);
+    expect(conversation.remoteAudio.volume).toBe(1);
     expect(conversation.controls()).toEqual([]);
     expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'speaking' });
   });
@@ -283,7 +333,8 @@ describe('realtime barge-in through the actual OpenAI producer', () => {
     conversation.startSpeech();
     conversation.finalizeUser(text);
     await conversation.waitForUser(text);
-    await vi.waitFor(() => expect(conversation.controls()).toEqual(['response.cancel', 'output_audio_buffer.clear']));
+    await conversation.waitForControl('output_audio_buffer.clear');
+    expect(conversation.controls()).toEqual(['response.cancel', 'output_audio_buffer.clear']);
     expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({
       state: 'speaking', controlSessionId: conversation.composed.controlSessionId,
     });
@@ -316,9 +367,10 @@ describe('realtime barge-in through the actual OpenAI producer', () => {
     expect(conversation.controls()).not.toContain('response.create');
     conversation.stopSpeech();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(conversation.controls()).toEqual([
+    await conversation.waitForControl('response.create');
+    expect(conversation.controls()).toEqual([
       'response.cancel', 'output_audio_buffer.clear', 'response.create',
-    ]));
+    ]);
     expect(conversation.controls().filter(type => type === 'response.create')).toHaveLength(1);
   });
 
@@ -351,12 +403,14 @@ describe('realtime barge-in through the actual OpenAI producer', () => {
     conversation.startSpeech();
     conversation.stopSpeech();
     conversation.finalizeUser('please answer my new question now');
-    await vi.waitFor(() => expect(conversation.controls()).toContain('response.cancel'));
+    await conversation.waitForControl('response.cancel');
+    expect(conversation.controls()).toContain('response.cancel');
     conversation.stopOutput();
     conversation.stopSpeech();
-    await vi.waitFor(() => expect(conversation.composed.runtime.adapter.getSnapshot()).toMatchObject({
+    await waitForTestEvent(conversation.composed.runtime.adapter.subscribe!, conversation.composed.runtime.adapter.getSnapshot, snapshot => snapshot.status === 'error');
+    expect(conversation.composed.runtime.adapter.getSnapshot()).toMatchObject({
       status: 'error', errorCode: 'voice_webrtc_data_channel_send_failed',
-    }));
+    });
     expect(rejected).toHaveLength(1);
     expect(conversation.controller.getOwnedAttemptId()).toBeNull();
     expect(conversation.browser.micTrack.stop).toHaveBeenCalled();
@@ -369,11 +423,13 @@ describe('realtime barge-in through the actual OpenAI producer', () => {
     conversation.startSpeech();
     conversation.stopSpeech();
     conversation.finalizeUser('please answer this new question');
-    await vi.waitFor(() => expect(conversation.controls()).toEqual(['response.cancel', 'output_audio_buffer.clear']));
+    await conversation.waitForControl('output_audio_buffer.clear');
+    expect(conversation.controls()).toEqual(['response.cancel', 'output_audio_buffer.clear']);
     conversation.stopOutput();
-    await vi.waitFor(() => expect(conversation.controls()).toEqual([
+    await conversation.waitForControl('response.create');
+    expect(conversation.controls()).toEqual([
       'response.cancel', 'output_audio_buffer.clear', 'response.create',
-    ]));
+    ]);
   });
 
 });

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
+import { createDeferred } from '@/dev/testkit';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 // The installed native module and package registry have one identity per app
 // process. Observe/reset SDK operations, never replace the registry's getter.
@@ -345,8 +346,10 @@ describe('NativeMicSession', () => {
             granted: boolean;
             canAskAgain: boolean;
         }) => void;
+        const permissionEntered = createDeferred<void>();
         requestPermission.mockImplementationOnce(() => new Promise((resolve) => {
             resolvePermission = resolve;
+            permissionEntered.resolve();
         }));
         const session = createRecordingSession({
             createRecorder,
@@ -356,9 +359,8 @@ describe('NativeMicSession', () => {
         const abortController = new AbortController();
 
         const starting = session.beginRecording(abortController.signal);
-        await vi.waitFor(() => {
-            expect(requestPermission).toHaveBeenCalledTimes(1);
-        });
+        await permissionEntered.promise;
+        expect(requestPermission).toHaveBeenCalledTimes(1);
         abortController.abort();
         resolvePermission({ granted: true, canAskAgain: true });
         await starting;
@@ -381,8 +383,9 @@ describe('NativeMicSession', () => {
         });
         const staleStop = vi.fn(async () => 'file:///tmp/stale-after-cancel.m4a');
         const retryStop = vi.fn(async () => 'file:///tmp/retry.m4a');
+        const nativeStartEntered = createDeferred<void>();
         const nativeFileStart = vi.fn()
-            .mockImplementationOnce(async () => { await lateStart; return { recordingId: 'stale' }; })
+            .mockImplementationOnce(async () => { nativeStartEntered.resolve(); await lateStart; return { recordingId: 'stale' }; })
             .mockResolvedValueOnce({ recordingId: 'retry' });
         const nativeFileModule = { ...audioSession.nativeModule,
             startFileRecording: nativeFileStart,
@@ -403,7 +406,8 @@ describe('NativeMicSession', () => {
         const abortController = new AbortController();
 
         const starting = session.beginRecording(abortController.signal);
-        await vi.waitFor(() => expect(nativeFileStart).toHaveBeenCalledTimes(1));
+        await nativeStartEntered.promise;
+        expect(nativeFileStart).toHaveBeenCalledTimes(1);
         abortController.abort();
         await session.teardown();
         resolveLateStart();
@@ -423,10 +427,11 @@ describe('NativeMicSession', () => {
         (Platform as { OS: string }).OS = platform;
         let finishPreparation!: () => void;
         const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
-        const firstRecorder = { ...recorder, prepareToRecordAsync: vi.fn(() => preparation), record: vi.fn(), stop: vi.fn(async () => {}) };
+        const preparationEntered = createDeferred<void>();
+        const firstRecorder = { ...recorder, prepareToRecordAsync: vi.fn(() => { preparationEntered.resolve(); return preparation; }), record: vi.fn(), stop: vi.fn(async () => {}) };
         const retryRecorder = { ...recorder, record: vi.fn(), stop: vi.fn(async () => {}) };
         const nativeStart = vi.fn()
-            .mockImplementationOnce(async () => { await preparation; return { recordingId: 'pending' }; })
+            .mockImplementationOnce(async () => { preparationEntered.resolve(); await preparation; return { recordingId: 'pending' }; })
             .mockResolvedValueOnce({ recordingId: 'retry' });
         const nativeStop = vi.fn(async ({ recordingId }: { recordingId: string }) => ({ uri: `file:///tmp/${recordingId}.m4a` }));
         const session = createRecordingSession({
@@ -441,7 +446,8 @@ describe('NativeMicSession', () => {
         });
         const starting = session.beginRecording();
         try {
-            await vi.waitFor(() => expect(platform === 'ios' ? nativeStart : firstRecorder.prepareToRecordAsync).toHaveBeenCalledOnce());
+            await preparationEntered.promise;
+            expect(platform === 'ios' ? nativeStart : firstRecorder.prepareToRecordAsync).toHaveBeenCalledOnce();
             await session.teardown();
             expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
             await session.beginRecording();
@@ -482,7 +488,8 @@ describe('NativeMicSession', () => {
         (Platform as { OS: string }).OS = 'ios';
         let rejectResume!: (error: Error) => void;
         const resume = new Promise<void>((_resolve, reject) => { rejectResume = reject; });
-        const nativeMute = vi.fn(async ({ muted }: { muted: boolean }) => { if (!muted) await resume; });
+        const resumeEntered = createDeferred<void>();
+        const nativeMute = vi.fn(async ({ muted }: { muted: boolean }) => { if (!muted) { resumeEntered.resolve(); await resume; } });
         const session = createRecordingSession({
             requestPermission,
             createNativeFileRecording: () => createVoiceFileRecording({ ...audioSession.nativeModule,
@@ -498,7 +505,8 @@ describe('NativeMicSession', () => {
             () => { settled = true; return null; },
             error => { settled = true; return error; },
         );
-        await vi.waitFor(() => expect(nativeMute).toHaveBeenCalledWith({ recordingId: 'mute-ack', muted: false }));
+        await resumeEntered.promise;
+        expect(nativeMute).toHaveBeenCalledWith({ recordingId: 'mute-ack', muted: false });
         try {
             expect(settled).toBe(false);
             expect(session.isMuted()).toBe(true);

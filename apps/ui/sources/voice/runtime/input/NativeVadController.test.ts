@@ -134,10 +134,12 @@ describe('native VAD controller through real bridge and capture', () => {
     it('settles matching stop during native startup and disposes the late capture', async () => {
         const native = installNativeBoundary();
         const gate = createDeferred<void>();
-        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const entered = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => { entered.resolve(); return gate.promise; });
         const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
         const starting = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' });
-        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        await entered.promise;
+        expect(native.createVadDetector).toHaveBeenCalledTimes(1);
         await expect(controller.stopSession('session-native')).resolves.toBeUndefined();
         gate.resolve(undefined);
         expect(await starting).toBe(false);
@@ -147,10 +149,12 @@ describe('native VAD controller through real bridge and capture', () => {
     it('preserves a pending native start when another session stops', async () => {
         const native = installNativeBoundary();
         const gate = createDeferred<void>();
-        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const entered = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => { entered.resolve(); return gate.promise; });
         const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
         const starting = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'session-native' });
-        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        await entered.promise;
+        expect(native.createVadDetector).toHaveBeenCalledTimes(1);
         await controller.stopSession('another-session');
         gate.resolve(undefined);
         expect(await starting).toBe(true);
@@ -161,10 +165,12 @@ describe('native VAD controller through real bridge and capture', () => {
     it('keeps the replacement healthy when an older detector completes startup late', async () => {
         const native = installNativeBoundary();
         const gate = createDeferred<void>();
-        native.createVadDetector.mockImplementationOnce(() => gate.promise);
+        const entered = createDeferred<void>();
+        native.createVadDetector.mockImplementationOnce(() => { entered.resolve(); return gate.promise; });
         const controller = createNativeVadController({ onEndpointSignal: vi.fn() });
         const first = controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'first-session' });
-        await vi.waitFor(() => expect(native.createVadDetector).toHaveBeenCalledTimes(1));
+        await entered.promise;
+        expect(native.createVadDetector).toHaveBeenCalledTimes(1);
         expect(await controller.startSession({ minSpeechMs: 10, redemptionMs: 30, sessionId: 'replacement-session' })).toBe(true);
         gate.resolve(undefined);
         expect(await first).toBe(false);

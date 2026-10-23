@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 
 import { resolveNativeSileroVadBridge } from './NativeSileroVadBridge';
 import { createNativeVadController } from './NativeVadController';
@@ -8,17 +9,25 @@ describe('resolveNativeSileroVadBridge frame-fed VAD', () => {
     it('returns native work to the bounded capture owner and clears controller health on saturation', async () => {
         const harness = createNativeVoicePcmCaptureHarness();
         let settlePush!: (value: { speechStarted: boolean; speechEnded: boolean }) => void;
-        const pushVadAudioFrame = vi.fn(() => new Promise<{ speechStarted: boolean; speechEnded: boolean }>((resolve) => { settlePush = resolve; }));
+        const pushEntered = createDeferred<void>();
+        const pushVadAudioFrame = vi.fn(() => new Promise<{ speechStarted: boolean; speechEnded: boolean }>((resolve) => { settlePush = resolve; pushEntered.resolve(); }));
         const cancelVadDetector = vi.fn(async () => {});
+        const captureStopped = createDeferred<void>();
+        const nativeStop = vi.mocked(harness.nativeModule.stop);
+        const stopCapture = nativeStop.getMockImplementation();
+        if (!stopCapture) throw new Error('Native capture stop boundary missing');
+        nativeStop.mockImplementationOnce(async () => { captureStopped.resolve(); await stopCapture(); });
         const bridge = await resolveNativeSileroVadBridge({ createVadDetector: vi.fn(async () => {}), pushVadAudioFrame, cancelVadDetector }, { frameSource: harness.capture });
         const onEndpointSignal = vi.fn();
         const controller = createNativeVadController({ bridge, onEndpointSignal });
         expect(await controller.startSession({ sessionId: 'bounded', minSpeechMs: 0, redemptionMs: 0 })).toBe(true);
         harness.emit();
-        await vi.waitFor(() => expect(pushVadAudioFrame).toHaveBeenCalledTimes(1));
+        await pushEntered.promise;
+        expect(pushVadAudioFrame).toHaveBeenCalledTimes(1);
         for (let frame = 0; frame < 8; frame += 1) harness.emit();
-        await vi.waitFor(() => expect(controller.isActiveSession('bounded')).toBe(false));
+        expect(controller.isActiveSession('bounded')).toBe(false);
         await controller.stopSession();
+        await captureStopped.promise;
         expect(cancelVadDetector).toHaveBeenCalledTimes(1);
         expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
         settlePush({ speechStarted: true, speechEnded: true });
@@ -37,7 +46,8 @@ describe('resolveNativeSileroVadBridge frame-fed VAD', () => {
         const controller = createNativeVadController({ bridge, onEndpointSignal: vi.fn() });
         await controller.startSession({ sessionId: 'failed', minSpeechMs: 0, redemptionMs: 0 });
         harness.emit();
-        await vi.waitFor(() => expect(controller.isActiveSession('failed')).toBe(false));
+        await harness.capture.waitForDrain();
+        expect(controller.isActiveSession('failed')).toBe(false);
         expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
 
         const earlyHarness = createNativeVoicePcmCaptureHarness();
@@ -106,7 +116,8 @@ describe('resolveNativeSileroVadBridge frame-fed VAD', () => {
     });
     it('retires the detector and native subscriber on a correlated physical terminal', async () => {
         const harness = createNativeVoicePcmCaptureHarness();
-        const cancelVadDetector = vi.fn(async () => {});
+        const detectorCancelled = createDeferred<void>();
+        const cancelVadDetector = vi.fn(async () => { detectorCancelled.resolve(); });
         const bridge = await resolveNativeSileroVadBridge({
             createVadDetector: vi.fn(async () => {}),
             pushVadAudioFrame: vi.fn(async () => ({ speechStarted: false, speechEnded: false })),
@@ -120,8 +131,9 @@ describe('resolveNativeSileroVadBridge frame-fed VAD', () => {
         const generation = vi.mocked(harness.nativeModule.start).mock.calls[0]?.[0].generation;
         if (!listener || generation === undefined) throw new Error('native terminal boundary missing');
         Reflect.apply(listener, undefined, [{ streamId: 'native-stream', generation, reason: 'dead_object' }]);
-        await vi.waitFor(() => expect(harness.capture.getSnapshot().subscriberCount).toBe(0));
-        await vi.waitFor(() => expect(cancelVadDetector).toHaveBeenCalledTimes(1));
+        await detectorCancelled.promise;
+        expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
+        expect(cancelVadDetector).toHaveBeenCalledTimes(1);
         await session.stop();
         expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
         expect(cancelVadDetector).toHaveBeenCalledTimes(1);

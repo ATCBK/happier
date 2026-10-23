@@ -42,11 +42,8 @@ describe('real Local Voice Agent activation', () => {
             await entering;
             if (outcome === 'cancel') caller.abort();
             else loseTransport(new Error('socket has been disconnected'));
-            let failure: unknown;
-            await vi.waitFor(async () => {
-                failure = await Promise.race([stopping, Promise.resolve(null)]);
-                expect(failure).not.toBeNull();
-            });
+            const failure: unknown = await stopping;
+            expect(failure).not.toBeNull();
             // An interrupted cleanup read is transport-unavailable; mutation
             // acknowledgments retain their outcome-unknown public code.
             expect(readRpcErrorCode(failure)).toBe(outcome === 'cancel' ? 'SOCKET_RPC_ABORTED'
@@ -92,7 +89,7 @@ describe('real Local Voice Agent activation', () => {
             const pending = transport.ensureRunning(fixture.sessionId).then(() => 'resolved', () => 'cancelled');
             await entering;
             const stopping = transport.stop(fixture.sessionId);
-            await vi.waitFor(async () => expect(await Promise.race([pending, Promise.resolve('pending')])).toBe('cancelled'));
+            expect(await pending).toBe('cancelled');
             await stopping;
             expect(transport.isActive(fixture.sessionId)).toBe(false);
             stall = false;

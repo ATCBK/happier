@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
-import { createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
@@ -76,15 +76,18 @@ const { requestMicrophonePermission, rejectRefusedMicrophone } = await import('@
 function createVendorConversation() {
   let muted = false;
   let volume = 1;
+  const listeners = new Set<() => void>();
+  const notify = () => { for (const listener of listeners) listener(); };
   return {
-    endSession: vi.fn(async (): Promise<void> => {}),
-    setMicMuted: vi.fn((value: boolean) => { muted = value; }),
-    setVolume: vi.fn(({ volume: value }: Readonly<{ volume: number }>) => { volume = value; }),
+    endSession: vi.fn(async (): Promise<void> => { notify(); }),
+    setMicMuted: vi.fn((value: boolean) => { muted = value; notify(); }),
+    setVolume: vi.fn(({ volume: value }: Readonly<{ volume: number }>) => { volume = value; notify(); }),
     sendUserMessage: vi.fn(),
     sendContextualUpdate: vi.fn(),
     getId: () => 'native-bridge-conversation',
     isMuted: () => muted,
     getVolume: () => volume,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }
 
@@ -182,6 +185,8 @@ async function withNativeBridge(
   }
 }
 
+// Give ignored/no-op platform events a host task to expose an unwanted effect;
+// positive SDK and lifecycle phases below wait for their actual publications.
 const settleBridge = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 function hasOutputFocus(controller: ReturnType<typeof createVoiceSessionLifecycleController>):
   controller is ReturnType<typeof createVoiceSessionLifecycleController> & {
@@ -320,22 +325,12 @@ afterEach(() => {
   (Platform as unknown as { OS: string }).OS = ORIGINAL_PLATFORM_OS;
 });
 
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-
-  return { promise, resolve, reject };
-}
-
 // F: a currently active generated native Voice contribution always retains an
 // output request (PCM conversation policy or provider-exclusive call mode).
 // This unique input-only reconfiguration port contract stays until a real
 // input-only Voice consumer can produce it; it is not composed runtime proof.
 function createReconfigurationHarness() {
+  const muteListeners = new Set<() => void>();
   let platformListener: ((event: VoiceAudioSessionPlatformEvent) => void) | null = null;
   const platform: VoiceAudioSessionPlatform = {
     apply: vi.fn(async ({ generation, configuration }) => {
@@ -365,7 +360,7 @@ function createReconfigurationHarness() {
   const controller = {
     getSnapshot: vi.fn(() => snapshot),
     setOutputFocusState: vi.fn(async (): Promise<'applied' | 'unsupported'> => 'applied'),
-    setMuted: vi.fn(async (_sessionId: string, _muted: boolean) => undefined),
+    setMuted: vi.fn(async (_sessionId: string, _muted: boolean) => { for (const listener of muteListeners) listener(); }),
     suspendInput: vi.fn(async () => {
       await controller.setMuted('voice-global', true);
       let released = false;
@@ -395,6 +390,7 @@ function createReconfigurationHarness() {
     coordinator,
     emit: (event: VoiceAudioSessionPlatformEvent) => platformListener?.(event),
     request,
+    subscribeMute: (listener: () => void) => { muteListeners.add(listener); return () => { muteListeners.delete(listener); }; },
   };
 }
 
@@ -403,14 +399,17 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
-    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
+    await waitForTestEvent(conversation.subscribe, conversation.getVolume, volume => volume === 0);
+    expect(conversation.getVolume()).toBe(0);
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: true });
     await settleBridge();
     expect(conversation.isMuted()).toBe(true);
     expect(lifecycle.getSnapshot().micMuted).toBe(true);
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => !muted);
+    expect(conversation.isMuted()).toBe(false);
     expect(conversation.getVolume()).toBe(1);
     });
   });
@@ -418,7 +417,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   it('removes only its interruption suspension when the user mutes during the interruption', async () => {
     await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
     await lifecycle.setMuted(VOICE_AGENT_GLOBAL_SESSION_ID, true);
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: true });
     await settleBridge();
@@ -442,9 +442,11 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   it('releases an acquired suspension lease when the bridge is disposed', async () => {
     await withNativeBridge(async ({ bridge, conversation, emit }) => {
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
     bridge.dispose();
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => !muted);
+    expect(conversation.isMuted()).toBe(false);
     });
   });
 
@@ -459,7 +461,10 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
         if (muted) bridge.dispose();
       });
       emit({ generation: 1, kind: 'interruption_began' });
-      await vi.waitFor(() => expect(conversation.setMicMuted.mock.calls).toEqual([[true], [false]]));
+      await waitForTestEvent(conversation.subscribe, () => conversation.setMicMuted.mock.calls, calls => calls.length === 2);
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.micMuted !== true);
+      expect(lifecycle.getSnapshot().micMuted === true).toBe(false);
+      expect(conversation.setMicMuted.mock.calls).toEqual([[true], [false]]);
       expect(conversation.isMuted()).toBe(false);
       expect(lifecycle.getSnapshot().micMuted === true).toBe(false);
     });
@@ -510,7 +515,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   it('does not let a duckable focus signal clear a true transient capture suspension', async () => {
     await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
 
     // This platform fact is intentionally distinct from transient loss. The
     // native output owner can apply its own duck policy, while capture stays
@@ -521,15 +527,18 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     expect(conversation.getVolume()).toBe(0);
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => !muted);
+    expect(conversation.isMuted()).toBe(false);
     });
   });
 
   it('suspends provider-neutral output for transient focus loss and restores only on gain', async () => {
     await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0));
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.getVolume, volume => volume === 0);
+    expect(conversation.getVolume()).toBe(0);
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
 
     // A duckable notification after a real transient loss must not downgrade
     // the output suspension before Android has returned focus.
@@ -538,20 +547,24 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     expect(conversation.getVolume()).toBe(0);
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(conversation.getVolume()).toBe(1));
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(false));
+    await waitForTestEvent(conversation.subscribe, conversation.getVolume, volume => volume === 1);
+    expect(conversation.getVolume()).toBe(1);
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => !muted);
+    expect(conversation.isMuted()).toBe(false);
     });
   });
 
   it('ducks output without muting capture and restores it on focus gain', async () => {
     await withNativeBridge(async ({ conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_duckable' });
-    await vi.waitFor(() => expect(conversation.getVolume()).toBe(0.18));
+    await waitForTestEvent(conversation.subscribe, conversation.getVolume, volume => volume === 0.18);
+    expect(conversation.getVolume()).toBe(0.18);
     expect(conversation.isMuted()).toBe(false);
     expect(conversation.setMicMuted).not.toHaveBeenCalled();
 
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(conversation.getVolume()).toBe(1));
+    await waitForTestEvent(conversation.subscribe, conversation.getVolume, volume => volume === 1);
+    expect(conversation.getVolume()).toBe(1);
     });
   });
 
@@ -560,7 +573,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     conversation.setVolume.mockImplementation(() => { throw new TypeError('Vendor output volume is unsupported'); });
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
 
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
     // Exact-adapter fail-closed settlement belongs to the lifecycle controller;
     // this bridge must not re-resolve and stop a same-id replacement.
     expect(conversation.endSession).toHaveBeenCalledTimes(1);
@@ -571,11 +585,13 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   it('does not unmute when active output restoration is unsupported', async () => {
     await withNativeBridge(async ({ lifecycle, conversation, emit }) => {
     emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
     conversation.setVolume.mockImplementation(() => { throw new TypeError('Vendor output restoration is unsupported'); });
     emit({ generation: 1, kind: 'focus_changed', state: 'gained' });
 
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+    expect(lifecycle.getSnapshot().status).toBe('disconnected');
     expect(conversation.endSession).toHaveBeenCalledTimes(1);
     expect(conversation.setMicMuted).not.toHaveBeenCalledWith(false);
     });
@@ -586,11 +602,14 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     // 'unsupported'. Retain its rejected-Promise port contract independently;
     // throwing at SDK setVolume exercises unsupported, not this catch branch.
     let listener: (event: VoiceAudioSessionPlatformEvent) => void = () => {};
-    const release = vi.fn(async () => undefined);
-    const suspendInput = vi.fn(async () => ({ release }));
+    const released = createDeferred<void>();
+    const suspended = createDeferred<void>();
+    const restored = createDeferred<void>();
+    const release = vi.fn(async () => { released.resolve(); });
+    const suspendInput = vi.fn(async () => { suspended.resolve(); return { release }; });
     const stop = vi.fn(async () => undefined);
     const focus = vi.fn(async (): Promise<'applied' | 'unsupported'> => 'applied')
-      .mockResolvedValueOnce('applied').mockRejectedValueOnce(new Error('output_restore_failed'));
+      .mockResolvedValueOnce('applied').mockImplementationOnce(async () => { restored.resolve(); throw new Error('output_restore_failed'); });
     const bridge = createNativeAudioSessionLifecycleBridge({
       coordinator: {
         subscribe(next: (event: VoiceAudioSessionPlatformEvent) => void) { listener = next; return { remove() {} }; },
@@ -600,29 +619,39 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     });
     try {
       listener({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-      await vi.waitFor(() => expect(suspendInput).toHaveBeenCalledTimes(1));
+      await suspended.promise;
+      expect(suspendInput).toHaveBeenCalledTimes(1);
       listener({ generation: 1, kind: 'focus_changed', state: 'gained' });
-      await vi.waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
+      await restored.promise;
+      expect(focus).toHaveBeenCalledTimes(2);
       await settleBridge();
       expect(release).not.toHaveBeenCalled();
       expect(stop).not.toHaveBeenCalled();
     } finally {
       bridge.dispose();
-      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+      await released.promise;
+      expect(release).toHaveBeenCalledTimes(1);
     }
   });
 
   it('does not stop a same-session replacement after delayed output focus failure', async () => {
     await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
       const ending = createDeferred<void>();
-      conversation.endSession.mockImplementationOnce(async () => await ending.promise);
+      const endEntered = createDeferred<void>();
+      const restoreEntered = createDeferred<void>();
+      const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
+      const restoreAudio = restore.getMockImplementation();
+      if (!restoreAudio) throw new Error('Missing native restore boundary');
+      restore.mockImplementationOnce(async () => { restoreEntered.resolve(); await restoreAudio(); });
+      conversation.endSession.mockImplementationOnce(async () => { endEntered.resolve(); await ending.promise; });
       conversation.setVolume.mockImplementationOnce(() => {
         throw new TypeError('Vendor output focus is unavailable');
       });
       if (!hasOutputFocus(lifecycle)) throw new Error('Expected lifecycle output focus');
       const focusObserver = vi.spyOn(lifecycle, 'setOutputFocusState');
       emit({ generation: 1, kind: 'focus_changed', state: 'lost_transient' });
-      await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+      await endEntered.promise;
+      expect(conversation.endSession).toHaveBeenCalledTimes(1);
       const focusResult = focusObserver.mock.results[0];
       if (focusResult?.type !== 'return') throw new Error('Expected the actual lifecycle focus work');
       let focusSettled = false;
@@ -630,7 +659,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
         focusSettled = true;
         return result;
       });
-      await vi.waitFor(() => expect(coordinator.getSnapshot().leaseCount).toBe(0));
+      await restoreEntered.promise;
+      expect(coordinator.getSnapshot().leaseCount).toBe(0);
       const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
       if (!entry) throw new Error('Missing generated ElevenLabs contribution');
       const replacement = createVendorConversation();
@@ -672,7 +702,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     await withNativePcmBridge(async ({ lifecycle, coordinator, emit }) => {
     const firstGeneration = coordinator.getSnapshot().generation;
     emit({ generation: firstGeneration, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted).toBe(true));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.micMuted === true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
     const configure = vi.mocked(nativeAudio.nativeModule.configureAudioSession);
     configure.mockImplementation(async request => {
       const result = await configureNativeAudioSession(request);
@@ -681,16 +712,19 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     });
     const replacement = await coordinator.acquire({ ownerId: 'replacement-playback', mode: 'playback', input: false, output: true, aec: 'off', capture: 'host_managed' });
     const replacementGeneration = coordinator.getSnapshot().generation;
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted === true).toBe(false));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.micMuted !== true);
+    expect(lifecycle.getSnapshot().micMuted === true).toBe(false);
 
     emit({ generation: replacementGeneration, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted).toBe(true));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.micMuted === true);
+    expect(lifecycle.getSnapshot().micMuted).toBe(true);
     emit({ generation: firstGeneration, kind: 'focus_changed', state: 'gained' });
     await settleBridge();
     expect(lifecycle.getSnapshot().micMuted).toBe(true);
 
     emit({ generation: replacementGeneration, kind: 'focus_changed', state: 'gained' });
-    await vi.waitFor(() => expect(lifecycle.getSnapshot().micMuted === true).toBe(false));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.micMuted !== true);
+    expect(lifecycle.getSnapshot().micMuted === true).toBe(false);
 
     await replacement.release();
     configure.mockImplementation(configureNativeAudioSession);
@@ -698,16 +732,18 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   });
 
   it('clears a focus suspension when the replacement configuration no longer needs output focus', async () => {
-    const { bridge, controller, coordinator, emit, request } = createReconfigurationHarness();
+    const { bridge, controller, coordinator, emit, request, subscribeMute } = createReconfigurationHarness();
     const input = await coordinator.acquire(request({ output: false }));
     const output = await coordinator.acquire(request({ ownerId: 'output' }));
     const outputGeneration = coordinator.getSnapshot().generation;
     emit({ generation: outputGeneration, kind: 'focus_changed', state: 'lost_transient' });
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true));
+    await waitForTestEvent(subscribeMute, () => controller.setMuted.mock.calls.at(-1)?.[1], muted => muted === true);
+    expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', true);
 
     await output.release();
     const inputOnlyGeneration = coordinator.getSnapshot().generation;
-    await vi.waitFor(() => expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false));
+    await waitForTestEvent(subscribeMute, () => controller.setMuted.mock.calls.at(-1)?.[1], muted => muted === false);
+    expect(controller.setMuted).toHaveBeenLastCalledWith('voice-global', false);
 
     emit({ generation: outputGeneration, kind: 'focus_changed', state: 'lost_transient' });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -733,13 +769,15 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
       emit({ generation: 1, kind: 'interruption_began' });
       emit({ generation: 1, kind: 'interruption_ended', shouldResume: false });
-      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+      expect(lifecycle.getSnapshot().status).toBe('disconnected');
       expect(conversation.endSession).toHaveBeenCalledTimes(1);
       expect(coordinator.getSnapshot().leaseCount).toBe(0);
     });
     await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
       emit({ generation: 2, kind: 'focus_changed', state: 'lost_permanent' });
-      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+      expect(lifecycle.getSnapshot().status).toBe('disconnected');
       expect(conversation.endSession).toHaveBeenCalledTimes(1);
       expect(coordinator.getSnapshot().leaseCount).toBe(0);
     });
@@ -751,13 +789,34 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     // is the fallible teardown boundary that reaches the real lifecycle Stop.
     const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
     restore.mockRejectedValueOnce(new Error('session_stop_failed'));
+    const suspensionReleased = createDeferred<void>();
+    const suspendInput = lifecycle.suspendInput.bind(lifecycle);
+    const suspension = vi.spyOn(lifecycle, 'suspendInput').mockImplementation(async (...args) => {
+      const lease = await suspendInput(...args);
+      return lease ? { async release() {
+        try { await lease.release(); } finally { suspensionReleased.resolve(); }
+      } } : null;
+    });
+    const stopped = createDeferred<void>();
+    const stop = lifecycle.stop.bind(lifecycle);
+    vi.spyOn(lifecycle, 'stop').mockImplementation(async (...args) => {
+      try { await stop(...args); } finally { stopped.resolve(); }
+    });
     emit({ generation: 1, kind: 'interruption_began' });
-    await vi.waitFor(() => expect(conversation.isMuted()).toBe(true));
+    await waitForTestEvent(conversation.subscribe, conversation.isMuted, muted => muted);
+    expect(conversation.isMuted()).toBe(true);
+
+    const admission = suspension.mock.results.at(-1);
+    if (admission?.type !== 'return') throw new Error('The real native suspension was not admitted');
+    await admission.value;
 
     emit({ generation: 1, kind: 'interruption_ended', shouldResume: false });
 
-    await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(coordinator.getSnapshot().pendingReleaseCount).toBe(1));
+    await stopped.promise;
+    await suspensionReleased.promise;
+    expect(lifecycle.getSnapshot().status, JSON.stringify({ snapshot: lifecycle.getSnapshot(), audio: coordinator.getSnapshot() })).toBe('disconnected');
+    expect(conversation.endSession).toHaveBeenCalledTimes(1);
+    expect(coordinator.getSnapshot().pendingReleaseCount).toBe(1);
     restore.mockResolvedValue(undefined);
     const recovery = await coordinator.acquire({ ownerId: 'bridge-release-recovery', mode: 'conversation', input: true, output: true, aec: 'preferred', capture: 'provider_managed_exclusive' });
     await recovery.release();
@@ -768,7 +827,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
   it('stops when required echo cancellation is lost at runtime', async () => {
     await withNativePcmBridge(async ({ lifecycle, coordinator, emit }) => {
       emit({ generation: coordinator.getSnapshot().generation, kind: 'capabilities_changed', aecAvailable: true, aecActive: false });
-      await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+      expect(lifecycle.getSnapshot().status).toBe('disconnected');
       expect(coordinator.getSnapshot().leaseCount).toBe(0);
       expect(nativeAudio.nativeModule.stop).toHaveBeenCalled();
       expect(nativeAudio.nativeModule.stopPlayback).toHaveBeenCalled();
@@ -782,7 +842,8 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     for (const reason of ['media_services_reset', 'configuration_unrecoverable'] as const) {
       await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
         emit({ generation: 1, kind: 'audio_graph_terminal', reason });
-        await vi.waitFor(() => expect(lifecycle.getSnapshot().status).toBe('disconnected'));
+        await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'disconnected');
+        expect(lifecycle.getSnapshot().status).toBe('disconnected');
         expect(conversation.endSession).toHaveBeenCalledTimes(1);
         expect(coordinator.getSnapshot().leaseCount).toBe(0);
       });

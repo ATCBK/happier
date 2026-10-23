@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
+import { waitForTestEvent } from '@/dev/testkit';
 import tweetnacl from 'tweetnacl';
 import { createPeerTcpTunnelApplicationSubstreamSession } from '@happier-dev/peer-transport';
 import { decodePeerTcpTunnelBinaryFrameV2, PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
@@ -29,6 +30,12 @@ describe('sender → encrypted relay framing → daemon STT intake', () => {
     { holdNativeAdmission: false, nativeFailure: false, slowPhase: 'finish' },
   ])('preserves capture and authenticated native outcomes %j', async ({ holdNativeAdmission, nativeFailure, slowPhase }) => {
     const streamRoot = await mkdtemp(join(tmpdir(), 'happier-df66-intake-'));
+    const events = new EventTarget();
+    const notify = () => events.dispatchEvent(new Event('transport'));
+    const subscribe = (listener: () => void) => {
+      events.addEventListener('transport', listener);
+      return () => events.removeEventListener('transport', listener);
+    };
     const received: Uint8Array[] = [];
     const nativeAppends: Array<() => void> = [];
     const terminalReasons: string[] = [];
@@ -50,7 +57,7 @@ describe('sender → encrypted relay framing → daemon STT intake', () => {
             // 10s cutoff while still inside the canonical Machine operation budget.
             if (slowPhase === 'append') await delay(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS / 2, undefined, { signal: signal ?? undefined });
             if (holdNativeAdmission && pcm16Bytes.byteLength > 640) {
-              await new Promise<void>(resolve => nativeAppends.push(resolve));
+              await new Promise<void>(resolve => { nativeAppends.push(resolve); notify(); });
             }
             return {
             events: [{ type: 'partial', seq, text: String(seq), isEndpoint: false, confidence: null }],
@@ -87,7 +94,7 @@ describe('sender → encrypted relay framing → daemon STT intake', () => {
       sendBinaryFrame: async frame => {
         const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame, maxHeaderBytes: maxFrameBytes, maxPayloadBytes: maxFrameBytes });
         expect(decoded.ok).toBe(true);
-        if (decoded.ok && decoded.header.kind === 'data' && holdReplies) await new Promise<void>(resolve => replies.push(resolve));
+        if (decoded.ok && decoded.header.kind === 'data' && holdReplies) await new Promise<void>(resolve => { replies.push(resolve); notify(); });
         receive?.(PeerTcpTunnelRelayEnvelopeSchema.parse({ v: 2, scopeUserId: binding.accountId,
           sender: { kind: 'machine', machineId: binding.machineId }, recipient: { kind: 'user', socketId: 'tab' },
           encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2, frame,
@@ -105,6 +112,7 @@ describe('sender → encrypted relay framing → daemon STT intake', () => {
         const decoded = decodePeerTcpTunnelBinaryFrameV2({ frame: strict.frame, maxHeaderBytes: maxFrameBytes, maxPayloadBytes: maxFrameBytes });
         if (!decoded.ok || decoded.header.kind !== 'data') return;
         if (decoded.header.sequence !== 0) sentDataFrames++;
+        notify();
         operations.push(application.acceptBinaryFrame(strict.frame, async ({ payload }) => {
           let response: Uint8Array | null = null;
           const handled = await dispatchDaemonVoiceInferenceSttBinaryAppend({
@@ -153,20 +161,20 @@ describe('sender → encrypted relay framing → daemon STT intake', () => {
         outcomes.push(sender.pushChunk(pcm).then(events => events, (error: unknown) => ({ error })));
       }
       let finished = false;
-      const finish = sender.finish().then(result => { finished = true; return { result }; }, (error: unknown) => { finished = true; return { error }; });
+      const finish = sender.finish().then(result => { finished = true; notify(); return { result }; }, (error: unknown) => { finished = true; notify(); return { error }; });
       if (holdNativeAdmission) {
         // The initial response window fills before coalesced packets are sent.
-        await expect.poll(() => replies.length).toBe(8);
+        await waitForTestEvent(subscribe, () => expect(replies.length).toBe(8));
         for (const release of replies.splice(0)) release();
         await Promise.all(outcomes.slice(0, 8));
         // Let settled response callbacks pump their next packets, then wait for
         // those asynchronous encrypted sends at the actual relay boundary.
         await new Promise<void>(resolve => setImmediate(resolve));
-        await expect.poll(() => sentDataFrames === chunkRequests).toBe(true);
+        await waitForTestEvent(subscribe, () => expect(sentDataFrames === chunkRequests).toBe(true));
         expect(terminalReasons).toEqual([]);
       }
       while (!finished) {
-        await expect.poll(() => finished || replies.length > 0 || nativeAppends.length > 0).toBe(true);
+        await waitForTestEvent(subscribe, () => expect(finished || replies.length > 0 || nativeAppends.length > 0).toBe(true));
         for (const release of nativeAppends.splice(0)) release();
         for (const release of replies.splice(0)) release();
       }

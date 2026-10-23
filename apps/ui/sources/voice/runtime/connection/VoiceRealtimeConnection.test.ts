@@ -4,6 +4,7 @@ import { describeActionForVoiceTool } from '@happier-dev/plugin-sdk/voice/client
 import { createOpenAiToolSessionUpdate } from '../../../../../../packages/plugins/openai/src/ui/voice/protocol';
 import { TestVoiceWebRtcPeer as FakeWebRtcPeer, installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { createWebSocketPcmMedia, encodePcm16LeBase64 } from './WebSocketPcmMedia';
+import { createDeferred } from '@/dev/testkit';
 
 import {
   createSdkHandleConnection,
@@ -17,11 +18,15 @@ import {
 function installRemoteAudioElement(
   playImplementation: () => Promise<void>,
 ) {
+  const playbackEntered = createDeferred<void>();
   const audio = {
     autoplay: false,
     srcObject: null as MediaStream | null,
     volume: 1,
-    play: vi.fn(playImplementation),
+    play: vi.fn(() => {
+      playbackEntered.resolve();
+      return playImplementation();
+    }),
     pause: vi.fn<() => void>(),
     remove: vi.fn<() => void>(),
   };
@@ -30,10 +35,11 @@ function installRemoteAudioElement(
     return audio;
   });
   vi.stubGlobal('document', { createElement });
-  return Object.freeze({ audio, createElement });
+  return Object.freeze({ audio, createElement, playbackEntered: playbackEntered.promise });
 }
 
 function createDriver() {
+  const closeEntered = createDeferred<void>();
   let emitControl: ((event: unknown) => void) | null = null;
   let emitTransport: ((event: VoiceRealtimeTransportEvent) => void) | null = null;
   let emitRemoteClose: ((reason: string) => void) | null = null;
@@ -43,12 +49,13 @@ function createDriver() {
     emitRemoteClose = input.onRemoteClose;
   });
   const sendControl = vi.fn(async (_event: unknown) => {});
-  const close = vi.fn(async () => {});
+  const close = vi.fn(async () => { closeEntered.resolve(); });
   return {
     driver: { open, sendControl, close } satisfies VoiceConnectionDriver,
     open,
     sendControl,
     close,
+    closeEntered: closeEntered.promise,
     emitControl: (event: unknown) => emitControl?.(event),
     emitTransport: (event: VoiceRealtimeTransportEvent) => emitTransport?.(event),
     emitRemoteClose: (reason: string) => emitRemoteClose?.(reason),
@@ -105,7 +112,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       createPeerConnection: () => peer as unknown as RTCPeerConnection,
     });
     const connecting = connection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+    await peer.remoteDescriptionSet;
+    expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
     peer.channel.open();
     await connecting;
     peer.channel.message(JSON.stringify(echoed));
@@ -142,7 +150,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     });
     const connecting = connection.connect(new AbortController().signal);
     const admitted = expect(connecting).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+    await peer.remoteDescriptionSet;
+    expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
     peer.channel.open();
     await admitted;
     expect(connection.state()).toBe('open');
@@ -207,10 +216,11 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     browser.micTrack.dispatchEvent(new Event('ended'));
 
-    await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledWith({
+    await fixture.closeEntered;
+    expect(fixture.close).toHaveBeenCalledWith({
       code: 'error',
       detail: 'pcm_capture_device_lost',
-    }));
+    });
     expect(connection.state()).toBe('closed');
     expect(context.processor.onaudioprocess).toBeNull();
     expect(context.processor.disconnect).toHaveBeenCalledOnce();
@@ -257,14 +267,19 @@ describe('VoiceRealtimeConnection implementations', () => {
     let releaseOpen!: () => void;
     const openGate = new Promise<void>((resolve) => { releaseOpen = resolve; });
     const fixture = createDriver();
-    fixture.driver.open = vi.fn(async () => await openGate);
+    const openEntered = createDeferred<void>();
+    fixture.driver.open = vi.fn(async () => {
+      openEntered.resolve();
+      await openGate;
+    });
     const { media, context } = await createBrowserPcm();
     const connection = createWebSocketPcmConnection({ driver: fixture.driver, pcm: media.pcm });
 
     const connecting = connection.connect(new AbortController().signal);
 
-    await vi.waitFor(() => expect(fixture.driver.open).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(context.processor.onaudioprocess).not.toBeNull());
+    await Promise.all([openEntered.promise, context.processorCreated]);
+    expect(fixture.driver.open).toHaveBeenCalledTimes(1);
+    expect(context.processor.onaudioprocess).not.toBeNull();
     expect(connection.state()).toBe('connecting');
 
     releaseOpen();
@@ -306,7 +321,9 @@ describe('VoiceRealtimeConnection implementations', () => {
 
   it('aborts an in-flight driver open when the connection is closed directly', async () => {
     const fixture = createDriver();
+    const openEntered = createDeferred<void>();
     fixture.driver.open = vi.fn(async ({ signal }) => {
+      openEntered.resolve();
       await new Promise<never>((_resolve, reject) => {
         signal.addEventListener('abort', () => {
           reject(Object.assign(new Error('driver_open_aborted'), { name: 'AbortError' }));
@@ -315,7 +332,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     });
     const connection = createSdkHandleConnection({ driver: fixture.driver });
     const connecting = connection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(connection.state()).toBe('connecting'));
+    await openEntered.promise;
+    expect(connection.state()).toBe('connecting');
 
     await connection.close({ code: 'replaced' });
 
@@ -360,7 +378,9 @@ describe('VoiceRealtimeConnection implementations', () => {
       releaseFirstSend = resolve;
     });
     const fixture = createDriver();
+    const sendEntered = createDeferred<void>();
     fixture.driver.sendControl = vi.fn(async () => {
+      sendEntered.resolve();
       await firstSendGate;
     });
     const connection = createSdkHandleConnection({ driver: fixture.driver });
@@ -372,7 +392,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       connection.sendControl(jsonObjectWithExactUtf8Bytes(firstBytes)),
       connection.sendControl(jsonObjectWithExactUtf8Bytes(secondBytes)),
     ];
-    await vi.waitFor(() => expect(fixture.driver.sendControl).toHaveBeenCalledTimes(1));
+    await sendEntered.promise;
+    expect(fixture.driver.sendControl).toHaveBeenCalledTimes(1);
 
     const overflow = connection.sendControl({ value: 'x' });
     const overflowOutcome = await Promise.race([
@@ -405,7 +426,11 @@ describe('VoiceRealtimeConnection implementations', () => {
   it('bounds retained generic control sends by count and settles every send on close', async () => {
     const never = new Promise<void>(() => {});
     const fixture = createDriver();
-    fixture.driver.sendControl = vi.fn(async () => await never);
+    const sendEntered = createDeferred<void>();
+    fixture.driver.sendControl = vi.fn(async () => {
+      sendEntered.resolve();
+      await never;
+    });
     const { media } = await createBrowserPcm();
     const connection = createWebSocketPcmConnection({
       driver: fixture.driver,
@@ -417,7 +442,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       { length: VOICE_WEBRTC_LIMITS.outboundQueueItems },
       (_, sequence) => connection.sendControl({ sequence }),
     );
-    await vi.waitFor(() => expect(fixture.driver.sendControl).toHaveBeenCalledTimes(1));
+    await sendEntered.promise;
+    expect(fixture.driver.sendControl).toHaveBeenCalledTimes(1);
     const overflow = connection.sendControl({ sequence: 'overflow' });
     const overflowOutcome = await Promise.race([
       overflow.then(
@@ -538,7 +564,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       }),
     });
     const connecting = connection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+    await peer.remoteDescriptionSet;
+    expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
     peer.channel.open();
     await connecting;
 
@@ -546,7 +573,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     // the fact until media attaches, then closes instead of leaking audio.
     expect(connection.setOutputFocusState?.('suspended')).toBe('applied');
     peer.remoteTrack({ id: 'uncontrollable-remote-output' } as MediaStreamTrack);
-    await vi.waitFor(() => expect(connection.state()).toBe('closed'));
+    await peer.closed;
+    expect(connection.state()).toBe('closed');
     expect(setOutputFocusState).toHaveBeenCalledWith('suspended');
   });
 
@@ -634,10 +662,12 @@ describe('VoiceRealtimeConnection implementations', () => {
         code: 'voice_webrtc_remote_audio_playback_failed',
         message: 'voice_webrtc_remote_audio_playback_failed',
       });
-      await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+      await peer.remoteDescriptionSet;
+      expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
       const remoteStream = { id: 'remote-stream-before-open' } as unknown as MediaStream;
       peer.remoteTrack({ id: 'remote-a' } as MediaStreamTrack, [remoteStream]);
-      await vi.waitFor(() => expect(audioBoundary.audio.play).toHaveBeenCalledTimes(1));
+      await audioBoundary.playbackEntered;
+      expect(audioBoundary.audio.play).toHaveBeenCalledTimes(1);
       peer.channel.open();
 
       await rejected;
@@ -678,7 +708,8 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     try {
       const connecting = connection.connect(new AbortController().signal);
-      await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+      await peer.remoteDescriptionSet;
+      expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
       peer.channel.open();
       await connecting;
       expect(connection.state()).toBe('open');
@@ -686,7 +717,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       const remoteStream = { id: 'remote-stream-after-open' } as unknown as MediaStream;
       peer.remoteTrack({ id: 'remote-a' } as MediaStreamTrack, [remoteStream]);
 
-      await vi.waitFor(() => expect(connection.state()).toBe('closed'));
+      await peer.closed;
+      expect(connection.state()).toBe('closed');
       expect(peer.close).toHaveBeenCalledTimes(1);
       expect(peer.channel.readyState).toBe('closed');
       expect(onClosed).toHaveBeenCalledTimes(1);
@@ -718,10 +750,12 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     try {
       const connecting = connection.connect(new AbortController().signal);
-      await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+      await peer.remoteDescriptionSet;
+      expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
       const remoteStream = { id: 'remote-stream-success' } as unknown as MediaStream;
       peer.remoteTrack({ id: 'remote-a' } as MediaStreamTrack, [remoteStream]);
-      await vi.waitFor(() => expect(audioBoundary.audio.play).toHaveBeenCalledTimes(1));
+      await audioBoundary.playbackEntered;
+      expect(audioBoundary.audio.play).toHaveBeenCalledTimes(1);
       peer.channel.open();
       await connecting;
 
@@ -789,7 +823,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     });
 
     const connecting = connection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+    await peer.remoteDescriptionSet;
+    expect(peer.setRemoteDescription).toHaveBeenCalledTimes(1);
     peer.channel.open();
     await connecting;
 
@@ -839,10 +874,11 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     fixture.emitControl({ sequence: 1 });
     fixture.emitControl({ sequence: 2 });
-    await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledWith({
+    await fixture.closeEntered;
+    expect(fixture.close).toHaveBeenCalledWith({
       code: 'error',
       detail: 'voice_connection_inbound_overflow',
-    }));
+    });
     expect(connection.state()).toBe('closed');
   });
 
@@ -881,17 +917,19 @@ describe('VoiceRealtimeConnection implementations', () => {
     const connecting = connection.connect(new AbortController().signal).then(() => {
       connectSettled = true;
     });
-    await vi.waitFor(() => expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+    await peer.dataChannelCreated;
+    expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events');
     peer.remoteTrack({ id: 'remote-a' } as MediaStreamTrack);
     expect(attachRemoteStream).toHaveBeenCalledTimes(1);
     peer.channel.open();
-    await vi.waitFor(() => expect(peer.channel.sent).toEqual([
+    await peer.channel.controlSent(serialized => serialized === JSON.stringify({ type: 'session.update', sequence: 1 }));
+    expect(peer.channel.sent).toEqual([
       JSON.stringify({ type: 'session.update', sequence: 1 }),
-    ]));
+    ]);
     expect(connection.state()).toBe('connecting');
     releaseInitialControl();
-    await vi.waitFor(() => expect(connectSettled).toBe(true));
     await connecting;
+    expect(connectSettled).toBe(true);
 
     expect(connection.state()).toBe('open');
     expect(exchangeOffer).toHaveBeenCalledWith({
@@ -916,9 +954,10 @@ describe('VoiceRealtimeConnection implementations', () => {
     const firstInitialControl = jsonObjectWithExactUtf8Bytes(150 * 1024);
     const secondInitialControl = jsonObjectWithExactUtf8Bytes(150 * 1024);
     const initialSends: Promise<void>[] = [];
+    const onOpenEntered = createDeferred<void>();
     const onOpen = vi.fn(({ sendJson }: Readonly<{
       sendJson(value: import('@happier-dev/protocol').VoiceRealtimeJsonValue): Promise<void>;
-    }>) => {
+    }>) => { onOpenEntered.resolve();
       initialSends.push(
         sendJson(firstInitialControl),
         sendJson(secondInitialControl),
@@ -937,7 +976,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     });
     await Promise.resolve();
     peer.channel.open();
-    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
+    await onOpenEntered.promise;
+    expect(onOpen).toHaveBeenCalledTimes(1);
     await Promise.resolve();
 
     expect(connection.state()).toBe('connecting');
@@ -945,7 +985,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     expect(peer.channel.sent).toEqual([]);
 
     peer.channel.drainTo(0);
-    await vi.waitFor(() => expect(peer.channel.sent).toHaveLength(1));
+    await peer.channel.controlSent(serialized => serialized === JSON.stringify(firstInitialControl));
+    expect(peer.channel.sent).toHaveLength(1);
     expect(connection.state()).toBe('connecting');
     expect(connectSettled).toBe(false);
 
@@ -985,7 +1026,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     );
     await Promise.resolve();
     peer.channel.open();
-    await vi.waitFor(() => expect(connection.state()).toBe('closed'));
+    await peer.closed;
+    expect(connection.state()).toBe('closed');
 
     await expect(connecting).resolves.toMatchObject({
       status: 'rejected',
@@ -1075,7 +1117,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       control: { label, onOpen: () => undefined },
     });
     const connecting = connection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(peer.createDataChannel).toHaveBeenCalledWith(label));
+    await peer.dataChannelCreated;
+    expect(peer.createDataChannel).toHaveBeenCalledWith(label);
     peer.channel.open();
     await connecting;
     vi.unstubAllGlobals();
@@ -1110,7 +1153,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       control: { label: 'events', onOpen: () => undefined },
     });
     const exactConnecting = exactConnection.connect(new AbortController().signal);
-    await vi.waitFor(() => expect(exchangeOffer).toHaveBeenCalled());
+    await exactPeer.remoteDescriptionSet;
+    expect(exchangeOffer).toHaveBeenCalled();
     exactPeer.channel.open();
     await expect(exactConnecting).resolves.toBeUndefined();
     await exactConnection.close({ code: 'user_stop' });
@@ -1271,7 +1315,8 @@ describe('VoiceRealtimeConnection implementations', () => {
 
     await expect(connection.sendControl({ sequence: 1 }))
       .rejects.toThrow('voice_webrtc_data_channel_send_failed');
-    await vi.waitFor(() => expect(connection.state()).toBe('closed'));
+    await peer.closed;
+    expect(connection.state()).toBe('closed');
     expect(peer.close).toHaveBeenCalledTimes(1);
     expect(onClosed).toHaveBeenCalledTimes(1);
     expect(onClosed).toHaveBeenCalledWith({
@@ -1365,7 +1410,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     });
 
     peer.channel.message(`${exact} `);
-    await vi.waitFor(() => expect(connection.state()).toBe('closed'));
+    await peer.closed;
+    expect(connection.state()).toBe('closed');
     expect(peer.close).toHaveBeenCalledTimes(1);
 
     const binaryPeer = new FakeWebRtcPeer();
@@ -1381,7 +1427,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     binaryPeer.channel.open();
     await binaryConnecting;
     binaryPeer.channel.message(new Uint8Array([1, 2, 3]));
-    await vi.waitFor(() => expect(binaryConnection.state()).toBe('closed'));
+    await binaryPeer.closed;
+    expect(binaryConnection.state()).toBe('closed');
     vi.unstubAllGlobals();
   });
 
@@ -1473,7 +1520,8 @@ describe('VoiceRealtimeConnection implementations', () => {
   }) => {
     const peer = new FakeWebRtcPeer();
     vi.stubGlobal('RTCPeerConnection', vi.fn(() => peer));
-    const exchangeOffer = vi.fn(async () => await new Promise<never>(() => undefined));
+    const exchangeOfferEntered = createDeferred<void>();
+    const exchangeOffer = vi.fn(async () => { exchangeOfferEntered.resolve(); return await new Promise<never>(() => undefined); });
     const connection = createWebRtcConnection({
       micStream: { getAudioTracks: () => [] } as unknown as MediaStream,
       duckGain: 0.18,
@@ -1485,7 +1533,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       () => ({ status: 'resolved' as const, error: null }),
       (error: unknown) => ({ status: 'rejected' as const, error }),
     );
-    await vi.waitFor(() => expect(exchangeOffer).toHaveBeenCalledTimes(1));
+    await exchangeOfferEntered.promise;
+    expect(exchangeOffer).toHaveBeenCalledTimes(1);
 
     trigger(peer);
     const outcome = await connecting;
@@ -1509,7 +1558,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     const offerExchange = new Promise<Readonly<{ answerSdp: string }>>((resolve) => {
       releaseOffer = resolve;
     });
-    const exchangeOffer = vi.fn(async () => await offerExchange);
+    const exchangeOfferEntered = createDeferred<void>();
+    const exchangeOffer = vi.fn(async () => { exchangeOfferEntered.resolve(); return await offerExchange; });
     const onClosed = vi.fn();
     const connection = createWebRtcConnection({
       micStream: { getAudioTracks: () => [] } as unknown as MediaStream,
@@ -1527,7 +1577,8 @@ describe('VoiceRealtimeConnection implementations', () => {
           : 'rejected' as const
       ),
     );
-    await vi.waitFor(() => expect(exchangeOffer).toHaveBeenCalledTimes(1));
+    await exchangeOfferEntered.promise;
+    expect(exchangeOffer).toHaveBeenCalledTimes(1);
 
     abortController.abort();
     const settlementAtAbort = await Promise.race([
@@ -1560,12 +1611,13 @@ describe('VoiceRealtimeConnection implementations', () => {
     const peer = new FakeWebRtcPeer();
     vi.stubGlobal('RTCPeerConnection', vi.fn(() => peer));
     const neverSettles = new Promise<never>(() => {});
+    const operationEntered = createDeferred<void>();
     if (nativeOperation === 'createOffer') {
-      peer.createOffer.mockImplementation(async () => await neverSettles);
+      peer.createOffer.mockImplementation(async () => { operationEntered.resolve(); return await neverSettles; });
     } else if (nativeOperation === 'setLocalDescription') {
-      peer.setLocalDescription.mockImplementation(async () => await neverSettles);
+      peer.setLocalDescription.mockImplementation(async () => { operationEntered.resolve(); return await neverSettles; });
     } else {
-      peer.setRemoteDescription.mockImplementation(async () => await neverSettles);
+      peer.setRemoteDescription.mockImplementation(async () => { operationEntered.resolve(); return await neverSettles; });
     }
     const onOpen = vi.fn();
     const onClosed = vi.fn();
@@ -1586,7 +1638,8 @@ describe('VoiceRealtimeConnection implementations', () => {
       : nativeOperation === 'setLocalDescription'
         ? peer.setLocalDescription
         : peer.setRemoteDescription;
-    await vi.waitFor(() => expect(pendingOperation).toHaveBeenCalledTimes(1));
+    await operationEntered.promise;
+    expect(pendingOperation).toHaveBeenCalledTimes(1);
 
     if (interruption === 'abort') {
       caller.abort();
@@ -1621,7 +1674,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     const initialControls = new Promise<void>((resolve) => {
       releaseInitialControls = resolve;
     });
-    const onOpen = vi.fn(async () => await initialControls);
+    const onOpenEntered = createDeferred<void>();
+    const onOpen = vi.fn(async () => { onOpenEntered.resolve(); return await initialControls; });
     const onClosed = vi.fn();
     const connection = createWebRtcConnection({
       micStream: { getAudioTracks: () => [] } as unknown as MediaStream,
@@ -1644,7 +1698,8 @@ describe('VoiceRealtimeConnection implementations', () => {
     );
     await Promise.resolve();
     peer.channel.open();
-    await vi.waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
+    await onOpenEntered.promise;
+    expect(onOpen).toHaveBeenCalledTimes(1);
 
     abortController.abort();
     const settlementAtAbort = await Promise.race([

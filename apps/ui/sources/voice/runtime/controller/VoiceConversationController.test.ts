@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred as deferred, waitForTestEvent } from '@/dev/testkit';
 import type { VoiceRealtimeJsonValue, VoiceRealtimeToolCallV1 } from '@happier-dev/protocol';
 import type { PartialOptions as ElevenLabsSdkStartOptions } from '@elevenlabs/client';
 
@@ -9,7 +10,7 @@ import type {
 import { createSdkHandleConnection, createWebRtcConnection, VOICE_WEBRTC_LIMITS, type VoiceConnectionDriver } from '@/voice/runtime/connection/VoiceRealtimeConnection';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceWebRtcPeer } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
-import { createXaiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/xaiVoiceRuntime';
+import { createXaiVoiceRuntimeEnvironment, XaiVoiceWebSocket } from '@/dev/testkit/harness/xaiVoiceRuntime';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { log } from '@/log';
@@ -20,6 +21,7 @@ import { useVoiceConversationRuntimeStore } from '@/voice/runtime/machine/voiceC
 import { createVoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
 import { readVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { storage } from '@/sync/domains/state/storage';
 import { createOpenAiRealtimeProtocolAdapter, encodeOpenAiRealtimeClientEvent } from '../../../../../../packages/plugins/openai/src/ui/voice/protocol';
 import { OPENAI_CLIENT_AUTH_EXPIRY_SAFETY_WINDOW_MS } from '../../../../../../packages/plugins/openai/src/ui/voice/connection';
 import {
@@ -56,12 +58,6 @@ const {
 } = await import('@/voice/transcript/voiceConversationTranscript');
 await loadSyncSingletonForTests();
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => { resolve = next; });
-  return { promise, resolve };
-}
-
 // Only the vendor SDK session is supplied; activation, preparation, context
 // encoding, the controller and lifecycle remain the generated real owners.
 function createElevenLabsSdkSession(sessionId: string) {
@@ -76,6 +72,7 @@ function createElevenLabsSdkSession(sessionId: string) {
 }
 
 function createConnectionFixture(kind: 'sdk_handle' | 'webrtc' = 'sdk_handle') {
+  const connectEntered = deferred<void>();
   const events: VoiceRealtimeJsonValue[] = [];
   const transportEvents: VoiceRealtimeTransportEvent[] = [];
   if (kind === 'sdk_handle') {
@@ -89,6 +86,7 @@ function createConnectionFixture(kind: 'sdk_handle' | 'webrtc' = 'sdk_handle') {
     const connection: { -readonly [Key in keyof VoiceRealtimeConnection]: VoiceRealtimeConnection[Key] } = createSdkHandleConnection({ driver: {
       open: async input => {
         sdkCallbacks = input;
+        connectEntered.resolve();
         await connect(input.signal);
         for (const event of transportEvents.splice(0)) input.onTransport(event);
         for (const event of events.splice(0)) input.onControl(event);
@@ -97,7 +95,7 @@ function createConnectionFixture(kind: 'sdk_handle' | 'webrtc' = 'sdk_handle') {
       setOutputFocusState,
     } });
     const finishEvents = () => sdkCallbacks?.onRemoteClose('sdk_remote_closed');
-    return { connection, connect, close, sendControl, beginOutputInterruptionCandidate,
+    return { connection, connect, connectEntered: connectEntered.promise, close, sendControl, beginOutputInterruptionCandidate,
       resolveOutputInterruptionCandidate, setOutputFocusState, events, transportEvents,
       emitControl: (event: VoiceRealtimeJsonValue) => sdkCallbacks?.onControl(event),
       emitTransport: (event: VoiceRealtimeTransportEvent) => sdkCallbacks?.onTransport(event),
@@ -132,6 +130,7 @@ function createConnectionFixture(kind: 'sdk_handle' | 'webrtc' = 'sdk_handle') {
     duckGain: 0.18,
     createPeerConnection: () => peer as unknown as RTCPeerConnection,
     signaling: { exchangeOffer: async ({ signal }) => {
+      connectEntered.resolve();
       await connect(signal);
       return { answerSdp: 'v=0\r\na=test-answer\r\n' };
     } },
@@ -162,7 +161,7 @@ function createConnectionFixture(kind: 'sdk_handle' | 'webrtc' = 'sdk_handle') {
       finishEvents();
     }
   };
-  return { connection, connect, close, sendControl, beginOutputInterruptionCandidate,
+  return { connection, connect, connectEntered: connectEntered.promise, close, sendControl, beginOutputInterruptionCandidate,
     resolveOutputInterruptionCandidate, setOutputFocusState, events, transportEvents,
     emitControl: (event: VoiceRealtimeJsonValue) => peer.channel.message(JSON.stringify(event)),
     emitTransport, finishEvents, failControlEvents,
@@ -272,16 +271,18 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       browser.peer.channel.message(JSON.stringify({
         type: 'error', event_id: 'expired-session',
         error: { code: 'session_expired', message: 'private-provider-detail' },
       }));
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().errorCode, code => code === 'voice_session_expired');
+      expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
         status: 'error', errorCode: 'voice_session_expired',
-      }));
+      });
       expect(composed.controller?.getActiveControlSessionId()).toBeNull();
       expect(browser.peer.close).toHaveBeenCalledTimes(1);
       expect(browser.peer.createDataChannel).toHaveBeenCalledTimes(1);
@@ -301,7 +302,8 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       log.clear();
@@ -312,7 +314,8 @@ describe('VoiceConversationController', () => {
       browser.peer.channel.message(JSON.stringify({
         type: 'error', event_id: 'failed-tool', error: { code: 'invalid_request_error', message: 'private-provider-detail' },
       }));
-      await vi.waitFor(() => expect(log.getLogs().filter(line => line.includes('"outcome":"provider_error"'))).toHaveLength(2));
+      await waitForTestEvent(notify => log.onChange(notify), () => log.getLogs().filter(line => line.includes('"outcome":"provider_error"')).length, count => count === 2);
+      expect(log.getLogs().filter(line => line.includes('"outcome":"provider_error"'))).toHaveLength(2);
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
       expect(composed.controller?.getActiveControlSessionId()).toBe(composed.controlSessionId);
       expect(browser.peer.close).not.toHaveBeenCalled();
@@ -324,9 +327,10 @@ describe('VoiceConversationController', () => {
         type: 'conversation.item.input_audio_transcription.completed', event_id: 'next-input',
         item_id: 'next-input', transcript: 'the conversation remains usable',
       }));
-      await vi.waitFor(() => expect(readCanonicalVoiceTranscriptSnapshot(composed.historySessionId)).toEqual([
+      await waitForTestEvent(storage.subscribe, () => readCanonicalVoiceTranscriptSnapshot(composed.historySessionId), entries => entries.some(entry => entry.text === 'the conversation remains usable'));
+      expect(readCanonicalVoiceTranscriptSnapshot(composed.historySessionId)).toEqual([
         expect.objectContaining({ role: 'user', text: 'the conversation remains usable' }),
-      ]));
+      ]);
     } finally {
       await composed.runtime.dispose();
       composed.hostLease.revoke();
@@ -421,9 +425,11 @@ describe('VoiceConversationController', () => {
     const environment = await createOpenAiVoiceRuntimeEnvironment();
     const browser = installVoiceWebRtcBrowserBoundary();
     const mint = deferred<void>();
+    const mintEntered = deferred<void>();
     const respond = environment.providerFetch.getMockImplementation();
     if (!respond) throw new Error('OpenAI HTTP boundary unavailable');
     environment.providerFetch.mockImplementation(async (...args) => {
+      mintEntered.resolve();
       await mint.promise;
       return await respond(...args);
     });
@@ -432,7 +438,8 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(environment.providerFetch).toHaveBeenCalledOnce());
+      await Promise.race([mintEntered.promise, starting]);
+      expect(environment.providerFetch).toHaveBeenCalledOnce();
       const stopping = composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
       mint.resolve();
       await starting;
@@ -475,7 +482,8 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       const mintIndex = environment.providerFetch.mock.calls.findIndex(([url]) => String(url).endsWith('/client_secrets'));
@@ -517,7 +525,8 @@ describe('VoiceConversationController', () => {
       // real Account settings owner before exercising connected teardown.
       await environment.installSavedSecretSettings();
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
@@ -735,6 +744,7 @@ describe('VoiceConversationController', () => {
     });
     const composed = await environment.createRuntime(browser);
     const mint = deferred<void>();
+    const abortMintEntered = deferred<void>();
     const states: string[] = [];
     const unsubscribe = useVoiceConversationRuntimeStore.subscribe(({ snapshot }, previous) => {
       if (snapshot.controlSessionId === composed.controlSessionId && snapshot.state !== previous.snapshot.state) {
@@ -743,7 +753,8 @@ describe('VoiceConversationController', () => {
     });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
@@ -791,14 +802,15 @@ describe('VoiceConversationController', () => {
       expect(browser.micSession.teardown).toHaveBeenCalledTimes(1);
 
       environment.providerFetch.mockImplementation(async (input, init) => {
-        if (String(input).endsWith('/client_secrets')) await mint.promise;
+        if (String(input).endsWith('/client_secrets')) { abortMintEntered.resolve(); await mint.promise; }
         return await respond(input, init);
       });
       states.length = 0;
       const mintsBeforeAbort = environment.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets')).length;
       const aborted = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(environment.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets')))
-        .toHaveLength(mintsBeforeAbort + 1));
+      await Promise.race([abortMintEntered.promise, aborted]);
+      expect(environment.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets')))
+        .toHaveLength(mintsBeforeAbort + 1);
       const stopping = composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
       mint.resolve();
       await aborted;
@@ -824,12 +836,17 @@ describe('VoiceConversationController', () => {
     const { withGeneratedElevenLabsVoiceRuntime } = await import('@/dev/testkit/harness/elevenLabsVoiceRuntime');
     const sdkSession = createElevenLabsSdkSession('elevenlabs-prepared-context');
     const sdkNegotiation = deferred<typeof sdkSession>();
-    elevenLabsSdk.startSession.mockImplementationOnce(async () => await sdkNegotiation.promise);
+    const sdkStarted = deferred<void>();
+    elevenLabsSdk.startSession.mockImplementationOnce(async () => {
+      sdkStarted.resolve();
+      return await sdkNegotiation.promise;
+    });
     await withGeneratedElevenLabsVoiceRuntime(async ({ adapter }) => {
       const starting = adapter.start({ sessionId: '', requestedTargetSessionAddress: null,
         textOnly: true, initialContext: 'workspace context' });
       try {
-        await vi.waitFor(() => expect(elevenLabsSdk.startSession).toHaveBeenCalledTimes(1));
+        await Promise.race([sdkStarted.promise, starting]);
+        expect(elevenLabsSdk.startSession).toHaveBeenCalledTimes(1);
         expect(elevenLabsSdk.startSession.mock.calls[0]?.[0]).toMatchObject({
           dynamicVariables: { initialConversationContext: 'workspace context' },
         });
@@ -867,7 +884,8 @@ describe('VoiceConversationController', () => {
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null,
         initialContext: 'workspace context' });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       const firstPeer = browser.peer;
@@ -875,12 +893,12 @@ describe('VoiceConversationController', () => {
       expect(connectedPublications).toBe(1);
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const reconnecting = composed.requestReconnect();
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
-      await vi.waitFor(() => {
-        expect(browser.peers).toHaveLength(2);
-        expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
-      });
+      await Promise.race([browser.peerCreated(1).then(peer => peer.remoteDescriptionSet), reconnecting]);
+      expect(browser.peers).toHaveLength(2);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       expect(firstPeer.close).toHaveBeenCalledTimes(1);
       expect(connectedPublications).toBe(1);
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connecting');
@@ -914,7 +932,8 @@ describe('VoiceConversationController', () => {
     const openGate = conversation.sdk.holdNextOpen();
     try {
       const reconnecting = conversation.requestReconnect();
-      await vi.waitFor(() => expect(conversation.sdk.openCount).toBe(2));
+      await Promise.race([openGate.entered, reconnecting]);
+      expect(conversation.sdk.openCount).toBe(2);
       // A reconnect replaces the PCM connection/scheduler, not the attempt's
       // mic-owned AudioContext. The new scheduler must start with held focus.
       expect(firstConnection?.state()).toBe('closed');
@@ -961,7 +980,8 @@ describe('VoiceConversationController', () => {
     const openGate = conversation.sdk.holdNextOpen();
     try {
       const starting = conversation.adapter.start({ sessionId: '', requestedTargetSessionAddress: null }).catch((failure: unknown) => failure);
-      await vi.waitFor(() => expect(conversation.sdk.openCount).toBe(1));
+      await Promise.race([openGate.entered, starting]);
+      expect(conversation.sdk.openCount).toBe(1);
       expect(conversation.getController().getOwnedControlSessionId()).toBe(conversation.controlSessionId);
       openGate.reject(error);
       await expect(starting).resolves.toMatchObject({ code: expectedCode });
@@ -986,7 +1006,8 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       if (failureCode === 'voice_webrtc_control_malformed') {
@@ -999,7 +1020,8 @@ describe('VoiceConversationController', () => {
           browser.peer.channel.message(JSON.stringify({ type: 'input_audio_buffer.speech_started', event_id: `queued-${index}` }));
         }
       }
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'error', errorCode: failureCode }));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().errorCode, code => code === failureCode);
+      expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'error', errorCode: failureCode });
       expect(composed.controller?.getOwnedControlSessionId()).toBeNull();
       expect(browser.peer.close).toHaveBeenCalledTimes(1);
       expect(browser.micSession.teardown).toHaveBeenCalledTimes(1);
@@ -1020,7 +1042,8 @@ describe('VoiceConversationController', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null }).catch((error: unknown) => error);
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       expect(composed.controller?.getOwnedControlSessionId()).toBe(composed.controlSessionId);
       // The physical channel never opens. Use the canonical connection owner's
       // full budget, not an independently authored shorter test timeout.
@@ -1042,10 +1065,11 @@ describe('VoiceConversationController', () => {
   it('keeps an explicit stop authoritative when an abort-ignoring connection later times out', async () => {
     const environment = await createOpenAiVoiceRuntimeEnvironment();
     const signaling = deferred<void>();
+    const signalingEntered = deferred<void>();
     const respond = environment.providerFetch.getMockImplementation();
     if (!respond) throw new Error('OpenAI HTTP boundary is absent');
     environment.providerFetch.mockImplementation(async (...args) => {
-      if (String(args[0]).endsWith('/calls')) await signaling.promise;
+      if (String(args[0]).endsWith('/calls')) { signalingEntered.resolve(); await signaling.promise; }
       return await respond(...args);
     });
     const browser = installVoiceWebRtcBrowserBoundary();
@@ -1053,7 +1077,8 @@ describe('VoiceConversationController', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(environment.providerFetch.mock.calls.some(([url]) => String(url).endsWith('/calls'))).toBe(true));
+      await Promise.race([signalingEntered.promise, starting]);
+      expect(environment.providerFetch.mock.calls.some(([url]) => String(url).endsWith('/calls'))).toBe(true);
       await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
       signaling.resolve();
       await starting;
@@ -1166,7 +1191,8 @@ describe('VoiceConversationController', () => {
       onCanonicalEvent: async () => {},
     });
     const connecting = connectingController.start({ controlSessionId: 'during-connect' });
-    await vi.waitFor(() => expect(firstConnection.connect).toHaveBeenCalled());
+    await Promise.race([firstConnection.connectEntered, connecting]);
+    expect(firstConnection.connect).toHaveBeenCalled();
     const stopping = connectingController.stop();
     connectGate.resolve();
     await expect(connecting).resolves.toEqual({ status: 'aborted' });
@@ -1176,17 +1202,19 @@ describe('VoiceConversationController', () => {
 
   it('settles stopped A before same-session replacement B takes ownership', async () => {
     const closeGate = deferred<void>();
+    const closeEntered = deferred<void>();
     ownedRuntimeCleanups.push(async () => { closeGate.resolve(); });
     const { createPublicPcmVoiceConversationForTest } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
     const conversation = await createPublicPcmVoiceConversationForTest(cleanup => ownedRuntimeCleanups.push(cleanup));
     const firstContext = conversation.context;
     const firstConnection = conversation.getConnection();
-    firstContext.close.mockImplementation(async () => { await closeGate.promise; });
+    firstContext.close.mockImplementation(async () => { closeEntered.resolve(); await closeGate.promise; });
     const controller = conversation.getController();
     let stopped = false;
     const stopping = conversation.adapter.stop({ sessionId: conversation.controlSessionId }).then(() => { stopped = true; });
     try {
-      await vi.waitFor(() => expect(firstContext.close).toHaveBeenCalledTimes(1));
+      await Promise.race([closeEntered.promise, stopping]);
+      expect(firstContext.close).toHaveBeenCalledTimes(1);
       const replacement = conversation.adapter.start({ sessionId: conversation.controlSessionId, requestedTargetSessionAddress: null });
       await Promise.resolve();
       expect(conversation.sdk.openCount).toBe(1);
@@ -1215,16 +1243,18 @@ describe('VoiceConversationController', () => {
 
   it('settles failed A before same-session replacement B takes ownership', async () => {
     const closeGate = deferred<void>();
+    const closeEntered = deferred<void>();
     ownedRuntimeCleanups.push(async () => { closeGate.resolve(); });
     const { createPublicPcmVoiceConversationForTest } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
     const conversation = await createPublicPcmVoiceConversationForTest(cleanup => ownedRuntimeCleanups.push(cleanup));
     const firstContext = conversation.context;
     const firstConnection = conversation.getConnection();
     const firstTrack = conversation.browser.micTrack;
-    firstContext.close.mockImplementation(async () => { await closeGate.promise; });
+    firstContext.close.mockImplementation(async () => { closeEntered.resolve(); await closeGate.promise; });
     firstTrack.dispatchEvent(new Event('ended'));
     try {
-      await vi.waitFor(() => expect(firstContext.close).toHaveBeenCalledTimes(1));
+      await closeEntered.promise;
+      expect(firstContext.close).toHaveBeenCalledTimes(1);
       const replacement = conversation.adapter.start({ sessionId: conversation.controlSessionId, requestedTargetSessionAddress: null });
       await Promise.resolve();
       expect(conversation.sdk.openCount).toBe(1);
@@ -1296,9 +1326,11 @@ describe('VoiceConversationController', () => {
     const environment = await createOpenAiVoiceRuntimeEnvironment();
     const browser = installVoiceWebRtcBrowserBoundary();
     const mint = deferred<void>();
+    const mintEntered = deferred<void>();
     const respond = environment.providerFetch.getMockImplementation();
     if (!respond) throw new Error('OpenAI HTTP boundary unavailable');
     environment.providerFetch.mockImplementation(async (...args) => {
+      mintEntered.resolve();
       await mint.promise;
       return await respond(...args);
     });
@@ -1309,7 +1341,8 @@ describe('VoiceConversationController', () => {
     }) ?? (() => {});
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(environment.providerFetch).toHaveBeenCalledOnce());
+      await Promise.race([mintEntered.promise, starting]);
+      expect(environment.providerFetch).toHaveBeenCalledOnce();
       await environment.configureVoice({ ...environment.persistedAccountSettings.voiceSettingsV1, providerId: 'off' });
       mint.resolve();
       await starting;
@@ -1341,16 +1374,18 @@ describe('VoiceConversationController', () => {
       const controller = composed.controller;
       if (!controller) throw new Error('Actual OpenAI controller is absent');
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       browser.peer.channel.message(JSON.stringify({ type: 'input_audio_buffer.speech_started', event_id: 'speech-controls' }));
       browser.peer.channel.message(JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed',
         event_id: 'controls-transcript', item_id: 'controls-transcript', transcript: 'canonical controls remain usable',
       }));
-      await vi.waitFor(() => expect(readCanonicalVoiceTranscriptSnapshot(composed.historySessionId)).toEqual([
+      await waitForTestEvent(storage.subscribe, () => readCanonicalVoiceTranscriptSnapshot(composed.historySessionId), entries => entries.some(entry => entry.text === 'canonical controls remain usable'));
+      expect(readCanonicalVoiceTranscriptSnapshot(composed.historySessionId)).toEqual([
         expect.objectContaining({ role: 'user', text: 'canonical controls remain usable' }),
-      ]));
+      ]);
       const sentBeforeAction = browser.peer.channel.sent.length;
       await expect(controller.performTurnControl('cancel_response')).resolves.toEqual({ status: 'sent' });
       await expect(controller.performTurnControl('send_exact_message')).resolves.toEqual({
@@ -1382,7 +1417,8 @@ describe('VoiceConversationController', () => {
       const controller = composed.controller;
       if (!controller) throw new Error('Actual OpenAI controller is absent');
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       const sentBeforeCommit = browser.peer.channel.sent.length;
@@ -1447,17 +1483,21 @@ describe('VoiceConversationController', () => {
       const controller = composed.controller;
       if (!controller) throw new Error('Actual OpenAI controller is absent');
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       const sentBeforeCommit = browser.peer.channel.sent.length;
       const commit = JSON.stringify({ type: 'input_audio_buffer.commit' });
       browser.peer.channel.bufferedAmount = VOICE_WEBRTC_LIMITS.outboundBufferedBytes - new TextEncoder().encode(commit).byteLength;
       const submitting = controller.performTurnControl('commit_input').catch((error: unknown) => error);
-      await vi.waitFor(() => {
+      await waitForTestEvent(browser.peer.channel.subscribe, () => {
         expect(browser.peer.channel.sent.slice(sentBeforeCommit).map(wire => JSON.parse(wire))).toEqual([
           { type: 'input_audio_buffer.commit' },
         ]);
+        // The default zero threshold also satisfies the comparison below.
+        // Observe the real response-send capacity wait, not only commit.send.
+        expect(browser.peer.channel.bufferedAmountLowThreshold).toBeGreaterThan(0);
         expect(browser.peer.channel.bufferedAmountLowThreshold).toBeLessThan(browser.peer.channel.bufferedAmount);
       });
       await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
@@ -1492,7 +1532,8 @@ describe('VoiceConversationController', () => {
       expect(browser.peers).toHaveLength(0);
       expect(globalThis.RTCPeerConnection).not.toHaveBeenCalled();
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       const sentBeforeText = browser.peer.channel.sent.length;
@@ -1541,13 +1582,15 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       browser.micTrack.dispatchEvent(new Event('ended'));
-      await vi.waitFor(() => expect(composed.hostLease.host.machine.getSnapshot()).toMatchObject({
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => expect(composed.hostLease.host.machine.getSnapshot()).toMatchObject({ error: { reason: 'mic_ended' } }));
+      expect(composed.hostLease.host.machine.getSnapshot()).toMatchObject({
         state: 'error', error: { kind: 'mic_ended', reason: 'mic_ended' },
-      }));
+      });
       expect(composed.controller?.getOwnedControlSessionId()).toBeNull();
       expect(browser.peer.close).toHaveBeenCalledTimes(1);
       expect(browser.micSession.teardown).toHaveBeenCalledTimes(1);
@@ -1575,9 +1618,10 @@ describe('VoiceConversationController', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
       const first = environment.physicalSockets[0]!;
       first.emitConversationId('conv-preparation-retry');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => readVoiceProviderConversationMetadata(environment.readProviderConversationOwnerMetadata(environment.historySessionId), environment.xaiEntry().providerId)?.conversationId, id => id === 'conv-preparation-retry');
+      expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(environment.historySessionId), environment.xaiEntry().providerId,
-      )?.conversationId).toBe('conv-preparation-retry'));
+      )?.conversationId).toBe('conv-preparation-retry');
       const attemptId = composed.getController().getOwnedAttemptId();
       const respond = composed.providerFetch.getMockImplementation();
       if (!respond) throw new Error('xAI HTTP boundary is absent');
@@ -1592,13 +1636,13 @@ describe('VoiceConversationController', () => {
       const mintCount = () => composed.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets')).length;
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const reconnecting = composed.requestReconnect();
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
-      await vi.waitFor(() => {
-        expect(failedMints).toBe(1);
-        expect(mintCount()).toBe(2);
-        expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
-      });
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => ({ failedMints, mints: mintCount(), retry: composed.runtime.adapter.getSnapshot().reconnectRetryAvailable }), value => value.failedMints === 1 && value.mints === 2 && value.retry === true);
+      expect(failedMints).toBe(1);
+      expect(mintCount()).toBe(2);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       // A failed real credential preparation consumes slot one without
       // allocating a replacement SDK carrier or releasing the attempt.
       expect(environment.physicalSockets).toHaveLength(1);
@@ -1608,8 +1652,10 @@ describe('VoiceConversationController', () => {
       expect(composed.runtime.adapter.getSnapshot().status).not.toBe('error');
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs
         * VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.backoffFactor);
-      await vi.waitFor(() => expect(environment.physicalSockets).toHaveLength(2));
+      await waitForTestEvent(XaiVoiceWebSocket.subscribe, () => expect(environment.physicalSockets).toHaveLength(2));
+      await vi.advanceTimersToNextTimerAsync();
       await expect(reconnecting).resolves.toBe(true);
+      expect(environment.physicalSockets).toHaveLength(2);
       expect(mintCount()).toBe(3);
       expect(new URL(environment.physicalSockets[1]!.url).searchParams.get('conversation_id')).toBe('conv-preparation-retry');
       expect(environment.physicalSockets[1]!.readyState).toBe(1);
@@ -1645,14 +1691,16 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       if (admittedExpiresAtMs === null) throw new Error('Actual OpenAI preparation did not admit client authority');
       vi.spyOn(Date, 'now').mockReturnValue(admittedExpiresAtMs);
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const reconnecting = composed.requestReconnect();
-      await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true));
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot().reconnecting, value => value === true);
+      expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true);
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
       await expect(reconnecting).resolves.toBe(false);
       expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'error', errorCode: 'voice_auth_expired' });
@@ -1677,22 +1725,24 @@ describe('VoiceConversationController', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       const firstPeer = browser.peer;
       const attemptId = composed.controller?.getOwnedAttemptId();
       firstPeer.channel.close();
-      await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true));
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot().reconnecting, value => value === true);
+      expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true);
       expect(browser.peers).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
-      await vi.waitFor(() => {
-        expect(browser.peers).toHaveLength(2);
-        expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
-      });
+      await browser.peerCreated(1).then(peer => peer.remoteDescriptionSet);
+      expect(browser.peers).toHaveLength(2);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       expect(browser.peer).not.toBe(firstPeer);
       browser.peer.channel.open();
-      await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'connected', reconnecting: false }));
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot(), snapshot => snapshot.state === 'connected' && !snapshot.reconnecting);
+      expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'connected', reconnecting: false });
       expect(composed.controller?.getOwnedAttemptId()).toBe(attemptId);
       expect(composed.controller?.getActiveControlSessionId()).toBe(composed.controlSessionId);
       expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected' });
@@ -1732,17 +1782,22 @@ describe('VoiceConversationController', () => {
       };
     };
     const releaseMetadataAck = deferred<void>();
+    const metadataAckEntered = deferred<void>();
+    const replacementMetadataWritten = deferred<void>();
     let heldMetadataAck = false;
     try {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
       const handle = environment.sessionHttp.handle.bind(environment.sessionHttp);
       vi.spyOn(environment.sessionHttp, 'handle').mockImplementation((input, init) => {
         const response = handle(input, init);
+        if (heldMetadataAck && response?.ok && init?.method === 'PATCH'
+          && new URL(String(input)).pathname === `/v2/sessions/${encodeURIComponent(environment.historySessionId)}`) replacementMetadataWritten.resolve();
         if (heldMetadataAck || !response?.ok || init?.method !== 'PATCH'
           || new URL(String(input)).pathname !== `/v2/sessions/${encodeURIComponent(environment.historySessionId)}`) {
           return response;
         }
         heldMetadataAck = true;
+        metadataAckEntered.resolve();
         // The real server fixture has committed the canonical producer's
         // metadata. Delay only delivery of its genuine Fetch response body.
         return new Response(new ReadableStream<Uint8Array>({
@@ -1761,7 +1816,8 @@ describe('VoiceConversationController', () => {
       const first = environment.physicalSockets[0]!;
       expect(first.readyState).toBe(1);
       first.emitConversationId('conv-delayed-first');
-      await vi.waitFor(() => expect(heldMetadataAck, 'actual provider identity metadata PATCH admitted').toBe(true));
+      await metadataAckEntered.promise;
+      expect(heldMetadataAck, 'actual provider identity metadata PATCH admitted').toBe(true);
       expect((await readPersistedCarrier()).state?.conversationId).toBe('conv-delayed-first');
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       // Both messages reach the actual driver while OPEN. The second write
@@ -1774,8 +1830,10 @@ describe('VoiceConversationController', () => {
       expect(environment.physicalSockets).toHaveLength(1);
       expect(composed.getController().getOwnedControlSessionId()).toBe(composed.controlSessionId);
       releaseMetadataAck.resolve();
-      await vi.waitFor(() => expect(environment.physicalSockets, 'replacement SDK socket opens after actual prior metadata ACK').toHaveLength(2));
+      await waitForTestEvent(XaiVoiceWebSocket.subscribe, () => expect(environment.physicalSockets).toHaveLength(2));
+      await vi.advanceTimersByTimeAsync(0);
       await expect(reconnecting).resolves.toBe(true);
+      expect(environment.physicalSockets, 'replacement SDK socket opens after actual prior metadata ACK').toHaveLength(2);
       const second = environment.physicalSockets[1]!;
       expect(new URL(second.url).searchParams.get('conversation_id')).toBe('conv-delayed-first');
       const currentIdentityReceived = deferred<void>();
@@ -1786,10 +1844,12 @@ describe('VoiceConversationController', () => {
       const boundConversation = voiceSessionBindingStore.getState().getByControlSessionId(composed.controlSessionId);
       expect(first.readyState).toBe(3);
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
-      await vi.waitFor(async () => expect((await readPersistedCarrier()).state?.conversationId).toBe('conv-owned-second'));
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await replacementMetadataWritten.promise;
+      expect((await readPersistedCarrier()).state?.conversationId).toBe('conv-owned-second');
+      await waitForTestEvent(storage.subscribe, () => readVoiceProviderConversationMetadata(environment.readProviderConversationOwnerMetadata(environment.historySessionId), environment.xaiEntry().providerId)?.conversationId, id => id === 'conv-owned-second');
+      expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(environment.historySessionId), environment.xaiEntry().providerId,
-      )?.conversationId).toBe('conv-owned-second'));
+      )?.conversationId).toBe('conv-owned-second');
       expect(voiceSessionBindingStore.getState().getByControlSessionId(composed.controlSessionId)).toEqual(boundConversation);
       expect(boundConversation?.conversationSessionId).toBe(environment.historySessionId);
       expect(composed.getController().getOwnedControlSessionId()).toBe(composed.controlSessionId);
@@ -1821,10 +1881,12 @@ describe('VoiceConversationController', () => {
     try {
       const reconnecting = conversation.requestReconnect();
       for (let slot = 1; slot <= budget.maxRetries; slot += 1) {
-        await vi.waitFor(() => expect(conversation.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+        await waitForTestEvent(conversation.adapter.subscribe!, () => conversation.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+        expect(conversation.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
         await vi.advanceTimersByTimeAsync(Math.min(budget.maxBackoffMs,
           budget.baseBackoffMs * budget.backoffFactor ** (slot - 1)));
-        await vi.waitFor(() => expect(conversation.sdk.openCount).toBe(slot + 1));
+        await Promise.race([gates[slot - 1]!.entered, reconnecting]);
+        expect(conversation.sdk.openCount).toBe(slot + 1);
         expect(conversation.getController().getOwnedAttemptId()).toBe(firstAttempt);
         gates[slot - 1]!.reject(new Error('offline'));
       }
@@ -1848,7 +1910,8 @@ describe('VoiceConversationController', () => {
       expect(secondContext).not.toBe(firstContext);
       const opensBeforePendingSlot = conversation.sdk.openCount;
       const pendingReconnect = conversation.requestReconnect();
-      await vi.waitFor(() => expect(conversation.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+      await waitForTestEvent(conversation.adapter.subscribe!, () => conversation.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(conversation.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       expect(secondConnection?.state()).toBe('closed');
       await conversation.adapter.stop({ sessionId: conversation.controlSessionId });
       await expect(pendingReconnect).resolves.toBe(false);
@@ -1877,24 +1940,26 @@ describe('VoiceConversationController', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       const attemptId = composed.controller?.getOwnedAttemptId();
       browser.peer.iceConnectionState = 'failed';
       browser.peer.dispatchEvent(new Event('iceconnectionstatechange'));
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       expect(browser.peers).toHaveLength(1);
       // Retry expedites the already pending slot; the next native offer fails
       // and the canonical owner leaves slot two waiting, rather than launching
       // a third carrier or replacing this attempt.
       const retry = composed.requestReconnect();
-      await vi.waitFor(() => {
-        expect(browser.peers).toHaveLength(2);
-        expect(browser.peer.createOffer).toHaveBeenCalledTimes(1);
-        expect(browser.peer.close).toHaveBeenCalledTimes(1);
-        expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
-      });
+      await browser.peerCreated(1).then(peer => peer.closed);
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(browser.peers).toHaveLength(2);
+      expect(browser.peer.createOffer).toHaveBeenCalledTimes(1);
+      expect(browser.peer.close).toHaveBeenCalledTimes(1);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       expect(composed.controller?.getOwnedAttemptId()).toBe(attemptId);
       expect(composed.runtime.adapter.getSnapshot().status).not.toBe('error');
       await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
@@ -1930,11 +1995,13 @@ describe('VoiceConversationController', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       const reconnecting = composed.requestReconnect();
-      await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true));
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot().reconnecting, value => value === true);
+      expect(createVoiceConversationRuntimeMachine().getSnapshot().reconnecting).toBe(true);
       publishSelection('off');
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
       await expect(reconnecting).resolves.toBe(false);
@@ -1959,7 +2026,8 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+      await Promise.race([browser.peerCreated().then(peer => peer.remoteDescriptionSet), starting]);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       browser.peer.channel.open();
       await starting;
       const firstPeer = browser.peer;
@@ -1978,22 +2046,21 @@ describe('VoiceConversationController', () => {
 
       firstPeer.iceConnectionState = 'failed';
       firstPeer.dispatchEvent(new Event('iceconnectionstatechange'));
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot().reconnectRetryAvailable, value => value === true);
+      expect(composed.runtime.adapter.getSnapshot().reconnectRetryAvailable).toBe(true);
       expect(firstPeer.close).toHaveBeenCalledTimes(1);
       expect(firstChannel.readyState).toBe('closed');
       expect(browser.peers).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(VOICE_RUNTIME_CONFIG_DEFAULTS.realtime.reconnect.baseBackoffMs);
-      await vi.waitFor(() => {
-        expect(browser.peers).toHaveLength(2);
-        expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
-      });
+      await browser.peerCreated(1).then(peer => peer.remoteDescriptionSet);
+      expect(browser.peers).toHaveLength(2);
+      expect(browser.peer.setRemoteDescription).toHaveBeenCalled();
       expect(browser.peer).not.toBe(firstPeer);
       expect(browser.peer.channel).not.toBe(firstChannel);
       browser.peer.channel.open();
-      await vi.waitFor(() => {
-        expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
-        expect(useVoiceConversationRuntimeStore.getState().snapshot.reconnecting).toBe(false);
-      });
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.runtime.adapter.getSnapshot(), snapshot => snapshot.status === 'connected' && !useVoiceConversationRuntimeStore.getState().snapshot.reconnecting);
+      expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
+      expect(useVoiceConversationRuntimeStore.getState().snapshot.reconnecting).toBe(false);
       expect(browser.peer.channel.readyState).toBe('open');
       expect(composed.controller?.getOwnedAttemptId()).toBe(ownedAttempt);
       expect(composed.controller?.getOwnedControlSessionId()).toBe(composed.controlSessionId);
@@ -2323,7 +2390,8 @@ describe('VoiceConversationController', () => {
     });
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       if (!stopping) throw new Error('Actual connected publication never reached the stop subscriber');
@@ -2351,8 +2419,9 @@ describe('VoiceConversationController', () => {
     const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
     const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
     const identityRead = deferred<void>();
+    const secondContextSent = deferred<void>();
     const first = { ...createElevenLabsSdkSession('elevenlabs-identity-A'), endSession: vi.fn(async () => {}), sendContextualUpdate: vi.fn() };
-    const second = { ...createElevenLabsSdkSession('elevenlabs-identity-B'), endSession: vi.fn(async () => {}), sendContextualUpdate: vi.fn() };
+    const second = { ...createElevenLabsSdkSession('elevenlabs-identity-B'), endSession: vi.fn(async () => {}), sendContextualUpdate: vi.fn(() => secondContextSent.resolve()) };
     const readFirstIdentity = first.getId;
     vi.spyOn(first, 'getId').mockImplementation(() => {
       identityRead.resolve();
@@ -2407,7 +2476,8 @@ describe('VoiceConversationController', () => {
         expect(currentBinding).not.toBeNull();
         oldOptions.onDisconnect({ reason: 'user' });
         adapter.sendContextUpdate({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, update: 'context for B only' });
-        await vi.waitFor(() => expect(second.sendContextualUpdate).toHaveBeenCalledWith('context for B only'));
+        await secondContextSent.promise;
+        expect(second.sendContextualUpdate).toHaveBeenCalledWith('context for B only');
         expect(first.sendContextualUpdate).not.toHaveBeenCalled();
         expect(adapter.getSnapshot().status).toBe('connected');
         expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)).toEqual(currentBinding);
@@ -2427,13 +2497,15 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       await environment.configureVoice({ ...environment.persistedAccountSettings.voiceSettingsV1, providerId: 'off' });
       expect(browser.peer.channel.readyState).toBe('open');
       browser.peer.channel.message(JSON.stringify({ type: 'input_audio_buffer.speech_started', event_id: 'stale-control' }));
-      await vi.waitFor(() => expect(composed.controller?.getOwnedControlSessionId()).toBeNull());
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.controller?.getOwnedControlSessionId(), id => id === null);
+      expect(composed.controller?.getOwnedControlSessionId()).toBeNull();
       expect(useVoiceConversationRuntimeStore.getState().snapshot).toMatchObject({
         state: 'disconnected', reconnecting: false, error: { reason: 'voice_provider_not_selected' },
       });
@@ -2457,14 +2529,16 @@ describe('VoiceConversationController', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]);
+      expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       browser.peer.channel.open();
       await starting;
       await environment.configureVoice({ ...environment.persistedAccountSettings.voiceSettingsV1, providerId: 'off' });
       expect(browser.peer.channel.readyState).toBe('open');
       browser.peer.iceConnectionState = 'connected';
       browser.peer.dispatchEvent(new Event('iceconnectionstatechange'));
-      await vi.waitFor(() => expect(composed.controller?.getOwnedControlSessionId()).toBeNull());
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => composed.controller?.getOwnedControlSessionId(), id => id === null);
+      expect(composed.controller?.getOwnedControlSessionId()).toBeNull();
       expect(useVoiceConversationRuntimeStore.getState().snapshot).toMatchObject({
         state: 'disconnected', reconnecting: false, error: { reason: 'voice_provider_not_selected' },
       });

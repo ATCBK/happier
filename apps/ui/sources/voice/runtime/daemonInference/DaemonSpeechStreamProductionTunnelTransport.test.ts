@@ -37,7 +37,7 @@ const { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerpri
 const { resolveAccountStorageContext } = await import('@/sync/encryption/accountStorageContext');
 const sodium = (await import('libsodium-wrappers')).default;
 await sodium.ready;
-const { createMachineFixture } = await import('@/dev/testkit');
+const { createMachineFixture, waitForTestEvent } = await import('@/dev/testkit');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { storage } = await import('@/sync/domains/state/storage');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -278,7 +278,8 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
         }
         return null;
       } });
-    await vi.waitFor(() => expect(storage.getState().profile.id).toBe('artifact-account'));
+    await waitForTestEvent(storage.subscribe, () => storage.getState().profile.id, id => id === 'artifact-account');
+    expect(storage.getState().profile.id).toBe('artifact-account');
     storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
       voice: true, 'execution.runs': true, 'voice.agent': true, 'voice.daemonInference': true, machines: true, 'machines.liveStream': true,
     }, voice: { ...storage.getState().settings.voice, executionMachine: {
@@ -542,6 +543,12 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
     const replies: Array<() => void> = [];
     let offeredChunks = 0;
     let receivedChunks = 0;
+    const transportEvents = new EventTarget();
+    const notifyTransport = () => transportEvents.dispatchEvent(new Event('transport'));
+    const subscribeTransport = (listener: () => void) => {
+      transportEvents.addEventListener('transport', listener);
+      return () => transportEvents.removeEventListener('transport', listener);
+    };
     let retainedBytes = 0;
     let peakRetainedBytes = 0;
     holdPcmResponse = async encodedBytes => {
@@ -549,7 +556,7 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
       retainedBytes += encodedBytes;
       peakRetainedBytes = Math.max(peakRetainedBytes, retainedBytes);
       try {
-        await new Promise<void>(resolve => replies.push(resolve));
+        await new Promise<void>(resolve => { replies.push(resolve); notifyTransport(); });
       } finally {
         retainedBytes -= encodedBytes;
       }
@@ -571,16 +578,16 @@ describe('DaemonSpeechStreamProductionTunnelTransport real producers', () => {
       await stream.start();
       const capture = Array.from({ length: 425 }, (_, frame) => new Uint8Array(640).fill(frame % 256));
       const outcomes = capture.map(pcm => stream.pushChunk(pcm).then(events => ({ events }), (error: unknown) => ({ error })));
-      await expect.poll(() => replies.length).toBe(8);
+      await waitForTestEvent(subscribeTransport, () => expect(replies.length).toBe(8));
       for (const release of replies.splice(0)) release();
       await Promise.all(outcomes.slice(0, 8));
       await new Promise<void>(resolve => setImmediate(resolve));
-      await expect.poll(() => receivedChunks === offeredChunks).toBe(true);
+      await waitForTestEvent(subscribeTransport, () => expect(receivedChunks === offeredChunks).toBe(true));
       expect(peakRetainedBytes).toBeLessThanOrEqual(DEFAULT_MAX_PENDING_APPLICATION_DISPATCH_BYTES);
       let finished = false;
-      const finishing = stream.finish().then(result => { finished = true; return { result }; }, (error: unknown) => { finished = true; return { error }; });
+      const finishing = stream.finish().then(result => { finished = true; notifyTransport(); return { result }; }, (error: unknown) => { finished = true; notifyTransport(); return { error }; });
       while (!finished) {
-        await expect.poll(() => finished || replies.length > 0).toBe(true);
+        await waitForTestEvent(subscribeTransport, () => expect(finished || replies.length > 0).toBe(true));
         for (const release of replies.splice(0)) release();
       }
       expect(await finishing).toMatchObject({ result: { ok: true, finalText: 'hello' } });

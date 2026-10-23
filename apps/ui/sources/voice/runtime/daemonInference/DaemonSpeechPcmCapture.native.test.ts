@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { createDeferred } from '@/dev/testkit';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import type { AudioStreamFrameEvent } from '../../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
+import type { VoiceMachineError } from '../machine/voiceMachineError';
 
 const nativeAudio = createNativeVoicePcmCaptureHarness();
 vi.mock('expo-modules-core', async original => {
@@ -24,12 +25,18 @@ afterAll(async () => {
 });
 const captures: Array<ReturnType<typeof createDaemonSpeechPcmCapture>> = [];
 function createCapture(overrides: Partial<Parameters<typeof createDaemonSpeechPcmCapture>[0]> = {}) {
+  const chunkEntered = createDeferred<void>();
+  const errorReported = createDeferred<void>();
   const micSession = createNativeMicSession({ ensurePermission: async () => {} });
   const options = { micSession, onAudioStarted: vi.fn(), onChunk: vi.fn(async (_bytes: Uint8Array) => {}),
     onError: vi.fn(), ...overrides };
+  const onChunk = options.onChunk;
+  const onError = options.onError;
+  options.onChunk = vi.fn(async (bytes: Uint8Array) => { chunkEntered.resolve(); await onChunk(bytes); });
+  options.onError = vi.fn((error: VoiceMachineError) => { errorReported.resolve(); onError?.(error); });
   const capture = createDaemonSpeechPcmCapture(options);
   captures.push(capture);
-  return { capture, options };
+  return { capture, options, chunkEntered: chunkEntered.promise, errorReported: errorReported.promise };
 }
 function emitNativeFrame(overrides: Partial<AudioStreamFrameEvent> = {}) {
   const callback = vi.mocked(harness.nativeModule.addListener).mock.calls.find(([name]) => name === 'audioFrame')?.[1];
@@ -57,23 +64,30 @@ describe('daemon native PCM through the shared capture owner', () => {
   it('drains accepted Dictation frames while prompt stop abandons held delivery', async () => {
     const held = createDeferred<void>();
     const chunks: Uint8Array[] = [];
-    const { capture } = createCapture({ capturePurpose: 'dictation', onChunk: async bytes => {
+    const { capture, chunkEntered } = createCapture({ capturePurpose: 'dictation', onChunk: async bytes => {
       chunks.push(bytes); if (chunks.length === 1) await held.promise;
     } });
     await capture.start();
     expect(harness.coordinator.getSnapshot().configuration).toMatchObject({ mode: 'dictation', output: false, aec: 'off' });
     harness.emit('AAE='); harness.emit('AgM=');
-    await vi.waitFor(() => expect(chunks).toHaveLength(1));
+    await chunkEntered;
+    expect(chunks).toHaveLength(1);
+    const nativeStopEntered = createDeferred<void>();
+    const stop = vi.mocked(harness.nativeModule.stop);
+    const stopNative = stop.getMockImplementation();
+    if (!stopNative) throw new Error('Native stop boundary missing');
+    stop.mockImplementationOnce(async () => { nativeStopEntered.resolve(); await stopNative(); });
     const finishing = capture.finish();
-    await vi.waitFor(() => expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1));
+    await nativeStopEntered.promise;
+    expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
     held.resolve(undefined); await finishing;
     expect(chunks).toEqual([new Uint8Array([0, 1]), new Uint8Array([2, 3])]);
     expect(capture.isActive()).toBe(false);
     const pending = createDeferred<void>();
-    const abandoned = createCapture({ onChunk: () => pending.promise }).capture;
-    await abandoned.start(); harness.emit();
-    await Promise.resolve(); await abandoned.stop();
-    expect(abandoned.isActive()).toBe(false);
+    const abandoned = createCapture({ onChunk: () => pending.promise });
+    await abandoned.capture.start(); harness.emit();
+    await abandoned.chunkEntered; await abandoned.capture.stop();
+    expect(abandoned.capture.isActive()).toBe(false);
     expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
     pending.resolve(undefined);
   });
@@ -96,8 +110,9 @@ describe('daemon native PCM through the shared capture owner', () => {
     const { capture, options } = createCapture({ signal: lifetime.signal });
     const teardown = vi.spyOn(options.micSession, 'teardown');
     await capture.start(); lifetime.abort();
-    await vi.waitFor(() => expect(harness.capture.getSnapshot().subscriberCount).toBe(0));
-    await capture.stop(); expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
+    await capture.stop();
+    expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
+    expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
     expect(teardown).not.toHaveBeenCalled();
   });
   it('reports native acquisition failure without retaining a half-open lease', async () => {
@@ -111,22 +126,25 @@ describe('daemon native PCM through the shared capture owner', () => {
   it('reports subscriber failure and actual queued-frame overflow as terminal capture errors', async () => {
     const failed = createCapture({ onChunk: async () => { throw new Error('consumer_failed'); } });
     await failed.capture.start(); harness.emit();
-    await vi.waitFor(() => expect(failed.options.onError).toHaveBeenCalled());
+    await failed.errorReported;
+    expect(failed.options.onError).toHaveBeenCalled();
     await failed.capture.stop();
     const pending = createDeferred<void>();
     const overflow = createCapture({ onChunk: () => pending.promise });
     await overflow.capture.start(); harness.emit();
-    await Promise.resolve();
+    await overflow.chunkEntered;
     for (let frame = 0; frame < 9; frame++) harness.emit();
-    await vi.waitFor(() => expect(overflow.options.onError).toHaveBeenCalled());
+    await overflow.errorReported;
+    expect(overflow.options.onError).toHaveBeenCalled();
     expect(overflow.capture.isActive()).toBe(false);
     pending.resolve(undefined);
   });
   it('waits for its accepted subscriber work to drain', async () => {
     const pending = createDeferred<void>();
-    const { capture, options } = createCapture({ onChunk: vi.fn(() => pending.promise) });
+    const { capture, options, chunkEntered } = createCapture({ onChunk: vi.fn(() => pending.promise) });
     await capture.start(); harness.emit();
-    await vi.waitFor(() => expect(options.onChunk).toHaveBeenCalledTimes(1));
+    await chunkEntered;
+    expect(options.onChunk).toHaveBeenCalledTimes(1);
     let drained = false; const draining = capture.waitForDrain().then(() => { drained = true; });
     await Promise.resolve(); expect(drained).toBe(false);
     pending.resolve(undefined); await draining; expect(drained).toBe(true);

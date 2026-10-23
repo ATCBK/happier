@@ -147,7 +147,8 @@ describe('waitForNextAssistantTextMessage', () => {
       expect(settled).toBe(false);
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
       project(17);
-      await vi.waitFor(() => expect(settled).toBe(true));
+      await waiting;
+      expect(settled).toBe(true);
       expect(controller.signal.aborted).toBe(false);
       await expect(waiting).resolves.toBeNull();
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');

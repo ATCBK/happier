@@ -274,16 +274,18 @@ describe('bundledSpeechRuntime', () => {
   };
 
   it('carries the captured Session voice into synthesis and publishes only the actually accepted playback voice', async () => {
+    const playbackEntered = createDeferred<void>();
     const preference = { providerContributionId: CATALOG_TTS_ID, settingFieldPath: 'catalogVoice', value: ' bound-voice ' };
     const actualVoice = { ...preference, value: 'bound-voice' };
     speech.speechSynthesizeRpc.mockResolvedValueOnce({ ...wav, appliedVoice: actualVoice });
-    speech.encodedAudio.start.mockImplementationOnce(async () => {});
+    speech.encodedAudio.start.mockImplementationOnce(async () => { playbackEntered.resolve(); });
     const preparation = prepare(preference);
     const speaking = runtimeFor([CATALOG_TTS_DECLARATION]).speak(CATALOG_TTS_ID, {
       text: 'hello', providerConfig: config,
       preparation, registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => expect(speech.encodedAudio.start).toHaveBeenCalledOnce());
+    await playbackEntered.promise;
+    expect(speech.encodedAudio.start).toHaveBeenCalledOnce();
     expect(speech.speechSynthesizeRpc.mock.calls[0]?.[0].voicePreference).toEqual(preference);
     expect(voiceConversationRuntimeMachine.getSnapshot().inUseVoice).toBeUndefined();
     speech.encodedAudio.emit('started');
@@ -295,8 +297,10 @@ describe('bundledSpeechRuntime', () => {
 
   it('drops a synthesis completed after its captured target retires', async () => {
     const pending = createDeferred<typeof wav>();
+    const synthesisEntered = createDeferred<void>();
     const preparation = prepare(null);
     speech.speechSynthesizeRpc.mockImplementationOnce(() => {
+      synthesisEntered.resolve();
       voiceSessionBindingStore.getState().unbind('runtime-conversation');
       return pending.promise;
     });
@@ -304,7 +308,8 @@ describe('bundledSpeechRuntime', () => {
       text: 'hello', providerConfig: config,
       preparation, registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => expect(speech.speechSynthesizeRpc).toHaveBeenCalledOnce());
+    await synthesisEntered.promise;
+    expect(speech.speechSynthesizeRpc).toHaveBeenCalledOnce();
     pending.resolve(wav);
     await speaking;
     expect(speech.encodedAudio.start).not.toHaveBeenCalled();
@@ -371,12 +376,14 @@ describe('bundledSpeechRuntime', () => {
   });
 
   it('synthesizes and plays through host substrate while package config validation fails closed', async () => {
-    speech.encodedAudio.start.mockImplementationOnce(async () => {});
+    const playbackEntered = createDeferred<void>();
+    speech.encodedAudio.start.mockImplementationOnce(async () => { playbackEntered.resolve(); });
     const onPlaybackStarted = vi.fn();
     const runtime = runtimeFor([CATALOG_TTS_DECLARATION]);
     const speaking = runtime.speak(CATALOG_TTS_ID, { text: 'hello', providerConfig: config,
       registerPlaybackStopper: () => () => {}, onPlaybackStarted });
-    await vi.waitFor(() => expect(speech.encodedAudio.start).toHaveBeenCalledOnce());
+    await playbackEntered.promise;
+    expect(speech.encodedAudio.start).toHaveBeenCalledOnce();
     expect(speech.speechSynthesizeRpc.mock.calls[0]?.[0]).toMatchObject({
       target: { pluginId: 'happier.voice.acme', localId: 'catalog-tts' }, input: 'hello',
     });
@@ -393,7 +400,11 @@ describe('bundledSpeechRuntime', () => {
 
   it('cancels in-flight bundled synthesis before playback and suppresses a late result', async () => {
     const pending = createDeferred<typeof wav>();
-    speech.speechSynthesizeRpc.mockReturnValueOnce(pending.promise);
+    const synthesisEntered = createDeferred<void>();
+    speech.speechSynthesizeRpc.mockImplementationOnce(() => {
+      synthesisEntered.resolve();
+      return pending.promise;
+    });
     const cancellation: { current: (() => void) | null } = { current: null };
     const speaking = runtimeFor([CATALOG_TTS_DECLARATION]).speak(CATALOG_TTS_ID, { text: 'cancel me', providerConfig: config,
       registerPlaybackStopper: stopper => {
@@ -401,7 +412,8 @@ describe('bundledSpeechRuntime', () => {
         return () => { if (cancellation.current === stopper) cancellation.current = null; };
       } });
     const outcome = expect(speaking).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
-    await vi.waitFor(() => expect(speech.speechSynthesizeRpc).toHaveBeenCalledOnce());
+    await synthesisEntered.promise;
+    expect(speech.speechSynthesizeRpc).toHaveBeenCalledOnce();
     cancellation.current!();
     expect(synthesisSignal?.aborted).toBe(true);
     pending.resolve(wav);

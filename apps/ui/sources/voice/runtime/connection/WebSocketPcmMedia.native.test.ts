@@ -29,7 +29,8 @@ afterAll(() => {
 
 describe('native WebSocketPcmMedia', () => {
   async function createMedia() {
-    const onInputChunk = vi.fn();
+    const inputChunkReceived = createDeferred<void>();
+    const onInputChunk = vi.fn((_chunk: string) => { inputChunkReceived.resolve(); });
     const onOutputLevel = vi.fn();
     const mic = createNativeMicSession();
     const ensureActive = vi.spyOn(mic, 'ensureActive');
@@ -38,11 +39,11 @@ describe('native WebSocketPcmMedia', () => {
       onInputChunk, onOutputLevel,
     });
     activeMedia.add(media);
-    return { media, onInputChunk, onOutputLevel, ensureActive };
+    return { media, onInputChunk, onOutputLevel, ensureActive, inputChunkReceived: inputChunkReceived.promise };
   }
 
   it('uses the one shared native capture/player lifecycle with a stream-scoped output lease', async () => {
-    const { media, onInputChunk, onOutputLevel, ensureActive } = await createMedia();
+    const { media, onInputChunk, onOutputLevel, ensureActive, inputChunkReceived } = await createMedia();
     const terminal = vi.fn();
     media.pcm.subscribeTerminal?.(terminal);
     await media.pcm.start(new AbortController().signal);
@@ -57,7 +58,8 @@ describe('native WebSocketPcmMedia', () => {
     expect(native.nativeModule.startPlayback).toHaveBeenCalledWith({ ...identity, sampleRate: 24_000, channels: 1 });
 
     native.emitEvent('audioFrame', { streamId: identity.streamId, pcm16leBase64: 'AQACAA==', sampleRate: 24_000, channels: 1 });
-    await vi.waitFor(() => expect(onInputChunk).toHaveBeenCalledWith('AQACAA=='));
+    await inputChunkReceived;
+    expect(onInputChunk).toHaveBeenCalledWith('AQACAA==');
     expect(media.inputLevel()).toBeGreaterThan(0);
     expect(media.enqueueOutput('AQACAA==')).toBe(true);
     expect(native.nativeModule.enqueuePlayback).toHaveBeenCalledWith({ ...identity, pcm16leBase64: 'AQACAA==' });
@@ -97,7 +99,9 @@ describe('native WebSocketPcmMedia', () => {
 
   it.each(['stop', 'abort'] as const)('releases a late native capture when its start receives %s', async (outcome) => {
     const started = createDeferred<{ streamId: string }>();
+    const startEntered = createDeferred<void>();
     native.nativeModule.start.mockImplementationOnce(async () => {
+      startEntered.resolve();
       const stream = await started.promise;
       const request = native.nativeModule.configureAudioSession.mock.calls.at(-1)?.[0];
       if (!request) throw new Error('Expected an admitted native audio session');
@@ -109,7 +113,8 @@ describe('native WebSocketPcmMedia', () => {
     const { media } = await createMedia();
     const controller = new AbortController();
     const starting = media.pcm.start(controller.signal);
-    await vi.waitFor(() => expect(native.nativeModule.start).toHaveBeenCalledOnce());
+    await startEntered.promise;
+    expect(native.nativeModule.start).toHaveBeenCalledOnce();
     if (outcome === 'stop') await media.pcm.stop();
     else controller.abort();
     started.resolve({ streamId: 'native-stream' });
@@ -124,9 +129,14 @@ describe('native WebSocketPcmMedia', () => {
 
   it('closes the transport independently while the actual native capture stop is still pending', async () => {
     const stopped = createDeferred<void>();
-    native.nativeModule.stop.mockImplementationOnce(async () => await stopped.promise);
+    const stopEntered = createDeferred<void>();
+    native.nativeModule.stop.mockImplementationOnce(async () => {
+      stopEntered.resolve();
+      await stopped.promise;
+    });
     const { media } = await createMedia();
-    const closeTransport = vi.fn(async () => {});
+    const closeEntered = createDeferred<void>();
+    const closeTransport = vi.fn(async () => { closeEntered.resolve(); });
     const connection = createWebSocketPcmConnection({
       driver: { open: async () => {}, sendControl: async () => {}, close: closeTransport },
       pcm: media.pcm,
@@ -136,8 +146,9 @@ describe('native WebSocketPcmMedia', () => {
     let settled = false;
     const closing = connection.close({ code: 'user_stop' }).then(() => { settled = true; });
     try {
-      await vi.waitFor(() => expect(native.nativeModule.stop).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(closeTransport).toHaveBeenCalledOnce());
+      await Promise.all([stopEntered.promise, closeEntered.promise]);
+      expect(native.nativeModule.stop).toHaveBeenCalledOnce();
+      expect(closeTransport).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
       expect(connection.state()).toBe('closed');
       expect(media.enqueueOutput('AQACAA==')).toBe(false);

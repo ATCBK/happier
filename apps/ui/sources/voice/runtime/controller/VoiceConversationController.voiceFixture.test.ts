@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,7 +57,7 @@ describe('conversation controller canonical fixture consumer', () => {
       const starting = composed.runtime.adapter.start({
         sessionId: '', requestedTargetSessionAddress: null, initialContext: '',
       });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
       await starting;
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
@@ -75,7 +76,7 @@ describe('conversation controller canonical fixture consumer', () => {
           item_id: `fixture-turn-${index + 1}`,
           transcript: turnTexts[index]!,
         }));
-        await vi.waitFor(() => expect(persistedUserTexts()).toEqual(turnTexts.slice(0, index + 1)));
+        await waitForTestEvent(storage.subscribe, () => expect(persistedUserTexts()).toEqual(turnTexts.slice(0, index + 1)));
       }
       const projected = readCanonicalVoiceTranscriptSnapshot(composed.historySessionId);
       expect(projected.map(event => event.text)).toEqual(turnTexts);
