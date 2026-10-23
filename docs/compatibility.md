@@ -3652,6 +3652,17 @@ interval overlapped. Correlated Agent/tool evidence remains independently attrib
 while workspace touched paths supply only best-effort content and possible attribution.
 The derived per-file and summary axes do not introduce another persisted change-set document.
 
+The foreground host publishes one terminal Diff recap after its existing checkpoint
+lifecycle joins normalized tool evidence with the final checkpoint result. The runtime
+transcript publisher writes that combined card; the checkpoint lifecycle does not write
+a second recap. Bound native turns await that write in their terminal transcript
+projection, preserving the existing required-write failure outcome before settlement.
+Native turns without a dispatched checkpoint binding and standalone Runs
+use the same publisher with provider evidence alone. Original tool rows remain separate
+evidence, unavailable checkpoints retain provider evidence, and empty turns emit no recap.
+This changes new development-source publication, not previously stored transcript rows;
+loaded-runtime verification still requires the rebuilt host and a usable Agent turn.
+
 The same merger normalizes evidence paths against the resolved repository root and retains
 all contributing observations through rename chains; copies remain independent. Consumers
 use that projection rather than reconstructing lineage from the final filename. Across
