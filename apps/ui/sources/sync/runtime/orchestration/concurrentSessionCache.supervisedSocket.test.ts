@@ -27,7 +27,90 @@ function sessionUpdate() { h.socket().trigger('update', { body: { t: 'update-ses
 function machineUpdate() { h.socket().trigger('update', { body: { t: 'update-machine' } }); }
 function offline() { h.pool.reportServerUnreachable(h.homeB.serverUrl, new Error('Home unreachable'), h.homeB.token); }
 
+const refreshPeriodMs = 5 * 60_000;
+function observePeriodicClock() {
+    const schedule = globalThis.setTimeout;
+    const fires = vi.fn();
+    // The clock is the external boundary; preserve every callback and its arguments.
+    const scheduled = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) =>
+        schedule(() => {
+            if (delay === refreshPeriodMs) fires();
+            callback(...args);
+        }, delay));
+    return { fires, scheduled };
+}
+
 describe('concurrent session cache supervised sockets', () => {
+    it('owns no periodic refresh timer or network when no secondary Home is selected', async () => {
+        await h.select([h.homeA.id]);
+        vi.useFakeTimers();
+        const clock = observePeriodicClock();
+        try {
+            h.startConcurrentSessionCacheSync();
+            await vi.advanceTimersByTimeAsync(2 * refreshPeriodMs + 1_000);
+            expect(h.network.socketBoundaries).toHaveLength(0);
+            expect(h.requests('/v2/sessions')).toHaveLength(0);
+            expect(h.requests('/v1/machines')).toHaveLength(0);
+            expect([clock.fires.mock.calls.length,
+                clock.scheduled.mock.calls.filter(([, delay]) => delay === refreshPeriodMs).length]).toEqual([0, 0]);
+        } finally {
+            h.stopConcurrentSessionCacheSync();
+            clock.scheduled.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    it('refreshes a selected background Home and retires its last timer before a late read can rearm it', async () => {
+        vi.useFakeTimers();
+        const clock = observePeriodicClock();
+        let releaseLate: (() => void) | undefined;
+        try {
+            h.setSessions(h.homeB, [h.session({ id: 'initial' })]);
+            await h.start(); await h.ready();
+            const initialReads = h.requests('/v2/sessions').length;
+            h.setSessions(h.homeB, [h.session({ id: 'periodic-current' })]);
+            await vi.advanceTimersByTimeAsync(refreshPeriodMs + 1_000);
+            await h.ready();
+            expect(h.requests('/v2/sessions')).toHaveLength(initialReads + 1);
+            expect(rows()?.['periodic-current']).toBeDefined();
+
+            let signal: AbortSignal | null | undefined;
+            h.setResponder(async (input, init) => {
+                if (new URL(String(input)).pathname !== '/v2/sessions') return null;
+                signal = init?.signal;
+                await new Promise<void>(resolve => { releaseLate = resolve; });
+                return Response.json({ sessions: [h.session({ id: 'late-retired' })], nextCursor: null, hasNext: false });
+            });
+            await vi.advanceTimersByTimeAsync(refreshPeriodMs);
+            expect(releaseLate).toBeTypeOf('function');
+            await h.select([h.homeA.id]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(signal?.aborted).toBe(true);
+            expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(false);
+            const closedReads = h.requests('/v2/sessions').length;
+            const closedFires = clock.fires.mock.calls.length;
+            releaseLate?.();
+            h.setResponder(null);
+            await vi.advanceTimersByTimeAsync(2 * refreshPeriodMs + 1_000);
+            expect(h.requests('/v2/sessions')).toHaveLength(closedReads);
+            expect(rows()?.['late-retired']).toBeUndefined();
+            const idleFires = clock.fires.mock.calls.length - closedFires;
+
+            h.setSessions(h.homeB, [h.session({ id: 'reopened-current' })]);
+            await h.select();
+            await vi.advanceTimersByTimeAsync(1_000);
+            await h.ready();
+            expect(h.requests('/v2/sessions')).toHaveLength(closedReads + 1);
+            expect(rows()?.['reopened-current']).toBeDefined();
+            expect(idleFires).toBe(0);
+        } finally {
+            releaseLate?.();
+            h.stopConcurrentSessionCacheSync();
+            clock.scheduled.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
     it('withdraws secondary-Home presence until fresh ingress for that exact Account and Machine', async () => {
         await h.start(); await h.ready();
         const reachability = await import('@/sync/domains/machines/reachability/machineReachability');
@@ -371,12 +454,12 @@ describe('concurrent session cache supervised sockets', () => {
         const machineReads = h.requests('/v1/machines').length;
         const socket = h.socket();
         socket.trigger('update', { id: 'account-1', seq: 11, createdAt: 11, body: { t: 'update-account', settings: { value: 'encrypted', version: 2 } } });
-        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, accountSettingsAffects: true });
         socket.trigger('ephemeral', { type: 'usage', id: sessionId, key: 'codex:model', tokens: { total: 1 }, cost: { total: 0 }, timestamp: 1000 });
-        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'] });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'], accountSettingsAffects: true });
         socket.trigger('ephemeral', { type: 'usage-sources-invalidated', machineId: 'machine-b', installationId: 'installation-b' });
         expect(observer).toHaveBeenCalledTimes(3);
-        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'] });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'], accountSettingsAffects: true });
         expect(h.requests('/v2/sessions')).toHaveLength(sessionReads);
         expect(h.requests('/v1/machines')).toHaveLength(machineReads);
     });
@@ -391,11 +474,11 @@ describe('concurrent session cache supervised sockets', () => {
     it('invalidates exact-Home Account projections when a secondary socket reconnects', async () => {
         const observer = observeAccountChanges();
         await h.start(); await h.ready();
-        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, source: 'connected' });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, source: 'connected', accountSettingsAffects: true });
         observer.mockClear();
         h.socket().trigger('connect');
         expect(observer).toHaveBeenCalledTimes(1);
-        expect(observer).toHaveBeenCalledWith({ serverId: h.homeB.id, source: 'connected' });
+        expect(observer).toHaveBeenCalledWith({ serverId: h.homeB.id, source: 'connected', accountSettingsAffects: true });
     });
 
     it('uses one supervised reconnect owner and disposes the secondary transport on stop', async () => {

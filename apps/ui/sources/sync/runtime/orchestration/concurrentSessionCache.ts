@@ -1297,6 +1297,7 @@ async function disposeManagedServer(entry: ManagedConcurrentServer): Promise<voi
         // New page demand must not join work bound to this retired entry.
         invalidateHomeAccountReadJoins(entry.id);
         managedServers.delete(entry.id);
+        reconcilePeriodicRefreshDemand();
     }
     invalidateCachedTransferRoutesForServer({ serverId: entry.id });
     await Promise.allSettled([
@@ -1311,6 +1312,23 @@ function stopManagedServer(serverId: string): void {
     const entry = getManagedServer(serverId);
     if (!entry) return;
     void disposeManagedServer(entry);
+}
+
+function reconcilePeriodicRefreshDemand(): void {
+    if (!started || managedServers.size === 0) {
+        periodicRefreshStop?.();
+        periodicRefreshStop = null;
+        return;
+    }
+    if (periodicRefreshStop) return;
+    // Selected secondary Homes remain live in the background; saved Homes alone
+    // are not refresh demand. Selection/credential/profile events acquire them.
+    periodicRefreshStop = startRuntimeActiveGatedInterval(() => {
+        for (const entry of managedServers.values()) {
+            queueRefresh(entry);
+        }
+        scheduleReconcile();
+    }, readRefreshIntervalMs());
 }
 
 function createManagedServer(
@@ -1366,6 +1384,7 @@ function createManagedServer(
     // is acquired. Idle entries admit no reads or socket ingress; the retired
     // transport is never kept alive as a fallback for an unverified carrier.
     managedServers.set(entry.id, entry);
+    reconcilePeriodicRefreshDemand();
     publishConcurrentSessionListObservation({
         entry,
         phase: entry.lastSessionListSuccessAt === null ? 'loading' : 'refreshing',
@@ -1937,13 +1956,6 @@ export function startConcurrentSessionCacheSync(): void {
         }
         pauseManagedServersForNetworkDisallowed();
     });
-
-    periodicRefreshStop = startRuntimeActiveGatedInterval(() => {
-        for (const entry of managedServers.values()) {
-            queueRefresh(entry);
-        }
-        scheduleReconcile();
-    }, readRefreshIntervalMs());
 
     scheduleReconcile();
     schedulePushTokenReconciliation();
