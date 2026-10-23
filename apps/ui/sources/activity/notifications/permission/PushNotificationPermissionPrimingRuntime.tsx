@@ -3,6 +3,7 @@ import * as React from 'react';
 import { isExpoPushNotificationChannelEnabled } from '@happier-dev/protocol/account/settings/accountSettings';
 
 import { useIsDataReady, useSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { sync } from '@/sync/sync';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -20,6 +21,7 @@ import { runPushNotificationPermissionPriming } from './pushNotificationPermissi
 export function PushNotificationPermissionPrimingRuntime(): React.ReactElement | null {
     const attentionDeliveryPolicyV1 = useSetting('attentionDeliveryPolicyV1');
     const isDataReady = useIsDataReady();
+    const hasSettingsSnapshot = getStorage()((state) => state.settingsVersion !== null);
     const pushEnabled = React.useMemo(
         () => isExpoPushNotificationChannelEnabled({ attentionDeliveryPolicyV1 }),
         [attentionDeliveryPolicyV1],
@@ -29,12 +31,12 @@ export function PushNotificationPermissionPrimingRuntime(): React.ReactElement |
     React.useEffect(() => {
         if (hasRunRef.current) return;
         if (!isPushNotificationRuntimeSupported()) return;
-        // Settings hooks fall back to defaults before hydration, so the account preference is only
-        // trustworthy once the store reports data ready. This also keeps the ask from landing over
-        // first-run loading.
-        if (!isDataReady) return;
-        if (!pushEnabled) return;
+        // Shell readiness can follow a failed Settings attempt; wait for the Account's known
+        // snapshot too. Consume this startup attempt even when push is off: a later Enable owns
+        // its explicit permission Action and must not also trigger this automatic prompt.
+        if (!isDataReady || !hasSettingsSnapshot) return;
         hasRunRef.current = true;
+        if (!pushEnabled) return;
 
         fireAndForget(
             runPushNotificationPermissionPriming({
@@ -44,7 +46,7 @@ export function PushNotificationPermissionPrimingRuntime(): React.ReactElement |
             }),
             { tag: 'PushNotificationPermissionPrimingRuntime.run' },
         );
-    }, [isDataReady, pushEnabled]);
+    }, [hasSettingsSnapshot, isDataReady, pushEnabled]);
 
     return null;
 }

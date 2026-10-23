@@ -15,10 +15,6 @@ vi.mock('expo-notifications', () => ({
     getPermissionsAsync: vi.fn(async () => ({ status: 'undetermined', granted: false, canAskAgain: true })),
 }));
 
-vi.mock('@/sync/sync', () => ({
-    sync: { onPushPermissionGranted: vi.fn() },
-}));
-
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios' } });
@@ -54,6 +50,9 @@ describe('PushNotificationPermissionPrimingRuntime', () => {
         await flushHookEffects({ cycles: 10 });
 
         expect(Modal.confirm).not.toHaveBeenCalled();
+        await act(async () => { storage.getState().applyReady(); });
+        await flushHookEffects({ cycles: 10 });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
     });
 
     it('does not ask when the account disabled push notifications', async () => {
@@ -65,7 +64,19 @@ describe('PushNotificationPermissionPrimingRuntime', () => {
         expect(Modal.confirm).not.toHaveBeenCalled();
     });
 
-    it('ignores unrelated settings and asks when the account enables push', async () => {
+    it('waits for a known Account settings snapshot when the ready shell has no settings version', async () => {
+        await storage.getState().activateSettingsScope({ serverId: 'push-delayed-home', accountId: 'push-delayed-account' });
+        expect(storage.getState().settingsVersion).toBeNull();
+        const { PushNotificationPermissionPrimingRuntime } = await import('./PushNotificationPermissionPrimingRuntime');
+        await renderScreen(<PushNotificationPermissionPrimingRuntime />);
+        await flushHookEffects({ cycles: 10 });
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        await act(async () => { storage.getState().applySettings(settingsDefaults, 1); });
+        await flushHookEffects({ cycles: 10 });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores unrelated settings and leaves later Enable permission intent to its admitted Action', async () => {
         const policy = settingsDefaults.attentionDeliveryPolicyV1;
         storage.getState().applySettingsLocal({
             attentionDeliveryPolicyV1: { ...policy, channels: { ...policy.channels, expo_push: { ...policy.channels.expo_push, enabled: false } } },
@@ -79,7 +90,7 @@ describe('PushNotificationPermissionPrimingRuntime', () => {
         );
         const baseline = commits.mock.calls.length;
         await act(async () => {
-            storage.getState().applySettingsLocal({ favoriteDirectories: ['~/code'] });
+            storage.getState().applySettings(settingsParse({ ...storage.getState().settings, favoriteDirectories: ['~/code'] }), 2);
         });
         expect(commits.mock.calls.length).toBe(baseline);
         await act(async () => {
@@ -87,6 +98,6 @@ describe('PushNotificationPermissionPrimingRuntime', () => {
         });
         await flushHookEffects({ cycles: 10 });
         expect(commits.mock.calls.length).toBe(baseline + 1);
-        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
 });
