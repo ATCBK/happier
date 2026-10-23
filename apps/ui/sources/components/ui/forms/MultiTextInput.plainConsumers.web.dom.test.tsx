@@ -93,7 +93,7 @@ function expectPlain(input: HTMLElement, text: string) {
 }
 
 const recovery: WorkflowInvocationRecoveryPresentation = {
-    canInspectExecution: false, canReattach: false, canRetrySameConversation: true, canRetryFreshAgent: false,
+    canInspectExecution: false, canReattach: false, canRetrySameConversation: true, canRetryFreshAgent: false, canRetry: false,
     retryCausalInvocationIds: [], unavailableReasons: { reattach: null, retry: null, continueSameConversation: null, continueFreshAgent: null },
     canContinuePrepared: false, canRestoreWorkspace: false, canStartReviewedNewRun: false, canRunWithAnotherAgent: false,
     preparedRecovery: null, requiresUncertaintyAcknowledgement: false, waitingForStop: false,
