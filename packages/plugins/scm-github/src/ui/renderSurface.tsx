@@ -51,6 +51,7 @@ import {
   Banner,
   Button,
   DiffStat,
+  DiffViewer,
   Divider,
   EmptyState,
   ErrorState,
@@ -165,6 +166,7 @@ import {
   type GithubDetailFieldV1,
 } from './detail/model.js';
 import {
+  useGithubChangedFileDiff,
   useGithubChangedFiles,
   useGithubCapabilities,
   useGithubChecks,
@@ -175,6 +177,7 @@ import {
   useGithubFeedbackThreadReplies,
   useGithubOverview,
   useGithubTimeline,
+  type GithubChangedFileViewV1,
   type GithubChecksViewV1,
   type GithubOverviewControllerV1,
   type GithubPagedControllerV1,
@@ -2427,6 +2430,15 @@ function FilesPanel({
   const hostApi = usePluginHostApi();
   const controller = useGithubChangedFiles(input);
   const { state } = controller;
+  // Which files are open in place. Opening a file reads its own diff; closing it drops that read.
+  const [openPaths, setOpenPaths] = React.useState<ReadonlySet<string>>(() => new Set());
+  const toggle = React.useCallback((path: string) => {
+    setOpenPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }, []);
   // The reading order is a source-owned fact computed over everything read so
   // far, so appending a page reorders within the same three bands rather than
   // stapling a second, differently ordered list onto the end.
@@ -2538,6 +2550,13 @@ function FilesPanel({
           })()}
           accessory={<DiffStat added={row.additions} removed={row.deletions} locale={locale} />}
           tone={CHANGED_FILE_TONES[row.status] ?? 'neutral'}
+          {...(row.diffAvailable
+            ? {
+              expanded: openPaths.has(row.path),
+              onPress: () => toggle(row.path),
+              expandedContent: <GithubFileDiffBody input={input} row={row} />,
+            }
+            : {})}
           {...quietRowActions(hostApi, text, {
             copyValue: row.path,
             ...(row.webUrl === undefined ? {} : { openUrl: row.webUrl }),
@@ -2545,6 +2564,65 @@ function FilesPanel({
         />
       )}
     />
+  );
+}
+
+/** One opened file: its own diff, read only while open. A shortened diff says so; a file without one says that. */
+function GithubFileDiffBody({
+  input,
+  row,
+}: Readonly<{ input: TriageDetailSurfaceInputV1; row: GithubChangedFileViewV1 }>): React.ReactElement {
+  const text = usePluginTranslation();
+  const diff = useGithubChangedFileDiff(input, row);
+  const { state } = diff;
+  if (state.kind === 'loading') {
+    return (
+      <Text
+        variant="micro"
+        tone="secondary"
+        valueKey="plugins.github.ui.readingFileDiff"
+        fallback="Reading this file's diff from GitHub…"
+      />
+    );
+  }
+  if (state.kind === 'unavailable') {
+    return (
+      <Text
+        variant="micro"
+        tone="secondary"
+        value={failureDescription(state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'))}
+      />
+    );
+  }
+  const { evidence, unifiedDiff } = state.value;
+  if (evidence.state === 'unavailable' || unifiedDiff === null) {
+    return (
+      <Text
+        variant="micro"
+        tone="secondary"
+        valueKey="plugins.github.ui.fileDiffNone"
+        fallback="GitHub has no diff for this file."
+      />
+    );
+  }
+  return (
+    <Stack gap="small">
+      <DiffViewer
+        unifiedDiff={unifiedDiff}
+        filePath={row.path}
+        label={text('plugins.github.ui.fileDiffLabel', 'Changes in this file')}
+      />
+      {evidence.state === 'truncated'
+        ? (
+          <Text
+            variant="micro"
+            tone="secondary"
+            valueKey="plugins.github.ui.fileDiffTruncated"
+            fallback="GitHub shortened this diff. The rest is on GitHub."
+          />
+        )
+        : null}
+    </Stack>
   );
 }
 
@@ -3672,6 +3750,15 @@ function githubChecksRollupV1(view: GithubChecksViewV1): TriageDetailChecksRollu
   };
 }
 
+/** The first line of a check's output that says something, without its Markdown heading or list marks. */
+function firstGithubOutputLine(output: string): string | undefined {
+  for (const line of output.split('\n')) {
+    const said = line.replace(/^[\s#>*\-]+/, '').trim();
+    if (said !== '') return said;
+  }
+  return undefined;
+}
+
 /**
  * The checks step: GitHub's rollup of the head commit's checks, and the ones that failed.
  * When GitHub had more check pages than were read (`knownIncomplete`) it states no counts,
@@ -3686,7 +3773,11 @@ function GithubChecksStep({ input }: Readonly<{ input: TriageDetailSurfaceInputV
   const rollup = githubChecksRollupV1(view);
   return (
     <TriageDetailChecks title="Checks" titleKey="plugins.github.ui.story.checks" latestCommit rollup={rollup}
-      failing={failed.map((row) => ({ id: row.key, name: row.name }))} />
+      failing={failed.map((row) => {
+        // What GitHub said about the failure, in one line under its name: the output's first line.
+        const said = row.logExcerpt === undefined ? undefined : firstGithubOutputLine(row.logExcerpt);
+        return { id: row.key, name: row.name, ...(said === undefined ? {} : { detail: said }) };
+      })} />
   );
 }
 

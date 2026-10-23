@@ -4,7 +4,7 @@ import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GITHUB_CONNECTED_ACCOUNT_PURPOSE,
@@ -121,8 +121,7 @@ afterEach(async () => {
   for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
 
-describe('the mounted GitHub Checks plane Session-start boundary', () => {
-  it('mounts the provider facts and zero Session-start controls', async () => {
+async function mountChecksDetail(input: JsonValue = launchInput()): Promise<PluginUiTestkit> {
     let detail!: PluginUiTestkit;
     await act(async () => {
       detail = await createPluginUiTestkit({
@@ -131,7 +130,7 @@ describe('the mounted GitHub Checks plane Session-start boundary', () => {
         surface: renderSurface,
         surfaceContext: createSurfaceContextFixture(),
         adapter: createPluginUiRnwSemanticSurfaceAdapter(),
-        launchInput: launchInput(),
+        launchInput: input,
         handlers: {
           executeAction: async ({ action, input: actionInput }) => {
             const localId = (action as { localId: string }).localId;
@@ -163,7 +162,18 @@ describe('the mounted GitHub Checks plane Session-start boundary', () => {
       }) as PluginUiTestkit;
     });
     mounted.push(detail);
+    return detail;
+}
 
+describe('the mounted GitHub Checks plane Session-start boundary', () => {
+  it('says under each failing check in the story what GitHub reported about it', async () => {
+    // The Triage frame asks the source for its Overview panel: the shared story with its Checks step.
+    const detail = await mountChecksDetail({ ...(launchInput() as Record<string, JsonValue>), panel: 'overview' });
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Typecheck found 2 errors in src/pump.ts.'));
+  });
+
+  it('mounts the provider facts and zero Session-start controls', async () => {
+    const detail = await mountChecksDetail();
     await act(async () => {
       await detail.press(await detail.getByRole('tab', { name: 'Checks' }));
     });
