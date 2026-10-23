@@ -15,7 +15,7 @@ function traceProjection(event) {
   const row = Object.fromEntries(['name', 'cat', 'ph', 'pid', 'tid', 'ts', 'dur', 'id', 'id2', 'scope', 's', 'tts', 'tdur'].filter(key => event[key] !== undefined).map(key => [key, event[key]]));
   const data = event.args?.data;
   if (data && typeof data === 'object') {
-    const safe = Object.fromEntries(['scriptId', 'functionName', 'lineNumber', 'columnNumber', 'timerId', 'type', 'startTime', 'endTime', 'id', 'timeDeltas', 'lines'].filter(key => data[key] !== undefined).map(key => [key, data[key]]));
+    const safe = Object.fromEntries(['scriptId', 'functionName', 'lineNumber', 'columnNumber', 'timerId', 'singleShot', 'timeout', 'type', 'startTime', 'endTime', 'id', 'timeDeltas', 'lines'].filter(key => data[key] !== undefined).map(key => [key, data[key]]));
     if (typeof data.url === 'string') safe.url = safeUrl(data.url);
     if (Array.isArray(data.stackTrace)) safe.stackTrace = data.stackTrace.map(frameProjection);
     if (data.cpuProfile) safe.cpuProfile = { ...data.cpuProfile, nodes: data.cpuProfile.nodes?.map(node => ({ ...node, callFrame: node.callFrame ? frameProjection(node.callFrame) : undefined })) };
@@ -25,7 +25,11 @@ function traceProjection(event) {
   return row;
 }
 
-function fullTrace(cdp, directory, measurementDurationMs) {
+function fullTrace(cdp, directory, measurementDurationMs, cpuProfile, captureMode) {
+  const categories = [
+    ...TRACE_CATEGORIES.filter(category => cpuProfile || category !== 'disabled-by-default-v8.cpu_profiler'),
+    ...(captureMode === 'counts' ? ['disabled-by-default-devtools.timeline.stack'] : []),
+  ];
   let stream, file, completion, acceptComplete, fileDone, count = 0, writeError, started = false, terminal;
   let samplerSources = [];
   const summaryEvents = [];
@@ -50,7 +54,7 @@ function fullTrace(cdp, directory, measurementDurationMs) {
       // The default 200 MiB dropped five-minute traces on the real fleet.
       // This diagnostic buffer covers the observed volume; dropped traces still
       // fail closed. It does not bound application work or accepted user data.
-      await cdp.send('Tracing.start', { traceConfig: { recordMode: 'recordAsMuchAsPossible', traceBufferSizeInKb: 2097152, includedCategories: TRACE_CATEGORIES }, transferMode: 'ReportEvents' });
+      await cdp.send('Tracing.start', { traceConfig: { recordMode: 'recordAsMuchAsPossible', traceBufferSizeInKb: 2097152, includedCategories: categories }, transferMode: 'ReportEvents' });
     },
     async stop() {
       if (terminal) return terminal;
@@ -68,7 +72,7 @@ function fullTrace(cdp, directory, measurementDurationMs) {
       const sampler = result.dataLossOccurred === false
         ? summarizeJsThreadLagSampler(summaryEvents, summary, samplerSources)
         : { available: false, unavailableReason: 'complete-trace-required', counterfactual: false };
-      return terminal = { artifact: 'trace.json.gz', categories: TRACE_CATEGORIES, eventCount: count,
+      return terminal = { artifact: 'trace.json.gz', categories, eventCount: count,
         dataLossOccurred: result.dataLossOccurred, summary,
         instrumentation: { jsThreadLagSampler: { ...sampler, sourceRanges: samplerSources } } };
     },
@@ -133,7 +137,9 @@ export async function startCapture(options) {
     throw error;
   }
   const salt = randomBytes(32).toString('hex');
-  const trace = options.profiling ? fullTrace(cdp, options.outputDir, options.measurementDurationMs) : null;
+  // Counts need task/timer envelopes, not necessarily sampled CPU-stack attribution.
+  const cpuProfile = options.cpuProfile !== false;
+  const trace = options.profiling ? fullTrace(cdp, options.outputDir, options.measurementDurationMs, cpuProfile, options.captureMode) : null;
   let heapStarted = false;
   const requests = [], sockets = [], socketLifecycle = [], telemetry = [], scripts = new Map(), nativePairs = [];
   const socketUrls = new Map();
@@ -325,11 +331,11 @@ export async function startCapture(options) {
           // One MiB allocation sampling retains function attribution without
           // the oversized CDP serialization observed at finer sampling.
           await cdp.send('HeapProfiler.startSampling', { samplingInterval: 1048576, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }); heapStarted = true;
-          await cdp.send('Profiler.setSamplingInterval', { interval: 10000 });
+          if (cpuProfile) await cdp.send('Profiler.setSamplingInterval', { interval: 10000 });
           await trace.start(samplerSources);
         }
         startMs = Date.now(); recording = true;
-        await cdp.send('Profiler.start'); profileStarted = true;
+        if (cpuProfile) { await cdp.send('Profiler.start'); profileStarted = true; }
         if (options.profiling) {
           const marker = await evaluate(`(() => { const mark = performance.mark('happier-perf:start'); return { epochMs: performance.timeOrigin + mark.startTime, startTime: mark.startTime, timeOrigin: performance.timeOrigin }; })()`);
           if (!Number.isFinite(marker?.epochMs)) throw new Error('Trace start marker clock unavailable');
@@ -375,7 +381,7 @@ export async function startCapture(options) {
         await available('finish.async-initiators', () => Promise.all(initiatorWork));
         if (requests.some(row => row.initiator.asyncStackUnavailable)) errors.push({ phase: 'finish.async-initiators', kind: 'parent-stack-unavailable' });
         const endAuthState = await available('finish.auth-surface', () => evaluate(`(${pageAuthSurface.toString()})()`));
-        if (probeData?.instrumentation) Object.assign(probeData.instrumentation, { asyncCallStackDepth, profiling: Boolean(options.profiling) });
+        if (probeData?.instrumentation) Object.assign(probeData.instrumentation, { asyncCallStackDepth, profiling: Boolean(options.profiling), cpuProfile });
         const profile = stopped?.profile;
         let summaryProfile = profile ? normalizeProfileSamples(profile) : null;
         if (summaryProfile && traceResult?.summary.available) {

@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { runQaBrowserWorker } from '../utils/dev_targets/qa_browser.mjs';
 import { startCapture } from './capture.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
@@ -80,12 +80,16 @@ test('counts capture retains async request issuers; timing and cleanup remain un
   });
   assert.deepEqual(ordinary, { started: true, duplicate: false, running: true, stopped: true },
     'ordinary telemetry outside a capture retains its sampler lifecycle');
-  for (const captureMode of ['counts', 'timing']) {
+  for (const { captureMode, cpuProfile } of [
+    { captureMode: 'counts', cpuProfile: true },
+    { captureMode: 'timing', cpuProfile: true },
+    { captureMode: 'counts', cpuProfile: false },
+  ]) {
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     const discovery = await (await fetch(`http://127.0.0.1:${endpoint.port}/json/list`)).json();
     const pageId = discovery.find(target => target.url === page.url()).id;
     const capture = await startCapture({ cdp: `http://127.0.0.1:${endpoint.port}`, pageId, cache: 'warm', captureMode,
-      profiling: true, outputDir: fixture.root });
+      profiling: true, cpuProfile, outputDir: fixture.root });
     let cleanup;
     try {
       // The telemetry constructor reads the pre-document capture override,
@@ -106,6 +110,19 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       await page.evaluate(() => issuingOperation());
       await page.evaluate(() => showWelcome());
       const result = await capture.finish();
+      if (!cpuProfile) {
+        assert.equal(result.profile, null, 'timeline-only counts must not collect or attribute a CPU profile');
+        assert.equal(result.cpu, null);
+        const events = JSON.parse(gunzipSync(await readFile(fixture.path('trace.json.gz')))).traceEvents;
+        const timer = events.find(event => event.name === 'TimerInstall'
+          && event.args?.data?.stackTrace?.some(frame => frame.functionName === 'issuingOperation'));
+        assert.equal(timer?.args.data.singleShot, true, 'timer classification must survive the safe trace projection');
+        assert.ok(Number.isFinite(timer.args.data.timeout));
+      }
+      assert.equal(result.profiling.trace.categories.includes('disabled-by-default-v8.cpu_profiler'), cpuProfile,
+        'timeline-only counts must not enable the trace CPU sampler either');
+      assert.equal(result.profiling.trace.categories.includes('disabled-by-default-devtools.timeline.stack'), captureMode === 'counts',
+        'timer issuer stacks belong to counts, not uninstrumented timing');
       const request = result.network.records.find(row => row.endpoint.endsWith('/probe'));
       assert.ok(request, 'fixture request must enter the native capture window');
       assert.equal(request.decodedBytes, Buffer.byteLength(probeBody), 'real Chrome reports decoded UTF-8 byte length for compressed responses');
