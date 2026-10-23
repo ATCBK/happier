@@ -40,9 +40,15 @@ describe('signed Project clean preparation', () => {
     let rowReads = 0;
     let current = true;
     let revokeOnMachineRead = false;
+    let changeRowsOnMachineRead: (() => void) | undefined;
     const deliveries: unknown[] = [];
     const fixture = await composeBindChildSourcePhaseTestRuntime({ socketIo, projectRowsFromHttp: true,
       readAdditionalHttpResponse: async url => {
+        if (changeRowsOnMachineRead && url.includes('/v1/machines/')) {
+          const change = changeRowsOnMachineRead;
+          changeRowsOnMachineRead = undefined;
+          change();
+        }
         if (revokeOnMachineRead && url.includes('/v1/machines/')) {
           revokeOnMachineRead = false;
           current = false;
@@ -144,13 +150,37 @@ describe('signed Project clean preparation', () => {
       rowReads = 0;
       await expect(receiver(request, receivingContext)).resolves.toMatchObject({ ok: true,
         traversed: [{ relationshipId: 'requester-clean' }] });
-      expect.soft(rowReads).toBe(1);
+      expect.soft(rowReads).toBe(2);
       expect(await readFile(join(fixture.targetPath, 'payload.txt'), 'utf8')).toBe(payload);
     }
     rowReads = 0;
     await expect(fixture.parent.handoffAdapter.prepareBetween(request, context.signal, receivingContext))
       .resolves.toMatchObject({ ok: true, traversed: [{ relationshipId: 'requester-clean' }] });
-    expect(rowReads).toBe(1);
+    expect(rowReads).toBe(2);
+
+    // A requester-private row can change after admission without updating the
+    // daemon's installed Account projection before its queued physical copy.
+    for (const changeKind of ['disabled relationship', 'changed endpoint'] as const) {
+      const acceptedRows = [...rows];
+      const beforeWithdrawal = await readFile(join(fixture.targetPath, 'payload.txt'), 'utf8');
+      await writeFile(join(fixture.sourcePath, 'payload.txt'), `${changeKind} must not copy`);
+      changeRowsOnMachineRead = () => {
+        rows[graphIndex] = ProjectAccountRowV1Schema.parse({ key, revision: 2,
+          content: cipher.seal({ key, value: { relationships: [{ ...relationship,
+            enabled: changeKind !== 'disabled relationship' }] } }) });
+        if (changeKind === 'changed endpoint') {
+          const refKey = { kind: 'workspace-ref' as const, serverId: fixture.serverId, id: fixture.targetRef.id };
+          const refIndex = rows.findIndex(row => row.key.kind === 'workspace-ref' && row.key.id === fixture.targetRef.id);
+          rows[refIndex] = ProjectAccountRowV1Schema.parse({ key: refKey, revision: 1,
+            content: cipher.seal({ key: refKey, value: { ...fixture.targetRef,
+              rootPath: join(fixture.targetPath, 'rebound') } }) });
+        }
+      };
+      await expect.soft(receiver(request, receivingContext), changeKind).resolves.toMatchObject({ ok: false,
+        errorCode: 'relationship_changed', completed: [] });
+      expect.soft(await readFile(join(fixture.targetPath, 'payload.txt'), 'utf8'), changeKind).toBe(beforeWithdrawal);
+      rows.splice(0, rows.length, ...acceptedRows);
+    }
 
     // A later link must refresh after the first physical copy. Withdraw that
     // later link at the HTTP boundary once the real OS-copy boundary completed.
@@ -187,15 +217,15 @@ describe('signed Project clean preparation', () => {
     await expect(receiver({ sourceWorkspaceRefId: fixture.targetRef.id, targetWorkspaceRefId: laterRef.id }, laterContext))
       .resolves.toMatchObject({ ok: false, errorCode: 'relationship_changed',
         completed: [{ relationshipId: relationship.relationshipId }] });
-    expect(rowReads).toBe(2);
+    expect(rowReads).toBe(3);
     expect(await readFile(join(fixture.targetPath, 'payload.txt'), 'utf8')).toBe(copiedPayload);
     readRows = async () => rows;
 
-    // Revocation after route admission must still stop the queued native effect.
+    // Revocation after route admission is refused by the first link's fresh
+    // route read, before any native effect.
     await writeFile(join(fixture.sourcePath, 'payload.txt'), 'revoked edit must not copy');
     revokeOnMachineRead = true;
-    await expect(receiver(request, receivingContext)).resolves.toMatchObject({ ok: false,
-      errorCode: 'project_requester_authority_unavailable', completed: [] });
+    await expect(receiver(request, receivingContext)).rejects.toMatchObject({ code: 'project_requester_authority_unavailable' });
     current = false;
     await expect(fixture.child.handoffAdapter.prepareBetween(request, context.signal, context))
       .rejects.toMatchObject({ code: 'project_requester_authority_unavailable' });

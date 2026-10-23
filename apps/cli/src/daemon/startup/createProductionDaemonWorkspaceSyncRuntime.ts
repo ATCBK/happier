@@ -995,22 +995,19 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     if (route.kind !== 'same_workspace' && route.controllerMachineId !== input.localMachineId) {
       throw compositionError('workspace_sync_controller_mismatch', 'Linked workspace route belongs to another controller');
     }
-    // No effect separates route admission from the first link. Carry that
-    // observation into its flush expectation; later links must observe changes
-    // made while the preceding copy ran. The controller still rechecks the
-    // expected definition, roots and requester at the queued physical effect.
+    // Every link reads the current route: requester-private rows can change
+    // during admission without updating the installed projection the queued
+    // controller checks. The flush expectation reuses that fresh observation.
     let current = initial;
-    let hasFlushed = false;
     return await prepareWorkspaceSyncBetween({
       ...request,
       serverId: semanticServerId,
       initial,
       readCurrent: async () => {
-        if (hasFlushed) current = await currentRouteSnapshot(request, signal, context);
+        current = await currentRouteSnapshot(request, signal, context);
         return current;
       },
       flush: async (relationshipId, flushSignal) => {
-        hasFlushed = true;
         if (isProjectPreparation(context)) {
           const selected = current.relationships.find(row => row.relationshipId === relationshipId);
           if (!selected) throw compositionError('relationship_changed', 'The admitted relationship is unavailable');
