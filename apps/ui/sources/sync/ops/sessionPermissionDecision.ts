@@ -74,6 +74,8 @@ export async function dispatchSessionPermissionDecision(params: Readonly<{
     const serverId = explicitScope?.serverId
         ?? (params.target && 'serverId' in params.target ? params.target.serverId : resolvePreferredServerIdForSessionId(params.sessionId));
     const recoveryScope = explicitScope ?? getActiveServerAccountScope();
+    const recoveryOccurrenceId = params.request.occurrenceId
+        ?? storage.getState().sessions[params.sessionId]?.agentState?.requests?.[params.request.id]?.occurrenceId;
     const method = typeof params.request.occurrenceId === 'string'
         ? SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_TO_OCCURRENCE_V1
         : SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_LEGACY;
@@ -95,6 +97,7 @@ export async function dispatchSessionPermissionDecision(params: Readonly<{
             onIssued: params.onIssued,
         });
 
+    const currentOccurrenceId = storage.getState().sessions[params.sessionId]?.agentState?.requests?.[params.request.id]?.occurrenceId;
     const activeScope = getActiveServerAccountScope();
     const stillTargetsActiveScope = recoveryScope
         ? areServerAccountScopesEqual(recoveryScope, activeScope)
@@ -103,6 +106,9 @@ export async function dispatchSessionPermissionDecision(params: Readonly<{
         params.request.approved === false
         && isSessionPermissionDecisionAccepted(result)
         && stillTargetsActiveScope
+        // Settlement can remove the request before its ACK; a different live
+        // occurrence belongs to newer work and must retain its thinking state.
+        && (!currentOccurrenceId || currentOccurrenceId === recoveryOccurrenceId)
         && (!serverId || areServerProfileIdentifiersEquivalent(serverId, getActiveServerId()))
     ) {
         try {

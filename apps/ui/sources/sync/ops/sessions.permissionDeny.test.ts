@@ -17,7 +17,7 @@ import { dispatchSessionPermissionDecision, sessionPermissionDecisionWithServerA
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { V2SessionByIdResponseSchema } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createServerFetchWithReachabilityProbe, createSocketHarness, createSessionFixture } from '@/dev/testkit';
+import { createServerFetchWithReachabilityProbe, createSocketHarness, createSessionFixture, createDeferred } from '@/dev/testkit';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { resetScopedSessionDataKeyCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/resolveScopedSessionDataKey';
 
@@ -27,6 +27,30 @@ function buildSession(sessionId: string): Session {
     return createSessionFixture({
         id: sessionId, active: true, activeAt: 1, metadata: null, metadataVersion: 0,
         agentState: null, agentStateVersion: 0, thinking: true, thinkingAt: 1,
+    });
+}
+
+function installScopedPermissionSocket(sessionId: string, emitWithAck: (event: string, payload: unknown) => Promise<unknown>): void {
+    const tokenPayload = btoa(JSON.stringify({ sub: 'account-target' }));
+    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: `e30.${tokenPayload}.signature` });
+    const sessionResponse = V2SessionByIdResponseSchema.parse({
+        session: {
+            id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+            archivedAt: null, metadata: 'metadata', metadataVersion: 1, agentState: null, agentStateVersion: 0,
+            pendingCount: 0, pendingVersion: 0, encryptionMode: 'plain', dataEncryptionKey: null,
+        },
+    });
+    vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async () => new Response(JSON.stringify(sessionResponse), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+    }))));
+    const events = createSocketHarness<Record<string, unknown>>();
+    connectSocket.mockReturnValue({
+        ...events,
+        connected: true,
+        connect: () => {},
+        disconnect: () => {},
+        timeout: () => ({ emitWithAck }),
+        emitWithAck,
     });
 }
 
@@ -41,11 +65,15 @@ describe('sessionDeny', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
         sessionRpc.mockReset();
+        connectSocket.mockReset();
     });
 
     it('clears local thinking state after a deny/abort permission decision', async () => {
         const sessionId = 's_permission_deny';
-        storage.getState().applySessions([buildSession(sessionId)]);
+        storage.getState().applySessions([{
+            ...buildSession(sessionId),
+            agentState: { requests: { perm_1: { tool: 'Bash', arguments: {}, occurrenceId: 'same-occurrence' } } },
+        }]);
         storage.getState().markSessionOptimisticThinking(sessionId);
         sessionRpc.mockResolvedValue({ ok: true });
 
@@ -122,6 +150,58 @@ describe('sessionDeny', () => {
         ]);
     });
 
+    it.each([
+        { caller: 'notification', successor: 'replaced', recovers: false },
+        { caller: 'notification', successor: 'removed', recovers: true },
+        { caller: 'foreground', successor: 'replaced', recovers: false },
+    ] as const)('does not apply a delayed $caller deny acknowledgment to a $successor occurrence', async ({ caller, successor, recovers }) => {
+        const sessionId = 's_delayed_permission_ack';
+        const serverId = getActiveServerId();
+        storage.setState({ profileScope: { serverId, accountId: 'account-target' } });
+        const requestA = { tool: 'Bash', arguments: { command: 'git status' }, occurrenceId: 'occurrence-a' };
+        storage.getState().applySessions([{
+            ...buildSession(sessionId), agentState: { requests: { reused: requestA } }, agentStateVersion: 1,
+        }]);
+        const issued = createDeferred<void>();
+        const acknowledgment = createDeferred<{ ok: true }>();
+        sessionRpc.mockImplementation(() => {
+            issued.resolve();
+            return acknowledgment.promise;
+        });
+        if (caller === 'notification') {
+            installScopedPermissionSocket(sessionId, async () => {
+                issued.resolve();
+                return { ok: true, result: await acknowledgment.promise };
+            });
+        }
+        const pending = caller === 'notification'
+            ? sessionPermissionDecisionWithServerAccountScope({
+                scope: { serverId, accountId: 'account-target' }, sessionId, requestId: 'reused',
+                occurrenceId: 'occurrence-a', action: 'deny', networkMode: 'background-task',
+            })
+            : sessionDeny(sessionId, 'reused');
+        await issued.promise;
+
+        const session = storage.getState().sessions[sessionId];
+        storage.getState().applySessions([{
+            ...session,
+            agentState: { requests: successor === 'replaced' ? { reused: { ...requestA, occurrenceId: 'occurrence-b' } } : {} },
+            agentStateVersion: 2, updatedAt: 2, thinking: true,
+        }]);
+        storage.getState().markSessionOptimisticThinking(sessionId);
+        const beforeAcknowledgment = storage.getState().sessions[sessionId];
+        const accepted = { ok: true } as const;
+        acknowledgment.resolve(accepted);
+
+        await pending;
+        if (recovers) {
+            expect(storage.getState().sessions[sessionId].thinking).toBe(false);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt).toBeNull();
+        } else {
+            expect(storage.getState().sessions[sessionId]).toBe(beforeAcknowledgment);
+        }
+    });
+
     it('retains foreground session approval policy and provider permission updates without clearing thinking', async () => {
         const sessionId = 's_permission_allow';
         storage.getState().applySessions([buildSession(sessionId)]);
@@ -156,28 +236,8 @@ describe('sessionDeny', () => {
         storage.getState().applySessions([buildSession(sessionId)]);
         storage.getState().markSessionOptimisticThinking(sessionId);
         const before = storage.getState().sessions[sessionId];
-        const tokenPayload = btoa(JSON.stringify({ sub: 'account-target' }));
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: `e30.${tokenPayload}.signature` });
-        const sessionResponse = V2SessionByIdResponseSchema.parse({
-            session: {
-                id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-                archivedAt: null, metadata: 'metadata', metadataVersion: 1, agentState: null, agentStateVersion: 0,
-                pendingCount: 0, pendingVersion: 0, encryptionMode: 'plain', dataEncryptionKey: null,
-            },
-        });
-        vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async () => new Response(JSON.stringify(sessionResponse), {
-            status: 200, headers: { 'Content-Type': 'application/json' },
-        }))));
-        const events = createSocketHarness<Record<string, unknown>>();
         const emitWithAck = vi.fn(async () => ({ ok: true, result: ack }));
-        connectSocket.mockReturnValue({
-            ...events,
-            connected: true,
-            connect: () => {},
-            disconnect: () => {},
-            timeout: () => ({ emitWithAck }),
-            emitWithAck,
-        });
+        installScopedPermissionSocket(sessionId, emitWithAck);
 
         const result = await sessionPermissionDecisionWithServerAccountScope({
             scope: { serverId, accountId: 'account-target' }, sessionId, requestId: 'permission',
