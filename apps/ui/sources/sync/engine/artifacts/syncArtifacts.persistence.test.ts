@@ -52,6 +52,51 @@ describe('device-persisted Artifact inventory through the real writer and store'
         vi.resetModules(); // A new app process retains only device storage.
     }
 
+    it('catches up 35000 closed documents through header inventory without body demand or a replay loop', async () => {
+        await seed();
+        const rows = Array.from({ length: 35000 }, (_, index) => head(`closed-${index}`));
+        let bodyRequests = 0;
+        let bodyIds = 0;
+        let headerPages = 0;
+        const request = async (path: string, init?: RequestInit) => {
+            if (path === '/v2/cursor') return currentCursor(35010);
+            if (path.startsWith('/v2/changes?')) {
+                const after = Number(new URL(path, 'https://inventory.test').searchParams.get('after'));
+                const offset = after - 10;
+                const changed = rows.slice(offset, offset + 500);
+                return json(ChangesResponseSchema.parse({ changes: changed.map((row, index) => ({
+                    kind: 'artifact', entityId: row.id, cursor: after + index + 1, changedAt: 1,
+                })), nextCursor: after + changed.length }));
+            }
+            if (path === '/v1/artifacts/read') {
+                bodyRequests += 1;
+                bodyIds += JSON.parse(String(init?.body)).artifactIds.length;
+                return json({ error: 'artifact_content_unavailable' }, 500);
+            }
+            expect(path).toMatch(/^\/v1\/artifacts\?/);
+            const query = new URL(path, 'https://inventory.test').searchParams;
+            expect(query.has('includeBody')).toBe(false);
+            const limit = Number(query.get('limit'));
+            const page = rows.slice(headerPages * limit, (headerPages + 1) * limit);
+            headerPages += 1;
+            return json(page);
+        };
+        const next = await load(request);
+        const failure = await next.completion.then(() => null, error => error);
+        expect(bodyIds).toBe(0);
+        expect(bodyRequests).toBe(0);
+        expect(failure).toBeNull();
+        expect(Object.keys(next.store.getState().artifacts)).toHaveLength(rows.length);
+        expect(next.store.getState().artifactsLoaded).toBe(true);
+        const completedPages = headerPages;
+        vi.resetModules();
+        const repeated = await load(request);
+        await repeated.completion;
+        expect(bodyRequests).toBe(0);
+        expect(headerPages).toBe(completedPages);
+        expect(repeated.store.getState().artifactsLoaded).toBe(true);
+    });
+
     it('acquires an approval absent from the device headers through the retained change cursor', async () => {
         await seed();
         const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -67,6 +112,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
             if (path.startsWith('/v2/changes?after=10&')) return json(ChangesResponseSchema.parse({ changes: [
                 { kind: 'artifact', entityId: artifact.id, cursor: 11, changedAt: 1 },
             ], nextCursor: 11 }));
+            if (path.startsWith('/v1/artifacts?')) return json([{ ...artifact, body: undefined }]);
             expect(path).toBe('/v1/artifacts/read');
             expect(JSON.parse(String(init?.body)).artifactIds).toEqual([artifact.id]);
             return json(ArtifactReadBatchResponseV1Schema.parse({ items: [
@@ -77,7 +123,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(next.store.getState().artifacts[artifact.id]?.header?.kind).toBe('approval_request.v1');
         expect(next.store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify(approval));
         expect(next.store.getState().artifactsLoaded).toBe(true);
-        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(true);
     });
 
     it('settles at the captured change frontier while unrelated Account writes continue', async () => {
@@ -156,22 +202,17 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(next.store.getState().artifacts.board?.kind).toBe('work_board');
     });
 
-    it('hydrates stale rows before delta catch-up, then applies changed and deleted headers without a full listing', async () => {
+    it('hydrates stale rows before catch-up, then refreshes changed and deleted headers without reading bodies', async () => {
         await seed();
         const gate = createDeferred<Response>();
         const paths: string[] = [];
-        const reloaded = await load(async (path, init) => {
+        const reloaded = await load(async path => {
             paths.push(path);
             if (path === '/v2/cursor') return currentCursor(12);
             if (path.startsWith('/v2/changes?after=10&')) return gate.promise;
             if (path.startsWith('/v2/changes?after=12&')) return json({ changes: [], nextCursor: 12 });
-            if (path === '/v1/artifacts/read') {
-                expect(JSON.parse(String(init?.body)).artifactIds.sort()).toEqual(['deleted', 'retained']);
-                return json(ArtifactReadBatchResponseV1Schema.parse({ items: [
-                    { artifactId: 'retained', ok: true, artifact: { ...head('retained', 2), body: encodePlainArtifactStoredContent({ body: 'changed' }) }, recipientCensus: null },
-                    { artifactId: 'deleted', ok: false, error: 'artifact_not_found', status: 404, retryable: false },
-                ] }));
-            }
+            if (path.startsWith('/v1/artifacts?')) return json([head('retained', 2)]);
+            expect(path).not.toBe('/v1/artifacts/read');
             return json([]);
         });
         try {
@@ -187,7 +228,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(Object.keys(reloaded.store.getState().artifacts)).toEqual(['retained']);
         expect(reloaded.store.getState().artifacts.retained?.headerVersion).toBe(2);
         expect(reloaded.store.getState().artifactsLoaded).toBe(true);
-        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(true);
         vi.resetModules();
         const next = await load(async path => {
             if (path === '/v2/cursor') return currentCursor(12);

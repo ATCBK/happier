@@ -8759,6 +8759,7 @@ class Sync {
             ...params,
             inventoryScope,
             inventoryReadStartedWith,
+            readCurrentArtifacts: () => storage.getState().artifacts,
             changesPageLimit: this.syncTuning.changesPageLimit,
             hydrateArtifacts: artifacts => {
                 storage.getState().applyArtifacts(artifacts);

@@ -388,6 +388,9 @@ describe('socket update handling: plaintext update-session', () => {
             pendingRequestObservedAt: storage.getState().sessionListRowsByServerId[serverId][session.id].pendingRequestObservedAt,
         };
         snapshot.resolve();
+        // The HTTP response schedules hydration publication after the earlier socket flush.
+        // waitFor advances the fake clock while observing the real publication boundary.
+        await vi.waitFor(() => expect(storage.getState().sessions[session.id]?.metadata?.path).toBe('/tmp/new'));
         expect((await hydration).ok).toBe(true);
         expect(storage.getState().sessions[session.id]).toMatchObject({ active: true, pendingPermissionRequestCount: mode === 'retained' ? 0 : 1, pendingRequestObservedAt: mode === 'retained' ? 200 : 100 });
         expect(storage.getState().sessionListRowsByServerId[serverId][session.id]).toMatchObject(completedPending);

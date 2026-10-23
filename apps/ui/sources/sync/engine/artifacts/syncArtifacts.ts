@@ -683,6 +683,8 @@ export async function fetchAndApplyArtifactsList(params: {
     hydrateArtifacts?: (artifacts: DecryptedArtifact[]) => void;
     /** Same scoped snapshot used by the store's inventory reconciliation. */
     inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>;
+    /** Read the reconciled projection after publishing headers, including raced body arrivals. */
+    readCurrentArtifacts?: () => Readonly<Record<string, DecryptedArtifact>>;
     changesPageLimit?: number;
     /** The open Artifact browser consumes attribution; background indexes do not. */
     includeProvenance?: boolean;
@@ -733,35 +735,25 @@ export async function fetchAndApplyArtifactsList(params: {
             if (!shouldContinue()) return;
             if (frontier.status !== 'ok') throw new Error('Artifact inventory changes are unavailable');
             if (Number(frontier.cursor) < Number(cursor)) cursor = null;
-            const changedIds = new Set<string>();
+            let needsHeaderInventory = false;
             // Private attribution is demanded only by the open Artifact browser;
             // it is deliberately absent from the device header projection.
-            if (params.includeProvenance) for (const row of rows) if (!params.inventoryReadStartedWith?.[row.id]) changedIds.add(row.id);
-            while (cursor !== null && Number(cursor) < Number(frontier.cursor)) {
+            if (params.includeProvenance) needsHeaderInventory = rows.some(row => !params.inventoryReadStartedWith?.[row.id]);
+            while (!needsHeaderInventory && cursor !== null && Number(cursor) < Number(frontier.cursor)) {
                 const page = await fetchChanges({ credentials, request: params.request, afterCursor: cursor,
                     limit: params.changesPageLimit ?? loadSyncTuning().changesPageLimit });
                 if (!shouldContinue()) return;
                 if (page.status === 'cursor-gone') { cursor = null; break; }
                 if (page.status !== 'ok') throw new Error('Artifact inventory changes are unavailable');
-                for (const change of page.changes) if (change.kind === 'artifact') changedIds.add(change.entityId);
+                needsHeaderInventory = page.changes.some(change => change.kind === 'artifact');
                 if (Number(page.nextCursor) <= Number(cursor)) throw new Error('Artifact inventory cursor did not reach its frontier');
                 cursor = page.nextCursor;
             }
-            if (cursor !== null) {
-                const details = changedIds.size === 0 ? [] : await fetchArtifactReadBatch(credentials, [...changedIds], { ...params, fresh: true });
-                if (!shouldContinue()) return;
-                const changed: Artifact[] = [];
-                for (const item of details) {
-                    if (item.ok) changed.push(item.artifact);
-                    else if (item.error !== 'artifact_not_found') throw new HappyError(item.error, item.retryable,
-                        { code: item.error, status: item.status });
-                }
-                const opened = await decryptArtifactListItems({ artifacts: changed, encryption, artifactDataKeys,
-                    includeProvenance: params.includeProvenance === true });
-                const merged = new Map(rows.filter(row => !changedIds.has(row.id)).map(row => [row.id, row]));
-                for (const row of opened) if (row) merged.set(row.id, row);
-                decryptedArtifacts = [...merged.values()];
-            }
+            // Changes carry identities, not a demand for document bodies. Refresh
+            // membership through the same paged header inventory as cold startup;
+            // exact reads remain owned by selected approval/notice/open consumers.
+            // Its pre-list cursor also covers changes racing this catch-up.
+            if (cursor !== null && !needsHeaderInventory) decryptedArtifacts = rows;
         }
         if (decryptedArtifacts === null) {
             // Capture BEFORE listing: changes racing pagination remain replayable on
@@ -824,7 +816,10 @@ export async function fetchAndApplyArtifactsList(params: {
         // The always-mounted Inbox badge consumes strict open approval bodies and
         // private Account notices. Settled receipts are demanded by their transcript;
         // Launch Profiles have their own scoped catalog read owner.
-        const detailHeads = decryptedArtifacts.filter(decrypted => {
+        const currentArtifacts = params.readCurrentArtifacts?.();
+        const detailHeads = decryptedArtifacts.filter(candidate => {
+            const decrypted = currentArtifacts ? currentArtifacts[candidate.id] : candidate;
+            if (!decrypted || decrypted.body !== undefined) return false;
             const header = decrypted.header;
             const isApprovalIndex = header?.kind === 'approval_request.v1'
                 || header?.kind === 'target_action_approval.v1'

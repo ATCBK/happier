@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 import { createDeferred } from '@/dev/testkit';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
-import { fetchAndApplyArtifactBodies, type ArtifactDataKeyCache } from './syncArtifacts';
+import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactsList, type ArtifactDataKeyCache } from './syncArtifacts';
 
 afterEach(() => vi.useRealTimers());
 
@@ -33,6 +34,41 @@ function createHarness() {
 }
 
 describe('Artifact body hydration publications', () => {
+    it('does not redemand a retained approval body on header refresh, but reads a changed revision', async () => {
+        const { store, artifacts, params } = createHarness();
+        const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
+            actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
+        let artifact = { ...artifacts[0]!, kind: 'other' as const,
+            header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }) };
+        let reads = 0;
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.startsWith('/v1/artifacts?')) return Response.json([{ ...artifact, body: undefined }]);
+            expect(path).toBe('/v1/artifacts/read');
+            expect(JSON.parse(String(init?.body)).artifactIds).toEqual([artifact.id]);
+            reads += 1;
+            return Response.json({ items: [{ artifactId: artifact.id, ok: true, artifact, recipientCensus: null }] });
+        };
+        const refresh = () => {
+            const startedWith = store.getState().artifacts;
+            return fetchAndApplyArtifactsList({ ...params, request, inventoryReadStartedWith: startedWith,
+                readCurrentArtifacts: () => store.getState().artifacts,
+                applyArtifacts: (rows, source) => store.getState().applyArtifacts(rows, source === 'inventory' ? startedWith : undefined) });
+        };
+        await refresh();
+        const opened = store.getState().artifacts[artifact.id];
+        expect(opened?.body).toBe(JSON.stringify(approval));
+        await refresh();
+        expect(reads).toBe(1);
+        expect(store.getState().artifacts[artifact.id]).toBe(opened);
+        artifact = { ...artifact, bodyVersion: 2, seq: 2, updatedAt: 2,
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...approval, updatedAtMs: 2 }) }) };
+        await refresh();
+        expect(reads).toBe(2);
+        expect(store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify({ ...approval, updatedAtMs: 2 }));
+    });
+
     it('publishes one completed body batch once and suppresses an equal replay', async () => {
         const { store, artifacts, params } = createHarness();
         let publications = 0;
