@@ -48,10 +48,14 @@ export type GlassSurfaceResolution = Readonly<{
 /** Stored choices survive accessibility and window-focus overrides. Never fade foreground content. */
 export function resolveGlassSurfaceMaterial(settings: GlassMaterialSettings, group: GlassSurfaceGroup, environment: GlassMaterialEnvironment = {}): GlassSurfaceResolution {
     const requested = (environment.nativeRenderer === true ? readGlassMaterials(settings) : readGlassTintedMaterials(settings))[group];
+    // A shown Wallpaper lies under the title bar, rail and sidebar, so for them it is a backing like desktop glass
+    // (owner ruling 2026-10-23): their stored material applies. Solid stays opaque because its stored material is.
+    const overWallpaper = environment.atmosphereBehind === 'wallpaper' && (group === 'chrome' || group === 'sidebar');
     const reason: GlassSurfaceResolution['reason'] = environment.reduceTransparency ? 'reduceTransparency'
         : environment.windowActive === false ? 'inactiveWindow'
         : group === 'card' && environment.atmosphereBehind !== 'band' && environment.atmosphereBehind !== 'wallpaper'
             && resolveGlassSurfaceMaterial(settings, 'content', environment).material.opacity === 1 ? 'noBacking'
+        : overWallpaper ? null
         : environment.desktopWindow !== true && ((group === 'content' && environment.atmosphereBehind !== 'band' && environment.atmosphereBehind !== 'wallpaper')
             || (group !== 'floating' && group !== 'card' && readGlassPreset(settings) === 'auto')) ? 'unsupported'
         : environment.desktopWindow === true && group !== 'floating' && group !== 'card' && environment.nativeWindowMaterialLive !== true ? 'unavailable'

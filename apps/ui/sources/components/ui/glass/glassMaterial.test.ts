@@ -50,6 +50,25 @@ describe('glass material Account owner', () => {
             }
         }
     });
+    it('treats a shown Wallpaper as backing: under Auto the title bar, rail and sidebar keep their glass on web and without live desktop glass', () => {
+        // Owner ruling 2026-10-23: under Auto, an active Wallpaper counts as something behind the window, like desktop glass.
+        const auto = { glassSurfaceMaterials: glassPresetMaterials('auto') };
+        const solid = { blur: 'off', opacity: 1 } as const;
+        expect(readGlassPreset(auto)).toBe('auto');
+        for (const group of ['chrome', 'sidebar'] as const) {
+            expect(readGlassTintedMaterials(auto)[group]).not.toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'none' }).material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'band' }).material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'wallpaper' }))
+                .toEqual({ material: readGlassTintedMaterials(auto)[group], reason: null });
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'wallpaper', desktopWindow: true, nativeWindowMaterialLive: false }))
+                .toEqual({ material: readGlassTintedMaterials(auto)[group], reason: null });
+            expect(resolveGlassSurfaceMaterial({ glassSurfaceMaterials: glassPresetMaterials('solid') }, group, { atmosphereBehind: 'wallpaper' }).material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'wallpaper', reduceTransparency: true }).material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(auto, group, { atmosphereBehind: 'wallpaper', windowActive: false }).material).toEqual(solid);
+        }
+    });
+
     it('applies a dimming tone without a contrast lift to wallpaper chrome and sidebar, retaining solid/custom and ordinary window treatment', () => {
         for (const group of ['chrome', 'sidebar'] as const) {
             const settings = { glassSurfaceMaterials: glassPresetMaterials('clear') };
