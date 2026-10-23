@@ -64,11 +64,13 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
       ...(options.ownerAccountId !== undefined ? { ownerAccountId: options.ownerAccountId } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     throwIfAborted(options.signal);
-    if (page.hasUnclassified === true) coverage = 'partial';
+    // A typed exact-kind witness is resolved by the legacy header pass below;
+    // classification lag is not itself unreadable content.
+    if (page.hasUnclassified === true && (kinds === undefined || !page.kindCoverage)) coverage = 'partial';
     if (page.coverage === 'partial') coverage = 'partial';
     if (page.kindCoverage) {
       kindCoverage = page.kindCoverage;
-      if (kindCoverage.status === 'partial') coverage = 'partial';
+      if (kindCoverage.status === 'partial' && kinds === undefined) coverage = 'partial';
     }
     all.push(...page.items.filter(matches));
     cursor = page.nextCursor;
