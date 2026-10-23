@@ -496,7 +496,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                     return Response.json({ didWrite: true, recipient, requestedAction: body.requestedAction,
                         pending: { ...body, recipient, status: 'queued', position: 1, createdAt: 1, updatedAt: 1 }, pendingVersion: 1, pendingCount: 1 });
                 }
-                if (request.path === '/v1/artifacts') return Response.json([]);
+                if (request.path === '/v1/artifacts') {
+                    // Kind-filtered inventory reads (Role catalog) answer the canonical filtered envelope.
+                    const params = new URL(request.url).searchParams;
+                    const filtered = params.has('kind') || params.has('kinds') || params.has('unclassified');
+                    return Response.json(filtered ? { items: [], hasUnclassified: false } : []);
+                }
                 return undefined;
             }).handle,
         });
