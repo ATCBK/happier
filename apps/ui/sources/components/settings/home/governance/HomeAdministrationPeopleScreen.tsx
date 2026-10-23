@@ -18,7 +18,7 @@ import {
     useHomeAccountSearch,
 } from '@/hooks/home/useHomeAccountSearch';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { t } from '@/text';
+import { t, usePreferredLanguage, type SupportedLanguage } from '@/text';
 
 import { HomeAdministrationSection } from './HomeAdministrationSection';
 import { HomeInvitePeopleButton } from './HomeInvitePeopleDialog';
@@ -45,17 +45,53 @@ const PEOPLE_CHUNK_SIZE = 12;
 /** The person's identity mark on the People list. */
 const PEOPLE_AVATAR_SIZE = 32;
 
+/** Stable admitted row inputs keep refresh/status publications out of unchanged mounted people. */
+const PeopleRosterRow = React.memo(function PeopleRosterRow(props: Readonly<{
+    row: HomeAccountRowV1;
+    viewerAccountId: string;
+    onOpen: (accountId: string) => void;
+    locale: SupportedLanguage;
+}>) {
+    const { row, viewerAccountId, onOpen } = props;
+    const open = React.useCallback(() => onOpen(row.accountId), [onOpen, row.accountId]);
+    const person = resolveAccountDisplayName({
+        profile: row.profile,
+        accountId: row.accountId,
+        signInEmail: row.authentication.signInEmail,
+        viewerAccountId,
+    });
+    return (
+        <Item
+            testID={`home-people-row:${row.accountId}`}
+            title={person.name}
+            leftElement={<Avatar id={row.accountId} size={PEOPLE_AVATAR_SIZE} imageUrl={row.profile.avatarUrl ?? null} />}
+            subtitle={[
+                homeRoleLabel(row.homeRole),
+                person.viewer && person.named ? t('homeGovernance.person.you') : null,
+                person.hint,
+            ].filter((part): part is string => part !== null).join(' · ')}
+            rightElement={<HomeAccountStatusPill row={row} testID={`home-people-status:${row.accountId}`} locale={props.locale} />}
+            keepChevronWithRightElement
+            onPress={open}
+        />
+    );
+});
+
 const PeopleRoster = React.memo(function PeopleRoster(
     props: Readonly<{ context: HomeAdministrationContext; header?: React.ReactNode }>,
 ) {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const locale = usePreferredLanguage();
     const { context } = props;
     const canList = context.projection.capabilities.manageAccounts;
     const [query, setQuery] = React.useState('');
     const roster = useHomeAccountRoster(context.scope, canList);
     const search = useHomeAccountSearch(context.scope, query, canList);
     const isSearching = query.trim().length > 0;
+    const open = React.useCallback((accountId: string) => {
+        router.push(homeAdministrationAccountPath(context.scope.serverId, accountId));
+    }, [context.scope.serverId, router]);
 
     const searchHeader = canList ? (
         <CompactSearchField
@@ -230,31 +266,8 @@ const PeopleRoster = React.memo(function PeopleRoster(
                 key: `roster:${chunk[0]!.accountId}`,
                 render: () => (
                     <ItemGroup virtualizedSegment={{ first, last }}>
-                        {chunk.map((row) => {
-                            const person = resolveAccountDisplayName({
-                                profile: row.profile,
-                                accountId: row.accountId,
-                                signInEmail: row.authentication.signInEmail,
-                                viewerAccountId: context.scope.accountId,
-                            });
-                            return (
-                                <Item
-                                    key={row.accountId}
-                                    testID={`home-people-row:${row.accountId}`}
-                                    title={person.name}
-                                    leftElement={<Avatar id={row.accountId} size={PEOPLE_AVATAR_SIZE} imageUrl={row.profile.avatarUrl ?? null} />}
-                                    subtitle={[
-                                        homeRoleLabel(row.homeRole),
-                                        person.viewer && person.named ? t('homeGovernance.person.you') : null,
-                                        person.hint,
-                                    ].filter((part): part is string => part !== null).join(' · ')}
-                                    rightElement={<HomeAccountStatusPill row={row} testID={`home-people-status:${row.accountId}`} />}
-                                    // A person opens their detail: the chevron stays beside a status marker (lab `hcPeople-A`).
-                                    keepChevronWithRightElement
-                                    onPress={() => router.push(homeAdministrationAccountPath(context.scope.serverId, row.accountId))}
-                                />
-                            );
-                        })}
+                        {chunk.map((row) => <PeopleRosterRow key={row.accountId} row={row}
+                            viewerAccountId={context.scope.accountId} onOpen={open} locale={locale} />)}
                     </ItemGroup>
                 ),
             });
@@ -300,7 +313,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
             });
         }
         return result;
-    }, [canList, context.scope.accountId, context.scope.serverId, isSearching, roster, router, search, theme.colors.text.secondary]);
+    }, [canList, context.scope.accountId, context.scope.serverId, isSearching, roster, router, search, theme.colors.text.secondary, open, locale]);
 
     const renderRow = React.useCallback(({ item }: Readonly<{ item: PeopleVirtualizedRow }>) => item.render(), []);
 

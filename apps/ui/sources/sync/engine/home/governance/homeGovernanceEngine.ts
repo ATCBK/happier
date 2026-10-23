@@ -1,5 +1,5 @@
-import { bindHomeDomainActionHttpRequestV1, homeDomainActionOutputSchemaV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
-import { HomeGovernanceProjectionV1Schema, type HomeGovernanceProjectionV1 } from '@happier-dev/protocol/home/governance/projection';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance/projection';
 
 import {
     requestHomeDomain,
@@ -62,21 +62,13 @@ const loader = createScopedSnapshotLoader<HomeGovernanceTarget>({
     load: async ({ scope }, loadContext) => {
         beginHomeGovernanceLoad(scope);
         const request = bindHomeDomainActionHttpRequestV1('home.governance.get', {});
-        const actionOutputSchema = homeDomainActionOutputSchemaV1('home.governance.get');
-        const result = await requestHomeDomain<HomeGovernanceProjectionV1>({
+        const result = await requestHomeDomain({
             scope,
             method: request.method,
             path: request.path,
             effect: 'read',
             input: request.body,
-            schema: {
-                safeParse: (value) => {
-                    const actionOutput = actionOutputSchema.safeParse(value);
-                    return actionOutput.success
-                        ? HomeGovernanceProjectionV1Schema.safeParse(actionOutput.data)
-                        : actionOutput;
-                },
-            },
+            schema: HomeGovernanceProjectionV1Schema,
         });
         if (result.ok) {
             applyHomeGovernanceProjection({

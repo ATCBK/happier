@@ -49,6 +49,8 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+const { resetHomeSettingsEngineForTests } = await import('@/sync/engine/home/governance/homeSettingsEngine');
+const { resetHomeSettingsSnapshotsForTests } = await import('@/sync/store/home/governance/homeSettingsSnapshots');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -149,6 +151,8 @@ async function typeAndLeave(screen: Awaited<ReturnType<typeof renderServerSettin
 }
 
 beforeEach(async () => {
+    resetHomeSettingsEngineForTests();
+    resetHomeSettingsSnapshotsForTests();
     const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
     resetHomeGovernanceSnapshotsForTests();
     resetServerFeaturesClientForTests();

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -31,7 +32,9 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const routerPush = vi.hoisted(() => vi.fn());
+const routerBoundary = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
+const routerPush = routerBoundary.push;
+const routerReplace = routerBoundary.replace;
 const virtualizedBoundary = vi.hoisted(() => ({
     props: null as Record<string, any> | null,
     mountLimit: Number.POSITIVE_INFINITY,
@@ -53,7 +56,7 @@ vi.mock('@/components/ui/lists/virtualized', () => ({
 
 installSettingsViewCommonModuleMocks({
     router: async () => ({
-        useRouter: () => ({ push: routerPush, back: vi.fn() }),
+        useRouter: () => routerBoundary,
         useNavigation: () => ({ setOptions: vi.fn() }),
         useLocalSearchParams: () => ({}),
     }),
@@ -62,6 +65,9 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+const { Item } = await import('@/components/ui/lists/Item');
+const { resetHomeAccountRosterEngineForTests } = await import('@/sync/engine/home/governance/homeAccountRosterEngine');
+const { getHomeAccountRosterSnapshot, resetHomeAccountRosterSnapshotsForTests } = await import('@/sync/store/home/governance/homeAccountRosterSnapshots');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const LIST_PATH = '/v1/home/accounts/list';
@@ -85,6 +91,8 @@ async function addAdministeredHome(): Promise<string> {
 }
 
 beforeEach(async () => {
+    resetHomeAccountRosterEngineForTests();
+    resetHomeAccountRosterSnapshotsForTests();
     const { resetHomeGovernanceSnapshotsForTests } = await import(
         '@/sync/store/home/governance/homeGovernanceSnapshots'
     );
@@ -92,15 +100,71 @@ beforeEach(async () => {
     resetServerFeaturesClientForTests();
     await harness.reset();
     routerPush.mockReset();
+    routerReplace.mockReset();
     virtualizedBoundary.props = null;
     virtualizedBoundary.mountLimit = Number.POSITIVE_INFINITY;
 });
 
 afterEach(() => {
     standardCleanup();
+    vi.restoreAllMocks();
 });
 
 describe('HomeAdministrationPeopleScreen', () => {
+    it.each(['page', 'rail'] as const)('keeps unchanged mounted %s row inputs stable across a 400-person roster refresh', async (surface) => {
+        virtualizedBoundary.mountLimit = 2;
+        const home = await addAdministeredHome();
+        const scope = { serverId: home, accountId: 'account-ada' };
+        const rows = Array.from({ length: 400 }, (_, index) => homeAccountRowFixture(`person-${index}`));
+        harness.answer(home, LIST_PATH, { body: { items: rows, nextCursor: null, total: 400 } });
+        // Observe the real formatter without substituting its domain logic.
+        const displayNames = await import('@/sync/domains/account/formatAccountDisplayName');
+        const formatted = vi.spyOn(displayNames, 'resolveAccountDisplayName');
+        const { HomePeopleCollectionRail } = await import('./HomePeopleCollectionRail');
+        const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
+        resetHomeGovernanceEngineForTests();
+        const screen = surface === 'page' ? await renderPeople(home)
+            : await renderScreen(<HomePeopleCollectionRail serverId={home} selectedAccountId="person-1" />);
+        const prefix = surface === 'page' ? 'home-people-row:' : 'home-people-rail-row:';
+        const inputs = () => new Map(screen.tree.findAllByType(Item)
+            .filter(node => typeof node.props.testID === 'string' && node.props.testID.startsWith(prefix))
+            .map(node => [node.props.testID, node.props]));
+        await waitForHomeGovernance(() => expect(inputs().size).toBe(surface === 'page' ? 24 : 2));
+        if (surface === 'rail') expect(inputs().get(`${prefix}person-1`)?.selected).toBe(true);
+        expect(new Set(formatted.mock.calls.map(([input]) => input.accountId).filter(id => id.startsWith('person-'))).size)
+            .toBe(surface === 'page' ? 24 : 2);
+        const initial = inputs();
+        formatted.mockClear();
+        await act(async () => { publishHomeAccountChange(home); });
+        await waitForHomeGovernance(() => {
+            expect(harness.requestsFor(LIST_PATH)).toHaveLength(2);
+            expect(getHomeAccountRosterSnapshot(scope)?.status).toBe('ready');
+        });
+        expect([...inputs()].filter(([id, props]) => props !== initial.get(id))).toHaveLength(0);
+        expect(formatted.mock.calls.filter(([input]) => input.accountId.startsWith('person-'))).toHaveLength(0);
+
+        const changed = rows.map((row, index) => index === 1 ? { ...row, profile: { ...row.profile, name: 'Changed person', firstName: 'Changed person' } } : row);
+        harness.answer(home, LIST_PATH, { body: { items: changed, nextCursor: null, total: 400 } });
+        const beforeEdit = inputs();
+        await act(async () => { publishHomeAccountChange(home); });
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Changed person'));
+        expect([...inputs()].filter(([id, props]) => props !== beforeEdit.get(id))).toHaveLength(1);
+        expect(formatted.mock.calls.filter(([input]) => input.accountId.startsWith('person-'))).toHaveLength(1);
+
+        const { getPreferredLanguage, commitPreferredLanguage } = await import('@/text/preferredLanguage');
+        const previousLanguage = getPreferredLanguage();
+        const beforeLocale = inputs();
+        try {
+            await act(async () => { commitPreferredLanguage(previousLanguage === 'fr' ? 'en' : 'fr'); });
+            expect([...inputs()].filter(([id, props]) => props !== beforeLocale.get(id))).toHaveLength(inputs().size);
+        } finally {
+            await act(async () => { commitPreferredLanguage(previousLanguage); });
+        }
+        screen.pressByTestId(`${prefix}person-1`);
+        if (surface === 'page') expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${home}/people/person-1`);
+        else expect(routerReplace).toHaveBeenLastCalledWith(`/settings/home/${home}/people/person-1`);
+    });
+
     it('keeps a large Home roster behind the canonical virtualized window', async () => {
         virtualizedBoundary.mountLimit = 2;
         const home = await addAdministeredHome();

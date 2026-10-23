@@ -62,6 +62,8 @@ const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/
 const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
 const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
+const { resetHomeSettingsEngineForTests } = await import('@/sync/engine/home/governance/homeSettingsEngine');
+const { resetHomeSettingsSnapshotsForTests } = await import('@/sync/store/home/governance/homeSettingsSnapshots');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { resetRemoteHostCatalogEngineForTests } = await import('@/sync/engine/settings/remoteHostCatalogEngine');
 const { resetRemoteHostCatalogSnapshotsForTests } = await import('@/sync/store/settings/remoteHostCatalogSnapshot');
@@ -80,6 +82,8 @@ beforeEach(async () => {
     resetTeamActionClientForTests();
     resetHomeGovernanceEngineForTests();
     resetHomeGovernanceSnapshotsForTests();
+    resetHomeSettingsEngineForTests();
+    resetHomeSettingsSnapshotsForTests();
     resetServerFeaturesClientForTests();
     resetRemoteHostCatalogEngineForTests();
     resetRemoteHostCatalogSnapshotsForTests();

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { HomeAccountRowV1 } from '@happier-dev/protocol/home/governance';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
@@ -12,7 +13,7 @@ import { useHomeAccountRoster } from '@/hooks/home/useHomeAccountRoster';
 import { useHomeAccountSearch } from '@/hooks/home/useHomeAccountSearch';
 import { useHomeAdministration } from '@/hooks/home/useHomeAdministration';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { t } from '@/text';
+import { t, usePreferredLanguage, type SupportedLanguage } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -27,6 +28,39 @@ type RailRow = Readonly<{ key: string; render: () => React.ReactElement }>;
 const railRowKey = (row: RailRow) => row.key;
 const renderRailRow = ({ item }: Readonly<{ item: RailRow }>) => item.render();
 
+/** Formatting and row elements are produced only for the recycler's mounted window. */
+const PeopleRailRosterRow = React.memo(function PeopleRailRosterRow(props: Readonly<{
+    row: HomeAccountRowV1;
+    viewerAccountId: string | undefined;
+    selected: boolean;
+    onOpen: (accountId: string) => void;
+    locale: SupportedLanguage;
+}>) {
+    const { row, viewerAccountId, onOpen } = props;
+    const open = React.useCallback(() => onOpen(row.accountId), [onOpen, row.accountId]);
+    const person = resolveAccountDisplayName({
+        profile: row.profile,
+        accountId: row.accountId,
+        signInEmail: row.authentication.signInEmail,
+        viewerAccountId,
+    });
+    return (
+        <Item
+            testID={`home-people-rail-row:${row.accountId}`}
+            title={person.name}
+            subtitle={[homeRoleLabel(row.homeRole), person.viewer && person.named ? t('homeGovernance.person.you') : null, person.hint]
+                .filter((part): part is string => part !== null).join(' · ')}
+            icon={<PersonMark accountId={row.accountId} avatarUrl={row.profile.avatarUrl ?? null} />}
+            rightElement={row.status === 'active' ? undefined : <HomeAccountStatusPill row={row} locale={props.locale} />}
+            selected={props.selected}
+            density="compact"
+            showChevron={false}
+            pressableStyle={collectionListStyles.row}
+            onPress={open}
+        />
+    );
+});
+
 /**
  * The People rail beside an open person (plan §3.12, lab `hcPeople-D`): everyone on this Home with
  * their role, the viewer marked "you", a disabled or retired person flagged, and a search that asks
@@ -38,6 +72,7 @@ export const HomePeopleCollectionRail = React.memo(function HomePeopleCollection
     selectedAccountId: string | null;
 }>) {
     const router = useRouter();
+    const locale = usePreferredLanguage();
     const binding = useHomeAdministration(props.serverId);
     const scope = binding.kind === 'bound' ? binding.scope : null;
     const canList = binding.kind === 'bound'
@@ -101,27 +136,9 @@ export const HomePeopleCollectionRail = React.memo(function HomePeopleCollection
             ));
         }
         for (const row of roster.rows) {
-            const person = resolveAccountDisplayName({
-                profile: row.profile,
-                accountId: row.accountId,
-                signInEmail: row.authentication.signInEmail,
-                viewerAccountId: scope?.accountId,
-            });
-            const you = person.viewer && person.named;
             add(`roster:${row.accountId}`, () => (
-                <Item
-                    testID={`home-people-rail-row:${row.accountId}`}
-                    title={person.name}
-                    subtitle={[homeRoleLabel(row.homeRole), you ? t('homeGovernance.person.you') : null, person.hint]
-                        .filter((part): part is string => part !== null).join(' · ')}
-                    icon={<PersonMark accountId={row.accountId} avatarUrl={row.profile.avatarUrl ?? null} />}
-                    rightElement={row.status === 'active' ? undefined : <HomeAccountStatusPill row={row} />}
-                    selected={props.selectedAccountId === row.accountId}
-                    density="compact"
-                    showChevron={false}
-                    pressableStyle={collectionListStyles.row}
-                    onPress={() => open(row.accountId)}
-                />
+                <PeopleRailRosterRow row={row} viewerAccountId={scope?.accountId}
+                    selected={props.selectedAccountId === row.accountId} onOpen={open} locale={locale} />
             ));
         }
         if (roster.error) {

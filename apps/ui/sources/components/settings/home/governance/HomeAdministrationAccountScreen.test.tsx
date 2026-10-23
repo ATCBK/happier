@@ -34,7 +34,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -53,7 +53,10 @@ const announceAccessibilityMessage = vi.hoisted(() => vi.fn());
 const sockets = vi.hoisted(() => new Map<string, import('socket.io-client').Socket>());
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-installDisconnectedServerSocketBoundary((socket, url) => { if (url) sockets.set(new URL(url).origin, socket); });
+const captureSocket = (socket: import('socket.io-client').Socket, url: string | undefined) => {
+    if (url) sockets.set(new URL(url).origin, socket);
+};
+installDisconnectedServerSocketBoundary(captureSocket);
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
@@ -184,6 +187,7 @@ beforeEach(async () => {
 afterEach(async () => {
     standardCleanup();
     await connection?.dispose(); connection = null;
+    installDisconnectedServerSocketBoundary(captureSocket);
 });
 
 function lastOwnerCapabilities() {
@@ -622,6 +626,12 @@ describe('HomeAdministrationAccountScreen', () => {
     });
 
     it('consumes the real Ask-first refusal into resource review and requires normal approval for the reviewed retry', async () => {
+        // This case observes both Homes over live authenticated sockets. Deliver the external
+        // SDK's successful dial so the real Account-currentness owner can admit its HTTP fact.
+        installDisconnectedServerSocketBoundary((socket, url) => {
+            captureSocket(socket, url);
+            configureConnectedServerSocketBoundary(socket);
+        });
         const home = await addAdministeredHome({ currentAccount: true });
         const resource = createManagedResourceDependencyFixture();
         let attempts = 0;
@@ -642,6 +652,8 @@ describe('HomeAdministrationAccountScreen', () => {
         storage.getState().activateProfileScope({ serverId: resolveServerProfileScopeIdForIdentifier(focused), accountId: 'focused-account' });
         const screen = await renderAccount(home, 'ada', true);
         await waitForHomeGovernance(() => expect(sockets.get('https://home-a.example')?.listeners('update').length).toBeGreaterThan(0));
+        expect(sockets.get('https://home-a.example')?.connected).toBe(true);
+        expect(sockets.get('https://focused-delete.example')?.connected).toBe(true);
         const { subscribeHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
         const deliverAccountChange = async () => {
             const socket = sockets.get('https://home-a.example');

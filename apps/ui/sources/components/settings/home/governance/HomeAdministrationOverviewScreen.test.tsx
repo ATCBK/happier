@@ -76,6 +76,10 @@ const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixture
 // Load the production graph after installing boundaries, before individual interaction deadlines.
 const { HomeConsoleShell } = await import('./HomeConsoleNavigation');
 const { HomeAdministrationOverviewScreen } = await import('./HomeAdministrationOverviewScreen');
+const { resetHomeSettingsEngineForTests } = await import('@/sync/engine/home/governance/homeSettingsEngine');
+const { resetHomeSettingsSnapshotsForTests } = await import('@/sync/store/home/governance/homeSettingsSnapshots');
+const { resetHomeAccountRosterEngineForTests } = await import('@/sync/engine/home/governance/homeAccountRosterEngine');
+const { resetHomeAccountRosterSnapshotsForTests } = await import('@/sync/store/home/governance/homeAccountRosterSnapshots');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const ACCOUNTS_PATH = '/v1/home/accounts/list';
@@ -130,6 +134,10 @@ async function renderOverview(home: string): Promise<RenderScreenResult> {
 }
 
 beforeEach(async () => {
+    resetHomeSettingsEngineForTests();
+    resetHomeSettingsSnapshotsForTests();
+    resetHomeAccountRosterEngineForTests();
+    resetHomeAccountRosterSnapshotsForTests();
     const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
     const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
     const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');

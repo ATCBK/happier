@@ -15,6 +15,7 @@ export type HomeAccountSearchState = Readonly<{
 }>;
 
 const NO_ROWS: readonly HomeAccountPickerRowV1[] = Object.freeze([]);
+type HomeAccountSearchAnswer = Pick<HomeAccountSearchState, 'rows' | 'failure'>;
 
 /**
  * Finds a person on one exact Home.
@@ -25,46 +26,56 @@ const NO_ROWS: readonly HomeAccountPickerRowV1[] = Object.freeze([]);
  * explained as an older Home rather than shown as "no matches", which would be
  * a false answer about who is on it.
  *
- * The shared hook caches by query for its component's lifetime, so a surface
- * that can change Home or Account underneath it must remount this hook — see
- * the People screen, which keys its search section by scope.
+ * Cached answers and typed refusals belong to the exact Home and Account,
+ * including when a mounted search surface changes scope without remounting.
  */
 export function useHomeAccountSearch(
     scope: ServerAccountScope | null,
     query: string,
     enabled: boolean,
 ): HomeAccountSearchState {
-    const [failure, setFailure] = React.useState<HomeDomainFailure | null>(null);
+    const [retryFailure, setRetryFailure] = React.useState<Readonly<{
+        scopeKey: string;
+        query: string;
+        value: HomeDomainFailure;
+    }> | null>(null);
     const serverId = scope?.serverId ?? '';
     const accountId = scope?.accountId ?? '';
+    const scopeKey = JSON.stringify([serverId, accountId]);
 
-    const search = React.useCallback(async (raw: string, request: SearchRequestContext): Promise<HomeAccountPickerRowV1[]> => {
+    const search = React.useCallback(async (raw: string, request: SearchRequestContext): Promise<HomeAccountSearchAnswer[]> => {
         const trimmed = raw.trim();
         if (!enabled || !serverId || !accountId || trimmed.length === 0) {
-            setFailure(null);
+            setRetryFailure(null);
             return [];
         }
         const outcome = await searchHomeAccounts({ scope: { serverId, accountId }, query: trimmed });
         if (!request.isCurrent()) return [];
         if (outcome.kind === 'failed') {
-            setFailure(outcome.failure);
             // A Home that could not be reached is worth asking again, so the
             // shared hook's retry is allowed to run. A refusal or a Home with
             // no such operation has already answered: repeating the question
             // only delays telling the person what happened.
-            if (outcome.failure.retryable) throw new Error('home_account_search_failed');
-            return [];
+            if (outcome.failure.retryable) {
+                setRetryFailure({ scopeKey, query: raw, value: outcome.failure });
+                throw new Error('home_account_search_failed');
+            }
+            setRetryFailure(null);
+            return [{ rows: NO_ROWS, failure: outcome.failure }];
         }
-        setFailure(null);
-        return [...outcome.value.accounts];
-    }, [enabled, serverId, accountId]);
+        setRetryFailure(null);
+        return [{ rows: [...outcome.value.accounts], failure: null }];
+    }, [enabled, serverId, accountId, scopeKey]);
 
-    const { results, isSearching, retry } = useSearch(query, search);
+    const { results, isSearching, retry } = useSearch(query, search, scopeKey);
+    const answer = results[0];
 
     return React.useMemo(() => Object.freeze({
-        rows: results.length > 0 ? results : NO_ROWS,
+        rows: answer?.rows.length ? answer.rows : NO_ROWS,
         searching: isSearching,
-        failure,
+        failure: retryFailure?.scopeKey === scopeKey && retryFailure.query === query
+            ? retryFailure.value
+            : answer?.failure ?? null,
         retry,
-    }), [results, isSearching, failure, retry]);
+    }), [answer, isSearching, retryFailure, retry, scopeKey, query]);
 }

@@ -2,8 +2,11 @@ import * as React from 'react';
 import type { HomeSettingsProjectionV1 } from '@happier-dev/protocol/home/governance';
 
 import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { getHomeSettings, type HomeGovernanceQueryOutcome } from '@/sync/ops/home/homeGovernanceOperations';
+import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { HomeGovernanceQueryOutcome } from '@/sync/ops/home/homeGovernanceOperations';
+import { observeHomeSettings, refreshHomeSettings } from '@/sync/engine/home/governance/homeSettingsEngine';
+import { adoptHomeSettingsProjection, getHomeSettingsSnapshot, subscribeHomeSettingsAdoptions, subscribeHomeSettingsSnapshots } from '@/sync/store/home/governance/homeSettingsSnapshots';
+import { useHomeSettingsLifetime } from './homeSettingsLifetime';
 
 export type HomeSettingsWithCompanion<TCompanion> = Readonly<{
     /** Last settings the Home answered; kept through a later failed read. */
@@ -25,10 +28,8 @@ export type HomeSettingsWithCompanion<TCompanion> = Readonly<{
 }>;
 
 type State<TCompanion> = Readonly<{
-    settings: HomeSettingsProjectionV1 | null;
+    scopeKey: string;
     companion: TCompanion | null;
-    loading: boolean;
-    failure: HomeDomainFailure | null;
     companionLoading: boolean;
     companionFailure: HomeDomainFailure | null;
 }>;
@@ -48,67 +49,81 @@ export function useHomeSettingsWithCompanion<TCompanion>(
 ): HomeSettingsWithCompanion<TCompanion> {
     const serverId = scope?.serverId ?? '';
     const accountId = scope?.accountId ?? '';
-    const [state, setState] = React.useState<State<TCompanion>>(() => ({ settings: null, companion: null, loading: true, failure: null, companionLoading: readCompanion !== null, companionFailure: null }));
+    const capturedScope = React.useMemo(() => serverId && accountId ? { serverId, accountId } : null, [serverId, accountId]);
+    const scopeKey = capturedScope ? serverAccountScopeKeySuffix(capturedScope) : '';
+    const retain = useHomeSettingsLifetime();
+    const readSettings = React.useCallback(() => capturedScope ? getHomeSettingsSnapshot(capturedScope) : null, [capturedScope]);
+    const settings = React.useSyncExternalStore(subscribeHomeSettingsSnapshots, readSettings, readSettings);
+    const [state, setState] = React.useState<State<TCompanion>>(() => ({ scopeKey, companion: null, companionLoading: readCompanion !== null, companionFailure: null }));
     const generation = React.useRef(0);
+    const currentScopeKey = React.useRef(scopeKey);
+    React.useLayoutEffect(() => { currentScopeKey.current = scopeKey; }, [scopeKey]);
     const readCompanionRef = React.useRef(readCompanion);
     readCompanionRef.current = readCompanion;
+    const hasCompanion = readCompanion !== null;
 
     const refreshCompanion = React.useCallback((currentGeneration: number) => {
         const read = readCompanionRef.current;
-        if (!read) return;
-        setState((previous) => ({ ...previous, companionLoading: true }));
+        if (!read || currentScopeKey.current !== scopeKey) return;
+        setState((previous) => ({ ...previous, scopeKey, companionLoading: true }));
         void (async () => {
             const companion = await read({ serverId, accountId });
-            if (currentGeneration !== generation.current) return;
+            if (currentGeneration !== generation.current || currentScopeKey.current !== scopeKey) return;
             setState((previous) => companion.kind === 'succeeded'
                 ? { ...previous, companion: companion.value, companionLoading: false, companionFailure: null }
                 : { ...previous, companionLoading: false, companionFailure: companion.failure });
         })();
-    }, [serverId, accountId]);
+    }, [serverId, accountId, scopeKey]);
 
     const load = React.useCallback(async () => {
-        if (!enabled || !serverId || !accountId) return;
+        if (!enabled || !capturedScope || currentScopeKey.current !== scopeKey) return;
         const currentGeneration = (generation.current += 1);
-        setState((previous) => ({ ...previous, loading: true, failure: null }));
         refreshCompanion(currentGeneration);
-        const settings = await getHomeSettings({ scope: { serverId, accountId } });
-        if (currentGeneration !== generation.current) return;
-        setState((previous) => settings.kind === 'succeeded'
-            ? { ...previous, settings: settings.value, loading: false, failure: null }
-            : { ...previous, loading: false, failure: settings.failure });
-    }, [enabled, serverId, accountId, refreshCompanion]);
+        await refreshHomeSettings(capturedScope);
+    }, [enabled, capturedScope, scopeKey, refreshCompanion]);
 
     // Only another Home (or another Account on it) starts from nothing. A read that is merely
     // re-enabled or repeated keeps the last answer on screen, so a settled page and its unsaved
     // edits never fall back to a loading state.
     React.useEffect(() => {
         generation.current += 1;
-        setState({ settings: null, companion: null, loading: true, failure: null, companionLoading: readCompanionRef.current !== null, companionFailure: null });
-    }, [serverId, accountId]);
+        setState({ scopeKey, companion: null, companionLoading: readCompanionRef.current !== null, companionFailure: null });
+        return () => { generation.current += 1; };
+    }, [scopeKey]);
 
     React.useEffect(() => {
-        void load();
-    }, [load]);
+        if (!enabled || !capturedScope) return;
+        retain?.(capturedScope);
+        return observeHomeSettings(capturedScope);
+    }, [enabled, capturedScope, retain]);
+
+    React.useEffect(() => {
+        if (!enabled || !capturedScope || !hasCompanion) return;
+        return subscribeHomeSettingsAdoptions(capturedScope, () => refreshCompanion(generation.current += 1));
+    }, [enabled, capturedScope, hasCompanion, refreshCompanion]);
+
+    React.useEffect(() => {
+        if (enabled && capturedScope) refreshCompanion(generation.current += 1);
+    }, [enabled, capturedScope, refreshCompanion]);
 
     const adoptSettings = React.useCallback((settings: HomeSettingsProjectionV1) => {
-        const currentGeneration = (generation.current += 1);
-        setState((previous) => ({ ...previous, settings, loading: false, failure: null }));
-        refreshCompanion(currentGeneration);
-    }, [refreshCompanion]);
+        if (!capturedScope) return;
+        adoptHomeSettingsProjection(capturedScope, settings);
+    }, [capturedScope]);
 
     const adoptCompanion = React.useCallback((companion: TCompanion) => {
-        setState((previous) => ({ ...previous, companion, companionLoading: false, companionFailure: null }));
-    }, []);
+        if (currentScopeKey.current === scopeKey) setState({ scopeKey, companion, companionLoading: false, companionFailure: null });
+    }, [scopeKey]);
 
     return React.useMemo(() => Object.freeze({
-        settings: state.settings,
-        companion: state.companion,
-        loading: state.loading,
-        failure: state.failure,
-        companionLoading: state.companionLoading,
-        companionFailure: state.companionFailure,
+        settings: settings?.settings ?? null,
+        companion: state.scopeKey === scopeKey ? state.companion : null,
+        loading: settings?.loading ?? true,
+        failure: settings?.failure ?? null,
+        companionLoading: state.scopeKey === scopeKey ? state.companionLoading : readCompanion !== null,
+        companionFailure: state.scopeKey === scopeKey ? state.companionFailure : null,
         reload: load,
         adoptSettings,
         adoptCompanion,
-    }), [state, load, adoptSettings, adoptCompanion]);
+    }), [settings, state, scopeKey, readCompanion, load, adoptSettings, adoptCompanion]);
 }

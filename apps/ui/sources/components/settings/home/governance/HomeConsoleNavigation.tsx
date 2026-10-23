@@ -31,6 +31,7 @@ import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useHomeAdministration } from '@/hooks/home/useHomeAdministration';
+import { HomeSettingsLifetime } from '@/hooks/home/homeSettingsLifetime';
 import { resolveHomeViewerRole } from '@/hooks/home/resolveHomeViewerRole';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
@@ -62,7 +63,9 @@ export function HomeConsoleShell(props: Readonly<{
     children: React.ReactNode;
 }>) {
     const value = React.useMemo(() => ({ serverId: props.serverId, rail: props.rail }), [props.rail, props.serverId]);
-    return <HomeConsoleShellContext.Provider value={value}>{props.children}</HomeConsoleShellContext.Provider>;
+    return <HomeSettingsLifetime serverId={props.serverId}>
+        <HomeConsoleShellContext.Provider value={value}>{props.children}</HomeConsoleShellContext.Provider>
+    </HomeSettingsLifetime>;
 }
 
 /** The narrowest window that holds the settings navigation, the console's sidebar and a page (R16). */

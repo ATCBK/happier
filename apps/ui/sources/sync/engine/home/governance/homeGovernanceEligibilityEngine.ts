@@ -1,6 +1,6 @@
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
-import { bindHomeDomainActionHttpRequestV1, homeDomainActionOutputSchemaV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
-import { HomeGovernanceEligibilityV1Schema, type HomeGovernanceEligibilityV1 } from '@happier-dev/protocol/home/governance/projection';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { HomeGovernanceEligibilityV1Schema } from '@happier-dev/protocol/home/governance/projection';
 
 import { requestHomeDomain, type HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
@@ -33,21 +33,13 @@ const loader = createScopedSnapshotLoader<EligibilityTarget>({
     load: async ({ scope }, loadContext) => {
         beginHomeGovernanceEligibilityLoad(scope);
         const request = bindHomeDomainActionHttpRequestV1('home.governance.eligibility.get', {});
-        const actionOutputSchema = homeDomainActionOutputSchemaV1('home.governance.eligibility.get');
-        const result = await requestHomeDomain<HomeGovernanceEligibilityV1>({
+        const result = await requestHomeDomain({
             scope,
             method: request.method,
             path: request.path,
             effect: 'read',
             input: request.body,
-            schema: {
-                safeParse: (value) => {
-                    const actionOutput = actionOutputSchema.safeParse(value);
-                    return actionOutput.success
-                        ? HomeGovernanceEligibilityV1Schema.safeParse(actionOutput.data)
-                        : actionOutput;
-                },
-            },
+            schema: HomeGovernanceEligibilityV1Schema,
         });
         if (result.ok) {
             applyHomeGovernanceEligibility({

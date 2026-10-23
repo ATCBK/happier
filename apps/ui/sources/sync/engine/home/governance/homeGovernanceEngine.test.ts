@@ -3,6 +3,7 @@ import {
     NO_HOME_CAPABILITIES_V1,
     type HomeGovernanceProjectionV1,
 } from '@happier-dev/protocol/home/governance';
+import { HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance/projection';
 
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
@@ -97,10 +98,12 @@ afterEach(() => {
     resetHomeGovernanceEngineForTests();
     resetHomeGovernanceSnapshotsForTests();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
 });
 
 describe('homeGovernanceEngine', () => {
     it('loads the projection for a newly observed Home and publishes it under that exact scope', async () => {
+        const parse = vi.spyOn(HomeGovernanceProjectionV1Schema, 'safeParse');
         const homeA = await addHome('Home A', 'https://home-a.example');
         await setActiveServerId(homeA, { scope: 'device' });
         runtimeFetchMock.mockImplementation(async () => jsonResponse(projection()));
@@ -113,6 +116,7 @@ describe('homeGovernanceEngine', () => {
 
         expect(getHomeGovernanceSnapshot(scope)?.data).toEqual(projection());
         expect(getHomeGovernanceSnapshot(scope)?.stale).toBe(false);
+        expect(parse).toHaveBeenCalledTimes(1);
         release();
     });
 

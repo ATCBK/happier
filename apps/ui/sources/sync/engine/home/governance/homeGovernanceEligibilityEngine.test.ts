@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HomeGovernanceEligibilityV1Schema } from '@happier-dev/protocol/home/governance/projection';
 
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
@@ -53,10 +54,12 @@ afterEach(() => {
     resetHomeGovernanceEligibilityEngineForTests();
     resetHomeGovernanceEligibilitySnapshotsForTests();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
 });
 
 describe('homeGovernanceEligibilityEngine', () => {
     it('reads only the minimum eligibility Action for one exact Home and Account', async () => {
+        const parse = vi.spyOn(HomeGovernanceEligibilityV1Schema, 'safeParse');
         const home = (await upsertServerProfile({ serverUrl: 'https://home-a.example', name: 'Home A' })).id;
         await setActiveServerId(home, { scope: 'device' });
         runtimeFetchMock.mockResolvedValue(response({ teamsEnabled: true, createTeam: true, createTeamForChosenAccount: false }));
@@ -74,6 +77,7 @@ describe('homeGovernanceEligibilityEngine', () => {
             serverUrl: 'https://home-a.example',
             url: 'https://home-a.example/v1/home/governance/eligibility/get',
         }));
+        expect(parse).toHaveBeenCalledTimes(1);
         release();
     });
 
@@ -83,6 +87,7 @@ describe('homeGovernanceEligibilityEngine', () => {
         runtimeFetchMock.mockResolvedValue(response({
             teamsEnabled: true,
             createTeam: true,
+            createTeamForChosenAccount: false,
             policy: { revision: 4 },
         }));
         const scope = createServerAccountScope(home, 'member-a')!;
