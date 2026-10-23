@@ -9437,15 +9437,16 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         } });
         const binding = normalizePluginUiSettingsPageBindingV1({ pluginId: 'acme.browser', pageId: 'preferences', rendererId: 'native-panel' });
         if (!binding) throw new Error('Expected external Settings binding');
+        const hostSupplies = [{ machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1',
+            occurrenceId, generation: 77, phase: 'current' as const, interactionEnabled: true,
+            pluginVersion: '3.2.1', sourceCustody, executionTargetDefault: true, executionOrigin }];
         const page: PluginUiSettingsPageProjection = {
             ...generatedReactNativePlacement({ occurrenceId }),
             id: 'settingsPage:acme.browser:preferences', contributionKind: 'settingsPage', descriptorId: 'preferences',
             page: { id: { pluginId: 'acme.browser', localId: 'preferences' }, title: 'Preferences', group: { kind: 'host', id: 'general' } }, binding,
             renderer: { kind: 'reactNative', contributionId: 'native-panel', requiredHostMethods: ['executeAction'] },
             hostCompatibility: 'compatible',
-            hostSupplies: [{ machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1',
-                occurrenceId, generation: 77, phase: 'current', interactionEnabled: true,
-                pluginVersion: '3.2.1', sourceCustody, executionTargetDefault: true, executionOrigin }],
+            hostSupplies,
         };
         const projection = { ...baseProjection, settingsPagesById: { [page.id]: page } };
         const { storage } = await import('@/sync/domains/state/storage');
@@ -9509,7 +9510,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             expect(readMountedSurface().machineExecutionReady).toBe(true);
             expect(readMountedSurface().machineConnectionPending).toBe(false);
             expect(outcomes).toEqual([{ discovered: true }]);
-            currentPage = { ...page, occurrenceId: 'reloading-settings-occurrence', hostSupplies: page.hostSupplies!.map(supply => ({ ...supply,
+            currentPage = { ...page, occurrenceId: 'reloading-settings-occurrence', hostSupplies: hostSupplies.map(supply => ({ ...supply,
                 occurrenceId: 'reloading-settings-occurrence', phase: 'establishing' as const, interactionEnabled: false })) };
             currentProjection = { ...projection, settingsPagesById: { [page.id]: currentPage }, installedPackagesById: {
                 ...projection.installedPackagesById, 'acme.browser': { ...projection.installedPackagesById['acme.browser']!,
