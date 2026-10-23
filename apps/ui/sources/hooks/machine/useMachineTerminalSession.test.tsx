@@ -458,7 +458,7 @@ describe('useMachineTerminalSession', () => {
         expect(terminalOps.close).not.toHaveBeenCalled();
     });
 
-    it('waits for observed Machine presence without claiming unknown is offline or opening its terminal', async () => {
+    it.each([undefined, 'observed'])('waits without an error or terminal RPCs for observed Machine presence, then attaches (existing terminal: %s)', async (attachedTerminalId) => {
         terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'observed', reused: false });
         terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'observed', frames: [], nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });
         const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
@@ -467,17 +467,49 @@ describe('useMachineTerminalSession', () => {
         const hook = await renderHook(() => useMachineTerminalSession({
             machineId: 'machine', serverId: homeIds.primary, cwd: '/repo', terminalKey: 'unobserved-machine',
             terminalRef, machineReachable: reachable, machineRpcTargetAvailable: true,
+            attachedTerminalId,
         }));
         await act(async () => hook.getCurrent().onReady(80, 24));
         await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
-        expect(terminalOps.ensure).not.toHaveBeenCalled();
-        expect(hook.getCurrent().error).toBe('terminal_unavailable');
+        for (const rpc of Object.values(terminalOps)) expect(rpc).not.toHaveBeenCalled();
+        expect(hook.getCurrent().status).toBe(attachedTerminalId ? 'connecting' : 'not-open');
+        expect(hook.getCurrent().error).toBeNull();
         reachable = true;
         await hook.rerender();
         await flushHookEffects({ cycles: 4, turns: 2, runOnlyPendingTimers: true });
-        expect(terminalOps.ensure).toHaveBeenCalledOnce();
+        expect(terminalOps.ensure).toHaveBeenCalledTimes(attachedTerminalId ? 0 : 1);
+        expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId: 'observed' }), expect.any(Object));
+        expect(hook.getCurrent().terminalId).toBe('observed');
         expect(hook.getCurrent().error).toBeNull();
         await hook.unmount();
+    });
+
+    it('keeps a workspace terminal waiting while its retained Machine presence is unknown, then opens on observation', async () => {
+        const React = await import('react');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
+        const { withdrawMachinePresenceForScope } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { WorkspaceEmbeddedTerminalPane } = await import('@/components/projects/panes/details/views/WorkspaceEmbeddedTerminalPane');
+        const { EmbeddedTerminalPane } = await import('@/components/terminal/embedded/EmbeddedTerminalPane');
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })]);
+        // Model the real transport-withdrawal edge: the row remains, its presence needs fresh observation.
+        withdrawMachinePresenceForScope({ serverId: homeIds.primary, accountId: 'terminal-account' });
+        terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'workspace-observed', reused: false });
+        terminalOps.streamReadBytes.mockResolvedValue({ ok: true, terminalId: 'workspace-observed', frames: [],
+            nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true });
+        const screen = await renderScreen(React.createElement(AppPaneProvider, null,
+            React.createElement(WorkspaceEmbeddedTerminalPane, {
+                scopeId: 'workspace-presence', machineId: 'machine', rootPath: '/repo',
+                serverId: homeIds.primary, terminalKey: 'workspace-presence',
+            })));
+        expect(screen.findByType(EmbeddedTerminalPane).props.controller).toMatchObject({ status: 'not-open', error: null });
+        for (const rpc of Object.values(terminalOps)) expect(rpc).not.toHaveBeenCalled();
+        await act(async () => { observeMachinePresenceForTest({ serverId: homeIds.primary, accountId: 'terminal-account' }, ['machine']); });
+        await vi.waitFor(() => expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine',
+            expect.objectContaining({ terminalId: 'workspace-observed' }), expect.any(Object)));
+        expect(screen.findByType(EmbeddedTerminalPane).props.controller.error).toBeNull();
+        await screen.unmount();
     });
 
     it('issues an explicit Retry while the machine is unreachable', async () => {
