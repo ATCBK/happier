@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import type { WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -10,7 +11,7 @@ import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import { WidgetFrame, type WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionCompanionInstanceView } from '../SessionCompanionItemFrame';
+import { SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX, type SessionCompanionInstanceView } from '../SessionCompanionItemFrame';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 
@@ -24,6 +25,8 @@ export function PluginGlance(props: Readonly<{
     menu?: React.ReactNode;
     /** This copy's rename field (in its title's place) and the card's repair line. */
     instanceView?: SessionCompanionInstanceView;
+    /** Until the copy is first in view its executable body waits, holding its room. */
+    bodyPresented: boolean;
     measurementOnly: boolean;
     testID: string;
 }>) {
@@ -40,7 +43,10 @@ export function PluginGlance(props: Readonly<{
         title={props.instanceView?.titleEditor ?? props.instance.displayName ?? descriptor?.title ?? (definition.kind === 'installed' ? definition.surface.localId : props.instance.id)}
         source={bindingLabel ?? descriptor?.pluginName ?? (definition.kind === 'installed' ? definition.surface.pluginId : undefined)}
         menu={props.menu}
-        body={{ kind: 'content', children: props.measurementOnly ? null : viewerScope && viewerScope.serverId === props.serverId
+        body={{ kind: 'content', children: props.measurementOnly ? null : !props.bodyPresented
+            ? <View testID={props.testID + '.deferred'} style={{ minHeight: SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX }}
+                accessibilityElementsHidden importantForAccessibility="no-hide-descendants" />
+            : viewerScope && viewerScope.serverId === props.serverId
             ? <WidgetSurface testID={props.testID + '.surface'}
                 scope={{ ...viewerScope, owner: { kind: 'companion', sessionId: props.sessionId } }}
                 providedContext={readSessionWidgetProvidedContext({ serverId: viewerScope.serverId, sessionId: props.sessionId, session: props.session })}

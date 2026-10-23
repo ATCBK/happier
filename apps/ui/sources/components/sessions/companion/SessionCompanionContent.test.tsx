@@ -22,6 +22,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
+import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 vi.mock('socket.io-client', async importOriginal =>
@@ -233,6 +234,11 @@ describe('SessionCompanionContent (mounted)', () => {
         </InjectedAuthProvider>;
         const screen = await renderScreen(content(viewer.serverId));
         try {
+            // The reference is presented once the column has laid it out inside its viewport.
+            await act(async () => {
+                screen.findHostByTestId('session-companion-content')!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 600 } } });
+                screen.findHostByTestId('session-companion-content-item-widget:daily-placement')!.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 260 } } });
+            });
             expect(screen.tree.root.findAllByProps({ diagnosticCode: 'widget_viewer_scope_mismatch' })).toHaveLength(0);
             await act(async () => { await loadPluginUiHostSupport(); });
             await vi.waitFor(() => expect(screen.tree.root.findAllByType(HostedHtmlSurfaceAdapter)).toHaveLength(1));
@@ -247,6 +253,49 @@ describe('SessionCompanionContent (mounted)', () => {
             await screen.update(content(viewer.serverId));
             await vi.waitFor(() => expect(screen.findByTestId('companion-visual-frame')).not.toBeNull());
             expect(http.writes).toEqual([]);
+        } finally { await screen.unmount(); await connection.dispose(); vi.unstubAllGlobals(); }
+    });
+
+    it('mounts a direct personal copy\'s body on its first presentation, holds its room until then, and keeps it once presented', async () => {
+        const http = createHomeHubArtifactHttpBoundary('viewer');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://companion-demand.test', serverIdentityId: 'srv_companion_demand', accountId: 'viewer', request: (url, init) => {
+            if (new URL(String(url)).pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) {
+                return Promise.resolve(Response.json(ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' })));
+            }
+            return http.request(url, init);
+        } });
+        const viewer = getActiveServerAccountScope();
+        if (!viewer) throw new Error('Expected current viewer');
+        const exactSession = createSessionFixture({ id: 'demand-session', serverId: viewer.serverId });
+        storage.getState().applySessions([exactSession]);
+        const refs = ['first', 'second'].map(id => ({ kind: 'instance' as const, instance: {
+            v: 1 as const, id, bindings: {}, definition: { kind: 'inline' as const, definition: WidgetDefinitionV1Schema.parse({
+                v: 1, id, name: id, sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+                inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+                body: { kind: 'html', source: artifactHtmlBundleFromBodyV1(`<main>${id}</main>`), requestedCapabilities: { network: 'none' } },
+            }) },
+        } }));
+        vi.stubGlobal('location', { origin: 'https://app.happier.dev' });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+            <SessionCompanionContent session={exactSession} serverId={viewer.serverId} controller={controller(refs)}
+                boardBinding={null} resolvePrimaryHost={() => null} />
+        </InjectedAuthProvider>);
+        const bodies = () => screen.tree.root.findAllByType(WidgetSurface).map(body => body.props.instance.id);
+        const item = (id: string) => screen.findHostByTestId(`session-companion-content-item-instance:${id}`)!;
+        const place = (id: string, y: number) => item(id).props.onLayout({ nativeEvent: { layout: { x: 0, y, width: 320, height: 260 } } });
+        const scroll = screen.findHostByTestId('session-companion-content')!;
+        try {
+            // Before any layout nothing has been presented, and the frame still holds the room a body would take.
+            expect(bodies()).toEqual([]);
+            expect(screen.findByTestId('session-companion-content-glance-instance:first.deferred')).not.toBeNull();
+            await act(async () => {
+                scroll.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 320, height: 600 } } });
+                place('first', 0);
+                place('second', 4000);
+            });
+            expect(bodies()).toEqual(['first']);
+            await act(async () => { scroll.props.onScroll({ nativeEvent: { contentOffset: { x: 0, y: 4000 } } }); });
+            expect(bodies().sort()).toEqual(['first', 'second']);
         } finally { await screen.unmount(); await connection.dispose(); vi.unstubAllGlobals(); }
     });
 

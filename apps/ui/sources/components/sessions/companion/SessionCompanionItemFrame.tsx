@@ -14,6 +14,7 @@ import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInp
 import { useWidgetInstanceDescriptor } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
 import { widgetProvidedContext, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
+import { useIsNearViewport, type NearViewportSpan, type NearViewportTracker } from '@/components/widgets/nearViewport';
 import type { WidgetInputBindingsV1, WidgetInstanceV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
 
@@ -46,6 +47,31 @@ export type SessionCompanionInstanceView = Readonly<{
     onRepairInputs?: () => void;
 }>;
 
+/**
+ * The room a widget body holds in the column until it is first presented. The Companion is a
+ * content-height column with no declared size, so this is the one floor every widget host there
+ * already uses (the Board-reference host's minimum height) rather than a second estimate.
+ */
+export const SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX = 96;
+
+/**
+ * Whether this item's body has been presented: the column's near-viewport rule (the one Home and
+ * the Board use), read from the item's own layout. A body mounts on its first presentation and then
+ * stays for the life of the item, so scrolling away never remounts it or loses its state.
+ */
+function useCompanionBodyPresented(tracker: NearViewportTracker | undefined) {
+    const [span, setSpan] = React.useState<NearViewportSpan | null>(null);
+    const [retained, setRetained] = React.useState(false);
+    // Once presented the item stops listening to the scroll window.
+    const near = useIsNearViewport(retained ? null : tracker ?? null, span);
+    if (tracker && near && !retained) setRetained(true);
+    const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const { y, height } = event.nativeEvent.layout;
+        setSpan((current) => current?.top === y && current.height === height ? current : { top: y, height });
+    }, []);
+    return { presented: !tracker || retained || near, onLayout };
+}
+
 type SessionCompanionItemFrameProps = Readonly<{
     /** The item's own accessible name, from its canonical presentation owner. */
     label: string;
@@ -53,9 +79,11 @@ type SessionCompanionItemFrameProps = Readonly<{
     /**
      * The item body. It receives this placement's controls (reorder handle and
      * item menu) and draws them at the end of its own header line, so the item
-     * keeps one header and the frame adds no second title row.
+     * keeps one header and the frame adds no second title row. `bodyPresented` is false
+     * until the item first scrolls into view: an executable body waits (holding
+     * {@link SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX}) and mounts on presentation.
      */
-    children: (headerAccessory: React.ReactNode, instanceView?: SessionCompanionInstanceView) => React.ReactNode;
+    children: (headerAccessory: React.ReactNode, instanceView?: SessionCompanionInstanceView, bodyPresented?: boolean) => React.ReactNode;
     /** Every item after the first sits under a hairline. */
     separated?: boolean;
     /**
@@ -65,6 +93,8 @@ type SessionCompanionItemFrameProps = Readonly<{
     flush?: 'plain' | 'card';
     testID: string;
     onLayout?: (event: LayoutChangeEvent) => void;
+    /** The column's scroll window; absent where the body is always built (measuring, a lone section). */
+    viewport?: NearViewportTracker;
     /** Absent while measuring or without a current qualified Companion owner. */
     entityDrag?: SessionSurfaceEntityBinding;
     /** A direct personal widget copy (never a Board reference); absent while measuring. */
@@ -125,7 +155,7 @@ function InstanceItemFrame(props: SessionCompanionItemFrameProps & Readonly<{ co
     return (
         <>
             <ItemFrameBody {...props} label={title} actions={actions} controlsRef={inputs.anchorRef}>
-                {(accessory) => children(accessory, view)}
+                {(accessory, _view, bodyPresented) => children(accessory, view, bodyPresented)}
             </ItemFrameBody>
             {inputs.popover}
             {definition.panel}
@@ -140,6 +170,7 @@ function ItemFrameBody(props: SessionCompanionItemFrameProps & Readonly<{
     const styles = stylesheet;
     const actions = React.useMemo(() => [...props.actions], [props.actions]);
     const drag = useSessionSurfaceEntityDrag(props.entityDrag ?? null);
+    const demand = useCompanionBodyPresented(props.viewport);
     const accessory = props.entityDrag || actions.length > 0 ? (
         <View style={styles.controls} ref={props.controlsRef} collapsable={false}>
             {props.entityDrag ? <SessionSurfaceEntityDragHandle drag={drag} title={props.label} testID={`${props.testID}-move-handle`} /> : null}
@@ -165,9 +196,9 @@ function ItemFrameBody(props: SessionCompanionItemFrameProps & Readonly<{
         <View ref={drag.ref} collapsable={false}
             style={[props.flush ? (props.flush === 'card' ? styles.cardGap : null) : styles.root, !props.flush && props.separated ? styles.separated : null]}
             testID={props.testID}
-            onLayout={event => { props.onLayout?.(event); drag.onLayout(event); }}
+            onLayout={event => { demand.onLayout(event); props.onLayout?.(event); drag.onLayout(event); }}
         >
-            {props.children(accessory)}
+            {props.children(accessory, undefined, demand.presented)}
             <SessionSurfaceEntityTargetFeedback drag={drag} testID={props.testID} />
         </View>
     );

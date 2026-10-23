@@ -48,6 +48,8 @@ export function SessionCompanionGlance(props: Readonly<{
     headerAccessory: React.ReactNode;
     /** A direct personal copy's rename field and repair line. */
     instanceView?: SessionCompanionInstanceView;
+    /** False until the item is first in view: a plugin's executable body waits for it. */
+    bodyPresented?: boolean;
     measurementOnly: boolean;
     testID: string;
 }>): React.ReactElement | null {
@@ -63,7 +65,7 @@ export function SessionCompanionGlance(props: Readonly<{
         case 'changes': return <ChangesGlance {...common} />;
         case 'local_services': return <LocalServicesGlance {...common} />;
         case 'pane': return <PaneLinkRow {...common} paneId={props.entry.ref.paneId} />;
-        case 'instance': return <PluginGlance {...common} session={props.session} instance={props.entry.ref.instance} {...(props.instanceView ? { instanceView: props.instanceView } : {})} />;
+        case 'instance': return <PluginGlance {...common} session={props.session} instance={props.entry.ref.instance} bodyPresented={props.bodyPresented !== false} {...(props.instanceView ? { instanceView: props.instanceView } : {})} />;
     }
 }
 

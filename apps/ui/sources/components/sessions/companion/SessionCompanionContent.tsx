@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, View, type LayoutChangeEvent } from 'react-native';
+import { Dimensions, ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { SessionWidgetHost } from '@/components/sessions/board/SessionWidgetHost';
@@ -44,7 +44,7 @@ import {
     sessionCompanionGlanceLabel,
     type SessionCompanionGlanceItem,
 } from './glances/SessionCompanionGlance';
-import { SessionCompanionItemFrame, type SessionCompanionInstanceControls, type SessionCompanionInstanceView } from './SessionCompanionItemFrame';
+import { SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX, SessionCompanionItemFrame, type SessionCompanionInstanceControls, type SessionCompanionInstanceView } from './SessionCompanionItemFrame';
 import {
     applySessionCompanionMutationWithNotice,
     applySessionCompanionItemPresentationIntent,
@@ -71,6 +71,7 @@ import {
 import { SessionAgentPlanCard, type SessionAgentPlanActivity } from './plan/SessionAgentPlanCard';
 import { VoiceCompanionSection } from '@/components/voice/presence/VoiceCompanionSection';
 import { createNearViewportTracker } from '@/components/widgets/nearViewport';
+import { PAGE_ROW_TOUCH_MIN_HEIGHT_PX } from '@/components/ui/lists/pageRowMetrics';
 import { SessionCompanionAddControl, type SessionCompanionAddBinding } from './picker/SessionCompanionAddControl';
 import { useSessionWidgetSurface } from '@/components/widgets/surface/useWidgetInputsEditor';
 import type { WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
@@ -250,6 +251,13 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         quantum: 1,
         initialViewportHeight: 0,
         overscan: false,
+    }));
+    // Widget bodies build on the same window policy as Home and the Board (a viewport of overscan
+    // above and two below), so a body is already built when it scrolls into view and its arrival
+    // never moves what the person is looking at. Voice keeps the exact visible window above.
+    const [widgetDemandTracker] = React.useState(() => createNearViewportTracker({
+        quantum: PAGE_ROW_TOUCH_MIN_HEIGHT_PX,
+        initialViewportHeight: Dimensions.get('window').height,
     }));
     const scrollRef = React.useRef<ScrollView | null>(null);
     const { binding: dragScope } = useServerCredentialAccountScopeBinding(props.serverId);
@@ -500,6 +508,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         headerAccessory: React.ReactNode,
         frameStyle: WidgetFrameStyle,
         instanceView?: SessionCompanionInstanceView,
+        bodyPresented = true,
     ): React.ReactNode => {
         if (entry.kind === 'summary') {
             return (
@@ -530,6 +539,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
                     frameStyle={frameStyle}
                     headerAccessory={headerAccessory}
                     {...(instanceView ? { instanceView } : {})}
+                    bodyPresented={bodyPresented}
                     measurementOnly={props.measurementOnly === true}
                     testID={`${testID}-glance-${companionItemMeasurementKey(entry)}`}
                 />
@@ -552,7 +562,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         return (
             <>
                 {entry.kind === 'widget' ? null : <View style={styles.stateControls}>{headerAccessory}</View>}
-                {renderWidgetBody(entry, headerAccessory, frameStyle)}
+                {renderWidgetBody(entry, headerAccessory, frameStyle, bodyPresented)}
             </>
         );
     };
@@ -560,6 +570,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         entry: Exclude<SessionCompanionContentItem, { kind: 'summary' } | { kind: 'plan' } | SessionCompanionGlanceItem>,
         headerAccessory: React.ReactNode,
         frameStyle: WidgetFrameStyle,
+        bodyPresented: boolean,
     ): React.ReactNode => {
         if (entry.kind === 'pending_widget') {
             // Not resolved yet. Uncertainty is never relabelled as a deletion.
@@ -628,7 +639,8 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
                 executableCurrentness={board
                     ? resolveSessionBoardExecutableCurrentness(board, entry.item, pluginRuntime)
                     : 'unverified'}
-                heightBounds={{ min: 96, max: 520 }}
+                heightBounds={{ min: SESSION_COMPANION_WIDGET_BODY_MIN_HEIGHT_PX, max: 520 }}
+                {...(bodyPresented ? {} : { deferBody: true })}
                 resolveSourceAvailability={resolveSourceAvailability}
                 {...(pluginRuntime ? { pluginRuntime } : {})}
                 {...(!props.measurementOnly && props.callerHostedHtmlRuntime
@@ -728,9 +740,9 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
         <>
         <ScrollView ref={node => { scrollRef.current = node; surfaceDrag.ref(node); }} style={styles.scroll} contentContainerStyle={styles.content} testID={testID}
             onScroll={event => { scrollOffsetY.current = event.nativeEvent.contentOffset.y; scrollOffset.value = scrollOffsetY.current;
-                voiceViewportTracker.onScroll(event); dragRuntime.refresh(); }}
+                voiceViewportTracker.onScroll(event); widgetDemandTracker.onScroll(event); dragRuntime.refresh(); }}
             onContentSizeChange={(_width, height) => { contentHeight.value = height; dragRuntime.refresh(); }}
-            onLayout={event => { voiceViewportTracker.onLayout(event); viewportHeight.value = event.nativeEvent.layout.height; refreshGeometry(); }} scrollEventThrottle={16}>
+            onLayout={event => { voiceViewportTracker.onLayout(event); widgetDemandTracker.onLayout(event); viewportHeight.value = event.nativeEvent.layout.height; refreshGeometry(); }} scrollEventThrottle={16}>
             {/* While a Voice conversation runs, its section leads the Companion (lab voice-presence A). */}
             {props.measurementOnly ? null : <VoiceCompanionSection tracker={voiceViewportTracker} testID={`${testID}-voice`} onReveal={revealVoice} />}
             {items.length === 0 ? (
@@ -771,6 +783,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
                         testID={`${testID}-item-${key}`}
                         label={label(entry)}
                         separated={index > 0}
+                        {...(props.measurementOnly ? {} : { viewport: widgetDemandTracker })}
                         {...(framed ? { flush: frameStyle } : {})}
                         onLayout={props.onMeasuredCardBounds || canDrag
                             ? (event) => reportCardLayout(key, event)
@@ -823,7 +836,7 @@ export const SessionCompanionContent = React.memo(function SessionCompanionConte
                         })}
                         instanceControls={instanceControls(entry)}
                     >
-                        {(accessory, instanceView) => renderBody(entry, accessory, frameStyle, instanceView)}
+                        {(accessory, instanceView, bodyPresented) => renderBody(entry, accessory, frameStyle, instanceView, bodyPresented)}
                     </SessionCompanionItemFrame>
                 );
             })}
