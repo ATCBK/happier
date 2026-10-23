@@ -45,6 +45,60 @@ describe("Artifact document grants (real SQLite)", () => {
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
 
+    it('reads selected identities beyond the provider bind boundary without widening access', async () => {
+        const owner = await plainAccount();
+        const reader = await plainAccount();
+        const foreign = await plainAccount();
+        const owned = await plainArtifact(reader.id);
+        const granted = await plainArtifact(owner.id);
+        const hidden = await plainArtifact(foreign.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: granted.id, accountId: reader.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        const artifactIds = [owned.id, granted.id, hidden.id, ...Array.from({ length: 34997 }, (_, index) => `missing-${index}`)];
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const response = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': reader.id, ...protocolHeaders }, payload: { artifactIds } });
+            expect(response.statusCode, response.body).toBe(200);
+            const items = response.json().items;
+            expect(items.map((item: { artifactId: string }) => item.artifactId)).toEqual(artifactIds);
+            expect(items.slice(0, 2)).toMatchObject([
+                { ok: true, recipientCensus: null, artifact: { access: 'owner', body: encodePlainArtifactStoredContent({ value: 'original' }) } },
+                { ok: true, recipientCensus: null, artifact: { access: 'view', body: encodePlainArtifactStoredContent({ value: 'original' }) } },
+            ]);
+            expect(items.slice(2).every((item: { ok: boolean; error: string }) => !item.ok && item.error === 'artifact_not_found')).toBe(true);
+        });
+    });
+
+    it('keeps encrypted recipient census ordering across portable account-query chunks', async () => {
+        const owner = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'e2ee' } });
+        const recipients = Array.from({ length: 1000 }, (_, index) => `${index < 500 ? 'z' : 'a'}-${owner.id}-${index}`);
+        await db.account.createMany({ data: recipients.map(id => ({ id, encryptionMode: 'plain' as const })) });
+        const dataKey = tweetnacl.randomBytes(32);
+        const envelope = new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey,
+            recipientPublicKey: owner.contentPublicKey!, randomBytes: tweetnacl.randomBytes }));
+        const artifactIds = [`a-${owner.id}`, `z-${owner.id}`];
+        const body = new TextEncoder().encode('opaque encrypted body');
+        await db.artifact.createMany({ data: artifactIds.map(id => ({ id, accountId: owner.id,
+            header: new TextEncoder().encode('opaque encrypted header'), body, dataEncryptionKey: envelope,
+            headerVersion: 1, bodyVersion: 1 })) });
+        await db.artifactAccountGrant.createMany({ data: recipients.map((accountId, index) => ({
+            artifactId: artifactIds[index < 500 ? 0 : 1], accountId, accessLevel: 'view' as const, createdByAccountId: owner.id,
+        })) });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const response = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { artifactIds } });
+            expect(response.statusCode, response.body).toBe(200);
+            const items = response.json().items;
+            for (const [index, item] of items.entries()) {
+                expect(item).toMatchObject({ artifactId: artifactIds[index], ok: true,
+                    artifact: { body: privacyKit.encodeBase64(body), encryptionMode: 'e2ee' },
+                    recipientCensus: { dataEncryptionKey: privacyKit.encodeBase64(envelope) } });
+                expect(item.recipientCensus.recipients.map((row: { recipientAccountId: string }) => row.recipientAccountId))
+                    .toEqual([owner.id, ...recipients.slice(index * 500, (index + 1) * 500)].sort());
+            }
+        });
+    });
+
     it('serves only widget-area layouts through the existing kind filter and exact consumer schema', async () => {
         const owner = await plainAccount();
         const foreign = await plainAccount();
