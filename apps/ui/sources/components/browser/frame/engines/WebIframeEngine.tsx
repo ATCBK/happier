@@ -241,7 +241,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     }, [navigationUrl, props.sandbox, props.automation?.adapterKind, collectorScript, props.diagnostics?.sourceOrigin]);
 
     const previewProbeUrl = React.useMemo(() => {
-        const href = cooperativeNavigation?.url ?? (props.localPreview ? props.url : undefined);
+        const href = cooperativeNavigation?.url ?? (props.localPreview ? navigationUrl : undefined);
         if (!href) return null;
         try {
             // The frame's own first request spends the one-use admission for its cookie; the probe rides
@@ -252,15 +252,17 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
             url.search += `${url.search ? '&' : '?'}${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
             return url.href;
         } catch { return null; }
-    }, [cooperativeNavigation?.url, props.localPreview, props.url]);
+    }, [cooperativeNavigation?.url, props.localPreview, navigationUrl]);
 
+    // Address observations can change props.url without assigning a new document. Readiness,
+    // collector custody and document-bound transports follow the same source as the iframe.
     React.useLayoutEffect(() => {
         hasLoadedCurrentNavigationRef.current = false;
         bridgeDocumentRetiredRef.current = false;
         cooperativeDocumentRetiredRef.current = false;
         setCooperativeReadyUrl(null);
         setPreviewRefusal(null);
-    }, [navigationKey, props.url, props.html, cooperativeNavigation?.url, reloadCommandId]);
+    }, [navigationKey, navigationUrl, props.html, cooperativeNavigation?.url, reloadCommandId]);
 
     React.useLayoutEffect(() => {
         if (!cooperativeNavigation || typeof window === 'undefined') return;
@@ -306,7 +308,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
 
     React.useLayoutEffect(() => {
         frameUrlRef.current = null;
-    }, [props.url, props.html]);
+    }, [navigationUrl, props.html]);
 
     React.useEffect(() => {
         if (!previewProbeUrl || !hasLoadedCurrentNavigationRef.current
@@ -565,7 +567,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         cooperativeReadyUrl,
         cooperativeNavigation ? null : loadedDocumentRevision,
         navigationKey,
-        props.url,
+        navigationUrl,
         props.html,
         props.sandbox,
         props.diagnostics?.sourceOrigin,
@@ -786,7 +788,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         bridgeExactDocumentChannel,
         bridgeTargetOrigin,
         navigationKey,
-        props.url,
+        navigationUrl,
         props.html,
     ]);
 
