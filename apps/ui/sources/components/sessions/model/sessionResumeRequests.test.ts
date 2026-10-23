@@ -5,9 +5,32 @@ import { renderScreen } from '@/dev/testkit';
 import {
     emitSessionResumeRequest,
     useSessionResumeRequestListener,
+    useSessionResumeRequestAvailable,
 } from './sessionResumeRequests';
 
 describe('sessionResumeRequests', () => {
+    it('publishes exact-Home listener availability and withdraws it on unmount', async () => {
+        const seen: boolean[] = [];
+        function Availability() {
+            const available = useSessionResumeRequestAvailable('availability-session', 'home-a');
+            React.useEffect(() => { seen.push(available); }, [available]);
+            return null;
+        }
+        const listener = async () => true;
+        function Listener({ serverId }: { serverId: string }) {
+            useSessionResumeRequestListener('availability-session', listener, serverId);
+            return null;
+        }
+        const observer = await renderScreen(React.createElement(Availability));
+        const otherHome = await renderScreen(React.createElement(Listener, { serverId: 'home-b' }));
+        expect(seen).toEqual([false]);
+        const exactHome = await renderScreen(React.createElement(Listener, { serverId: 'home-a' }));
+        expect(seen).toEqual([false, true]);
+        await exactHome.unmount();
+        expect(seen).toEqual([false, true, false]);
+        await otherHome.unmount();
+        await observer.unmount();
+    });
     it('rejects when the requested session has no registered resume listener', async () => {
         await expect(emitSessionResumeRequest('session-without-listener')).rejects.toThrow();
     });

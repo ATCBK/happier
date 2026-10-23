@@ -10,7 +10,26 @@ export type SessionResumeRequestListener = () => Promise<boolean>;
  * has a listener for the id: with several, resuming the focused or first one would resume the
  * wrong Session.
  */
-const listenersBySessionId = new Map<string, Map<string, Set<SessionResumeRequestListener>>>();
+type ResumeRequestScope = {
+    listeners: Set<SessionResumeRequestListener>;
+    observers: Set<() => void>;
+};
+const listenersBySessionId = new Map<string, Map<string, ResumeRequestScope>>();
+
+function getResumeRequestScope(sessionId: string, serverScope: string): ResumeRequestScope {
+    const scopes = listenersBySessionId.get(sessionId) ?? new Map<string, ResumeRequestScope>();
+    const scope = scopes.get(serverScope) ?? { listeners: new Set(), observers: new Set() };
+    scopes.set(serverScope, scope);
+    listenersBySessionId.set(sessionId, scopes);
+    return scope;
+}
+
+function retireEmptyResumeRequestScope(sessionId: string, serverScope: string, scope: ResumeRequestScope) {
+    if (scope.listeners.size || scope.observers.size) return;
+    const scopes = listenersBySessionId.get(sessionId);
+    scopes?.delete(serverScope);
+    if (scopes?.size === 0) listenersBySessionId.delete(sessionId);
+}
 
 function normalizeServerScope(serverId: string | null | undefined): string {
     return typeof serverId === 'string' ? serverId.trim() : '';
@@ -22,10 +41,26 @@ function readResumeListeners(
 ): Set<SessionResumeRequestListener> | undefined {
     const listenersByServerScope = listenersBySessionId.get(sessionId);
     if (!listenersByServerScope) return undefined;
-    if (serverScope) return listenersByServerScope.get(serverScope);
-    return listenersByServerScope.size === 1
-        ? listenersByServerScope.values().next().value
-        : undefined;
+    if (serverScope) return listenersByServerScope.get(serverScope)?.listeners;
+    const registered = [...listenersByServerScope.values()].filter(scope => scope.listeners.size > 0);
+    return registered.length === 1 ? registered[0].listeners : undefined;
+}
+
+/** Presence comes only from the existing exact-Home register/unregister lifecycle. */
+export function useSessionResumeRequestAvailable(sessionId: string, serverId: string | null | undefined): boolean {
+    const serverScope = normalizeServerScope(serverId);
+    const subscribe = React.useCallback((observer: () => void) => {
+        if (!serverScope) return () => {};
+        const scope = getResumeRequestScope(sessionId, serverScope);
+        scope.observers.add(observer);
+        return () => {
+            scope.observers.delete(observer);
+            retireEmptyResumeRequestScope(sessionId, serverScope, scope);
+        };
+    }, [sessionId, serverScope]);
+    const getSnapshot = React.useCallback(() => Boolean(serverScope
+        && listenersBySessionId.get(sessionId)?.get(serverScope)?.listeners.size), [sessionId, serverScope]);
+    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export async function emitSessionResumeRequest(
@@ -51,21 +86,15 @@ export function useSessionResumeRequestListener(
 ): void {
     const serverScope = normalizeServerScope(serverId);
     React.useEffect(() => {
-        const listenersByServerScope = listenersBySessionId.get(sessionId)
-            ?? new Map<string, Set<SessionResumeRequestListener>>();
-        const listeners = listenersByServerScope.get(serverScope)
-            ?? new Set<SessionResumeRequestListener>();
+        const scope = getResumeRequestScope(sessionId, serverScope);
+        const listeners = scope.listeners;
+        const wasAvailable = listeners.size > 0;
         listeners.add(listener);
-        listenersByServerScope.set(serverScope, listeners);
-        listenersBySessionId.set(sessionId, listenersByServerScope);
+        if (!wasAvailable) for (const observer of scope.observers) observer();
         return () => {
             listeners.delete(listener);
-            if (listeners.size === 0) {
-                listenersByServerScope.delete(serverScope);
-            }
-            if (listenersByServerScope.size === 0) {
-                listenersBySessionId.delete(sessionId);
-            }
+            if (listeners.size === 0) for (const observer of scope.observers) observer();
+            retireEmptyResumeRequestScope(sessionId, serverScope, scope);
         };
     }, [listener, sessionId, serverScope]);
 }
