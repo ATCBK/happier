@@ -99,6 +99,7 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
                 expect(first.statusCode, first.body).toBe(200);
                 expect(first.json().items).toHaveLength(500);
                 expect(first.json().hasUnclassified).toBe(true);
+                expect(first.json().coverage).toEqual({ status: 'partial', unclassifiedCount: 1, reason: 'unclassified_legacy_rows' });
                 const last = first.json().items[499];
                 const cursor = Buffer.from(JSON.stringify({ updatedAt: last.updatedAt, id: last.id })).toString('base64url');
                 const second = await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=${kinds}&limit=500&cursor=${cursor}`, headers });
@@ -116,12 +117,15 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
                 expect(new Set(headerIds)).toEqual(new Set([legacy.id]));
                 expect(await db.artifact.findUniqueOrThrow({ where: { id: legacy.id } })).toMatchObject({
                     kind: 'v1:other:account_notice.v1', headerVersion: 1, bodyVersion: 1, body: data.body });
+                expect((await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=${kinds}&limit=1`, headers })).json().coverage)
+                    .toEqual({ status: 'complete', unclassifiedCount: 0 });
                 headerIds.length = 0;
-                // A zero-demand exact set is complete even while another legacy row exists.
+                // Empty item demand still reports the actual scoped legacy count, without opening private bytes.
                 await db.artifact.update({ where: { id: legacy.id }, data: { kind: 'other' } });
                 const empty = await app.inject({ method: 'GET', url: '/v1/artifacts?kinds=%5B%5D&includeBody=true', headers });
                 expect(empty.statusCode, empty.body).toBe(200);
-                expect(empty.json()).toEqual({ items: [], hasUnclassified: false });
+                expect(empty.json()).toEqual({ items: [], hasUnclassified: true,
+                    coverage: { status: 'partial', unclassifiedCount: 1, reason: 'unclassified_legacy_rows' } });
                 expect(headerIds).toEqual([]);
                 expect(bodyReads).toBe(0);
             });
