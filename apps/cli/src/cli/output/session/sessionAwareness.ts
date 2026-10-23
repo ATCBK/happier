@@ -138,6 +138,12 @@ function buildCliSessionAwarenessInputFromPresentationV1(
     activityActiveCount: readNumber(row.runtimeActivityActiveCount),
     controlServiceability: controlServiceability === 'unknown' ? null : controlServiceability,
   } as const;
+  const updatedAtMs = readNumber(row.updatedAt);
+  // A heartbeat observes runtime without changing semantic content. The aggregate
+  // ceiling includes that actual observation; Protocol still clamps it to activeAt.
+  const observedAtMs = runtime.lastObservedAtMs === null
+    ? updatedAtMs
+    : updatedAtMs === null ? runtime.lastObservedAtMs : Math.max(updatedAtMs, runtime.lastObservedAtMs);
 
   return {
     nowMs: params.nowMs,
@@ -173,7 +179,7 @@ function buildCliSessionAwarenessInputFromPresentationV1(
       // admitted and decodes to nothing: the work state is unknown, not absent. Readable
       // metadata carrying no work state stays observed.
       work: metadata ? 'observed' : 'unavailable',
-      observedAtMs: readNumber(row.updatedAt),
+      observedAtMs,
     }),
   };
 }

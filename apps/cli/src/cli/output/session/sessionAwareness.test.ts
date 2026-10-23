@@ -100,6 +100,33 @@ describe('projectCliSessionAwarenessV1', () => {
     expect(projectCliSessionAwarenessV1(params).freshness).toBe('stale');
   });
 
+  it('keeps a quiet completed Session live from its actual heartbeat without refreshing semantic content', () => {
+    const semanticAt = NOW_MS - 600_000;
+    const row = createSessionRecordFixture({
+      id: 'quiet-completed', encryptionMode: 'plain',
+      metadata: JSON.stringify({ summary: { text: 'Finished review', updatedAt: semanticAt }, path: '/repo' }),
+      updatedAt: semanticAt, active: true, activeAt: NOW_MS - 1_000,
+      latestTurnStatus: 'completed', latestTurnStatusObservedAt: semanticAt,
+      latestReadyEventSeq: 7, latestReadyEventAt: semanticAt,
+      pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0,
+    });
+    const original = { ...row };
+    const params = { credentials: tokenOnlyCredentials, accountEncryption: createAccountEncryptionCurrentnessFixture(), row, nowMs: NOW_MS };
+    const awareness = projectCliSessionAwarenessV1(params);
+    expect.soft(awareness.freshness).toBe('live');
+    expect(awareness).toMatchObject({ lifecycle: 'ready', runtime: 'idle', title: 'Finished review',
+      workspace: { path: '/repo' }, availability: 'complete', operational: { primary: 'ready' } });
+    expect(row).toEqual(original);
+
+    // Reading the same retained heartbeat later does not manufacture a new observation.
+    expect(projectCliSessionAwarenessV1({ ...params, nowMs: NOW_MS + 120_000 }).freshness).toBe('stale');
+    const staleRow = { ...row, updatedAt: NOW_MS, activeAt: semanticAt };
+    expect(projectCliSessionAwarenessV1({ ...params, row: staleRow }).freshness).toBe('stale');
+    expect(projectCliSessionAwarenessV1({ ...params, row: { ...staleRow, active: false } })).toMatchObject({
+      runtime: 'offline', freshness: 'offline', lifecycle: 'ready', title: 'Finished review',
+    });
+  });
+
   it('keeps background provider activity distinct from a foreground turn', () => {
     const awareness = project({
       id: 'session-background',
