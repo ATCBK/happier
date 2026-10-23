@@ -9909,11 +9909,71 @@ function useExplicitFreshRereadAfterUnknownOutcome(input: Readonly<{
   return requestRefresh;
 }
 
+/** One connection in the connections list: name, provider, where it runs, and its state when it needs the reader. */
+function ConnectionListRow(props: Readonly<{
+  connection: ChannelsConnection;
+  expanded: boolean;
+  showDivider?: boolean;
+  onExpand: () => void;
+  t: Translate;
+}>): React.ReactElement {
+  const status = connectionStatus(props.connection, props.t);
+  const provider = usePluginBrandDisplayName(props.connection.providerPluginId)
+    ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
+  const label = connectionLabel(props.connection);
+  const continuityDescriptions = connectionContinuityDescriptions(props.connection, props.t);
+  return (
+      <List.Item
+      testID={`channels-connection-${props.connection.connectionId}`}
+      {...(props.showDivider === undefined ? {} : { showDivider: props.showDivider })}
+      title={label}
+      subtitle={provider}
+      // A healthy row is quiet: it says where it runs, and only a paused policy is named. The transport
+      // mechanism stays in the connection's detail.
+      detail={[
+        ...(props.connection.enabled ? [] : [connectionPolicyLabel(props.connection, props.t)]),
+        connectionMachinePlacementLabel(props.connection, props.t),
+      ].join(' · ')}
+      icon={(
+        <BrandMark
+          pluginId={props.connection.providerPluginId}
+          size="small"
+          externallyLabelled
+          testID={`channels-provider-brand-${props.connection.connectionId}`}
+        />
+      )}
+      accessory={status.tone === 'secondary' || status.tone === 'neutral' ? undefined : (
+        <Status
+          testID={`channels-connection-status-${props.connection.connectionId}`}
+          tone={status.tone}
+          label={status.label}
+        />
+      )}
+      accessibilityExpanded={props.expanded}
+      accessibilityLabel={[
+        `${label}.`,
+        `${props.t('plugins.channels.surface.provider', 'Provider')}: ${provider}.`,
+        // Policy and runtime placement reach a screen reader as the two
+        // separate facts the sighted detail line states.
+        `${connectionPolicyLabel(props.connection, props.t)}.`,
+        `${connectionMachinePlacementLabel(props.connection, props.t)}.`,
+        `${transportLabel(props.connection.selectedTransport, props.t)}.`,
+        `${status.label}.`,
+        ...continuityDescriptions,
+      ].join(' ')}
+      onPress={props.onExpand}
+    />
+  );
+}
+
 function ConnectionRow(props: Readonly<{
   connection: ChannelsConnection;
+  expanded: boolean;
+  onExpand: () => void;
+  /** The list's sheet hairline below this row (the shared List decides it). */
+  showDivider?: boolean;
   /** The page's binding reads, which name the conversation each undecided delivery belongs to. */
   bindings: readonly ChannelsBinding[];
-  expanded: boolean;
   signal: AbortSignal;
   resource: ResourcePresentation;
   targetPluginId?: string;
@@ -9921,10 +9981,10 @@ function ConnectionRow(props: Readonly<{
   resolveOperation?: DeliveryResolveOperation;
   providerDependentOperationsAvailable?: boolean;
   onLifecycleSettled?: (connectionId: string) => void;
-  onExpand: () => void;
   onRefresh: () => void;
   t: Translate;
 }>): React.ReactElement {
+  const theme = usePluginTheme();
   const [draft, setDraft] = React.useState(() => connectionPolicyDraft(props.connection));
   const updateAction = useExecutePluginAction(
     CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionUpdate,
@@ -9937,11 +9997,8 @@ function ConnectionRow(props: Readonly<{
   const currentDraft = currentConnectionPolicyDraft(draft, props.connection);
   const updateUnavailable = props.connection.deletionState !== 'none';
   const mutationOutcomeUnknown = policyExecution.status === 'outcomeUnknown';
-  const status = connectionStatus(props.connection, props.t);
   const provider = usePluginBrandDisplayName(props.connection.providerPluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
-  const label = connectionLabel(props.connection);
-  const continuityDescriptions = connectionContinuityDescriptions(props.connection, props.t);
 
   const sourceChanged = connectionPolicyDraftSourceChanged(currentDraft, props.connection);
 
@@ -10095,69 +10152,43 @@ function ConnectionRow(props: Readonly<{
 
   return (
     <>
-      <List.Item
-        testID={`channels-connection-${props.connection.connectionId}`}
-        title={label}
-        subtitle={provider}
-        // A healthy row is quiet: it says where it runs, and only a paused policy is named. The transport
-        // mechanism stays in the connection's detail.
-        detail={[
-          ...(props.connection.enabled ? [] : [connectionPolicyLabel(props.connection, props.t)]),
-          connectionMachinePlacementLabel(props.connection, props.t),
-        ].join(' · ')}
-        icon={(
-          <BrandMark
-            pluginId={props.connection.providerPluginId}
-            size="small"
-            externallyLabelled
-            testID={`channels-provider-brand-${props.connection.connectionId}`}
-          />
-        )}
-        accessory={status.tone === 'secondary' || status.tone === 'neutral' ? undefined : (
-          <Status
-            testID={`channels-connection-status-${props.connection.connectionId}`}
-            tone={status.tone}
-            label={status.label}
-          />
-        )}
-        accessibilityExpanded={props.expanded}
-        accessibilityLabel={[
-          `${label}.`,
-          `${props.t('plugins.channels.surface.provider', 'Provider')}: ${provider}.`,
-          // Policy and runtime placement reach a screen reader as the two
-          // separate facts the sighted detail line states.
-          `${connectionPolicyLabel(props.connection, props.t)}.`,
-          `${connectionMachinePlacementLabel(props.connection, props.t)}.`,
-          `${transportLabel(props.connection.selectedTransport, props.t)}.`,
-          `${status.label}.`,
-          ...continuityDescriptions,
-        ].join(' ')}
-        onPress={props.onExpand}
+      <ConnectionListRow
+        connection={props.connection}
+        expanded={props.expanded}
+        {...(props.showDivider === undefined ? {} : { showDivider: props.showDivider })}
+        onExpand={props.onExpand}
+        t={props.t}
       />
       {props.expanded ? (
-        <List.Item>
+        // The detail follows its row as a region of the sheet, not as another item of the list: its
+        // policy and decision sections are lists of their own.
+        <Stack
+          testID={`channels-connection-expanded-${props.connection.connectionId}`}
+          gap="large"
+          style={{ paddingHorizontal: theme.spacing.large, paddingVertical: theme.spacing.large }}
+        >
           {/*
-            The connection's one recommended recovery leads its detail, drawn by the
-            existing control that owns that Action; the other repairs stay quiet below.
-          */}
-          {recoveryControls.recommended}
-          <ConnectionPolicyEditor
-            connection={props.connection}
-            provider={provider}
-            draft={currentDraft}
-            execution={policyExecution}
-            providerDependentOperationsAvailable={providerDependentOperationsAvailable}
-            resource={props.resource}
-            sourceChanged={sourceChanged}
-            onEnabledChange={onEnabledChange}
-            onMaximumObservationAgeMsChange={onMaximumObservationAgeMsChange}
-            onRefresh={requestRefresh}
-            onReload={reloadPolicyDraft}
-            onSave={save}
-            t={props.t}
-          />
-          {recoveryControls.others}
-        </List.Item>
+          The connection's one recommended recovery leads its detail, drawn by the
+          existing control that owns that Action; the other repairs stay quiet below.
+        */}
+        {recoveryControls.recommended}
+        <ConnectionPolicyEditor
+          connection={props.connection}
+          provider={provider}
+          draft={currentDraft}
+          execution={policyExecution}
+          providerDependentOperationsAvailable={providerDependentOperationsAvailable}
+          resource={props.resource}
+          sourceChanged={sourceChanged}
+          onEnabledChange={onEnabledChange}
+          onMaximumObservationAgeMsChange={onMaximumObservationAgeMsChange}
+          onRefresh={requestRefresh}
+          onReload={reloadPolicyDraft}
+          onSave={save}
+          t={props.t}
+        />
+        {recoveryControls.others}
+        </Stack>
       ) : null}
     </>
   );
@@ -10227,15 +10258,16 @@ function ConnectionReconnectControl(props: Readonly<{
  * unavailable rather than becoming an Action fallback.
  */
 function AccountLocalConnectionRow(props: Readonly<{
+  showDivider?: boolean;
   collection: ChannelStateCollection;
   deliveriesCollection: ChannelDeliveriesCollection;
   connection: ChannelsConnection;
   bindings: readonly ChannelsBinding[];
   expanded: boolean;
+  onExpand: () => void;
   signal: AbortSignal;
   resource: ResourcePresentation;
   onCommitted: () => void;
-  onExpand: () => void;
   onRefresh: () => void;
   t: Translate;
 }>): React.ReactElement {
@@ -10253,14 +10285,15 @@ function AccountLocalConnectionRow(props: Readonly<{
   return (
     <ConnectionRow
       connection={props.connection}
-      bindings={props.bindings}
       expanded={props.expanded}
+      onExpand={props.onExpand}
+      {...(props.showDivider === undefined ? {} : { showDivider: props.showDivider })}
+      bindings={props.bindings}
       signal={props.signal}
       resource={props.resource}
       policyOperation={policyOperation}
       resolveOperation={resolveOperation}
       providerDependentOperationsAvailable={false}
-      onExpand={props.onExpand}
       onRefresh={props.onRefresh}
       t={props.t}
     />
@@ -10312,31 +10345,13 @@ function ConnectionPolicyEditor(props: Readonly<{
     await props.onSave(parsedAge);
   }, [props.draft.maximumObservationAgeMs, props.onSave, props.t, saveUnavailable]);
 
-  const status = connectionStatus(props.connection, props.t);
-  const label = connectionLabel(props.connection);
-  const observationAgeRange = `${formatObservationAge(MIN_CONVERSATION_OBSERVATION_AGE_MS, props.t)} ${props.t(
-    'plugins.channels.surface.through',
-    'through',
-  )} ${formatObservationAge(MAX_CONVERSATION_OBSERVATION_AGE_MS, props.t)}`;
+  const formDisabled = updateUnavailable || saving || mutationUnavailable;
+  const enabledLabel = props.t('plugins.channels.surface.enabledPolicy', 'Enabled');
+  const observationAgeLabel = props.t('plugins.channels.surface.maximumObservationAge', 'Maximum observation age');
+  // The row above names the connection and its state; the detail starts with what needs the reader,
+  // then the policy as settings rows, then the facts it runs on.
   return (
     <Stack testID="channels-connection-detail" gap="large">
-      <Action.Refresh
-        testID="channels-detail-resource-refresh"
-        title={props.t('plugins.channels.surface.refresh', 'Refresh')}
-        onRefresh={props.onRefresh}
-      />
-
-      <Stack gap="small">
-        <Heading level={2} value={label} />
-        <Text
-          value={props.t(
-            'plugins.channels.surface.integrationIdentity',
-            'Integration identity and Account policy',
-          )}
-        />
-        <Status tone={status.tone} label={status.label} />
-      </Stack>
-
       <ResourceFreshnessNotice resource={props.resource} onRefresh={props.onRefresh} t={props.t} />
       {props.sourceChanged ? (
         <SourceChangedWhileEditingNotice
@@ -10363,34 +10378,6 @@ function ConnectionPolicyEditor(props: Readonly<{
           t={props.t}
         />
       ) : null}
-
-      <Metadata
-        title={props.t('plugins.channels.surface.currentPolicy', 'Current connection policy')}
-        entries={[
-          {
-            label: props.t('plugins.channels.surface.provider', 'Provider'),
-            value: props.provider,
-          },
-          {
-            label: props.t('plugins.channels.surface.transport', 'Transport'),
-            value: transportLabel(props.connection.selectedTransport, props.t),
-          },
-          {
-            label: props.t('plugins.channels.surface.maximumObservationAge', 'Maximum observation age'),
-            value: formatObservationAge(props.connection.maximumObservationAgeMs, props.t),
-          },
-        ]}
-      />
-
-      <Metadata
-        title={props.t('plugins.channels.surface.technicalDetails', 'Technical details')}
-        entries={[
-          {
-            label: props.t('plugins.channels.surface.selectedMachineId', 'Selected machine ID'),
-            value: props.connection.selectedMachineId,
-          },
-        ]}
-      />
 
       {updateUnavailable ? (
         <Banner
@@ -10425,38 +10412,47 @@ function ConnectionPolicyEditor(props: Readonly<{
         />
       ) : null}
 
-      <Form.Field
-        label={props.t('plugins.channels.surface.enabledPolicy', 'Enabled')}
-        description={props.t(
-          'plugins.channels.surface.enabledPolicyDescription',
-          'Allow this integration to accept and deliver under its saved policy.',
+      <ItemGroup
+        testID="channels-connection-policy"
+        title={props.t('plugins.channels.surface.connectionPolicyTitle', 'Policy')}
+        action={(
+          <Action.Refresh
+            testID="channels-detail-resource-refresh"
+            title={props.t('plugins.channels.surface.refresh', 'Refresh')}
+            onRefresh={props.onRefresh}
+          />
         )}
-        disabled={updateUnavailable || saving || mutationUnavailable}
       >
-        <Form.Toggle
-          testID="channels-connection-enabled"
-          label={props.t('plugins.channels.surface.enabledPolicy', 'Enabled')}
-          value={props.draft.enabled}
-          onChange={props.onEnabledChange}
-          disabled={updateUnavailable || saving || mutationUnavailable}
+        <Item
+          title={enabledLabel}
+          subtitle={props.t(
+            'plugins.channels.surface.enabledPolicyDescription',
+            'Allow this integration to accept and deliver under its saved policy.',
+          )}
+          accessoryOutsidePressable
+          accessory={(
+            <Form.Toggle
+              testID="channels-connection-enabled"
+              label={enabledLabel}
+              value={props.draft.enabled}
+              onChange={props.onEnabledChange}
+              disabled={formDisabled}
+            />
+          )}
         />
-      </Form.Field>
-
+      </ItemGroup>
       <Form.Field
-        label={props.t('plugins.channels.surface.maximumObservationAge', 'Maximum observation age')}
-        description={`${props.t(
+        label={observationAgeLabel}
+        description={props.t(
           'plugins.channels.surface.maximumObservationAgeDescription',
           'Accept incoming observations no older than this limit.',
-        )} ${props.t('plugins.channels.surface.observationAgeRange', 'Choose a value from')} ${observationAgeRange}.`}
-        disabled={updateUnavailable || saving || mutationUnavailable}
+        )}
+        disabled={formDisabled}
         issue={validationIssue}
       >
         <Form.Select
           testID="channels-connection-observation-age"
-          label={props.t(
-            'plugins.channels.surface.maximumObservationAgeInput',
-            'How long incoming messages stay eligible',
-          )}
+          label={observationAgeLabel}
           options={durationPresetOptions(OBSERVATION_AGE_PRESETS_MS, props.draft.maximumObservationAgeMs, props.t)}
           value={props.draft.maximumObservationAgeMs}
           onChange={(next) => {
@@ -10465,7 +10461,7 @@ function ConnectionPolicyEditor(props: Readonly<{
             props.onMaximumObservationAgeMsChange(selected);
             if (validationIssue !== undefined) setValidationIssue(undefined);
           }}
-          disabled={updateUnavailable || saving || mutationUnavailable}
+          disabled={formDisabled}
         />
       </Form.Field>
 
@@ -10511,14 +10507,30 @@ function ConnectionPolicyEditor(props: Readonly<{
         />
       ) : null}
 
-      <Button
-        testID="channels-connection-save"
-        title={saving
-          ? props.t('plugins.channels.surface.saving', 'Saving…')
-          : props.t('plugins.channels.surface.save', 'Save changes')}
-        busy={saving}
-        disabled={saveUnavailable}
-        onPress={save}
+      <Row>
+        <Button
+          testID="channels-connection-save"
+          title={saving
+            ? props.t('plugins.channels.surface.saving', 'Saving…')
+            : props.t('plugins.channels.surface.save', 'Save changes')}
+          busy={saving}
+          disabled={saveUnavailable}
+          onPress={save}
+        />
+      </Row>
+
+      <Metadata
+        title={props.t('plugins.channels.surface.connectionDetailsTitle', 'Details')}
+        entries={[
+          {
+            label: props.t('plugins.channels.surface.provider', 'Provider'),
+            value: props.provider,
+          },
+          {
+            label: props.t('plugins.channels.surface.transport', 'Transport'),
+            value: transportLabel(props.connection.selectedTransport, props.t),
+          },
+        ]}
       />
     </Stack>
   );
@@ -13844,6 +13856,38 @@ function ConnectionsContent(props: Readonly<{
     setPendingDeletedConnectionId(connectionId);
     setAnnounceDeletedConnection(false);
   }, []);
+  const renderConnectionRow = (connection: ChannelsConnection) => (
+    props.accountLocalPolicy === undefined ? (
+      <ConnectionRow
+        key={connection.connectionId}
+        connection={connection}
+        bindings={bindings}
+        expanded={connection.connectionId === props.expandedConnectionId}
+        signal={props.signal}
+        resource={props.resource}
+        targetPluginId={props.targetPluginId}
+        onLifecycleSettled={onLifecycleSettled}
+        onExpand={() => props.onExpand(connection.connectionId)}
+        onRefresh={props.onRefresh}
+        t={props.t}
+      />
+    ) : (
+      <AccountLocalConnectionRow
+        key={connection.connectionId}
+        collection={props.accountLocalPolicy.collection}
+        deliveriesCollection={props.accountLocalPolicy.deliveriesCollection}
+        connection={connection}
+        bindings={bindings}
+        expanded={connection.connectionId === props.expandedConnectionId}
+        signal={props.signal}
+        resource={props.resource}
+        onCommitted={props.accountLocalPolicy.onCommitted}
+        onExpand={() => props.onExpand(connection.connectionId)}
+        onRefresh={props.onRefresh}
+        t={props.t}
+      />
+    )
+  );
 
   React.useEffect(() => {
     if (pendingDeletedConnectionId === undefined
@@ -13927,38 +13971,7 @@ function ConnectionsContent(props: Readonly<{
               accessibilityLabel={props.t('plugins.channels.surface.connections', 'Conversation connections')}
               testID="channels-connections-list"
             >
-              {props.connections.map((connection) => (
-                props.accountLocalPolicy === undefined ? (
-                  <ConnectionRow
-                    key={connection.connectionId}
-                    connection={connection}
-                    bindings={bindings}
-                    expanded={connection.connectionId === props.expandedConnectionId}
-                    signal={props.signal}
-                    resource={props.resource}
-                    targetPluginId={props.targetPluginId}
-                    onLifecycleSettled={onLifecycleSettled}
-                    onExpand={() => props.onExpand(connection.connectionId)}
-                    onRefresh={props.onRefresh}
-                    t={props.t}
-                  />
-                ) : (
-                  <AccountLocalConnectionRow
-                    key={connection.connectionId}
-                    collection={props.accountLocalPolicy.collection}
-                    deliveriesCollection={props.accountLocalPolicy.deliveriesCollection}
-                    connection={connection}
-                    bindings={bindings}
-                    expanded={connection.connectionId === props.expandedConnectionId}
-                    signal={props.signal}
-                    resource={props.resource}
-                    onCommitted={props.accountLocalPolicy.onCommitted}
-                    onExpand={() => props.onExpand(connection.connectionId)}
-                    onRefresh={props.onRefresh}
-                    t={props.t}
-                  />
-                )
-              ))}
+              {props.connections.map(renderConnectionRow)}
             </List>
           )}
         </Stack>
