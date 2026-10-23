@@ -1,7 +1,8 @@
 import type { DiskNodeV1, StorageItemV1, StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
 
-import { HAPPIER_SUNBURST_SMALLER_SUFFIX, HAPPIER_TREEMAP_SMALLER_SUFFIX } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_SUNBURST_SMALLER_SUFFIX, HAPPIER_TREEMAP_SMALLER_SUFFIX, type HappierChartPart } from '@happier-dev/plugin-ui/presentation';
 
+import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { t } from '@/text';
 
 import {
@@ -77,6 +78,27 @@ export function storageDiskNodeName(node: DiskNodeV1): string {
   return node.kind === 'small-items' ? t('machineStorage.disk.smallItems', { count: node.items }) : node.name;
 }
 
+export const STORAGE_DISK_FOLDED_CRUMB_KEY = 'folded';
+
+export type StorageDiskCrumb = Readonly<{
+  key: string;
+  label: string;
+  nodeId: string | undefined;
+  /** The one crumb that stands for every ancestor between the disk and the open folder; it opens the parent. */
+  folded?: true;
+}>;
+
+/**
+ * A phone has no room for every ancestor, and shrinking each one to "ho…" says nothing. Past the disk, one
+ * folder and the open one, the middle folds into a single crumb that goes up one level (it keeps the parent's
+ * name as its accessible name); the disk and the open folder keep their words.
+ */
+export function foldStorageDiskCrumbs(crumbs: readonly StorageDiskCrumb[], phone: boolean): readonly StorageDiskCrumb[] {
+  if (!phone || crumbs.length <= 3) return crumbs;
+  const parent = crumbs[crumbs.length - 2]!;
+  return [crumbs[0]!, { key: STORAGE_DISK_FOLDED_CRUMB_KEY, label: parent.label, nodeId: parent.nodeId, folded: true }, crumbs[crumbs.length - 1]!];
+}
+
 /** Opening it lists its children: a folder, a package or a cloud-only folder, never a file or another disk's mount. */
 export function isStorageDiskNodeDrillable(node: DiskNodeV1): boolean {
   return node.kind === 'folder' || node.kind === 'package' || node.kind === 'cloud-only';
@@ -98,6 +120,34 @@ export function resolveStorageDiskOpenTarget(
   if (target === '') return null;
   const node = rows.get(target)?.node ?? chartNodes.get(target)?.node;
   return node && isStorageDiskNodeDrillable(node) ? target : null;
+}
+
+/**
+ * A scan node's size as every view says it: the row, the Map tile, the Rings arc and the tooltip. A folder
+ * Happier could not fully open keeps its "≥" lower bound in all of them, as the page above promises.
+ */
+export function formatStorageDiskBytes(node: DiskNodeV1, bytes: number = node.size.allocatedBytes): string {
+  return `${node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(bytes, 'storage')}`;
+}
+
+/** A level's chart node as the public Map / Rings part: the same words as its row. */
+export function toStorageDiskChartPart(node: StorageDiskChartNode): HappierChartPart {
+  return {
+    key: node.key,
+    label: node.label,
+    value: node.value,
+    valueLabel: formatStorageDiskBytes(node.node, node.value),
+    tone:
+      node.mark === 'happier'
+        ? 'accent'
+        : node.mark === 'small' || node.mark === 'hidden' || node.mark === 'reserved'
+          ? 'quiet'
+          : 'ink',
+    hatched: node.collected,
+    dotted: node.mark === 'small' || node.mark === 'hidden' || node.mark === 'reserved' || node.mark === 'cloud',
+    locked: node.mark === 'protected',
+    children: node.children.map(toStorageDiskChartPart),
+  };
 }
 
 export function describeStorageDiskMark(node: DiskNodeV1): StorageDiskMark {

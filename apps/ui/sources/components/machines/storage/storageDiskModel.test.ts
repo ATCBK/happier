@@ -4,7 +4,7 @@ import type {
   PileItemRefV1,
 } from '@happier-dev/protocol/storage/storageV1';
 
-import { buildStorageDiskLevel, resolveStorageDiskOpenTarget, storageDiskNodeName, toStorageDiskCollectRow } from './storageDiskModel';
+import { buildStorageDiskLevel, foldStorageDiskCrumbs, formatStorageDiskBytes, resolveStorageDiskOpenTarget, storageDiskNodeName, toStorageDiskChartPart, toStorageDiskCollectRow } from './storageDiskModel';
 
 const node = (
   nodeId: string,
@@ -169,6 +169,24 @@ describe('one whole-disk view model for List, Map and Rings (plan 40 §4.11)', (
     ).toMatchObject({ collect: 'available' });
   });
 
+  it('says a folder Happier could not fully open as a lower bound on its row and on its Map tile and Rings arc alike', () => {
+    const level = buildStorageDiskLevel({
+      nodes: [
+        node(ROOT, '/Users', 4_200),
+        node(`${ROOT}/Movies`, ROOT, 3_000),
+        node(`${ROOT}/private`, ROOT, 1_200, { flags: { happier: false, protection: 'none', atLeast: true, inUse: false } }),
+      ],
+      rootId: ROOT,
+      pile: [],
+      sort: { by: 'size', direction: 'desc' },
+    });
+    const bounded = level.rows.find((row) => row.key === `${ROOT}/private`)!;
+    const exact = level.chart.find((entry) => entry.key === `${ROOT}/Movies`)!;
+    const limited = level.chart.find((entry) => entry.key === `${ROOT}/private`)!;
+    expect(formatStorageDiskBytes(bounded.node)).toMatch(/^≥ /u);
+    expect(toStorageDiskChartPart(limited).valueLabel).toBe(formatStorageDiskBytes(bounded.node));
+    expect(toStorageDiskChartPart(exact).valueLabel).not.toContain('≥');
+  });
   it('keeps the list order as the sort asks and marks a row inside a collected folder as covered', () => {
     const level = buildStorageDiskLevel({
       nodes: page(),
@@ -241,5 +259,22 @@ describe('storageDiskNodeName', () => {
   });
   it('keeps a real folder name', () => {
     expect(storageDiskNodeName(node('/home/u/Movies', '/home/u', 1))).toBe('Movies');
+  });
+});
+
+describe('the phone path', () => {
+  const crumb = (label: string, nodeId?: string) => ({ key: nodeId ?? '', label, nodeId });
+  const deep = [crumb('System disk'), crumb('home', '/home'), crumb('happier', '/home/happier'), crumb('j8d-resource', '/home/happier/j8d-resource')];
+
+  it('folds the ancestors between the disk and the open folder into one crumb that goes up a level', () => {
+    expect(foldStorageDiskCrumbs(deep, true).map((entry) => entry.label)).toEqual(['System disk', 'happier', 'j8d-resource']);
+    const folded = foldStorageDiskCrumbs(deep, true)[1]!;
+    expect(folded).toMatchObject({ folded: true, nodeId: '/home/happier' });
+  });
+
+  it('keeps a short path whole, and every ancestor on a wide screen', () => {
+    const short = deep.slice(0, 3);
+    expect(foldStorageDiskCrumbs(short, true)).toBe(short);
+    expect(foldStorageDiskCrumbs(deep, false)).toBe(deep);
   });
 });

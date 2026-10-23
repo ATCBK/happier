@@ -154,6 +154,15 @@ describe('the review sheet model (plan 40 STO-12, lab rs R)', () => {
     expect(fewer.freesBytes).toBe(11_200 + 9_800 + 2_400);
   });
 
+  it('says what the ticked items take as well as what they free, the page pile\'s two quantities', () => {
+    const model = buildStorageReview(review(), volumes);
+    const ticked = new Set(['nm', 'pnpm']);
+    const plan = selectStorageReviewApply(model, ticked, 'trash');
+    // `size()` allocates one byte more than it frees; the pile legend reads allocated, the total reads frees.
+    expect(plan.allocatedBytes).toBe(11_200 + 1 + 9_800 + 1);
+    expect(plan.freesBytes).toBe(11_200 + 9_800);
+  });
+
   it('deletes now every ticked item, including those on a disk without a Trash, with no verdict claim', () => {
     const model = buildStorageReview(review(), volumes);
     const picked = new Set(['nm', 'ext']);

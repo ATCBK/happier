@@ -25,6 +25,8 @@ export type StorageReviewRow = Readonly<{
   reason: StorageReasonV1;
   /** What a confirmation names for a Keep item ("3 files with changes"). */
   loses: readonly StorageReasonV1[];
+  /** What the item takes on its disk (the page's "in the pile"); `freesBytes` is what comes back. */
+  allocatedBytes: number;
   freesBytes: number;
   volumeId: string | null;
   /** The item's disk keeps a Happier Trash; without one only Delete now can take it. */
@@ -59,6 +61,9 @@ export type StorageReviewApply = Readonly<{
   /** Ticked items a Trash move cannot take (their disk has no Happier Trash). */
   withoutTrash: readonly string[];
   count: number;
+  /** What the acted-on items take (the pile legend's quantity), as the page's pile reads it. */
+  allocatedBytes: number;
+  /** What they free (the total, the dock's quantity). */
   freesBytes: number;
   /**
    * The sessions holding an in-use item the person still has ticked (each `in_use` reason names its
@@ -112,6 +117,7 @@ export function buildStorageReview(
         verdict: check.verdict,
         reason: check.reason,
         loses: check.loses ?? [],
+        allocatedBytes: check.size.allocatedBytes,
         freesBytes: check.size.freesBytes,
         volumeId,
         // A disk the review does not name keeps its Trash (the daemon names every disk without one).
@@ -163,6 +169,7 @@ export function selectStorageReviewApply(
         ? ticked.filter((row) => !row.trashAvailable).map((row) => row.itemId)
         : [],
     count: items.length,
+    allocatedBytes: acting.reduce((sum, row) => sum + row.allocatedBytes, 0),
     freesBytes: Math.min(frees, review.totalFreesBytes),
     holders: holdingSessions(acting),
   };

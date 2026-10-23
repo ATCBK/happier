@@ -14,7 +14,6 @@ import {
   Sunburst,
   Treemap,
   useHappierCollection,
-  type HappierChartPart,
 } from '@happier-dev/plugin-ui/presentation';
 import {
   STORAGE_RINGS_MIN_ARC_DEGREES,
@@ -70,12 +69,17 @@ import {
 } from './StorageCollectToggle';
 import {
   buildStorageDiskLevel,
+  formatStorageDiskBytes,
+  foldStorageDiskCrumbs,
   resolveStorageDiskOpenTarget,
+  STORAGE_DISK_FOLDED_CRUMB_KEY,
   type StorageDiskChartNode,
+  type StorageDiskCrumb,
   type StorageDiskMark,
   type StorageDiskRow,
   type StorageDiskSort,
   storageDiskNodeName,
+  toStorageDiskChartPart,
   toStorageDiskCollectRow,
 } from './storageDiskModel';
 import { describeStorageVerdict } from './storageReasonPresentation';
@@ -584,6 +588,7 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
             targetPath={'folderPath' in scan.target ? scan.target.folderPath : null}
             homeDir={facts.homeDir}
             reading={reading}
+            compact={layout.compact}
             onOpen={open}
           />
         ) : null}
@@ -778,6 +783,8 @@ function DiskPath(
     homeDir: string | undefined;
     /** The level is still being read: its size and count so far are not a result, so no figures yet. */
     reading: boolean;
+    /** A phone folds the ancestors into one "…" that goes up a level. */
+    compact: boolean;
     onOpen: (nodeId: string | undefined) => void;
   }>,
 ) {
@@ -785,8 +792,8 @@ function DiskPath(
   const mount = props.volume?.volume.mountPath ?? '/';
   const name = props.volume ? storageVolumeName(props.volume) : mount;
   const crumbs = React.useMemo(() => {
-    const items = [
-      { key: '', label: name, nodeId: undefined as string | undefined },
+    const items: StorageDiskCrumb[] = [
+      { key: '', label: name, nodeId: undefined },
     ];
     const levelPath = props.root?.nodeId ?? props.targetPath;
     if (levelPath) {
@@ -800,8 +807,8 @@ function DiskPath(
         items.push({ key: acc, label: part, nodeId: acc });
       }
     }
-    return items;
-  }, [mount, name, props.root, props.targetPath]);
+    return foldStorageDiskCrumbs(items, props.compact);
+  }, [mount, name, props.compact, props.root, props.targetPath]);
   const last = crumbs.length - 1;
   const meta = props.root
     ? props.reading
@@ -835,7 +842,7 @@ function DiskPath(
         // The app's text roles, so the crumbs keep their ink in both themes: ancestors quiet, the open folder strong.
         renderLabel={(item) => (
           <Text numberOfLines={1} style={item.onPress ? styles.crumb : styles.crumbCurrent}>
-            {item.label}
+            {item.key === STORAGE_DISK_FOLDED_CRUMB_KEY ? '…' : item.label}
           </Text>
         )}
       />
@@ -844,31 +851,6 @@ function DiskPath(
       </Text>
     </View>
   );
-}
-
-function toChartPart(node: StorageDiskChartNode): HappierChartPart {
-  return {
-    key: node.key,
-    label: node.label,
-    value: node.value,
-    valueLabel: formatMachineBytes(node.value, 'storage'),
-    tone:
-      node.mark === 'happier'
-        ? 'accent'
-        : node.mark === 'small' ||
-            node.mark === 'hidden' ||
-            node.mark === 'reserved'
-          ? 'quiet'
-          : 'ink',
-    hatched: node.collected,
-    dotted:
-      node.mark === 'small' ||
-      node.mark === 'hidden' ||
-      node.mark === 'reserved' ||
-      node.mark === 'cloud',
-    locked: node.mark === 'protected',
-    children: node.children.map(toChartPart),
-  };
 }
 
 /** The Map or Rings above the list: the same nodes, the pointed-at part is its row's, Space collects it. */
@@ -900,7 +882,7 @@ function DiskChart(
     if (key !== null) setInspected(key);
   };
   const parts = React.useMemo(
-    () => props.level.chart.map(toChartPart),
+    () => props.level.chart.map(toStorageDiskChartPart),
     [props.level.chart],
   );
   const rows = React.useMemo(
@@ -941,7 +923,7 @@ function DiskChart(
             {storageDiskNodeName(node)}
           </Text>
           <Text style={styles.tooltipTitle}>
-            {formatMachineBytes(node.size.allocatedBytes, 'storage')}
+            {formatStorageDiskBytes(node)}
           </Text>
         </View>
         <Text style={styles.tooltipMeta}>
@@ -1298,7 +1280,7 @@ function DiskList(
     row.mark === 'mount'
       ? t('machineStorage.disk.anotherDisk')
       : hasSize(row)
-        ? `${row.node.flags.atLeast ? '≥ ' : ''}${formatMachineBytes(row.node.size.allocatedBytes, 'storage')}`
+        ? formatStorageDiskBytes(row.node)
         : '';
   const fields = React.useMemo(
     (): CollectionField<StorageDiskRow>[] => [
