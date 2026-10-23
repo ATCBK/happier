@@ -740,8 +740,8 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
     invalidateServer: (serverId) => {
         invalidateTeamsSnapshotsForServer(serverId);
     },
-    invalidateTarget: ({ scope, address, application }) => {
-        invalidateTeamCredentialResourceCatalog(scope, address, application);
+    invalidateTarget: ({ scope, address, application }, reason) => {
+        invalidateTeamCredentialResourceCatalog(scope, address, application, { retainSelection: reason === 'reload' });
     },
     matchesWake: (event) => event.entityIds === undefined
         || event.entityIds.includes(TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1),

@@ -109,6 +109,7 @@ vi.mock('@/components/ui/lists/virtualized', () => ({
 // is intentionally absent from synchronized source-only test targets.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
 }));
 vi.mock('@/hooks/teams/useTeamGroups', () => ({
     useTeamGroups: () => ({ ...nativeGroupsBinding, isCurrent: !nativeGroupsBinding.error, hasMore: false, status: nativeGroupsBinding.error ? 'error' : 'ready', loadMore: vi.fn() }),

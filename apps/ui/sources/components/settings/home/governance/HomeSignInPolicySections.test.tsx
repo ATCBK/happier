@@ -32,6 +32,7 @@ installSettingsViewCommonModuleMocks({
 // source mirrors; the empty projection keeps this suite on the real Action path.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
 }));
 
 const harness = createHomeGovernanceHarness();

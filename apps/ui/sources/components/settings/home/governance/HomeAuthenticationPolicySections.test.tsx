@@ -49,6 +49,7 @@ vi.mock('@/sync/ops/home/homeGovernanceOperations', async (importOriginal) => {
 // projection; plugin artifact selection is covered by its owning suites.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
 }));
 // This suite owns the Home policy controller. Provider/App lists are sibling
 // surfaces with their own integration suites; importing their full runtime here

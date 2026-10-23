@@ -87,6 +87,11 @@ cannot reuse another application's model rows. Model controls come from the exac
 source descriptor through the shared picker, including Team rows. Catalog visibility
 and reasoning choices do not bypass native Team preflight refusal, worker compatibility
 checks, or experimental-model confirmation.
+An answered picker choice survives a retryable unknown catalog-read failure while
+the snapshot remains stale and its error stays visible to consumers. A Home-unreachable
+outcome, authoritative refusal, explicit invalidation or observer gap withdraws
+selection; a reconnect revalidates through the existing catalog loader. Retaining
+a picker choice grants no launch authority.
 After worker confirmation, New Session checks the selected model's exact current
 Team resource and the Agent's declared Provider authentication isolation. A binding
 that replaces the Agent's native authentication satisfies credential readiness

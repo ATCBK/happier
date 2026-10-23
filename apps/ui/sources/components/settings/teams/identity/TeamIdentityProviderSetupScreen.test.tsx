@@ -24,6 +24,7 @@ vi.mock('@/text', async () => {
 // is intentionally absent from synchronized source-only test targets.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
 }));
 vi.mock('@/components/settings/home/identity/managedIdentityProviderClient', () => ({
     createManagedIdentityProviderClient: () => ({ execute: providerExecuteMock }),

@@ -21,6 +21,8 @@ import {
     applyTeamGroupsPage,
     applyTeamProjection,
     applyTeamCredentialResourceCatalog,
+    applyTeamCredentialResourceCatalogFailure,
+    beginTeamCredentialResourceCatalogLoad,
     applyTeamCredentialResource,
     applyTeamCredentialResourcesPage,
     applyTeamsDirectoryFailure,
@@ -186,9 +188,28 @@ describe('teamsSnapshots', () => {
         expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA,
             { ...application, endpointTemplateId: 'other-endpoint' })).toBeNull();
 
+        const failCatalog = (kind: 'unknown' | 'unreachable') => applyTeamCredentialResourceCatalogFailure({
+            scope: scopeA, address: groupAddressA, application, error: { kind, retryable: true },
+        });
+        failCatalog('unknown');
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)).toMatchObject({
+            status: 'error', stale: true, selectionCurrent: true, reachability: 'unknown',
+        });
+        failCatalog('unreachable');
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.selectionCurrent).toBe(false);
+        beginTeamCredentialResourceCatalogLoad(scopeA, groupAddressA, application);
+        failCatalog('unknown');
+        // A failed reconnect read cannot revive selection withdrawn by an actual Home loss.
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.selectionCurrent).toBe(false);
+        applyTeamCredentialResourceCatalog({ scope: scopeA, address: groupAddressA, application,
+            resources: [{ ...catalogEntry, displayName: 'Application catalog' }], observedAt: 82 });
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.selectionCurrent).toBe(true);
+
         invalidateTeamCredentialResources(scopeA, groupAddressA, resource.id);
         expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA)?.stale).toBe(true);
         expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.stale).toBe(true);
+        failCatalog('unknown');
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.selectionCurrent).toBe(false);
         expect(getTeamCredentialResourcesSnapshot(scopeA, groupAddressA)?.data).toBe(listData);
         expect(getTeamCredentialResourcesSnapshot(scopeA, groupAddressA)?.stale).toBe(true);
         expect(getTeamCredentialResourceSnapshot(scopeA, groupAddressA, resource.id)).toMatchObject({

@@ -31,6 +31,7 @@ installSettingsViewCommonModuleMocks({
 // projection, refresh and approval owners.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: Object.freeze([]),
 }));
 
 const harness = createHomeGovernanceHarness();

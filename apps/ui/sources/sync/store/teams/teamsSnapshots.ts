@@ -139,6 +139,8 @@ export type TeamCredentialResourceCatalogSnapshot = Readonly<{
     data: readonly TeamCredentialResourceCatalogEntryV1[] | null;
     lastObservedAt: number | null;
     stale: boolean;
+    /** Last admitted picker choices survive advisory rereads, never grant launch authority. */
+    selectionCurrent: boolean;
     reachability: ScopedSnapshotReachability;
     error: ScopedSnapshotError | null;
 }>;
@@ -794,6 +796,7 @@ export function beginTeamCredentialResourceCatalogLoad(
         data: current?.data ?? null,
         lastObservedAt: current?.lastObservedAt ?? null,
         stale: current?.stale ?? false,
+        selectionCurrent: current?.selectionCurrent ?? false,
         reachability: current?.reachability ?? 'unknown',
         error: null,
     }));
@@ -817,6 +820,7 @@ export function applyTeamCredentialResourceCatalog(params: Readonly<{
         data: preserveUnchangedCredentialCatalog(current?.data ?? null, params.resources),
         lastObservedAt: params.observedAt,
         stale: params.current === false,
+        selectionCurrent: params.current !== false,
         reachability: 'reachable',
         error: null,
     }));
@@ -839,6 +843,10 @@ export function applyTeamCredentialResourceCatalogFailure(params: Readonly<{
         data: withdrawn ? null : current?.data ?? null,
         lastObservedAt: withdrawn ? null : current?.lastObservedAt ?? null,
         stale: !withdrawn && Boolean(current?.data),
+        // A transient read failure does not retract the last admitted picker choice.
+        // Preserve withdrawal from a real Home loss, refusal, mutation or observer gap.
+        selectionCurrent: params.error.kind === 'unknown' && params.error.retryable
+            && current?.selectionCurrent === true,
         reachability: reachabilityForScopedSnapshotError(params.error),
         error: params.error,
     }));
@@ -849,8 +857,9 @@ export function invalidateTeamCredentialResourceCatalog(
     scope: ServerAccountScope,
     address: TeamAddress,
     application?: ProviderBrokerApplicationBindingV1,
+    options?: Readonly<{ retainSelection: boolean }>,
 ): boolean {
-    const changed = markTeamCredentialResourceCatalogStale(scope, address, application);
+    const changed = markTeamCredentialResourceCatalogStale(scope, address, application, options?.retainSelection === true);
     if (!changed) return false;
     notify();
     return true;
@@ -860,11 +869,13 @@ function markTeamCredentialResourceCatalogStale(
     scope: ServerAccountScope,
     address: TeamAddress,
     application?: ProviderBrokerApplicationBindingV1,
+    retainSelection = false,
 ): boolean {
     const key = teamCredentialResourceCatalogKey(scope, address, application);
     const current = credentialCatalogs.get(key);
-    if (!current || current.stale) return false;
-    credentialCatalogs.set(key, Object.freeze({ ...current, stale: true }));
+    if (!current || (current.stale && (retainSelection || !current.selectionCurrent))) return false;
+    credentialCatalogs.set(key, Object.freeze({ ...current, stale: true,
+        selectionCurrent: retainSelection && current.selectionCurrent }));
     return true;
 }
 
@@ -919,8 +930,8 @@ export function invalidateTeamCredentialResources(
         changed = true;
     }
     for (const [key, current] of credentialCatalogs) {
-        if (current.stale || !credentialSnapshotMatches(current, scope, address)) continue;
-        credentialCatalogs.set(key, Object.freeze({ ...current, stale: true }));
+        if ((current.stale && !current.selectionCurrent) || !credentialSnapshotMatches(current, scope, address)) continue;
+        credentialCatalogs.set(key, Object.freeze({ ...current, stale: true, selectionCurrent: false }));
         changed = true;
     }
     if (changed) notify();
@@ -1168,6 +1179,9 @@ export function invalidateTeamsSnapshotsForServer(serverIdRaw: string): boolean 
     }
     for (const [key, snapshot] of credentialCatalogs) {
         if (snapshot.scope.serverId !== serverId || snapshot.stale) continue;
+        // A wake requests a reread, not a refusal. Keep the last admitted
+        // picker choices while authority freshness is withdrawn; actual
+        // mutation, observer-gap and unavailable/refused reads withdraw selection too.
         credentialCatalogs.set(key, Object.freeze({ ...snapshot, stale: true }));
         changed = true;
     }

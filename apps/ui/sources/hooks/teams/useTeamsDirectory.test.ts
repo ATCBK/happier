@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import * as React from 'react';
 import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceReadInputV1Schema, TeamsListInputV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
@@ -31,18 +32,19 @@ import { readAccountAgentProviderRequirements, readAccountProviderDeclarations }
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createDeferred, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook } from '@/dev/testkit';
+import { createDeferred, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook, renderScreen } from '@/dev/testkit';
 import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     primeServerFeaturesSnapshot,
     resetServerFeaturesClientForTests,
 } from '@/sync/api/capabilities/serverFeaturesClient';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileScopeIdForIdentifier, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
-import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { invalidateTeamCredentialResourceCatalog, resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { resetHomeGovernanceEngineForTests } from '@/sync/engine/home/governance/homeGovernanceEngine';
 import { resetHomeGovernanceEligibilityEngineForTests } from '@/sync/engine/home/governance/homeGovernanceEligibilityEngine';
 import { clearHomeGovernanceSnapshotsForServer } from '@/sync/store/home/governance/homeGovernanceSnapshots';
@@ -276,7 +278,9 @@ describe('useTeamsDirectory', () => {
         home.answer(serverId, '/v1/teams/list', { body: { items: [team('team-1')], nextCursor: null } });
         const path = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' }).path;
         let revision = 1;
-        let applicationUnavailable = false;
+        let applicationFailureStatus: number | null = null;
+        let applicationUnreachable = false;
+        let respondAfter: Promise<void> | undefined;
         const agentKey = (id: string) => source === 'installed' ? `agent:acme.agents/${id}` : `agent:happier.agent.${id}/${id}`;
         const multiProtocolAgent = agentKey('opencode');
         const definition = readAccountProviderDeclarations({ kind: 'account' }).find(row => row.definition.managedRuntime)!.definition;
@@ -292,7 +296,9 @@ describe('useTeamsDirectory', () => {
         }) : null;
         home.answer(serverId, path, { select: (input) => {
             const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
-            if (application && applicationUnavailable) return { status: 503, body: { error: 'unavailable' } };
+            if (application && applicationUnreachable) throw new TypeError('fetch failed');
+            if (application && applicationFailureStatus) return { respondAfter, status: applicationFailureStatus,
+                body: { error: applicationFailureStatus === 403 ? 'forbidden' : 'unavailable' } };
             const modelId = application?.agentTargetKey === multiProtocolAgent ? 'shared-model'
                 : application ? `${application.protocol}-${revision}` : '';
             const resource = {
@@ -306,7 +312,7 @@ describe('useTeamsDirectory', () => {
                 }] : [], connectedServiceSelections: [],
                 sourcePresentation: { kind: 'provider', provider: { identity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' }, definitionRevision: 1 } },
             };
-            return { body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: application ? [resource]
+            return { respondAfter, body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: application ? [resource]
                 : [resource, { ...resource, id: 'generic-only',
                     sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.service.test', localId: 'chat' } },
                     connectedServiceSelections: [{ source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' }],
@@ -324,11 +330,30 @@ describe('useTeamsDirectory', () => {
         setRuntimeFetch((input, init) => home.request(input, init));
         const codex = agentKey('codex');
         const claude = agentKey('claude');
-        const rendered = await renderHook(({ agentTargetKey }: { agentTargetKey: string }) => ({
-            selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey, declarationProjection,
-                machineId: source === 'installed' ? 'installed-machine' : null }),
-            generic: useHomeTeamCredentialModelCatalog({ serverId, enabled: true }),
-        }), { initialProps: { agentTargetKey: codex } });
+        const { SessionModelPicker } = await import('@/components/sessions/modelPicker/SessionModelPicker');
+        const { sessionModelSelectionKey } = await import('@/components/sessions/modelPicker/sessionModelSelectionKey');
+        const onSelect = vi.fn();
+        let current!: { selected: ReturnType<typeof useHomeTeamCredentialModelCatalog>; generic: ReturnType<typeof useHomeTeamCredentialModelCatalog> };
+        function CatalogPicker({ agentTargetKey }: { agentTargetKey: string }) {
+            current = {
+                selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey, declarationProjection,
+                    machineId: source === 'installed' ? 'installed-machine' : null }),
+                generic: useHomeTeamCredentialModelCatalog({ serverId, enabled: true }),
+            };
+            return React.createElement(SessionModelPicker, {
+                agentTargetKey, declarationContext: source === 'installed' ? { kind: 'machine', projection: declarationProjection } : { kind: 'account' },
+                nativeModels: [], providerGroups: [], providerProjectionAuthoritative: true,
+                selected: null, effectiveLabel: 'Choose', onSelect, onSelectTeamCredentialModel: onSelect,
+                teamCredentialResources: current.selected.resources,
+                currentTeamCredentialResourceKeys: current.selected.currentResourceKeys,
+            });
+        }
+        const screen = await renderScreen(React.createElement(CatalogPicker, { agentTargetKey: codex }));
+        const rendered = {
+            getCurrent: () => current,
+            rerender: async (props: { agentTargetKey: string }) => { await act(async () => { screen.update(React.createElement(CatalogPicker, props)); }); },
+            unmount: () => screen.unmount(),
+        };
         const models = () => rendered.getCurrent().selected.resources.flatMap(row => row.providerModels.map(model => model.descriptor.id));
         try {
             await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
@@ -358,13 +383,73 @@ describe('useTeamsDirectory', () => {
             expect(models()).toEqual(['shared-model']);
             const model = rendered.getCurrent().selected.resources[0]?.providerModels[0];
             expect(model?.application.endpointTemplateId).toBe('cliproxyapi-openai-responses');
+            if (!model) throw new Error('Expected admitted Team model');
+            const optionId = `model-picker-overlay-option:${sessionModelSelectionKey(model.selection)}`;
+            const expectSelectable = () => {
+                expect(screen.findByTestId(optionId)).not.toBeNull();
+                expect(screen.findByTestId(optionId)?.props.disabled).not.toBe(true);
+            };
+            expectSelectable();
             expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
-            applicationUnavailable = true;
+            // A pending reread is not a refused catalog. Keep the exact offered
+            // model selectable until the Home answers, including a wake that
+            // arrives while this refresh is in flight.
+            const refreshAnswer = createDeferred<void>();
+            respondAfter = refreshAnswer.promise;
+            let refreshing!: Promise<void>;
+            await act(async () => { refreshing = rendered.getCurrent().selected.reload(); });
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(true);
+            await act(async () => { publishHomeAccountChange(serverId); });
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(true);
+            respondAfter = undefined;
+            await act(async () => { refreshAnswer.resolve(); await refreshing; });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            // Explicit invalidation still withdraws a stale model observation.
+            await act(async () => {
+                const canonicalServerId = resolveServerProfileScopeIdForIdentifier(serverId);
+                expect(invalidateTeamCredentialResourceCatalog({ serverId: canonicalServerId, accountId: 'account' },
+                    { serverId: canonicalServerId, teamId: 'team-1' }, model!.application)).toBe(true);
+            });
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(false);
+            await act(async () => { await rendered.getCurrent().selected.reload(); });
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(true);
+            applicationFailureStatus = 503;
             await act(async () => { await rendered.getCurrent().selected.reload(); });
             expect(rendered.getCurrent().selected.current).toBe(false);
             expect(models()).toEqual(['shared-model']);
-            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(false);
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(true);
             expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
+            expectSelectable();
+            await screen.pressByTestIdAsync(optionId);
+            expect(onSelect).toHaveBeenLastCalledWith(model.selection);
+            const retryAnswer = createDeferred<void>();
+            respondAfter = retryAnswer.promise;
+            applicationFailureStatus = null;
+            await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+            expectSelectable();
+            respondAfter = undefined;
+            await act(async () => { retryAnswer.resolve(); });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            applicationUnreachable = true;
+            await act(async () => { await rendered.getCurrent().selected.reload(); });
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(false);
+            expect(screen.findByTestId(optionId)?.props.disabled).toBe(true);
+            onSelect.mockClear();
+            await screen.pressByTestIdAsync(optionId);
+            expect(onSelect).not.toHaveBeenCalled();
+            const reconnectAnswer = createDeferred<void>();
+            applicationUnreachable = false;
+            respondAfter = reconnectAnswer.promise;
+            await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+            // A reconnect requests revalidation; it cannot itself revive an unavailable choice.
+            expect(screen.findByTestId(optionId)?.props.disabled).toBe(true);
+            respondAfter = undefined;
+            await act(async () => { reconnectAnswer.resolve(); });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expectSelectable();
+            applicationFailureStatus = 403;
+            await act(async () => { await rendered.getCurrent().selected.reload(); });
+            expect(models()).toEqual([]);
             await rendered.rerender({ agentTargetKey: 'agent:acme.unknown/agent' });
             expect(models()).toEqual([]);
             expect(rendered.getCurrent().selected.current).toBe(false);

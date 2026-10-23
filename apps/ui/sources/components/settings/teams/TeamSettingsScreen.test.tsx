@@ -36,6 +36,7 @@ vi.mock('@/platform/randomUUID', () => ({
 // Action policy, approval continuation and Team screen paths execute below it.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: Object.freeze([]),
 }));
 
 // The logo picker reads picked bytes through the platform file API, which has no

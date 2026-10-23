@@ -31,6 +31,7 @@ installSettingsViewCommonModuleMocks({
 });
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
 }));
 
 // Only the network and the device credential store are replaced; the claim operation, the Action

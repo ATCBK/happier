@@ -95,7 +95,8 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
         subscribeTeamsSnapshots,
         () => JSON.stringify(demands.map(({ row, application }) => {
             const snapshot = getTeamCredentialResourceCatalogSnapshot(scope, row.address, application);
-            return [row.address.teamId, snapshot?.status ?? 'none', snapshot?.lastObservedAt ?? null, snapshot?.stale === true, snapshot?.error?.kind ?? null];
+            return [row.address.teamId, snapshot?.status ?? 'none', snapshot?.lastObservedAt ?? null, snapshot?.stale === true,
+                snapshot?.selectionCurrent === true, snapshot?.error?.kind ?? null];
         })),
         () => '',
     );
@@ -128,6 +129,7 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
             teamNameById[row.address.teamId] = row.team.name;
             homeNameByTeamId[row.address.teamId] = row.homeName;
             const snapshot = getTeamCredentialResourceCatalogSnapshot(scope, row.address, application);
+            const selectable = snapshot?.selectionCurrent === true;
             if (snapshot?.status !== 'ready' || snapshot.stale) {
                 current = false;
             }
@@ -135,7 +137,7 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
             else if (snapshot?.status !== 'ready' && !condition) condition = { reason: 'loading', retryable: false };
             for (const resource of snapshot?.data ?? []) {
                 const key = `${resource.teamId}:${resource.id}`;
-                if (resource.providerModels.length > 0 && (snapshot?.status !== 'ready' || snapshot.stale)) {
+                if (resource.providerModels.length > 0 && !selectable) {
                     nonCurrentModelResourceKeys.add(key);
                 }
                 const previous = resourcesByKey.get(key);
@@ -161,7 +163,7 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
                     providerModels,
                 });
             }
-            if (snapshot?.status === 'ready' && !snapshot.stale) {
+            if (selectable) {
                 for (const resource of snapshot.data ?? []) currentResourceKeys.add(`${resource.teamId}:${resource.id}`);
             }
         }
