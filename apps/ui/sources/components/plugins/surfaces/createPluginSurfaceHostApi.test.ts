@@ -3,7 +3,7 @@ import type {
     PluginUiHostApiRequestEnvelopeV1,
     PluginUiSurfaceContextV1,
 } from '@happier-dev/protocol/plugins/ui';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
     createPluginSurfaceHostApi,
@@ -37,6 +37,61 @@ function request(
 }
 
 describe('createPluginSurfaceHostApi', () => {
+    it('holds a pending installed-plugin call until connection settlement, without polling or repeating its effect', async () => {
+        let connecting = true;
+        let available = false;
+        const read = vi.fn(() => ({ status: 'ready', content: 'external plugin content' }));
+        const hostApi = createPluginSurfaceHostApi({ surfaceContext,
+            handlers: { statOpenableContent: read },
+            isMethodAvailable: method => method === 'context' || available,
+            isConnectionPending: () => connecting,
+        });
+        const invocation = request('statOpenableContent');
+        let settled = false;
+        const result = settlePluginSurfaceHostApiRequest(invocation, () => hostApi.handleRequest(invocation))
+            .then(value => { settled = true; return value; });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(read).not.toHaveBeenCalled();
+        hostApi.notifyConnectionSettled?.();
+        expect(read).not.toHaveBeenCalled();
+        connecting = false;
+        available = true;
+        hostApi.notifyConnectionSettled?.();
+        await expect(result).resolves.toMatchObject({ kind: 'result', payload: { status: 'ready' } });
+        hostApi.notifyConnectionSettled?.();
+        expect(read).toHaveBeenCalledTimes(1);
+        hostApi.dispose?.();
+    });
+
+    it.each(['abort', 'abortAfterConnect', 'retire', 'failed'] as const)('settles a pending host call on %s without invoking its effect', async outcome => {
+        let connecting = true;
+        let current = true;
+        const effect = vi.fn(() => null);
+        const hostApi = createPluginSurfaceHostApi({ surfaceContext,
+            handlers: { readStoredImage: effect },
+            isMethodAvailable: () => outcome === 'abortAfterConnect' && !connecting,
+            isCurrent: () => current,
+            isConnectionPending: () => connecting,
+        });
+        const cancellation = new AbortController();
+        const invocation = request('readStoredImage');
+        const result = settlePluginSurfaceHostApiRequest(invocation,
+            () => hostApi.handleRequest(invocation, { signal: cancellation.signal }));
+        if (outcome === 'abort') cancellation.abort();
+        else if (outcome === 'abortAfterConnect') { connecting = false; hostApi.notifyConnectionSettled?.(); cancellation.abort(); }
+        else if (outcome === 'retire') { current = false; hostApi.dispose?.(); }
+        else { connecting = false; hostApi.notifyConnectionSettled?.(); }
+        await expect(result).resolves.toMatchObject({ kind: 'error', payload: {
+            code: outcome === 'retire' ? 'stale_surface' : 'unavailable',
+            diagnostics: [outcome === 'abort' || outcome === 'abortAfterConnect' ? 'plugin_ui_invocation_aborted'
+                : outcome === 'retire' ? 'plugin_surface_retired' : 'host_api_method_unavailable:readStoredImage'],
+        } });
+        expect(effect).not.toHaveBeenCalled();
+        hostApi.dispose?.();
+    });
+
     it('advertises and serves only the current mounted handler contract without replacing the facade', async () => {
         let handlers: import('./createPluginSurfaceHostApi').PluginSurfaceHostApiHandlers = { readComposer: () => null };
         const hostApi = createPluginSurfaceHostApi({ surfaceContext, readHandlers: () => handlers });

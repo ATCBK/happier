@@ -1872,6 +1872,7 @@ describe('PluginHostedWebPane', () => {
             accountEncryptionMode: 'e2ee' as const,
             translations: { 'preview.title': 'Preview' },
             targetedContributions: canonicalTargetedContributions,
+            requesterExecutionReady: false,
         } as const;
 
         try {
@@ -1959,6 +1960,7 @@ describe('PluginHostedWebPane', () => {
                     canonicalHostApi={{
                         ...canonicalHostApi,
                         translations: { 'preview.title': 'Aper\u00e7u' },
+                        requesterExecutionReady: true,
                     }}
                     focusEligible={false}
                 />,
@@ -1976,7 +1978,7 @@ describe('PluginHostedWebPane', () => {
                     kind: 'subscription',
                     subscriptionId: 'subscription-1',
                     event: {
-                        surface: { translations: { 'preview.title': 'Aper\u00e7u' } },
+                        surface: { translations: { 'preview.title': 'Aper\u00e7u' }, requesterExecutionReady: true },
                         activity: { active: false },
                     },
                 },

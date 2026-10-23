@@ -29,6 +29,7 @@ import { BrowserViewTargetV1Schema, type BrowserViewTargetV1 } from '@happier-de
 import { PluginHostedHtmlSourceV1Schema, type PluginHostedHtmlSourceV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlSourceV1';
 import { UiSurfaceNetworkRequestV1Schema, normalizeUiSurfaceCapabilityRequestV1, intersectUiSurfaceNetworkPoliciesV1, type UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
 import type { PluginUiTargetedSurfaceMountCoreV1, DaemonContributionRegistryProjectionMountedTargetV1, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDocument';
@@ -1440,6 +1441,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         pendingApproval: SurfaceContext['pendingApproval'];
         machineConnectionPending: boolean;
         machineExecutionReady: boolean;
+        requesterExecutionReady: boolean;
         /** Manifest/projection-owned brand; never supplied by the artifact. */
         brand?: PluginUiPresentationBrand;
         /**
@@ -1485,6 +1487,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         pendingApproval: canonicalIdentity.pendingApproval,
         machineConnectionPending: canonicalIdentity.machineConnectionPending,
         machineExecutionReady: canonicalIdentity.machineExecutionReady,
+        requesterExecutionReady: canonicalIdentity.requesterExecutionReady,
     }), [
         canonicalIdentity.mount,
         canonicalIdentity.target,
@@ -1494,6 +1497,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         canonicalIdentity.pendingApproval,
         canonicalIdentity.machineConnectionPending,
         canonicalIdentity.machineExecutionReady,
+        canonicalIdentity.requesterExecutionReady,
         environment,
     ]);
     const canonicalRenderIdentity = React.useMemo(() => {
@@ -1524,6 +1528,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         canonicalIdentity.pendingApproval,
         canonicalIdentity.machineConnectionPending,
         canonicalIdentity.machineExecutionReady,
+        canonicalIdentity.requesterExecutionReady,
         canonicalIdentity.translations,
         canonicalIdentity.viewId,
         canonicalIdentity.brand,
@@ -1551,8 +1556,8 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             canonicalRenderIdentity.platform,
             canonicalRenderIdentity.sessionId ?? '',
             getPluginSurfaceTargetAuthorityKey(canonicalRenderIdentity.target),
-            canonicalRenderIdentity.targetedContributions?.target.pluginId ?? '',
-            canonicalRenderIdentity.targetedContributions?.target.occurrenceId ?? '',
+            // Target snapshot admission updates context in place. The actual
+            // controller/mountLifetime below owns caller authority retirement.
             props.mountInstanceKey ?? '',
     ].join('\u001f');
     const canonicalAccountLifetime = canonicalIdentity.accountLifetime;
@@ -2432,6 +2437,32 @@ function PluginSurfaceHostMount(props: Readonly<(
     const accountExecutionOrigin = React.useMemo(() => targetedBinding?.mount.accountExecutionOrigin
         ?? (accountUnionMount ? readPluginUiAccountExecutableOrigin(descriptor) : null),
     [accountUnionMount, descriptor, targetedBinding]);
+    // An app union may first present a Machine declaration, then publish this
+    // same destination under Account custody. Loading ending elsewhere cannot
+    // admit reads from that interim requester. Availability publishes bundled
+    // declarations atomically with its first scoped observation.
+    const requesterAccountAdmission = accountUnionMount
+        ? availabilityReader?.readCurrentAccountExecution(mountedPluginId) : undefined;
+    const requesterAccountProjection = accountUnionMount ? availabilityReader?.readAccountUiProjection() : null;
+    const requesterAccountEntry = descriptor?.contributionKind === 'settingsPage'
+        ? requesterAccountProjection?.settingsPagesById[descriptor.id]
+        : descriptor ? requesterAccountProjection?.surfacePlacementsById[descriptor.id] : undefined;
+    const expectedRequesterOrigin = React.useMemo(() => readPluginUiAccountExecutableOrigin(requesterAccountEntry),
+        [requesterAccountEntry]);
+    const requesterAccountObservationLoaded = requesterAccountAdmission !== undefined
+        && (requesterAccountAdmission.kind === 'available'
+            || (requesterAccountAdmission.code !== 'account_availability_not_loaded'
+                && requesterAccountAdmission.code !== 'account_availability_scope_mismatch'));
+    const requesterProjectionOriginAdmitted = !accountUnionMount || (requesterAccountObservationLoaded
+        && (expectedRequesterOrigin
+            ? accountExecutionOrigin !== null
+                && accountExecutionOrigin.accountId === expectedRequesterOrigin.accountId
+                && areServerProfileIdentifiersEquivalent(accountExecutionOrigin.serverId, expectedRequesterOrigin.serverId)
+                && accountExecutionOrigin.custodyId === expectedRequesterOrigin.custodyId
+                && pluginSourceCustodyV1Equal(accountExecutionOrigin.sourceCustody, expectedRequesterOrigin.sourceCustody)
+            // A loaded absence settles a genuine Machine requester, not a
+            // retained Account declaration whose custody was withdrawn.
+            : accountExecutionOrigin === null));
     const needsMachineExecution = accountUnionMount && descriptor != null && isPluginSurfaceMachineBound({
         pluginId: mountedPluginId, surface: descriptor, projection: props.pluginUiProjection,
     });
@@ -3450,6 +3481,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     // presentation inputs. Unrelated loading cannot hold an admitted target.
     const machineExecutionReady = controller.canInteractWithDaemon();
     const machineConnectionPending = !machineExecutionReady && machinePrerequisitesPending;
+    const requesterExecutionReady = controller.isRequesterAdmitted() && requesterProjectionOriginAdmitted;
     const [accountHosting, setAccountHosting] = React.useState<Readonly<{
         owner: BoundPluginSurfaceController;
         completion: Promise<PluginAccountHostedArtifactPublicationResult>;
@@ -4075,6 +4107,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 pendingApproval,
                 machineConnectionPending,
                 machineExecutionReady,
+                requesterExecutionReady,
                 // §3.2/§3.3: the hosted-web binding carries the SAME exact
                 // target, semantic theme and translation bundle the React Native
                 // mount receives, resolved by the one context owner.
@@ -4369,6 +4402,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             pendingApproval,
             machineConnectionPending,
             machineExecutionReady,
+            requesterExecutionReady,
             executionOrigin,
             ...(projectedBrand ? { brand: projectedBrand } : {}),
             ...(brandTargetPresentation

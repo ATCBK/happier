@@ -123,6 +123,7 @@ describe('createPluginSurfaceContext', () => {
             targetedContributions,
             machineConnectionPending: true,
             machineExecutionReady: false,
+            requesterExecutionReady: false,
         });
 
         expect(targeted.mount).toBe(fixture.mount);
@@ -131,7 +132,7 @@ describe('createPluginSurfaceContext', () => {
         // Both physical transports use this producer and the SDK's strict
         // context reader; pending is presentation, never surface inactivity.
         expect(PluginUiHostApiSurfaceContextV1Schema.parse(targeted)).toMatchObject({
-            machineConnectionPending: true, machineExecutionReady: false,
+            machineConnectionPending: true, machineExecutionReady: false, requesterExecutionReady: false,
         });
     });
 

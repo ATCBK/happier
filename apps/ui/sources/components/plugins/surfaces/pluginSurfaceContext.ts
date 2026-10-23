@@ -278,6 +278,7 @@ export function createPluginSurfaceContext(input: Readonly<{
     pendingApproval?: SurfaceContext['pendingApproval'];
     machineConnectionPending?: SurfaceContext['machineConnectionPending'];
     machineExecutionReady?: SurfaceContext['machineExecutionReady'];
+    requesterExecutionReady?: SurfaceContext['requesterExecutionReady'];
 }>): SurfaceContext {
     return freezeOwnedContext({
         mount: input.mount,
@@ -301,6 +302,7 @@ export function createPluginSurfaceContext(input: Readonly<{
         ...(input.pendingApproval === undefined ? {} : { pendingApproval: input.pendingApproval }),
         ...(input.machineConnectionPending === undefined ? {} : { machineConnectionPending: input.machineConnectionPending }),
         ...(input.machineExecutionReady === undefined ? {} : { machineExecutionReady: input.machineExecutionReady }),
+        ...(input.requesterExecutionReady === undefined ? {} : { requesterExecutionReady: input.requesterExecutionReady }),
     });
 }
 

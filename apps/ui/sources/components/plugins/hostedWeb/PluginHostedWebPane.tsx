@@ -558,6 +558,7 @@ export function PluginHostedWebPane(props: Readonly<{
         pendingApproval?: SurfaceContext['pendingApproval'];
         machineConnectionPending?: SurfaceContext['machineConnectionPending'];
         machineExecutionReady?: SurfaceContext['machineExecutionReady'];
+        requesterExecutionReady?: SurfaceContext['requesterExecutionReady'];
     }>;
     /**
      * The mounted host's single Account-scoped Data bridge factory. The pane
@@ -906,6 +907,7 @@ export function PluginHostedWebPane(props: Readonly<{
                 pendingApproval: binding.pendingApproval,
                 machineConnectionPending: binding.machineConnectionPending,
                 machineExecutionReady: binding.machineExecutionReady,
+                requesterExecutionReady: binding.requesterExecutionReady,
             }),
         });
     }, [

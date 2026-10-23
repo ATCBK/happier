@@ -77,6 +77,8 @@ export type PluginSurfaceHostApiV1 = Readonly<{
         request: PluginUiHostApiRequestEnvelopeV1,
         options?: PluginSurfaceHostApiRequestOptions,
     ) => PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1>;
+    /** Physical host readiness committed; resume calls held by this same facade. */
+    notifyConnectionSettled?: () => void;
     /**
      * Retire whatever the installed handlers put in front of the user (§3.4:
      * feedback and confirmation retire with the surface). Idempotent, and absent
@@ -291,90 +293,116 @@ export function createPluginSurfaceHostApi(
         ));
     };
     const isMethodAvailable = input.isMethodAvailable;
-    const enrichUnavailable = (result: PluginUiJsonValueV1, request: PluginUiHostApiRequestEnvelopeV1): PluginUiJsonValueV1 => {
+    let disposed = false;
+    const connectionWaiters = new Set<() => void>();
+    const enrichUnavailable = (result: PluginUiJsonValueV1, request: PluginUiHostApiRequestEnvelopeV1,
+        options?: PluginSurfaceHostApiRequestOptions): PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1> => {
         const error = readPluginSurfaceHostApiErrorPayload(result);
         if (error?.code !== 'unavailable') return result;
         const pending = input.isConnectionPending?.(error, request) === true;
+        // Only the controller's positive, pre-invocation readiness refusal can
+        // enter this wait. Domain results and settled outages stay terminal.
+        // The physical host wakes it on connection settlement; no polling or
+        // author-side retry can repeat an already-admitted effect.
+        if (pending) {
+            if (disposed || input.isCurrent?.() === false) {
+                return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
+            }
+            return new Promise<PluginUiJsonValueV1>(resolve => {
+                const finish = (value: PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1>) => {
+                    connectionWaiters.delete(resume);
+                    options?.signal?.removeEventListener('abort', abort);
+                    resolve(value);
+                };
+                const abort = () => finish(createPluginSurfaceHostApiError('unavailable', ['plugin_ui_invocation_aborted']));
+                const resume = () => {
+                    if (!disposed && input.isCurrent?.() !== false && input.isConnectionPending?.(error, request) === true) return;
+                    // Re-read current handlers and admission, including failure
+                    // and retirement, before invoking the requested operation.
+                    finish(Promise.resolve().then(() => handleRequest(request, options)));
+                };
+                if (options?.signal?.aborted) { abort(); return; }
+                connectionWaiters.add(resume);
+                options?.signal?.addEventListener('abort', abort, { once: true });
+            });
+        }
         const resolved = input.resolveUnavailableError?.(error, request) ?? error;
-        return !pending && resolved === error ? result : createPluginSurfaceHostApiError(resolved.code,
-            pending ? [...resolved.diagnostics, 'plugin_surface_connection_pending'] : resolved.diagnostics, resolved.message);
+        return resolved === error ? result : createPluginSurfaceHostApiError(resolved.code, resolved.diagnostics, resolved.message);
     };
     const resolveLiveInstalledMethods = (): readonly PluginUiHostMethodV1[] => {
         // A retired mount cannot serve even its locally synthesized context.
         // Keep the advertised set aligned with the same currentness predicate
         // that rejects a request below; otherwise a consumer could negotiate a
         // stale method that the only request owner must refuse.
-        if (input.isCurrent?.() === false) return Object.freeze([]);
+        if (disposed || input.isCurrent?.() === false) return Object.freeze([]);
         const installedMethods = readInstalledMethods();
         if (!isMethodAvailable) return installedMethods;
         return Object.freeze(installedMethods.filter((method) => isMethodAvailable(method)));
     };
     const onDispose = input.onDispose;
-    let disposed = false;
+    function handleRequest(
+        request: PluginUiHostApiRequestEnvelopeV1,
+        options?: PluginSurfaceHostApiRequestOptions,
+    ): PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1> {
+        if (disposed || input.isCurrent?.() === false) {
+            return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
+        }
+        if (options?.signal?.aborted) {
+            return createPluginSurfaceHostApiError('unavailable', ['plugin_ui_invocation_aborted']);
+        }
+        const releasedMethod = PluginUiHostMethodV1Schema.safeParse(request.method);
+        const handlers = readHandlers();
+        // A request admits only its addressed method. Enumerating the full
+        // live set repeats currentness and unrelated method admissions;
+        // negotiation getters still read that complete set independently.
+        if (releasedMethod.success && ((releasedMethod.data !== 'context' && handlers[releasedMethod.data] === undefined)
+            || (isMethodAvailable !== undefined && !isMethodAvailable(releasedMethod.data)))) {
+            // Structural absence and transient narrowing are different facts.
+            // Keep the method admitted while its connection is pending; a
+            // settled outage still returns the existing unavailable envelope.
+            return readAdmissionMethods().includes(releasedMethod.data)
+                ? enrichUnavailable(createPluginSurfaceHostApiError(
+                    'unavailable',
+                    [`host_api_method_unavailable:${request.method}`],
+                ), request, options)
+                : createPluginSurfaceHostApiError(
+                    'unsupported_method',
+                    [`host_api_method_not_installed:${request.method}`],
+                );
+        }
+        if (request.method === 'context') return surfaceContext;
 
+        const handler = handlers[request.method];
+        const invoke = handler ?? input.fallback;
+        if (invoke) {
+            const result = invoke(request, options);
+            if (!input.resolveUnavailableError && !input.isConnectionPending) return result;
+            return result instanceof Promise
+                ? result.then(value => enrichUnavailable(value, request, options))
+                : enrichUnavailable(result, request, options);
+        }
+        return createPluginSurfaceHostApiError(
+            'unsupported_method',
+            [`host_api_method_not_installed:${request.method}`],
+        );
+    }
+    const notifyConnectionSettled = () => {
+        for (const resume of [...connectionWaiters]) resume();
+    };
     return Object.freeze({
         platform: surfaceContext.platform,
         channel: surfaceContext.channel,
-        get installedMethods(): readonly PluginUiHostMethodV1[] {
-            return resolveLiveInstalledMethods();
-        },
+        get installedMethods(): readonly PluginUiHostMethodV1[] { return resolveLiveInstalledMethods(); },
         get admissionMethods(): readonly PluginUiHostMethodV1[] {
-            return input.isCurrent?.() === false ? Object.freeze([]) : readAdmissionMethods();
+            return disposed || input.isCurrent?.() === false ? Object.freeze([]) : readAdmissionMethods();
         },
-        ...(onDispose
-            ? {
-                dispose: (): void => {
-                    if (disposed) return;
-                    disposed = true;
-                    onDispose();
-                },
-            }
-            : {}),
-        handleRequest: (
-            request: PluginUiHostApiRequestEnvelopeV1,
-            options?: PluginSurfaceHostApiRequestOptions,
-        ): PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1> => {
-            if (input.isCurrent?.() === false) {
-                return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
-            }
-            const releasedMethod = PluginUiHostMethodV1Schema.safeParse(request.method);
-            const handlers = readHandlers();
-            // A request admits only its addressed method. Enumerating the full
-            // live set repeats currentness and unrelated method admissions;
-            // negotiation getters still read that complete set independently.
-            if (releasedMethod.success && ((releasedMethod.data !== 'context' && handlers[releasedMethod.data] === undefined)
-                || (isMethodAvailable !== undefined && !isMethodAvailable(releasedMethod.data)))) {
-                // Structural absence and transient narrowing are different
-                // facts. A daemon-owned method this mount installs is
-                // re-advertised on reconnect without replacing the mount, so
-                // answering `unsupported_method` would hand the caller a
-                // permanent capability verdict it must never revisit; the
-                // retryable `unavailable` envelope keeps recovery reachable.
-                return readAdmissionMethods().includes(releasedMethod.data)
-                    ? enrichUnavailable(createPluginSurfaceHostApiError(
-                        'unavailable',
-                        [`host_api_method_unavailable:${request.method}`],
-                    ), request)
-                    : createPluginSurfaceHostApiError(
-                        'unsupported_method',
-                        [`host_api_method_not_installed:${request.method}`],
-                    );
-            }
-            if (request.method === 'context') return surfaceContext;
-
-            const handler = handlers[request.method];
-            const invoke = handler ?? input.fallback;
-            if (invoke) {
-                const result = invoke(request, options);
-                if (!input.resolveUnavailableError && !input.isConnectionPending) return result;
-                return result instanceof Promise
-                    ? result.then(value => enrichUnavailable(value, request))
-                    : enrichUnavailable(result, request);
-            }
-            return createPluginSurfaceHostApiError(
-                'unsupported_method',
-                [`host_api_method_not_installed:${request.method}`],
-            );
+        handleRequest,
+        notifyConnectionSettled,
+        dispose: (): void => {
+            if (disposed) return;
+            disposed = true;
+            notifyConnectionSettled();
+            onDispose?.();
         },
     });
 }

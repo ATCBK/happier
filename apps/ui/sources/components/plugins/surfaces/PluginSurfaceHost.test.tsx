@@ -178,7 +178,7 @@ import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountS
 import {
     type PluginAccountAvailabilitySnapshot,
 } from '@/sync/domains/plugins/availability/reader';
-import { clearPluginAccountAvailabilityProjection, readPluginAccountAvailability, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
+import { clearPluginAccountAvailabilityProjection, readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, retirePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 
@@ -9528,6 +9528,256 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             pendingProjection.resolve({ protocolVersion: 1, projection: machineProjection });
             await screen.unmount();
         }
+    });
+
+    it('keeps external Account Settings discovery cold through a settled Machine-less mount and resumes on admission', async () => {
+        await primeGeneratedArtifact();
+        const lifetime = pluginSurfaceAccountLifetime.value!;
+        const pluginId = 'acme.browser';
+        const base = createGeneratedProjection();
+        const artifactGraph = base.reactNativeBundlesById['reactNativeBundle:acme.browser:native-panel']!.artifactGraph;
+        const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+            availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId, desiredVersion: '3.2.1', enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+            release: { ref: { pluginId, version: '3.2.1' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: pluginId, version: '3.2.1',
+                    displayName: 'External Settings', engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 },
+                    contributes: { actions: [{ id: 'read-page', title: 'Read page', scopes: ['global'], surfaces: ['ui'],
+                        placementBindings: [], dangerLevel: 'safe', execution: { target: 'account',
+                            account: { artifactId: generatedIdentity.artifactId, exportName: 'renderSurface' } },
+                        inputSchema: { type: 'object' }, resultSchema: { type: 'object' } },
+                        { id: 'discover', title: 'Discover', scopes: ['global'], surfaces: ['ui'],
+                        placementBindings: [], dangerLevel: 'safe', execution: { target: 'daemon' },
+                        inputSchema: { type: 'object' }, resultSchema: { type: 'object' } }],
+                        ui: { renderers: [{ id: 'native-panel', kind: 'reactNative', artifact: generatedIdentity.artifactId,
+                            requiredHostMethods: ['executeAction'] }], settingsPages: [{ id: 'preferences', title: 'Preferences',
+                            group: { kind: 'host', id: 'general' }, renderer: 'native-panel' }] } } }),
+                collectionContracts: [], uiSlots: [{ contributionId: 'native-panel', artifactId: generatedIdentity.artifactId,
+                    tier: 'reactNative', platform: 'web', artifactDigest: generatedIdentity.artifactDigest, hostUiApiRange: '^1.0.0', artifactGraph }],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            packageAssets: [], uiArtifacts: [],
+        });
+        replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: { availabilityCursor: 1,
+            intentReads: [{ pluginId, response }], materializations: [], snapshots: [], inventoryComplete: true } });
+        const accountProjection = readPluginAccountAvailability(lifetime.scope).readAccountUiProjection();
+        if (!accountProjection) throw new Error('Expected external Account Settings declarations');
+        const pageId = 'settingsPage:acme.browser:preferences';
+        const page = accountProjection.settingsPagesById[pageId]!;
+        expect(page.hostAccountOrigin).toBeDefined();
+        const sourceCustody = developmentSourceCustody('account-settings-source-test-root');
+        const executionOrigin = { serverIdentityId: 'srv_server_1', sourceRef: { pluginId, machineId: 'machine_1', sourceCustody } };
+        const occurrenceId = 'account-settings-daemon';
+        const action = PluginProjectedActionV2Schema.parse({ ...projectedDaemonUiAction({ pluginId, localId: 'discover',
+            machineId: 'machine_1', materializationId: 'account-settings', serverIdentityId: 'srv_server_1' }), executionOrigin });
+        const actionsById = { [`${pluginId}/discover`]: action };
+        const outcomes: unknown[] = [];
+        const admissions: Array<{ pending: boolean; ready: boolean | undefined }> = [];
+        function Discovery() {
+            const hostApi = usePluginHostApi();
+            const readiness = usePluginHostReadiness();
+            const ready = readiness.ready;
+            const context = useSurfaceContext();
+            admissions.push({ pending: readiness.pending, ready: context.machineExecutionReady });
+            React.useEffect(() => {
+                if (readiness.pending || ready === false) return;
+                void hostApi.executeAction({ pluginId, localId: 'discover' }, {})
+                    .then(value => outcomes.push(value), error => outcomes.push(error));
+            }, [hostApi, readiness.pending, readiness.revision, ready]);
+            return null;
+        }
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(Discovery) };
+        declarativeActionExecuteMock.mockResolvedValue({ supported: true, result: { ok: true, result: { discovered: true } } });
+        const { PluginSettingsPageHost } = await import('./PluginSurfaceHost');
+        // Account presentation may retain an Action declaration while its
+        // Machine selection and transport binding are currently unavailable.
+        let projection: PluginUiProjectionModel = { ...accountProjection, actionsById: { ...accountProjection.actionsById, ...actionsById } };
+        const render = () => <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection,
+            pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: null,
+            serverId: 'server_1', platform: 'web', accountLifetime: lifetime, reloadConnectedAccountProjection() {},
+            clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {},
+        }}><PluginSettingsPageHost page={projection.settingsPagesById[pageId]!} pluginUiProjection={projection} platform="web"
+            reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} /></AppShellPluginUiProjectionValueProvider>;
+        const screen = await renderScreen(render());
+        try {
+            await vi.waitFor(() => expect(admissions).toContainEqual({ pending: false, ready: false }));
+            await flushHookEffects({ cycles: 3, turns: 2 });
+            expect(outcomes).toEqual([]);
+            expect(declarativeActionExecuteMock).not.toHaveBeenCalled();
+            const installed = { id: pluginId, occurrenceId, displayName: 'External Settings', version: '3.2.1', enabled: true,
+                source: { kind: 'bundled' as const, locator: pluginId }, sourceCustody, declaresContributionPoints: false,
+                brand: { state: 'missing' as const } };
+            realResourceTransport.settingsEnabled = true;
+            realResourceTransport.request = async method => method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+                ? { protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 77,
+                    installedPackagesById: { [pluginId]: installed }, actionsById }) } : { error: 'Method not found' };
+            const { mergeInstalledPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
+            const machineProjection = { ...base, actionsById, installedPackagesById: { [pluginId]: { ...installed,
+                declaredExecution: { daemonActions: true, contributionPoints: false } } }, settingsPagesById: {
+                [pageId]: { ...page, hostSupplies: [{ machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1',
+                    occurrenceId, generation: 77, phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1',
+                    sourceCustody, executionTargetDefault: true, executionOrigin }] },
+            } };
+            projection = mergeInstalledPluginUiProjections([accountProjection], machineProjection)!;
+            await screen.update(render());
+            await vi.waitFor(() => expect(outcomes).toEqual([{ discovered: true }]));
+        } finally { await screen.unmount(); }
+    });
+
+    it.each(['Settings', 'app-page', 'Machine-less Settings', 'retained Account Settings'] as const)('waits for an external %s requester Account origin before entering its Account read', async (surface) => {
+        await primeGeneratedArtifact();
+        const lifetime = pluginSurfaceAccountLifetime.value!;
+        const pluginId = 'acme.browser';
+        const base = createGeneratedProjection();
+        const artifactGraph = base.reactNativeBundlesById['reactNativeBundle:acme.browser:native-panel']!.artifactGraph;
+        const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+            availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId, desiredVersion: '3.2.1', enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+            release: { ref: { pluginId, version: '3.2.1' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: pluginId, version: '3.2.1',
+                    displayName: 'External Settings', engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 },
+                    contributes: { actions: [{ id: 'read-page', title: 'Read page', scopes: ['global'], surfaces: ['ui'],
+                        placementBindings: [], dangerLevel: 'safe', execution: { target: 'account',
+                            account: { artifactId: generatedIdentity.artifactId, exportName: 'renderSurface' } },
+                        inputSchema: { type: 'object' }, resultSchema: { type: 'object' } }],
+                        ui: { renderers: [{ id: 'native-panel', kind: 'reactNative', artifact: generatedIdentity.artifactId,
+                            requiredHostMethods: ['executeAction'] }], settingsPages: [{ id: 'preferences', title: 'Preferences',
+                            group: { kind: 'host', id: 'general' }, renderer: 'native-panel' }],
+                            views: [{ id: 'account-page', title: 'Account page', container: 'appPage',
+                                target: { kind: 'app' }, renderer: 'native-panel' }] } } }),
+                collectionContracts: [], uiSlots: [{ contributionId: 'read-page', artifactId: generatedIdentity.artifactId,
+                    tier: 'reactNative', platform: 'web', artifactDigest: generatedIdentity.artifactDigest, hostUiApiRange: '^1.0.0', artifactGraph }],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            packageAssets: [], uiArtifacts: [],
+        });
+        const publish = () => replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: { availabilityCursor: 1,
+            intentReads: [{ pluginId, response }], materializations: [], snapshots: [], inventoryComplete: true } });
+        publish();
+        const accountProjection = readPluginAccountAvailability(lifetime.scope).readAccountUiProjection();
+        if (!accountProjection) throw new Error('Expected external Account Settings declarations');
+        const pageId = 'settingsPage:acme.browser:preferences';
+        const accountPage = accountProjection.settingsPagesById[pageId]!;
+        const placementId = 'surfacePlacement:acme.browser:account-page';
+        const accountPlacement = accountProjection.surfacePlacementsById[placementId]!;
+        if (accountPlacement.binding.kind !== 'destination') throw new Error('Expected Account page destination binding');
+        const occurrenceId = 'cold-account-requester-machine';
+        const sourceCustody = developmentSourceCustody('cold-account-requester-test-root');
+        const executionOrigin = { serverIdentityId: 'srv_server_1', sourceRef: { pluginId, machineId: 'machine_1', sourceCustody } };
+        const supply = { machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1', occurrenceId,
+            generation: 77, phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1', sourceCustody,
+            executionTargetDefault: true, executionOrigin };
+        const hasMachineRequester = surface !== 'Machine-less Settings';
+        const coldPage: PluginUiSettingsPageProjection = { ...accountPage, hostAccountOrigin: undefined,
+            occurrenceId: hasMachineRequester ? occurrenceId : undefined,
+            executionOrigin: hasMachineRequester ? executionOrigin : undefined,
+            hostOrigin: hasMachineRequester ? supply : undefined, hostSupplies: hasMachineRequester ? [supply] : [] };
+        const coldPlacement: PluginUiSurfacePlacementProjection = { ...accountPlacement, binding: accountPlacement.binding, hostAccountOrigin: undefined,
+            occurrenceId, executionOrigin, hostOrigin: supply, hostSupplies: [supply] };
+        const retainedAccountRequester = surface === 'retained Account Settings';
+        let projection: PluginUiProjectionModel = retainedAccountRequester ? accountProjection : { ...base, settingsPagesById: { [pageId]: coldPage },
+            surfacePlacementsById: { [placementId]: coldPlacement },
+            actionsById: accountProjection.actionsById, installedPackagesById: { [pluginId]: {
+                id: pluginId, occurrenceId, displayName: 'External Settings', version: '3.2.1', enabled: true,
+                source: { kind: 'bundled', locator: pluginId }, sourceCustody, declaresContributionPoints: false,
+                brand: { state: 'missing' },
+            } } };
+        const attempts: string[] = [];
+        const outcomes: unknown[] = [];
+        const enteredSignals: AbortSignal[] = [];
+        const accountRead = createDeferred<{ read: boolean }>();
+        const { getInstalledPluginUiClientExecutableComposition } = await import('@/components/plugins/reactNative/clientExecutableContributions');
+        const composition = getInstalledPluginUiClientExecutableComposition();
+        const registerAccountRead = async () => {
+            const { resolveProjectedPluginUiClientExecutables } = await import('@/components/plugins/reactNative/clientExecutableProjection');
+            const { getInstalledPluginReactNativeBundleCache } = await import('@/components/plugins/reactNative/bundleCache');
+            const executable = resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: accountProjection }, platform: 'web' })[0];
+            if (!executable) throw new Error('Expected real Account executable projection');
+            await composition.unload();
+            expect((await composition.reconcile([{ ...executable, identity: executable.cacheIdentity,
+                cache: getInstalledPluginReactNativeBundleCache(), accountLifetime: lifetime, isCurrent: () => true,
+                backend: { backendId: 'commonJs', available: true,
+                    // Artifact evaluation is the system boundary; admission,
+                    // registration, requester custody and abort stay real.
+                    loadInstalledBundle: async () => ((api: import('@happier-dev/plugin-sdk').PluginAccountApi) => {
+                        api.actions.register('read-page', async (_input, context) => {
+                            enteredSignals.push(context.signal);
+                            return await accountRead.promise;
+                        });
+                    }) as import('../reactNative/loader').PluginReactNativeExecutableExport,
+                },
+            }])).map(attempt => attempt.result)).toEqual([{ ok: true }]);
+        };
+        // The retained callee already exists. Only requester Availability goes
+        // unobserved; no descriptor, Action, factory or custody changes on return.
+        if (retainedAccountRequester) await registerAccountRead();
+        clearPluginAccountAvailabilityProjection();
+        let requesterMounted = false;
+        function AccountRead() {
+            const hostApi = usePluginHostApi();
+            const { pending, ready, revision } = usePluginHostReadiness(false);
+            React.useEffect(() => {
+                requesterMounted = true;
+                return () => { requesterMounted = false; };
+            }, []);
+            React.useEffect(() => {
+                if (pending || ready === false) return;
+                attempts.push('read');
+                void hostApi.executeAction({ pluginId, localId: 'read-page' }, {})
+                    .then(value => outcomes.push(value), error => outcomes.push(error));
+            }, [hostApi, pending, ready, revision]);
+            return null;
+        }
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(AccountRead) };
+        const { PluginSettingsPageHost, PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const render = () => <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection,
+            pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: null,
+            serverId: 'server_1', platform: 'web', accountLifetime: lifetime, reloadConnectedAccountProjection() {},
+            clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {},
+        }}>{surface !== 'app-page'
+            ? <PluginSettingsPageHost page={projection.settingsPagesById[pageId]!} pluginUiProjection={projection} platform="web"
+                reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />
+            : <PluginSurfacePlacementHost placement={projection.surfacePlacementsById[placementId]!} pluginUiProjection={projection} platform="web"
+                reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />}</AppShellPluginUiProjectionValueProvider>;
+        const screen = await renderScreen(render());
+        try {
+            if (!retainedAccountRequester) await vi.waitFor(() => expect(reactNativeSurfaceProps.length).toBeGreaterThan(0));
+            await flushHookEffects({ cycles: 3, turns: 2 });
+            expect(attempts).toEqual([]);
+            expect(outcomes).toEqual([]);
+            if (!hasMachineRequester) {
+                await act(async () => { replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
+                    availabilityCursor: 0, intentReads: [], materializations: [], snapshots: [], inventoryComplete: true,
+                } }); });
+                await flushHookEffects({ cycles: 3, turns: 2 });
+                // A real Account lifetime and a loaded empty selection do not
+                // manufacture a caller from a Machine-less declaration.
+                expect(attempts).toEqual([]);
+            }
+            await act(async () => { publish(); });
+            await flushHookEffects({ cycles: 3, turns: 2 });
+            // Availability knows the final requester before the parent union
+            // publishes that same custody on this mounted descriptor.
+            if (!retainedAccountRequester) {
+                expect(attempts).toEqual([]);
+                await registerAccountRead();
+            }
+            projection = accountProjection;
+            await screen.update(render());
+            await vi.waitFor(() => expect(enteredSignals).toHaveLength(1));
+            expect(attempts).toEqual(['read']);
+            expect(enteredSignals[0]!.aborted).toBe(false);
+            await screen.update(render());
+            expect(enteredSignals[0]!.aborted).toBe(false);
+            accountRead.resolve({ read: true });
+            await vi.waitFor(() => expect(outcomes).toEqual([{ read: true }]));
+            expect(attempts).toEqual(['read']);
+            await act(async () => { retirePluginAccountAvailabilityProjection([pluginId]); });
+            // Canonical withdrawal removes the renderer rather than publishing
+            // another context to the retired adapter's last recorded props.
+            await vi.waitFor(() => expect(requesterMounted).toBe(false));
+            expect(attempts).toEqual(['read']);
+        } finally { await screen.unmount(); await composition.unload(); }
     });
 
     it('retains generic Composer handlers while an empty Machine projection first becomes ready', async () => {

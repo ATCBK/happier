@@ -432,6 +432,8 @@ export type BoundPluginSurfaceController = Readonly<{
     interactive: boolean;
     /** The same current daemon admission used by contributed Action dispatch, without recording use. */
     canInteractWithDaemon: () => boolean;
+    /** The exact caller binding consumed by dispatch, independent of daemon reachability. */
+    isRequesterAdmitted: () => boolean;
     /**
      * EU-4b: observe the live resource invalidations this mount's
      * `watchResource` handler produces. The transport publishes here; the
@@ -887,6 +889,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             // host separately keeps an offline exact target presentation-inert.
             interactive: hostApi.installedMethods.length > 0,
             canInteractWithDaemon: () => false,
+            isRequesterAdmitted: () => false,
             // This context-only facade never admits capture viewings.
             readLiveStreamViewing: () => null,
             subscribeResourceInvalidations: () => () => {},
@@ -1491,6 +1494,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         },
         interactive: hostApi.installedMethods.length > 0,
         canInteractWithDaemon: () => isInteractionCurrent() && isDaemonInteractionEnabled(false),
+        isRequesterAdmitted: () => callerBinding !== null && isInteractionCurrent(),
         subscribeResourceInvalidations: (listener) => {
             resourceInvalidationListeners.add(listener);
             return () => { resourceInvalidationListeners.delete(listener); };
@@ -1532,6 +1536,11 @@ export function useBoundPluginSurfaceController(input: Readonly<{
 }>): BoundPluginSurfaceController {
     const facts = input.facts;
     const binding = input.binding;
+    // Admission of the exact Account caller changes execution authority. Keep
+    // incidental Availability delivery out of the physical lifetime, but do not
+    // retain a controller whose captured dispatch binding was still absent.
+    const accountCallerAdmitted = facts.accountExecutionOrigin
+        ? resolvePluginSurfaceCallerBinding(facts) !== null : null;
     const machineDisplayNameRef = React.useRef(facts.machineDisplayName);
     machineDisplayNameRef.current = facts.machineDisplayName;
     const executionOriginSelectionKindRef = React.useRef(facts.executionOriginSelectionKind);
@@ -1619,6 +1628,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts.occurrenceId,
             facts.daemonOccurrenceId,
             stableJsonStringify(facts.accountExecutionOrigin ?? null),
+            accountCallerAdmitted,
             facts.readCurrentUiContext,
             stableJsonStringify(facts.executionOrigin ?? null),
             facts.resourceCapability?.readable,
@@ -1672,6 +1682,10 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             if (!controller.isCurrent()) controller.dispose();
         };
     }, [controller]);
+    const connectionPending = facts.isDaemonConnectionPending?.() === true;
+    React.useLayoutEffect(() => {
+        if (!connectionPending) controller.hostApi.notifyConnectionSettled?.();
+    }, [controller, connectionPending, facts.daemonInteractionEnabled]);
     return controller;
 }
 

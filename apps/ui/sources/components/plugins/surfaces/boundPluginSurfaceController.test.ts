@@ -300,7 +300,29 @@ function request(method: string, payload?: unknown) {
 }
 
 describe('BoundPluginSurfaceController (§3.1)', () => {
-    it('classifies host readiness as pending without changing caller refusals or Account activity', async () => {
+    it('answers an external plugin call entered while connecting after the committed connection settles', async () => {
+        const executeContributedAction = vi.fn(async () => ({
+            supported: true as const, result: { ok: true as const, result: { refreshed: true } },
+        }));
+        const hook = await renderHook((connecting: boolean) => useBoundPluginSurfaceController({
+            facts: { ...FACTS, daemonInteractionEnabled: !connecting, isDaemonConnectionPending: () => connecting },
+            binding: { executeContributedAction },
+        }), { initialProps: true });
+        try {
+            const controller = hook.getCurrent();
+            let settled = false;
+            const result = controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' }, {})
+                .then(value => { settled = true; return value; });
+            await act(async () => {});
+            expect(settled).toBe(false);
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            expect(await hook.rerender(false)).toBe(controller);
+            await expect(result).resolves.toEqual({ refreshed: true });
+            expect(executeContributedAction).toHaveBeenCalledTimes(1);
+        } finally { await hook.unmount(); }
+    });
+
+    it('holds host readiness without changing settled caller refusals or Account activity', async () => {
         for (const occurrenceId of [null, FACTS.occurrenceId]) {
             let connecting = true;
             const facts = { ...FACTS, occurrenceId, executionOrigin: null, daemonInteractionEnabled: false,
@@ -310,8 +332,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 const invocation = request('executeAction', { action: 'refresh-index', input: {} });
                 const read = () => settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
                 const original = occurrenceId ? 'plugin_surface_contributed_action_unavailable' : 'plugin_mounted_caller_unavailable';
-                expect(await read()).toMatchObject({ kind: 'error', payload: { code: 'unavailable',
-                    diagnostics: [original, 'plugin_surface_connection_pending'] } });
+                const waiting = read();
                 expect(controller.interactive).toBe(true);
                 expect(controller.hostApi.handleRequest(request('context'))).toMatchObject({ pluginId: FACTS.pluginId });
                 const localInvocation = request('executeAction', { action: 'plugins.reload', input: {} });
@@ -323,6 +344,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 // The same refusal during an actual outage is terminal. A code
                 // allowlist alone cannot infer that a host is still connecting.
                 connecting = false;
+                controller.hostApi.notifyConnectionSettled?.();
+                expect(await waiting).toMatchObject({ kind: 'error', payload: { code: 'unavailable', diagnostics: [original] } });
                 expect(await read()).toMatchObject({ kind: 'error', payload: { code: 'unavailable', diagnostics: [original] } });
             } finally { controller.dispose(); }
         }
@@ -416,10 +439,11 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         const controller = createBoundPluginSurfaceController({ facts, binding: { executeContributedAction } });
         try {
             const waiting = request('executeAction', { action: 'refresh-index', input: {} });
-            await expect(settlePluginSurfaceHostApiRequest(waiting, () => controller.hostApi.handleRequest(waiting)))
-                .resolves.toMatchObject({ kind: 'error', payload: { code: 'unavailable',
-                    diagnostics: expect.arrayContaining(['plugin_surface_connection_pending']) } });
+            const waitingResult = settlePluginSurfaceHostApiRequest(waiting, () => controller.hostApi.handleRequest(waiting));
             pending = false;
+            controller.hostApi.notifyConnectionSettled?.();
+            await expect(waitingResult).resolves.toMatchObject({ kind: 'error', payload: { code: 'timeout',
+                diagnostics: expect.arrayContaining(['targeted_contributions_timeout']) } });
             for (const [method, payload] of [
                 ['executeAction', { action: 'refresh-index', input: {} }],
                 ['readResource', { resource: 'status' }],
