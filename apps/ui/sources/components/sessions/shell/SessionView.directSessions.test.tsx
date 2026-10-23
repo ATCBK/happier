@@ -111,6 +111,8 @@ const machineDirectSessionTakeoverSpy = vi.hoisted(() => vi.fn<(input: unknown) 
 const machineDirectSessionTakeoverPersistSpy = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ ok: true })));
 let agentTransitionResult: 'accepted' | 'outcome_unknown' = 'accepted';
 let inputPermissionCapability: 'supported' | 'unknown' = 'supported';
+let usageLimitBoundaryStatus: 'ready' | 'resumed' | 'switch_applied' | 'switch_observed' | 'cancelled' | 'not_found' | null = null;
+let resetCreditBoundaryFailure: 'rejected' | 'transport_error' | null = null;
 let connectedAccountProjection: ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse> | null = null;
 let pendingProjectionReceipt: ReturnType<typeof createDeferred<ReturnType<typeof DaemonContributionRegistryProjectionDescribeResponseSchema.parse>>> | null = null;
 let modelTransitionReply: ((request: Extract<SessionModelTransitionRequestV1, { selection: unknown }>) =>
@@ -186,31 +188,31 @@ const sessionUsageLimitCheckNowSpy = vi.hoisted(() =>
   vi.fn<
     (
       _sessionId: string,
-      _opts?: unknown,
+      _opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitCheckNow>[1],
     ) => Promise<{
       ok: true;
-      status?: 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+      status?: SessionUsageLimitRecoveryOperationResultV1['status'];
     } | {
       ok: false;
       error: string;
       errorCode?: string;
     }>
-  >(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+  >(async (_sessionId: string, _opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitCheckNow>[1]) => ({ ok: true })),
 );
 const sessionUsageLimitSwitchAccountNowSpy = vi.hoisted(() =>
   vi.fn<
     (
       _sessionId: string,
-      _opts?: unknown,
+      _opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitSwitchAccountNow>[1],
     ) => Promise<{
       ok: true;
-      status?: 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+      status?: SessionUsageLimitRecoveryOperationResultV1['status'];
     } | {
       ok: false;
       error: string;
       errorCode?: string;
     }>
-  >(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+  >(async (_sessionId: string, _opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitSwitchAccountNow>[1]) => ({ ok: true })),
 );
 const sessionUsageLimitConsumeResetCreditSpy = vi.hoisted(() =>
   vi.fn<
@@ -582,9 +584,9 @@ vi.mock('@/sync/ops/sessionUsageLimitRecovery', () => ({
     sessionUsageLimitWaitResumeEnableSpy(sessionId, request, opts),
   sessionUsageLimitWaitResumeCancel: (sessionId: string, opts?: unknown) =>
     sessionUsageLimitWaitResumeCancelSpy(sessionId, opts),
-  sessionUsageLimitCheckNow: (sessionId: string, opts?: unknown) =>
+  sessionUsageLimitCheckNow: (sessionId: string, opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitCheckNow>[1]) =>
     sessionUsageLimitCheckNowSpy(sessionId, opts),
-  sessionUsageLimitSwitchAccountNow: (sessionId: string, opts?: unknown) =>
+  sessionUsageLimitSwitchAccountNow: (sessionId: string, opts?: Parameters<typeof import('@/sync/ops/sessionUsageLimitRecovery').sessionUsageLimitSwitchAccountNow>[1]) =>
     sessionUsageLimitSwitchAccountNowSpy(sessionId, opts),
   sessionUsageLimitConsumeResetCredit: (sessionId: string, opts?: unknown) =>
     sessionUsageLimitConsumeResetCreditSpy(sessionId, opts),
@@ -764,7 +766,15 @@ installDisconnectedServerSocketBoundary((socket: Socket, serverUrl) => {
       if (confirmedRestartUnsupported && method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND) {
         return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
       }
-      if (pendingRestartReceipt && (method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
+      if (usageLimitBoundaryStatus && (method === SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW
+        || method === RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)) {
+        result = usageLimitBoundaryStatus === 'cancelled' || usageLimitBoundaryStatus === 'not_found'
+          ? { ok: false, status: usageLimitBoundaryStatus, errorCode: usageLimitBoundaryStatus === 'cancelled' ? 'session_rpc_cancelled' : 'usage_limit_issue_unavailable', sessionId: 's1' }
+          : { ok: true, status: usageLimitBoundaryStatus, sessionId: 's1' };
+      } else if (resetCreditBoundaryFailure && method === RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME) {
+        if (resetCreditBoundaryFailure === 'transport_error') throw new Error('connection_lost');
+        result = { ok: false, errorCode: 'no_recovery_credit_available', error: 'no_recovery_credit_available' };
+      } else if (pendingRestartReceipt && (method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
         || method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2
         || method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND)) {
         const { socketRpcCodec } = await import('@happier-dev/sync-client');
@@ -2215,6 +2225,8 @@ describe('SessionView (direct sessions)', () => {
     getSessionRunnerRuntimeStatusSpy.mockReset();
     getSessionRunnerRuntimeStatusSpy.mockResolvedValue(null);
     sessionRunnerRuntimeStatusRetention.clearForTests();
+    usageLimitBoundaryStatus = null;
+    resetCreditBoundaryFailure = null;
     connectedServiceQuotaRecoveryCreditConsumeSpy.mockReset();
     connectedServiceQuotaRecoveryCreditConsumeSpy.mockResolvedValue({ ok: false, errorCode: 'no_recovery_credit_available', error: 'no_recovery_credit_available' });
     machineDirectSessionTakeoverSpy.mockReset();
@@ -3207,11 +3219,21 @@ describe('SessionView (direct sessions)', () => {
     expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
   });
 
-  it('clears the stale usage-limit warning when an active check-now resumes the provider runtime', async () => {
+  it.each([
+    ['ready', 'session.usageLimitRecovery.status.resumeReady'],
+    ['resumed', 'session.usageLimitRecovery.status.waiting'],
+    ['cancelled', 'session.usageLimitRecovery.status.ready'],
+    ['not_found', 'session.usageLimitRecovery.status.ready'],
+  ] as const)('keeps the usage-limit warning actionable after an active check-now returns %s', async (status, statusLabel) => {
     installCodexAgentProjection({ capabilities: { sessions: { open: ['resume'], delivery: ['newTurn'], cancel: true, usageLimitRecovery: { active: ['checkNow'], inactive: ['checkNow'] } } } });
     featureEnabledState['sessions.usageLimitRecovery'] = true;
-    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
-    sessionUsageLimitCheckNowSpy.mockResolvedValueOnce({ ok: true, status: 'resumed' });
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
+    const operations = await vi.importActual<typeof import('@/sync/ops/sessionUsageLimitRecovery')>('@/sync/ops/sessionUsageLimitRecovery');
+    sessionUsageLimitCheckNowSpy.mockImplementationOnce(async (...args) => {
+      const result = await operations.sessionUsageLimitCheckNow(...args);
+      return result.ok ? result : { ...result, error: result.errorCode };
+    });
+    usageLimitBoundaryStatus = status;
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
       active: true,
@@ -3235,13 +3257,18 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-checkNow'));
+    await settleDirectSessionView();
 
     expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
     }));
     expect(resumeSessionSpy).not.toHaveBeenCalled();
-    expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeTruthy();
+    expect(findUsageLimitStatusBadge(screen)).toEqual(expect.objectContaining({ label: statusLabel }));
+    if (status === 'ready') expect(screen.findByTestId('session-usageLimit-recovery-resumeNow')).toBeTruthy();
+    if (status === 'cancelled' || status === 'not_found') expect(modalAlertSpy).toHaveBeenCalled();
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
   });
 
   it('does not offer a resume-now action for an active reset-elapsed issue when no interrupted work remains', async () => {
@@ -3276,10 +3303,15 @@ describe('SessionView (direct sessions)', () => {
     expect(screen.findByTestId('session-usageLimit-recovery-resumeNow')).toBeNull();
   });
 
-  it('clears a switchable group usage-limit warning when fallback switching resumes the provider runtime', async () => {
+  it.each(['resumed', 'switch_applied', 'switch_observed'] as const)('keeps a switchable group usage-limit warning after %s until provider confirmation', async (status) => {
     featureEnabledState['sessions.usageLimitRecovery'] = true;
     settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
-    sessionUsageLimitSwitchAccountNowSpy.mockResolvedValueOnce({ ok: true, status: 'resumed' });
+    const operations = await vi.importActual<typeof import('@/sync/ops/sessionUsageLimitRecovery')>('@/sync/ops/sessionUsageLimitRecovery');
+    sessionUsageLimitSwitchAccountNowSpy.mockImplementationOnce(async (...args) => {
+      const result = await operations.sessionUsageLimitSwitchAccountNow(...args);
+      return result.ok ? result : { ...result, error: result.errorCode };
+    });
+    usageLimitBoundaryStatus = status;
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
       active: true,
@@ -3317,7 +3349,8 @@ describe('SessionView (direct sessions)', () => {
       serverId: 'server-route-1',
     }));
     expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
-    expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeTruthy();
+    expect(findUsageLimitStatusBadge(screen)).toEqual(expect.objectContaining({ label: 'session.usageLimitRecovery.status.waiting' }));
   });
 
   it('surfaces switch-account recovery progress while the control request is in flight', async () => {
@@ -4078,6 +4111,35 @@ describe('SessionView (direct sessions)', () => {
       signal: expect.any(AbortSignal),
     });
     expect(sessionUsageLimitConsumeResetCreditSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['rejected', 'transport_error'] as const)('settles checking and preserves retry after Apply reset %s', async (failure) => {
+    featureEnabledState['connectedServices.quotas'] = true;
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    installConnectedServiceWorkProfileRecoveryCreditSession();
+    quotaSnapshotsState.current = {
+      'openai-codex/work': buildOpenAiCodexWorkQuotaSnapshot({
+        fetchedAt: 2_000,
+        used: 82,
+        recoveryCredits: {
+          kind: 'usage_limit_resets',
+          availableCount: 1,
+          credits: [{ kind: 'usage_limit_reset', status: 'available' }],
+        },
+      }),
+    };
+    const operations = await vi.importActual<typeof import('@/sync/ops/connectedServiceQuotaRecoveryCredits')>('@/sync/ops/connectedServiceQuotaRecoveryCredits');
+    connectedServiceQuotaRecoveryCreditConsumeSpy.mockImplementationOnce(operations.connectedServiceQuotaRecoveryCreditConsume);
+    resetCreditBoundaryFailure = failure;
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-consumeResetCredit'));
+    await settleDirectSessionView();
+
+    expect(modalAlertSpy).toHaveBeenCalled();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeTruthy();
+    expect(screen.findByTestId('session-usageLimit-recovery-consumeResetCredit')?.props.disabled).not.toBe(true);
+    expect(findUsageLimitStatusBadge(screen)?.label).not.toBe('session.usageLimitRecovery.status.checking');
   });
 
   it('uses later polled quota after connected-service reset-credit consume returns no snapshot', async () => {

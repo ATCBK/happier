@@ -1,3 +1,4 @@
+import type { SessionUsageLimitRecoveryOperationResultV1 } from '@happier-dev/protocol/sessions/control/sessionUsageLimitRecoveryOperationResultV1';
 import type {
     ConnectedServiceQuotaRecoveryCreditsV1,
     PrimaryTurnStatusV1,
@@ -25,7 +26,34 @@ export type UsageLimitRecoverySettings = Readonly<{
     customResumePrompt?: string;
 }>;
 
-export type UsageLimitRecoveryOperationStatus = 'checking' | 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+export type UsageLimitRecoveryOperationStatus = 'checking' | 'ready' | 'waiting' | 'exhausted' | 'inactive';
+
+/** Control acknowledgements do not prove that the provider accepted another turn. */
+export function resolveSessionUsageLimitRecoveryOperationStatus(
+    status: SessionUsageLimitRecoveryOperationResultV1['status'] | undefined,
+): UsageLimitRecoveryOperationStatus | 'cancelled' | null {
+    switch (status) {
+        case 'ready':
+        case 'already_ready':
+        case 'no_recovery_needed':
+            return 'ready';
+        case 'resumed':
+        case 'switch_attempted':
+        case 'switch_applied':
+        case 'switch_observed':
+        case 'waiting':
+        case 'rate_limited':
+            return 'waiting';
+        case 'exhausted':
+            return 'exhausted';
+        case 'inactive':
+            return 'inactive';
+        case 'cancelled':
+            return 'cancelled';
+        default:
+            return null;
+    }
+}
 
 export type SessionUsageLimitRecoveryActionKind =
     | 'enable'
@@ -335,18 +363,20 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
     if (params.recoveryState?.status === 'cancelled') return null;
     // The failed turn may append its own terminal limit notice after the runtime issue. That
     // activity is part of the same failure, not proof that a later turn recovered.
-    if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus !== 'failed') return null;
-    if (params.latestTurnStatus != null && params.latestTurnStatus !== 'failed') return null;
+    if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus === 'in_progress') return null;
+    if (params.latestTurnStatus != null
+        && params.latestTurnStatus !== 'failed'
+        && params.latestTurnStatus !== 'cancelled'
+        && params.latestTurnStatus !== 'in_progress') return null;
 
     const resetAtMs = readUsageLimitResetAtMs(lastRuntimeIssue, params.recoveryState);
     const ready = params.operationStatus === 'ready'
-        || params.operationStatus === 'resumed'
         || (
             params.hasInterruptedWorkToResume === true
             && hasResetElapsed(resetAtMs, params.nowMs)
         );
     const checking = !ready && params.operationStatus === 'checking';
-    const waiting = checking || (!ready && isActiveRecoveryStatus(params.recoveryState?.status));
+    const waiting = checking || (!ready && (params.operationStatus === 'waiting' || isActiveRecoveryStatus(params.recoveryState?.status)));
     const checkNowSupported = params.checkNowSupported === true;
     const recoveryCreditSummary = summarizeConnectedServiceQuotaRecoveryCredits(
         params.recoveryCredits ?? params.recoveryState?.recoveryCredits ?? null,
@@ -357,7 +387,7 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
         issue: lastRuntimeIssue,
         recoveryState: params.recoveryState,
         ready,
-        waiting,
+        waiting: isActiveRecoveryStatus(params.recoveryState?.status),
         checkNowSupported,
     });
     const title = ready

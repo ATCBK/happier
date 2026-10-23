@@ -300,7 +300,7 @@ import { buildStructuredInputMetaOverrides, mergeMessageMetaOverrides } from "@/
 import { type SessionAuthSurfaceState } from "@/components/sessions/shell/sessionAuthSurfaceState";
 import { selectSessionViewShellSessionForRouteState } from "@/components/sessions/shell/sessionViewStableSession";
 import { useSessionRuntimeStatusSource } from "@/components/sessions/shell/useSessionRuntimeStatusSource";
-import { SESSION_USAGE_LIMIT_RECOVERY_BADGE_KEY, buildSessionUsageLimitRecoveryPresentation, isSessionUsageLimitRecoveryCheckNowAction, isSessionUsageLimitRecoveryCheckingOperationAction, readSessionUsageLimitRecoveryFromMetadata, type SessionUsageLimitRecoveryActionKind, type SessionUsageLimitRecoveryTranslate, type SessionUsageLimitRecoveryTranslationParams, type SessionUsageLimitRecoveryState, type UsageLimitRecoveryOperationStatus, type UsageLimitRecoverySettings } from "@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryPresentation";
+import { SESSION_USAGE_LIMIT_RECOVERY_BADGE_KEY, buildSessionUsageLimitRecoveryPresentation, resolveSessionUsageLimitRecoveryOperationStatus, isSessionUsageLimitRecoveryCheckNowAction, isSessionUsageLimitRecoveryCheckingOperationAction, readSessionUsageLimitRecoveryFromMetadata, type SessionUsageLimitRecoveryActionKind, type SessionUsageLimitRecoveryTranslate, type SessionUsageLimitRecoveryTranslationParams, type SessionUsageLimitRecoveryState, type UsageLimitRecoveryOperationStatus, type UsageLimitRecoverySettings } from "@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryPresentation";
 import { hasMeaningfulActivityAfterRuntimeIssue } from "@/components/sessions/usageLimitRecovery/sessionUsageLimitActivityStaleness";
 import { SessionUsageLimitRecoveryBanner } from "@/components/sessions/usageLimitRecovery/SessionUsageLimitRecoveryBanner";
 import { buildSessionNearLimitPresentation, dismissSessionNearLimit, readDismissedSessionNearLimitKeys } from "@/components/sessions/usageLimitRecovery/sessionNearLimitPresentation";
@@ -446,6 +446,7 @@ function connectedServiceQuotaSnapshotMatchesProfileRef(
     );
 }
 
+
 const EMPTY_AGENT_INPUT_STATUS_BADGES: readonly AgentInputStatusBadge[] = Object.freeze([]);
 
 const translateUsageLimitRecoveryPresentationKey: SessionUsageLimitRecoveryTranslate = (key, ...params) => {
@@ -479,31 +480,6 @@ function readUsageLimitRecoveryDiagnosticProfileActionRoute(
         },
         getConnectedServiceRegistrySnapshot().entries,
     );
-}
-
-function isUsageLimitRecoveryResolvedStatus(
-    status: SessionUsageLimitRecoveryOperationResult['status'] | undefined,
-): boolean {
-    return status === 'ready'
-        || status === 'resumed'
-        || status === 'cancelled'
-        || status === 'already_ready'
-        || status === 'no_recovery_needed'
-        || status === 'switch_applied'
-        || status === 'switch_observed';
-}
-
-function readUsageLimitRecoveryDisplayStatus(
-    status: SessionUsageLimitRecoveryOperationResult['status'] | undefined,
-): UsageLimitRecoveryOperationStatus | null {
-    if (status === 'waiting'
-        || status === 'exhausted'
-        || status === 'inactive'
-    ) {
-        return status;
-    }
-    if (status === 'rate_limited') return 'waiting';
-    return null;
 }
 
 const connectedServiceQuotaGaugeFormatter: ConnectedServiceQuotaGaugeLabelFormatter = {
@@ -2438,6 +2414,17 @@ export function useSessionComposerController({
             status,
         });
     }, [usageLimitRecoveryPresentation]);
+    const applyUsageLimitRecoveryOperationStatus = React.useCallback((result: SessionUsageLimitRecoveryOperationResult): boolean => {
+        const status = resolveSessionUsageLimitRecoveryOperationStatus(result.status);
+        if (status === 'cancelled') {
+            if (!result.ok) return false;
+            markUsageLimitRecoveryIssueResolved();
+            return true;
+        }
+        if (!status) return false;
+        markCurrentUsageLimitRecoveryOperationStatus(status);
+        return true;
+    }, [markCurrentUsageLimitRecoveryOperationStatus, markUsageLimitRecoveryIssueResolved]);
     const { execute: executeRecoveryAction } = useMountedActionExecution(sessionAccountScope, { openOnRequest: true });
     const executeUsageLimitRecoveryAction = React.useCallback(async (
         actionId: 'session.usageLimit.checkNow' | 'session.usageLimit.waitResume.enable'
@@ -2561,34 +2548,26 @@ export function useSessionComposerController({
                     });
                     if (!result.ok) {
                         setUsageLimitRecoveryOperationStatus(null);
-                        await showUsageLimitRecoveryOperationFailure(result);
+                        if (!applyUsageLimitRecoveryOperationStatus(result)) await showUsageLimitRecoveryOperationFailure(result);
                         return;
                     }
-                    if (isUsageLimitRecoveryResolvedStatus(result.status)) {
-                        if (result.status === 'ready') {
-                            await handleReadyUsageLimitRecoveryResult({
-                                sessionActive: session.active === true,
-                                resumeInactiveSession: async () => (
-                                    await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: true }) === true
-                                ),
-                                markResolved: markUsageLimitRecoveryIssueResolved,
-                                markReady: () => markCurrentUsageLimitRecoveryOperationStatus('ready'),
-                            });
-                            return;
-                        }
-                        markUsageLimitRecoveryIssueResolved();
+                    if (resolveSessionUsageLimitRecoveryOperationStatus(result.status) === 'ready') {
+                        await handleReadyUsageLimitRecoveryResult({
+                            sessionActive: session.active === true,
+                            resumeInactiveSession: async () => (
+                                await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: true }) === true
+                            ),
+                            markReady: () => markCurrentUsageLimitRecoveryOperationStatus('ready'),
+                        });
                         return;
                     }
-                    const displayStatus = readUsageLimitRecoveryDisplayStatus(result.status);
-                    if (displayStatus) {
-                        markCurrentUsageLimitRecoveryOperationStatus(displayStatus);
-                    }
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
                     return;
                 }
 
                 const resumed = await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: false });
                 if (resumed) {
-                    markUsageLimitRecoveryIssueResolved();
+                    markCurrentUsageLimitRecoveryOperationStatus('waiting');
                 } else {
                     setUsageLimitRecoveryOperationStatus(null);
                 }
@@ -2603,13 +2582,13 @@ export function useSessionComposerController({
                 });
                 if (!result.ok) {
                     setUsageLimitRecoveryOperationStatus(null);
-                    await showUsageLimitRecoveryOperationFailure(result);
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) await showUsageLimitRecoveryOperationFailure(result);
                 } else {
                     const saved = await executeRecoveryAction('settings.set', {
                         anchor: SESSION_PROVIDER_LIMITS_SETTINGS.settings.autoWait.anchor, value: true,
                     }, { defaultSessionId: sessionId, signal: sessionViewCaller.signal });
                     if (!saved.ok) await showUsageLimitRecoveryOperationFailure(saved);
-                    setUsageLimitRecoveryOperationStatus(null);
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
                 }
                 return;
             }
@@ -2624,7 +2603,7 @@ export function useSessionComposerController({
                 });
                 if (!result.ok) {
                     setUsageLimitRecoveryOperationStatus(null);
-                    await showUsageLimitRecoveryOperationFailure(result);
+                    if (!applyUsageLimitRecoveryOperationStatus(result)) await showUsageLimitRecoveryOperationFailure(result);
                     return;
                 }
                 const saved = await executeRecoveryAction('settings.set', {
@@ -2635,28 +2614,16 @@ export function useSessionComposerController({
                     await showUsageLimitRecoveryOperationFailure(saved);
                     return;
                 }
-                if (isUsageLimitRecoveryResolvedStatus(result.status)) {
-                    markUsageLimitRecoveryIssueResolved();
-                } else {
-                    const displayStatus = readUsageLimitRecoveryDisplayStatus(result.status);
-                    if (displayStatus) {
-                        markCurrentUsageLimitRecoveryOperationStatus(displayStatus);
-                    } else {
-                        setUsageLimitRecoveryOperationStatus(null);
-                    }
-                }
+                if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
                 return;
             }
 
             if (kind === 'consume_reset_credit' && connectedServiceQuotaProfileIdentity && connectedServiceQuotaProfileKey) {
-                const consumed = await consumeConnectedServiceRecoveryCreditForProfile({
+                await consumeConnectedServiceRecoveryCreditForProfile({
                     profileRef: connectedServiceQuotaProfileIdentity,
                     profileKey: connectedServiceQuotaProfileKey,
                     snapshotFetchedAtMs: connectedServiceQuotaSnapshot?.fetchedAt ?? null,
                 });
-                if (consumed) {
-                    setUsageLimitRecoveryOperationStatus(null);
-                }
                 return;
             }
 
@@ -2694,7 +2661,7 @@ export function useSessionComposerController({
                             });
             if (!result.ok) {
                 setUsageLimitRecoveryOperationStatus(null);
-                await showUsageLimitRecoveryOperationFailure(result);
+                if (!applyUsageLimitRecoveryOperationStatus(result)) await showUsageLimitRecoveryOperationFailure(result);
                 return;
             }
             if (usageLimitRecoveryPresentation.banner.temporaryThrottle) {
@@ -2702,28 +2669,9 @@ export function useSessionComposerController({
                 setUsageLimitRecoveryOperationStatus(null);
                 return;
             }
-            if ((isSessionUsageLimitRecoveryCheckNowAction(kind) || isUsageLimitRecoverySwitchAction(kind)) && result.status) {
-                if (isUsageLimitRecoveryResolvedStatus(result.status)) {
-                    markUsageLimitRecoveryIssueResolved();
-                    return;
-                }
-                const displayStatus = readUsageLimitRecoveryDisplayStatus(result.status);
-                if (displayStatus) {
-                    markCurrentUsageLimitRecoveryOperationStatus(displayStatus);
-                }
-            } else if (kind === 'cancel' || kind === 'enable') {
-                if (isUsageLimitRecoveryResolvedStatus(result.status)) {
-                    markUsageLimitRecoveryIssueResolved();
-                } else {
-                    const displayStatus = readUsageLimitRecoveryDisplayStatus(result.status);
-                    if (displayStatus) {
-                        markCurrentUsageLimitRecoveryOperationStatus(displayStatus);
-                    } else {
-                        setUsageLimitRecoveryOperationStatus(null);
-                    }
-                }
-            }
+            if (!applyUsageLimitRecoveryOperationStatus(result)) setUsageLimitRecoveryOperationStatus(null);
         } finally {
+            setUsageLimitRecoveryOperationStatus((current) => current?.status === 'checking' ? null : current);
             usageLimitRecoveryPendingActionRef.current = false;
             setUsageLimitRecoveryPendingAction(null);
         }
@@ -2731,6 +2679,7 @@ export function useSessionComposerController({
         accountProfile?.connectedServicesV2,
         markCurrentUsageLimitRecoveryOperationStatus,
         markUsageLimitRecoveryIssueResolved,
+        applyUsageLimitRecoveryOperationStatus,
         connectedServiceQuotaProfileKey,
         connectedServiceQuotaProfileIdentity,
         connectedServiceQuotaSnapshot?.fetchedAt,
@@ -2787,14 +2736,7 @@ export function useSessionComposerController({
                 await Modal.alert(t('common.error'), formatUsageLimitRecoveryOperationError(result));
                 return;
             }
-            if (isUsageLimitRecoveryResolvedStatus(result.status)) {
-                markUsageLimitRecoveryIssueResolved();
-                return;
-            }
-            const displayStatus = readUsageLimitRecoveryDisplayStatus(result.status);
-            if (displayStatus) {
-                markCurrentUsageLimitRecoveryOperationStatus(displayStatus);
-            }
+            applyUsageLimitRecoveryOperationStatus(result);
         } finally {
             setProviderUsageRecoveryCreditPending(false);
         }
@@ -2804,6 +2746,7 @@ export function useSessionComposerController({
         handleUsageLimitRecoveryAction,
         markCurrentUsageLimitRecoveryOperationStatus,
         markUsageLimitRecoveryIssueResolved,
+        applyUsageLimitRecoveryOperationStatus,
         providerAccountUsageSnapshot?.providerId,
         providerUsageConnectedServiceQuotaProfileRef,
         providerUsageGauge?.recoveryCreditSummary,

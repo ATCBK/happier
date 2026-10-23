@@ -777,18 +777,27 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         })).toBeNull();
     });
 
-    it('keeps the recovery banner visible while the runtime is working again without proven activity', () => {
+    it.each(['in_progress', 'cancelled'] as const)('keeps unproven recovery visible when the latest lifecycle is %s', (latestTurnStatus) => {
         // Honesty: runtimeWorking (a live thinking signal after a local switch) is NOT
         // provider-outcome proof, so an unproven recovery must stay visible until real activity.
         expect(buildSessionUsageLimitRecoveryPresentation({
             featureEnabled: true,
             lastRuntimeIssue: usageLimitIssue,
-            latestTurnStatus: 'failed',
+            latestTurnStatus,
             runtimeWorking: true,
             recoveryState: null,
             settings: { v: 1, mode: 'ask' },
             translate: translateUsageLimitRecoveryKeyForTest,
         })).not.toBeNull();
+    });
+
+    it('hides recovery only after a later in-progress turn produces meaningful activity', () => {
+        expect(buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true, lastRuntimeIssue: usageLimitIssue,
+            latestTurnStatus: 'in_progress', hasActivityAfterRuntimeIssue: true,
+            recoveryState: null, settings: { v: 1, mode: 'ask' },
+            translate: translateUsageLimitRecoveryKeyForTest,
+        })).toBeNull();
     });
 
     it('keeps the current failed recovery visible when the provider emits its terminal limit notice', () => {
