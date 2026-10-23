@@ -173,7 +173,7 @@ export async function openProject(input: OpenProjectInputV1, runtime: ProjectOpe
         selector = admitted.selector; ref = admitted.ref; subdir = admitted.subdir;
         sourceProvenance = { sourceId: input.source.id, revision: admitted.sourceRevision };
       }
-      const snapshot = await readProjectAccountRows(requester.rows);
+      const snapshot = await readProjectAccountRows({ ...requester.rows, selection: { kinds: ['workspace-ref'] } });
       let sourceDirectory: string | undefined;
       let sourceRootPath: string | undefined;
       let sourceMachineId = runtime.machineId;
@@ -452,7 +452,7 @@ export async function materializeProjectSyncOnSource(input: OpenProjectInputV1, 
         const admitted = await admitOpenSource({ ...input, source: input.source }, runtime, requester, context);
         if (admitted.kind === 'refused') return refused(admitted.code);
       }
-      const snapshot = await readProjectAccountRows(requester.rows);
+      const snapshot = await readProjectAccountRows({ ...requester.rows, selection: { kinds: ['workspace-ref'] } });
       const selected = input.source.kind === 'workspace'
         ? input.source.checkout ?? { serverId: runtime.serverId, id: input.source.workspaceId }
         : input.source.kind === 'source' ? input.source.checkout : undefined;

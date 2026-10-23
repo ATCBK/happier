@@ -4,13 +4,14 @@ import axios from 'axios';
 
 import {
   PROJECT_ACCOUNT_ROWS_ROUTE_V1,
-  ProjectAccountRowListResponseV1Schema, ProjectAccountRowMutationRequestV1Schema,
+  ProjectAccountRowListResponseV1Schema, ProjectAccountRowReadResponseV1Schema, ProjectAccountRowMutationRequestV1Schema,
   ProjectAccountRowMutationResponseV1Schema,
   assertProjectAccountRowPayloadBindingV1,
   buildProjectAccountRowPhysicalKeyV1,
   type ProjectAccountRowKeyV1, type ProjectAccountRowPayloadV1,
   type ProjectAccountRowContentV1, type ProjectAccountOrganizationV1,
   type ProjectAccountRowMutationRequestV1, type ProjectAccountRowMutationResponseV1,
+  type ProjectAccountRowListRequestV1, type ProjectAccountRowV1,
 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import {
   assertProjectAccountSnapshotTransition, parseProjectAccountSnapshotV1,
@@ -95,6 +96,10 @@ export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials
     publication?: 'installed';
     /** A host-owned effect also retains its captured Machine/lifecycle authority at each HTTP admission. */
     assertCurrentAuthority?: () => Promise<void> }>;
+export type ProjectAccountRowsReadInput = ProjectAccountRowsInput & Readonly<{
+  /** Exact/domain reads may refresh an existing same-scope census, never establish one. */
+  selection?: ProjectAccountRowListRequestV1 | Readonly<{ key: ProjectAccountRowKeyV1 }>;
+}>;
 export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; sessionCustody?: ProjectAccountSessionCustody; accountAuthorization?: never }>
   | Readonly<{ credentials?: never; accountAuthorization: ExternalActionExecutionAuthorizationV1 }>;
 
@@ -142,7 +147,20 @@ function canPublish(input: ReadInput): boolean {
   return !input.authorization && !input.sessionCustody
     && (input.publication === 'installed' || active?.scopeKey === scopeKey(input));
 }
-function acceptSnapshot(input: ReadInput, snapshot: ActiveProjectAccountRowsSnapshot) {
+async function withSnapshotReadFailurePolicy<T>(input: ReadInput, read: () => Promise<T>): Promise<T> {
+  try { return await read(); }
+  catch (error) {
+    // Transient refresh failure retains accepted rows; hard admission/content refusal withdraws them.
+    if (!classifyServerEndpointError(error).retryable
+      && canPublish(input) && (!active || active.scopeKey === scopeKey(input))) withdrawActiveProjectAccountRowsSnapshot();
+    throw error;
+  }
+}
+function acceptSnapshot(input: ProjectAccountRowsReadInput, snapshot: ActiveProjectAccountRowsSnapshot) {
+  if (input.selection) {
+    if (canPublish(input) && active?.scopeKey === snapshot.scopeKey) publish(snapshot);
+    return snapshot;
+  }
   return canPublish(input) ? publish(snapshot) : snapshot;
 }
 function headers(credentials: StoredCredentials) {
@@ -242,19 +260,33 @@ export async function mutateProjectAccountRows(input: ReadInput & Readonly<{
     return result;
   });
 }
-async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee'): Promise<ActiveProjectAccountRowsSnapshot> {
-  const path = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
-  const response = await axios.post(`${baseUrl(input)}${path}`, {}, {
-    headers: await requestHeaders(input, path, {}), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
+async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee', selection: NonNullable<ProjectAccountRowsReadInput['selection']> = {}): Promise<ActiveProjectAccountRowsSnapshot> {
+  const path = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/${'key' in selection ? 'read' : 'list'}`;
+  const response = await axios.post(`${baseUrl(input)}${path}`, selection, {
+    headers: await requestHeaders(input, path, selection), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
   });
   // The predecessor Home has no Project-row route. Keep unsupported distinct
   // from an empty census; explicit accepted Project addresses must still refuse.
   if (response.status === 404) throw rowError('project_account_rows_unsupported');
   if (response.status !== 200) throw createHttpStatusError(response.status, 'Project rows are unavailable', 'project_account_rows_unavailable');
-  const result = ProjectAccountRowListResponseV1Schema.parse(response.data);
-  if (result.status !== 'listed') throw rowError(`project_account_rows_${result.status}`);
+  let selectedRows: readonly ProjectAccountRowV1[];
+  if ('key' in selection) {
+    const result = ProjectAccountRowReadResponseV1Schema.parse(response.data);
+    if (result.status === 'present') {
+      if (buildProjectAccountRowPhysicalKeyV1(result.row.key) !== buildProjectAccountRowPhysicalKeyV1(selection.key)) {
+        throw rowError('project_account_row_invalid');
+      }
+      selectedRows = [result.row];
+    } else if (result.status === 'deleted') selectedRows = [{ key: selection.key, revision: result.revision, content: null }];
+    else if (result.status === 'absent') selectedRows = [];
+    else throw rowError(`project_account_rows_${result.status}`);
+  } else {
+    const result = ProjectAccountRowListResponseV1Schema.parse(response.data);
+    if (result.status !== 'listed') throw rowError(`project_account_rows_${result.status}`);
+    selectedRows = result.rows;
+  }
   await assertRequesterCurrent(input);
-  const rows = result.rows.map(row => ({ key: row.key, revision: row.revision, payload: row.content === null ? null : openRow(row.key, row.content, mode, input) }));
+  const rows = selectedRows.map(row => ({ key: row.key, revision: row.revision, payload: row.content === null ? null : openRow(row.key, row.content, mode, input) }));
   return projectSnapshotFromRows(rows, scopeKey(input));
 }
 function projectSnapshotFromRows(rows: readonly OpenedProjectAccountRow[], scopeKey: string): ActiveProjectAccountRowsSnapshot {
@@ -295,18 +327,17 @@ export type ProjectAccountRowsObservation = Readonly<{
   isCurrent(): Promise<boolean>;
 }>;
 
-export async function readProjectAccountRowsObservation(input: ReadInput): Promise<ProjectAccountRowsObservation> {
+export async function readProjectAccountRowsObservation(input: ProjectAccountRowsReadInput): Promise<ProjectAccountRowsObservation> {
   const bound = { ...input, serverId: input.serverId ?? input.authorization?.requesterAccountProjection?.serverId ?? configuration.activeServerId };
   const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
     bound.authorization?.binding.actionId ?? '', bound.authorization?.binding.requestId, stage, operation);
-  return await runWithServerHttpBaseUrl(baseUrl(bound), async () => {
-    try {
+  return await runWithServerHttpBaseUrl(baseUrl(bound), () => withSnapshotReadFailurePolicy(bound, async () => {
       input.signal?.throwIfAborted();
       const mode = await trace('project_rows.mode', () => readMode(bound));
-      const snapshot = await trace('project_rows.fetch', () => fetchSnapshot(bound, mode));
+      const snapshot = await trace('project_rows.fetch', () => fetchSnapshot(bound, mode, bound.selection));
       // Source-backed Projects take their current context from shared attachments;
       // the personal organization remains stored but is not their context layer.
-      if (bound.credentials && canPublish(bound)) {
+      if (bound.credentials && !bound.selection && canPublish(bound)) {
         for (const organization of snapshot.organizations) {
           if (snapshot.workspaceRefs.some(ref => ref.serverId === organization.key.serverId
             && ref.projectKey === organization.key.projectKey && ref.source)) continue;
@@ -316,7 +347,7 @@ export async function readProjectAccountRowsObservation(input: ReadInput): Promi
         }
       }
       input.signal?.throwIfAborted();
-      const published = canPublish(bound);
+      const published = !bound.selection && canPublish(bound);
       const accepted = acceptSnapshot(bound, snapshot);
       return { snapshot: accepted, isCurrent: async () => {
         try { await assertRequesterCurrent(bound); }
@@ -327,17 +358,10 @@ export async function readProjectAccountRowsObservation(input: ReadInput): Promi
           && isDeepStrictEqual(active.workspaceRefs, accepted.workspaceRefs)
           && isDeepStrictEqual(active.relationships, accepted.relationships);
       } };
-    } catch (error) {
-      // A failed refresh is not evidence that accepted stored rows disappeared.
-      // Auth, envelope, mode and schema failures still withdraw the projection.
-      if (!classifyServerEndpointError(error).retryable
-        && canPublish(bound) && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
-      throw error;
-    }
-  });
+  }));
 }
 
-export async function readProjectAccountRows(input: ReadInput): Promise<ActiveProjectAccountRowsSnapshot> {
+export async function readProjectAccountRows(input: ProjectAccountRowsReadInput): Promise<ActiveProjectAccountRowsSnapshot> {
   return (await readProjectAccountRowsObservation(input)).snapshot;
 }
 
@@ -391,16 +415,18 @@ export async function mutateProjectAccountOrganization(input: ReadInput & Readon
   mutate(value: ProjectAccountOrganizationV1): ProjectAccountOrganizationV1;
 }>): Promise<Readonly<{ status: 'updated'; key: Extract<ProjectAccountRowKeyV1, { kind: 'project-organization' }>; revision: number; value: ProjectAccountOrganizationV1 }> | Readonly<{ status: 'conflict'; revision: number }>> {
   return await runWithServerHttpBaseUrl(resolveServerHttpBaseUrl(), async () => {
-    const mode = await readMode(input);
-    const snapshot = await fetchSnapshot(input, mode);
     const key = { kind: 'project-organization' as const, serverId: input.serverId, projectKey: input.projectKey };
+    const { mode, snapshot } = await withSnapshotReadFailurePolicy(input, async () => {
+      const mode = await readMode(input);
+      return { mode, snapshot: await fetchSnapshot(input, mode, { key }) };
+    });
     const identity = buildProjectAccountRowPhysicalKeyV1(key);
     const row = snapshot.organizations.find(value => buildProjectAccountRowPhysicalKeyV1(value.key) === identity);
     const observedRevision = snapshot.rows.find(value => buildProjectAccountRowPhysicalKeyV1(value.key) === identity)?.revision ?? 'absent';
     if (input.expectedRevision !== undefined && input.expectedRevision !== observedRevision) return { status: 'conflict', revision: observedRevision === 'absent' ? -1 : observedRevision };
     const value = input.mutate(row?.value ?? {});
     if (row && isDeepStrictEqual(value, row.value)) {
-      acceptSnapshot(input, snapshot);
+      if (active?.scopeKey === snapshot.scopeKey) acceptSnapshot(input, snapshot);
       return { status: 'updated', key, revision: row.revision, value: row.value };
     }
     const result = await submitOpenedRows({ ...input, request: {
@@ -413,7 +439,7 @@ export async function mutateProjectAccountOrganization(input: ReadInput & Readon
     if (!acknowledged?.payload) throw rowError('project_account_row_acknowledgement_invalid');
     const payload = acknowledged.payload;
     if ('id' in payload.value || 'relationships' in payload.value) throw rowError('project_account_row_invalid');
-    acceptSnapshot(input, applyAcknowledgedRows(snapshot, result.openedRows));
+    if (active?.scopeKey === snapshot.scopeKey) acceptSnapshot(input, applyAcknowledgedRows(snapshot, result.openedRows));
     return { status: 'updated', key, revision: acknowledged.revision, value: payload.value };
   });
 }

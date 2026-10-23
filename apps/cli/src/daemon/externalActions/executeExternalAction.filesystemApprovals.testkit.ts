@@ -24,6 +24,7 @@ import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay } from '@hap
 import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionRequestEnvelopeSchema, ExternalActionRequestEnvelopeV1Schema,
   projectExternalActionRunNowIdempotencyKeyV1, type ExternalActionRequestEnvelope } from '@happier-dev/protocol/actions/externalActionApi';
 import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowV1Schema, ProjectAccountRowListResponseV1Schema,
+  ProjectAccountRowReadRequestV1Schema, ProjectAccountRowReadResponseV1Schema,
   ProjectAccountRowMutationResponseV1Schema, buildProjectAccountRowPhysicalKeyV1, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { ProjectSourcesCreateInputV1Schema, ProjectSourcesUpdateInputV1Schema, ProjectSourcesDeleteInputV1Schema, type ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -433,11 +434,17 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       await trustRead;
       return { status: 200, data: { status: 'absent' } };
     }
-    if (path === '/v1/account/project-rows/list') {
+    if (path === '/v1/account/project-rows/list' || path === '/v1/account/project-rows/read') {
       if (changeRequesterRowsBeforePreparation && rpcOutcomes.some(outcome => typeof outcome === 'object'
         && outcome !== null && 'phase' in outcome && outcome.phase === 'installed.prepareBetween')) {
         changeRequesterRowsBeforePreparation();
         changeRequesterRowsBeforePreparation = undefined;
+      }
+      if (path.endsWith('/read')) {
+        const { key } = ProjectAccountRowReadRequestV1Schema.parse(body);
+        const row = (protectedMoveRows ?? rows).find(row => buildProjectAccountRowPhysicalKeyV1(row.key) === buildProjectAccountRowPhysicalKeyV1(key));
+        return { status: 200, data: ProjectAccountRowReadResponseV1Schema.parse(!row ? { status: 'absent' }
+          : row.content === null ? { status: 'deleted', revision: row.revision } : { status: 'present', row }) };
       }
       return { status: 200,
         data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: protectedMoveRows ?? rows }) };

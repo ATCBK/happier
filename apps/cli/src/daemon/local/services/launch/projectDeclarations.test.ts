@@ -92,6 +92,7 @@ import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { inspectProjectSetup } from '@/workspaces/projectSetup/projectSetupPreparation';
 import { resolveProjectSetupAcceptedWorkspace } from '@/workspaces/projectSetup/projectSetupAcceptedWorkspace';
+import { projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
 import { WorkspaceExecutionConfigMutationRequestV1Schema, type WorkspaceExecutionConfigContentV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import type { LocalServicesRuntimeActionRoutes } from '../actions/runtimeActionExecutor';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
@@ -152,7 +153,6 @@ describe('accepted Project Service declaration starter', () => {
             return post(url, body, options);
         });
         const ingress = { ...h.ingress, verifyMachineAdmissionCurrent: async () => { admissions++; await delay(); return true; } };
-        const startedAt = performance.now();
         const approval = await h.starter.prepareStartApproval(h.request, ingress, h.context);
         if ('ok' in approval) throw new Error(approval.errorCode);
         h.trustSetupDigest(approval.setup!.reviewedEffectDigest);
@@ -163,7 +163,6 @@ describe('accepted Project Service declaration starter', () => {
         await Promise.race([h.setupStarted, completion]);
         h.setupProcesses[0]?.pty.exit(0);
         expect(await completion).toMatchObject({ status: 'succeeded' });
-        const elapsedMs = Math.round(performance.now() - startedAt);
         // Three fresh fences per full review, plus the two setup-effect fences.
         expect({ reviews, inspections, admissions }).toEqual({ reviews: 8, inspections: 3, admissions: 26 });
         await h.owner.listProjectServices()[0]?.stop();
@@ -647,7 +646,7 @@ describe('accepted Project Service declaration starter', () => {
                 const key = { kind: 'relationship-graph' as const };
                 rows.push({ key, revision: relationshipCurrent ? 1 : 2, content: { t: 'plain', v: { key, value: { relationships: relationshipCurrent ? [relationship] : [] } } } });
             }
-            return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
+            return projectAccountRowsReadHttpResponse(rows, String(url), body);
         });
         let savedPlacement: ProjectServicePlacementV1 | undefined;
         let placementReads = 0;

@@ -13,6 +13,11 @@ import { createProjectWorkspaceRetirement } from './projectWorkspaceRetirement';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { mockProjectAccountRowsHttpBoundary as boundary } from './projectAccountRows.testkit';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { readWorkspaceSyncWorkerTargetSnapshot } from './sync/workspaceSyncPreparation';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+
+// Prepare the real lazy Machine transport during collection; this fixture measures HTTP row work, not source transformation.
+await import('@/api/api');
 
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 const credentials = { token: 'project-token', encryption: null };
@@ -26,6 +31,117 @@ function deferred() {
 }
 
 describe('Project snapshot refresh availability', () => {
+  it('asks only for the complete Home ref/graph domain during Sync target preparation', async () => {
+    const rows = [{ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } },
+      ...Array.from({ length: 1024 }, (_, index) => {
+        const key = { kind: 'project-organization' as const, serverId: ref.serverId, projectKey: `other-${index}` };
+        return { key, revision: 0, content: { t: 'plain', v: { key, value: {} } } };
+      })];
+    const post = boundary(rows);
+    vi.mocked(axios.get).mockImplementation(async url => url.endsWith('/v1/account/encryption')
+      ? { status: 200, data: { mode: 'plain', updatedAt: 1 } }
+      : { status: 200, data: { machine: { id: ref.machineId, active: true, installationId: 'installation-a',
+        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, metadataVersion: 1, daemonStateVersion: 0, daemonState: null,
+        metadata: encodePlainMachineStoredContent({ host: 'test', platform: 'linux', homeDir: '/home/test',
+          username: 'test', happyCliVersion: 'test', happyHomeDir: '/home/test/.happier' }) } } });
+    let loadedRows = 0;
+    post.mockImplementation(async (_url, body) => {
+      const filter = body as { kinds?: string[]; serverId?: string };
+      const selected = rows.filter(row => (!filter.kinds || filter.kinds.includes(row.key.kind))
+        && (!filter.serverId || row.key.serverId === filter.serverId));
+      loadedRows += selected.length;
+      return { status: 200, data: { status: 'listed', rows: selected, coverage: 'complete' } };
+    });
+    const result = await readWorkspaceSyncWorkerTargetSnapshot({ credentials, serverId: ref.serverId,
+      serverHttpBaseUrl: 'https://home.example', sourceWorkspaceRefId: ref.id, targetMachineId: ref.machineId });
+    expect(loadedRows).toBe(1);
+    expect(result.workspaceRefs).toEqual([ref]);
+    expect(result.organizations).toEqual([]);
+    expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+  });
+
+  it('reads one organization row without opening a 1,024-row Account census', async () => {
+    const organizationKey = { kind: 'project-organization' as const, serverId: 'home-a', projectKey: 'project-a' };
+    const post = boundary([{ key: organizationKey, revision: 2,
+      content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } }, ...Array.from({ length: 1023 }, (_, index) => {
+      const key = { ...organizationKey, projectKey: `unrelated-${index}` };
+      return { key, revision: 0, content: { t: 'plain', v: { key, value: {} } } };
+    })]);
+    const transport = post.getMockImplementation()!;
+    let loadedRows = 0;
+    post.mockImplementation(async (...args) => {
+      if (args[0].endsWith('/read')) {
+        loadedRows += 1;
+        return { status: 200, data: { status: 'present', row: { key: organizationKey, revision: 2,
+          content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } } } };
+      }
+      if (args[0].endsWith('/list')) loadedRows += 1024;
+      return await transport(...args);
+    });
+    const result = await mutateProjectAccountOrganization({ credentials, serverId: 'home-a', projectKey: 'project-a',
+      mutate: value => ({ ...value, hidden: true }) });
+    expect.soft(loadedRows).toBe(1);
+    expect(result).toMatchObject({ status: 'updated', value: { pinned: true, hidden: true } });
+    expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+  });
+
+  it.each(['account-mode-mismatch', 'mode authentication', 'row authentication', 'invalid content'] as const)(
+    'withdraws the installed projection when an exact organization observation refuses %s', async failure => {
+      const organizationKey = { kind: 'project-organization' as const, serverId: 'home-a', projectKey: 'project-a' };
+      const row = { key: organizationKey, revision: 2,
+        content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } };
+      const post = boundary([row]);
+      const input = { credentials, serverId: 'home-a' };
+      await readProjectAccountRows({ ...input, publication: 'installed' });
+      expect(getActiveProjectAccountRowsSnapshot()?.organizations).toHaveLength(1);
+      post.mockClear();
+      if (failure === 'mode authentication') vi.mocked(axios.get).mockResolvedValueOnce({ status: 401, data: { error: 'unauthorized' } });
+      else post.mockResolvedValueOnce(failure === 'row authentication'
+        ? { status: 403, data: { error: 'access_denied' } }
+        : failure === 'invalid content'
+          ? { status: 200, data: { status: 'present', row: { ...row, content: { t: 'encrypted', c: 'invalid' } } } }
+          : { status: 200, data: { status: 'account-mode-mismatch' } });
+      const mutate = vi.fn<Parameters<typeof mutateProjectAccountOrganization>[0]['mutate']>(value => value);
+      const code = failure === 'mode authentication' ? 'project_account_mode_unavailable'
+        : failure === 'row authentication' ? 'project_account_rows_unavailable'
+          : failure === 'invalid content' ? 'project_account_mode_mismatch' : 'project_account_rows_account-mode-mismatch';
+      await expect(mutateProjectAccountOrganization({ ...input, projectKey: 'project-a', mutate })).rejects.toMatchObject({ code });
+      expect(mutate).not.toHaveBeenCalled();
+      expect(post.mock.calls.map(([url]) => url.slice(url.lastIndexOf('/') + 1)))
+        .toEqual(failure === 'mode authentication' ? [] : ['read']);
+      expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+    });
+
+  it.each(['network', 'row throttling'] as const)('retains the installed projection after exact organization %s failure and accepts recovery', async failure => {
+    const organizationKey = { kind: 'project-organization' as const, serverId: 'home-a', projectKey: 'project-a' };
+    const post = boundary([{ key: organizationKey, revision: 2,
+      content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } }]);
+    const input = { credentials, serverId: 'home-a', projectKey: 'project-a' };
+    const accepted = await readProjectAccountRows({ credentials, serverId: input.serverId, publication: 'installed' });
+    if (failure === 'network') post.mockRejectedValueOnce(new axios.AxiosError('Connection reset', 'ECONNRESET'));
+    else post.mockResolvedValueOnce({ status: 429, data: { error: 'throttled' } });
+    const error: unknown = await mutateProjectAccountOrganization({ ...input, mutate: value => ({ ...value, hidden: true }) })
+      .catch((failure: unknown) => failure);
+    expect(classifyServerEndpointError(error)).toMatchObject({ retryable: true });
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(accepted);
+    expect(await mutateProjectAccountOrganization({ ...input, expectedRevision: 2, mutate: value => ({ ...value, hidden: true }) }))
+      .toMatchObject({ status: 'updated', revision: 3, value: { pinned: true, hidden: true } });
+    expect(getActiveProjectAccountRowsSnapshot()?.organizations).toMatchObject([
+      { key: organizationKey, revision: 3, value: { pinned: true, hidden: true } },
+    ]);
+  });
+
+  it('keeps another Account scope installed when an exact organization read hard-refuses', async () => {
+    const organizationKey = { kind: 'project-organization' as const, serverId: 'home-a', projectKey: 'project-a' };
+    const post = boundary([{ key: organizationKey, revision: 2,
+      content: { t: 'plain', v: { key: organizationKey, value: { pinned: true } } } }]);
+    const accepted = await readProjectAccountRows({ credentials, serverId: 'home-a', publication: 'installed' });
+    post.mockResolvedValueOnce({ status: 200, data: { status: 'account-mode-mismatch' } });
+    await expect(mutateProjectAccountOrganization({ credentials: { token: 'other-account-token', encryption: null },
+      serverId: 'home-a', projectKey: 'project-a', mutate: value => value })).rejects.toMatchObject({ code: 'project_account_rows_account-mode-mismatch' });
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(accepted);
+  });
+
   it.each([[403, false], [429, true]] as const)('preserves HTTP %s read disposition and retains rows only for retryable failures', async (status, retryable) => {
     const post = boundary([{ key, revision: 1, content: { t: 'plain', v: { key, value: ref } } }]);
     const input = { credentials, serverId: 'home-a', publication: 'installed' as const };

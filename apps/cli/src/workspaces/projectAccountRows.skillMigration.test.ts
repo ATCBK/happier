@@ -29,6 +29,8 @@ import { publishRunnerSkillNotice } from '@/prompts/skills/runtime/publishRunner
 import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { removeSkillRulesV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
+import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
 afterEach(() => { resetActiveAccountSettingsSnapshotForTests(); withdrawActiveProjectAccountRowsSnapshot(); });
 
@@ -142,14 +144,22 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
           }) : undefined;
           if (operationContext) setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKey({ ...credentials,
             token: `e30.${Buffer.from(JSON.stringify({ sub: 'daemon-account' })).toString('base64url')}.signature` }) });
-          const result = await resolveRunnerSkills({ ownerKey: 'session', agentId: 'test', machineId: 'machine', directory: '/repo',
-            credentials, accountSnapshot: snapshot, operationContext, agentHasActionChannel: true,
-            ...(failure === 'provided-reach' ? { reachContext: { machineId: 'machine', machinePlatform: 'posix',
-              directory: '/elsewhere', projectKey: 'other-project', agentId: 'test' } as const } : {}),
-            sessionMetadata: Object.assign(createTestMetadata({ path: '/repo', machineId: 'machine' }),
-              { workspaceId: 'checkout', projectId: 'project' }),
-            contributes: { catalogEntriesById: { test: { skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported' } } } },
-          }, { ensureSessionDir: async () => ({ pluginRoot: '/session', skillsRoot: '/session/skills', items: [], failed: [] }) });
+          const result = await withTempDir('project-skill-migration-', async happyHomeDir => {
+            const store = createSkillStore({ happyHomeDir });
+            try {
+              return await resolveRunnerSkills({ ownerKey: 'session', agentId: 'test', machineId: 'machine', directory: '/repo',
+                credentials, accountSnapshot: snapshot, operationContext, agentHasActionChannel: true,
+                ...(failure === 'provided-reach' ? { reachContext: { machineId: 'machine', machinePlatform: 'posix',
+                  directory: '/elsewhere', projectKey: 'other-project', agentId: 'test' } as const } : {}),
+                sessionMetadata: Object.assign(createTestMetadata({ path: '/repo', machineId: 'machine' }),
+                  { workspaceId: 'checkout', projectId: 'project' }),
+                contributes: { catalogEntriesById: { test: { skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported' } } } },
+              }, { ensureSessionDir: request => store.ensureSkillSessionDir(request) });
+            } finally {
+              await store.releaseSkillSessionDirs('session');
+              await store.collectSkillCache({ libraryDigests: [] });
+            }
+          });
           if (failure === 'rules-conflict') {
             expect(result.unavailable).toBe(true);
             expect(result.delivery).toBeUndefined();
@@ -160,7 +170,12 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
             expect(events.map(readSessionCapabilityNoticeV1)).toEqual([{ v: 1, items: [{ kind: 'skill', name: 'Skills',
               code: 'skills_unavailable', detail: 'project_skill_migration_unavailable' }] }]);
           } else {
-            expect(result.delivery?.items.map(item => item.skillId)).toEqual(failure === 'provided-reach' ? [] : ['skill']);
+            if (failure === 'provided-reach') {
+              // No rule matches the supplied different Project: no native materialization is needed.
+              expect(result.delivery).toBeUndefined();
+              expect(result.unavailable).toBeUndefined();
+              expect(result.plan.items.filter(item => item.state === 'delivered')).toEqual([]);
+            } else expect(result.delivery?.items.map(item => item.skillId)).toEqual(['skill']);
             if (operationContext) {
               const daemon = getActiveAccountSettingsSnapshot();
               expect(daemon?.scopeKey === snapshot.scopeKey).toBe(false);

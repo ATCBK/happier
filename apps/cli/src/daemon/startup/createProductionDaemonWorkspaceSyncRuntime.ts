@@ -635,6 +635,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       ...(context?.callerInputAuthorization ? { authorization: context.callerInputAuthorization,
         effectActionId: context.callerInputAuthorization.binding.actionId } : { credentials: input.credentials, publication: 'installed' }),
       serverId: semanticServerId,
+      selection: context?.callerInputAuthorization ? { kinds: ['workspace-ref', 'relationship-graph'] } : undefined,
       ...(signal ? { signal } : {}),
     }),
     readChildMachineFacts: async (machineIds, signal) => await readWorkspaceSyncChildMachineFacts({
@@ -882,8 +883,10 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     const snapshot = privatePreparation && requester ? await factories.refreshProjectRows({ credentials: requester.credentials,
       sessionCustody: { serverId: semanticServerId, accountId: authorization.binding.accountId,
         serverHttpBaseUrl: requester.serverHttpBaseUrl, isCurrent: requester.isCurrent },
-      serverId: semanticServerId, signal }) : authorization ? await factories.refreshProjectRows({ authorization,
-      effectActionId: authorization.binding.actionId, serverId: semanticServerId, signal }) : factories.getProjectSnapshot();
+      serverId: semanticServerId, signal, selection: { kinds: ['workspace-ref', 'relationship-graph'] } })
+      : authorization ? await factories.refreshProjectRows({ authorization,
+      effectActionId: authorization.binding.actionId, serverId: semanticServerId, signal,
+      selection: { kinds: ['workspace-ref', 'relationship-graph'] } }) : factories.getProjectSnapshot();
     if (!snapshot) throw compositionError('workspace_sync_settings_unavailable', 'Workspace sync settings are unavailable');
     return snapshot;
   };
@@ -902,12 +905,14 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       localProfileId, ...(input.homeTarget ? { homeTarget: input.homeTarget } : {}), machineIds, signal });
   };
   const currentRouteSnapshot = async (request: WorkspaceSyncPrepareBetweenRequestV1, signal?: AbortSignal, context?: RpcHandlerContext) => {
-    const snapshot = await readHandoffProjectSnapshot(signal, context);
-    if (isProjectPreparation(context)) await assertProjectPreparationInput(request, snapshot, context!);
+    const snapshot = await timeWebLatencyPhase('workspaceSync.route.projectRows', () => readHandoffProjectSnapshot(signal, context));
+    if (isProjectPreparation(context)) await timeWebLatencyPhase('workspaceSync.route.originalInput',
+      () => assertProjectPreparationInput(request, snapshot, context!));
     const serverId = semanticServerId;
     const workspaceRefs = snapshot.workspaceRefs.filter(ref => ref.serverId === serverId);
     const endpoints = workspaceRefs.filter(ref => ref.id === request.sourceWorkspaceRefId || ref.id === request.targetWorkspaceRefId);
-    const childMachines = await readHandoffChildMachines(endpoints.map(ref => ref.machineId), signal, context);
+    const childMachines = await timeWebLatencyPhase('workspaceSync.route.endpointMachines',
+      () => readHandoffChildMachines(endpoints.map(ref => ref.machineId), signal, context));
     return {
       serverId,
       workspaceRefs,
@@ -915,14 +920,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       childMachines,
     };
   };
-  const currentRoute = async (request: WorkspaceSyncPrepareBetweenRequestV1, signal?: AbortSignal, context?: RpcHandlerContext) => {
-    return resolveWorkspaceSyncTransferRoute({
-      ...await currentRouteSnapshot(request, signal, context),
-      sourceWorkspaceRefId: request.sourceWorkspaceRefId,
-      targetWorkspaceRefId: request.targetWorkspaceRefId,
-    });
-  };
-  const routeFailure = (route: Extract<Awaited<ReturnType<typeof currentRoute>>, { ok: false }>): WorkspaceSyncPrepareBetweenResultV1 => ({
+  const routeFailure = (route: Extract<ReturnType<typeof resolveWorkspaceSyncTransferRoute>, { ok: false }>): WorkspaceSyncPrepareBetweenResultV1 => ({
     ok: false,
     errorCode: route.code,
     completed: [],
@@ -988,7 +986,8 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     readWebLatencyTracePoint()?.requestId ?? context?.callerInputAuthorization?.binding.requestId ?? context?.transportRequestId,
     () => timeWebLatencyPhase('workspaceSync.prepareBetweenAtController', async () => {
     if (!runtime) throw controllerUnavailable();
-    const route = await currentRoute(request, signal, context);
+    const initial = await currentRouteSnapshot(request, signal, context);
+    const route = resolveWorkspaceSyncTransferRoute({ ...initial, ...request });
     if (!route.ok) return routeFailure(route);
     if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
       authorization: context?.callerInputAuthorization, ownerKind: 'relationship' });
@@ -998,6 +997,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     return await prepareWorkspaceSyncBetween({
       ...request,
       serverId: semanticServerId,
+      initial,
       readCurrent: async () => await currentRouteSnapshot(request, signal, context),
       flush: async (relationshipId, flushSignal) => {
         if (isProjectPreparation(context)) {

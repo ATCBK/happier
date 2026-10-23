@@ -80,6 +80,36 @@ import {
 const handoffOperationId = 'handoff-op-1';
 const relationshipId = deriveWorkspaceSyncRelationshipId(handoffOperationId);
 
+describe('endpoint Machine read costs', () => {
+  it('starts distinct endpoint reads before either response, preserving input-order refusal', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started: string[] = [];
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      const id = url.slice(url.lastIndexOf('/') + 1);
+      started.push(id);
+      await held;
+      if (id === 'machine-b') throw new Error('second endpoint transport failure');
+      return { status: 200, data: { machine: { id, active: true, revokedAt: 1, installationId: `${id}-installation`,
+        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, metadataVersion: 1, daemonStateVersion: 0, daemonState: null,
+        metadata: encodePlainMachineStoredContent({ host: id, platform: 'linux', homeDir: '/home/test', username: 'test',
+          happyCliVersion: 'test', happyHomeDir: '/home/test/.happier' }) } } };
+    });
+    onTestFinished(() => get.mockRestore());
+    const result = readWorkspaceSyncChildMachineFacts({ serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+      credentials: { token: 'token', encryption: null }, machineIds: ['machine-a', 'machine-b', 'machine-a'] });
+    const outcome = result.catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(started).toEqual(['machine-a', 'machine-b']));
+    } finally { release(); }
+    try {
+      expect(await outcome).toMatchObject({ code: 'workspace_sync_child_unavailable' });
+      expect(started).toEqual(['machine-a', 'machine-b']);
+    } finally { get.mockRestore(); }
+  });
+});
+
 describe('bind-child replacement approval at the physical target owner', () => {
   it('qualifies an independent installed Project target from its own row without a Parent route', async () => {
     const [project, actionHeaders, signing, execution, socketSchemas, installedContent] = await Promise.all([

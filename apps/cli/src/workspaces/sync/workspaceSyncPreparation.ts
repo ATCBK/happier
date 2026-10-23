@@ -38,6 +38,7 @@ export async function readWorkspaceSyncWorkerTargetSnapshot(input: Readonly<{
 }>): Promise<ActiveProjectAccountRowsSnapshot & Readonly<{ childMachines: readonly WorkspaceSyncChildMachineFacts[] }>> {
   return await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => {
     const snapshot = await readProjectAccountRows({ serverId: input.serverId, signal: input.signal,
+      selection: { kinds: ['workspace-ref', 'relationship-graph'] },
       ...(input.authorization ? { authorization: input.authorization, effectActionId: input.authorization.binding.actionId }
         : { credentials: input.credentials }) });
     const childMachines = await readWorkspaceSyncChildMachineFacts({ ...input,
@@ -230,21 +231,25 @@ function errorCode(error: unknown, fallback: string): string {
     : fallback;
 }
 
+type WorkspaceSyncPreparationSnapshot = Readonly<{
+  workspaceRefs: readonly WorkspaceRefV1[];
+  relationships: readonly WorkspaceSyncRelationshipV1[];
+  childMachines?: readonly WorkspaceSyncChildMachineFacts[];
+}>;
+
 /** Ordered, ephemeral pair/star barrier. Current settings are re-read before
  * every effect; no route cursor or successful-link rollback is created. */
 export async function prepareWorkspaceSyncBetween(input: Readonly<{
   serverId?: string;
   sourceWorkspaceRefId: string;
   targetWorkspaceRefId: string;
-  readCurrent(): Promise<Readonly<{
-    workspaceRefs: readonly WorkspaceRefV1[];
-    relationships: readonly WorkspaceSyncRelationshipV1[];
-    childMachines?: readonly WorkspaceSyncChildMachineFacts[];
-  }>>;
+  /** A controller may supply the observation it just admitted, before any effect. */
+  initial?: WorkspaceSyncPreparationSnapshot;
+  readCurrent(): Promise<WorkspaceSyncPreparationSnapshot>;
   flush(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
   signal?: AbortSignal;
 }>): Promise<WorkspaceSyncPrepareBetweenResultV1> {
-  const initial = await input.readCurrent();
+  const initial = input.initial ?? await input.readCurrent();
   const route = resolveWorkspaceSyncTransferRoute({
     ...initial,
     serverId: input.serverId,

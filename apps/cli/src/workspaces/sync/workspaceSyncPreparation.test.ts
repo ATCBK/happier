@@ -29,6 +29,23 @@ const status = (id: string): WorkspaceSyncStatusV1 => ({
 });
 
 describe('prepareWorkspaceSyncBetween', () => {
+  it('consumes the admitted initial route once and still refreshes before every flush', async () => {
+    const initial = { workspaceRefs: refs, relationships: [relationship('ab', 'a', 'b')] };
+    let reads = 0;
+    const flushed: string[] = [];
+    const input = { serverId: 's', sourceWorkspaceRefId: 'a', targetWorkspaceRefId: 'b', initial,
+      readCurrent: async () => { reads += 1; return initial; },
+      flush: async (id: string) => { flushed.push(id); return status(id); } };
+    await expect(prepareWorkspaceSyncBetween(input)).resolves.toMatchObject({ ok: true });
+    expect.soft(reads).toBe(1);
+    expect(flushed).toEqual(['ab']);
+    // The supplied route is never permission to skip the final fresh boundary.
+    await expect(prepareWorkspaceSyncBetween({ ...input,
+      readCurrent: async () => ({ ...initial, relationships: [] }),
+    })).resolves.toMatchObject({ ok: false, errorCode: 'relationship_changed' });
+    expect(flushed).toEqual(['ab']);
+  });
+
   it('requires an admitted worker copy, ignores ordinary linked roots and retains copy custody at dequeue', () => {
     const ordinary = relationship('ab', 'a', 'b', 'keep_synced');
     const input = { serverId: 's', sourceWorkspaceRefId: 'a', targetMachineId: 'mb', workspaceRefs: refs, relationships: [ordinary] };

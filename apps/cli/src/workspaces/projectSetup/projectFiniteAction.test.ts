@@ -53,7 +53,8 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { reloadConfiguration } from '@/configuration';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
-import { ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { projectAccountRowsReadHttpResponse } from '@/workspaces/projectAccountRows.testkit';
+import { ProjectAccountRowListResponseV1Schema, ProjectAccountRowReadResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { inspectProjectSetupFromRuntime } from './projectSetupReadiness';
@@ -110,11 +111,11 @@ describe('authenticated finite Project Action owner', () => {
                 trustContent = mutation.content;
                 return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
             }
-            return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [...workspaceRefs.map(value => {
+            return projectAccountRowsReadHttpResponse([...workspaceRefs.map(value => {
                 const key = { kind: 'workspace-ref', serverId: homeId, id: value.id };
                 return { key, revision: 1, content: { t: 'plain', v: { key, value } } };
             }), { key: { kind: 'relationship-graph' }, revision: 1,
-                content: { t: 'plain', v: { key: { kind: 'relationship-graph' }, value: { relationships } } } }] } };
+                content: { t: 'plain', v: { key: { kind: 'relationship-graph' }, value: { relationships } } } }], String(url), body);
         });
         const spawned: Array<{ params: PtySpawnParams; pty: BoundaryPty }> = [];
         let notifyFirstSpawn!: () => void;
@@ -587,8 +588,13 @@ describe('authenticated finite Project Action owner', () => {
         const post = h.post.getMockImplementation()!;
         h.post.mockImplementation(async (url, body, options) => {
             const response = await post(url, body, options);
-            if (!withdrawn || !String(url).endsWith('/v1/account/project-rows/list')) return response;
+            if (!withdrawn || !/\/v1\/account\/project-rows\/(?:read|list)$/u.test(String(url))) return response;
             if (!response || typeof response !== 'object' || !('data' in response)) throw new Error('Expected Home response');
+            if (String(url).endsWith('/read')) {
+                const read = ProjectAccountRowReadResponseV1Schema.parse(response.data);
+                return read.status === 'present' && read.row.key.kind === 'workspace-ref'
+                    ? { ...response, data: { status: 'deleted', revision: read.row.revision + 1 } } : response;
+            }
             const listed = ProjectAccountRowListResponseV1Schema.parse(response.data);
             if (listed.status !== 'listed') return response;
             // Real withdrawal is a newer tombstone, not absence from an inventory page.
@@ -633,7 +639,7 @@ describe('authenticated finite Project Action owner', () => {
         const phaseReads: Record<string, Array<{ config: number; project: number }>> = {};
         const startedReads = new Map<string, { config: number; project: number }>();
         const counts = () => ({ config: requests.filter(path => path.endsWith('/read')).length,
-            project: h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/list')).length });
+            project: h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/read')).length });
         diagnostics.mockImplementation((event, fields) => {
             if (event !== '[external-action-stage]' || !fields || typeof fields !== 'object' || !('stage' in fields)
                 || typeof fields.stage !== 'string') return;
@@ -673,7 +679,7 @@ describe('authenticated finite Project Action owner', () => {
             // Dequeue can start its next fresh read before the accepted RPC
             // returns. Count each decision below, not that scheduling race.
             expect.soft(requests.filter(path => path.endsWith('/read'))).toHaveLength(3);
-            const projectReads = h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/list'));
+            const projectReads = h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/read'));
             expect.soft(projectReads).toHaveLength(2);
             expect.soft(h.post.mock.calls).toHaveLength(2);
             expect.soft(h.get.mock.calls.slice(getCallsAtStart).map(([url]) => new URL(String(url)).pathname))

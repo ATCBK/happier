@@ -311,8 +311,14 @@ export async function readWorkspaceSyncChildMachineFacts(input: Readonly<{
         effectActionId: input.effectActionId, signal: input.signal })
       : api!.getMachine(machineId, { signal: input.signal });
     const facts: WorkspaceSyncChildMachineFacts[] = [];
-    for (const machineId of new Set(input.machineIds)) {
-      const machine = await readMachine(machineId);
+    // Start the endpoint reads together, but consume settled results in input
+    // order so per-read admission and the existing refusal precedence remain.
+    const reads = [...new Set(input.machineIds)].map(machineId => ({ machineId,
+      result: readMachine(machineId).then(machine => ({ machine }), (error: unknown) => ({ error })) }));
+    for (const { machineId, result } of reads) {
+      const settled = await result;
+      if ('error' in settled) throw settled.error;
+      const machine = settled.machine;
       if (!machine || machine.revokedAt != null || machine.replacedByMachineId) {
         throw authorityError('workspace_sync_child_unavailable', 'Current Machine is unavailable');
       }

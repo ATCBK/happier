@@ -27,26 +27,33 @@ export async function resolveProjectSetupAcceptedWorkspace(input: ProjectSetupAc
 }>): Promise<ProjectSetupAcceptedAssociation | null> {
     const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
     if (!await isServerProfileHomeIdentity(input.serverId, input.address.serverId)) return fail('server_scope_mismatch');
-    let snapshot: Awaited<ReturnType<typeof readProjectAccountRows>>;
+    const homeServerId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
+    let workspaceRefs: readonly WorkspaceRefV1[];
     try {
-        snapshot = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => readProjectAccountRows({
+        // Read the exact qualified ids, or the reached Home's root census.
+        // Retained profile qualifiers still participate in alias ambiguity.
+        const qualifiers = [...new Set([input.serverId, homeServerId, input.address.serverId])];
+        const snapshots = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all(qualifiers.map(serverId => readProjectAccountRows({
             ...input, serverId: input.serverId,
+            selection: input.address.workspaceId
+                ? { key: { kind: 'workspace-ref', serverId, id: input.address.workspaceId } }
+                : { kinds: ['workspace-ref'], serverId },
             ...(input.signal ? { signal: input.signal } : {}),
-        }));
+        }))));
+        workspaceRefs = snapshots.flatMap(snapshot => snapshot.workspaceRefs);
     } catch (error) {
         if (!input.signal?.aborted && input.allowUnassociated && input.address.workspaceId === undefined
             && error instanceof Error && 'code' in error && error.code === 'project_account_rows_unsupported') return null;
         return fail(input.signal?.aborted ? 'cancelled' : 'project_workspace_unavailable');
     }
-    const homeServerId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
     const context = { normalizeServerId: (id: string) => id === input.serverId ? homeServerId : id };
-    const resolved = resolveWorkspaceRefV1(snapshot.workspaceRefs, input.address, context);
+    const resolved = resolveWorkspaceRefV1(workspaceRefs, input.address, context);
     if (resolved.kind !== 'resolved') {
         // Only a cold root lookup may discover an ordinary, unassociated folder.
         // A known checkout identity becoming unavailable is still a refusal.
         if (resolved.kind === 'missing' && input.allowUnassociated && input.address.workspaceId === undefined) return null;
         if (input.address.workspaceId === undefined) return fail(resolved.kind === 'ambiguous' ? 'project_workspace_ambiguous' : 'project_workspace_unavailable');
-        const identity = resolveWorkspaceRefV1(snapshot.workspaceRefs, { serverId: input.serverId, id: input.address.workspaceId }, context);
+        const identity = resolveWorkspaceRefV1(workspaceRefs, { serverId: input.serverId, id: input.address.workspaceId }, context);
         return fail(identity.kind === 'resolved' && identity.ref.projectKey ? 'project_workspace_changed' : 'project_workspace_unavailable');
     }
     const workspace = resolved.ref;

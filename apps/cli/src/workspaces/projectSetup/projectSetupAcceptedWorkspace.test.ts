@@ -2,6 +2,7 @@ import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { resolveProjectSetupAcceptedWorkspace } from './projectSetupAcceptedWorkspace';
+import { mockProjectAccountRowsHttpBoundary } from '../projectAccountRows.testkit';
 
 describe('preparation accepted workspace association', () => {
     afterEach(() => {
@@ -37,13 +38,12 @@ describe('preparation accepted workspace association', () => {
     });
 
     it('does not activate a Project for an accepted Workspace that has no Project association', async () => {
-        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
         const key = { kind: 'workspace-ref', serverId: 'home', id: 'ordinary-workspace' };
-        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [{
+        mockProjectAccountRowsHttpBoundary([{
             key, revision: 1, content: { t: 'plain', v: { key, value: {
                 id: key.id, serverId: 'home', machineId: 'teammate', rootPath: '/ordinary-folder', createdAtMs: 1,
             } } },
-        }] } });
+        }]);
         const launch = { ...input, address: { serverId: 'home', machineId: 'teammate', rootPath: '/ordinary-folder' },
             allowUnassociated: true as const };
         await expect(resolveProjectSetupAcceptedWorkspace(launch)).resolves.toBeNull();
@@ -52,33 +52,35 @@ describe('preparation accepted workspace association', () => {
     });
 
     it('uses the requester Home row and refuses a caller-swapped Machine or directory', async () => {
-        vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+        const key = { kind: 'workspace-ref' as const, serverId: 'home', id: 'accepted' };
+        const rows: unknown[] = [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }];
+        const post = mockProjectAccountRowsHttpBoundary(rows);
+        vi.mocked(axios.get).mockImplementation(async (url, options) => {
             expect(url).toBe('https://requester.example/v1/account/encryption');
             expect(options?.headers?.Authorization).toBe('Bearer requester');
             return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
         });
-        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, _body, options) => {
-            expect(url).toBe('https://requester.example/v1/account/project-rows/list');
+        const transport = post.getMockImplementation()!;
+        post.mockImplementation(async (...args) => {
+            const [url, body, options] = args;
+            expect(url).toBe('https://requester.example/v1/account/project-rows/read');
+            expect(body).toEqual({ key });
             expect(options?.headers?.Authorization).toBe('Bearer requester');
-            const key = { kind: 'workspace-ref', serverId: 'home', id: 'accepted' };
-            return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1, content: { t: 'plain', v: { key, value: workspace } } }] } };
+            return await transport(...args);
         });
         expect(await resolveProjectSetupAcceptedWorkspace(input)).toEqual({ workspace, project: { serverId: 'home', projectId: 'stable-project' } });
         await expect(resolveProjectSetupAcceptedWorkspace({ ...input, address: { ...address, machineId: 'custodian' } })).rejects.toMatchObject({ code: 'project_workspace_changed' });
         await expect(resolveProjectSetupAcceptedWorkspace({ ...input, address: { ...address, rootPath: '/elsewhere' } })).rejects.toMatchObject({ code: 'project_workspace_changed' });
-        // The reserved-row owner retains deletion tombstones. A later complete
-        // census represents this deletion with a newer revision, not omission.
-        post.mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key: { kind: 'workspace-ref', serverId: 'home', id: 'accepted' }, revision: 2, content: null }] } });
+        rows[0] = { key, revision: 2, content: null };
         await expect(resolveProjectSetupAcceptedWorkspace(input)).rejects.toMatchObject({ code: 'project_workspace_unavailable' });
     });
 
     it('accepts equivalent target-platform root spellings without changing the accepted checkout', async () => {
         const windowsWorkspace = { ...workspace, rootPath: 'C:\\Users\\alice\\repo' };
-        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
         const key = { kind: 'workspace-ref', serverId: 'home', id: 'accepted' };
-        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+        mockProjectAccountRowsHttpBoundary([
             { key, revision: 1, content: { t: 'plain', v: { key, value: windowsWorkspace } } },
-        ] } });
+        ]);
 
         await expect(resolveProjectSetupAcceptedWorkspace({
             ...input, address: { ...address, rootPath: 'c:/Users/alice/repo/' },
