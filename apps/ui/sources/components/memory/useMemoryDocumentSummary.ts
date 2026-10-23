@@ -11,6 +11,7 @@ import type { MemoryDocumentSource } from './useMemoryDocument';
 
 const UNAVAILABLE: MemoryDocumentSummary = { state: 'unavailable' };
 const DOCUMENTS = ['documents'] as const;
+const GLOBAL_SCOPE = { type: 'global' } as const;
 
 /** One cancellable read of the existing daemon admission owner, not a retained preparation. */
 export function useMemoryDocumentSummary(params: Readonly<{
@@ -23,7 +24,10 @@ export function useMemoryDocumentSummary(params: Readonly<{
 }>): MemoryDocumentSummary {
   const { source, serverId } = params;
   const view = source.view;
-  const sessionId = params.scope?.type === 'session' ? params.scope.sessionId : null;
+  const scope = params.scope ?? GLOBAL_SCOPE;
+  const scopeKey = JSON.stringify(scope);
+  const stableScope = React.useMemo(() => scope, [scopeKey]);
+  const sessionId = stableScope.type === 'session' ? stableScope.sessionId : null;
   const originAccount = useActiveServerAccountScope(serverId);
   const custody = source.draftCustody;
   // A Session id belongs to its origin Home, even when its prepared document is foreign.
@@ -31,7 +35,7 @@ export function useMemoryDocumentSummary(params: Readonly<{
   const account = sessionId ? originAccount : custody?.scope;
   const enabled = params.enabled !== false && source.status === 'ready' && !source.stale && view !== null;
   const provider = useMemorySearchProvider({ kind: 'exact', serverId: account?.serverId ?? serverId },
-    { enabled, corpora: DOCUMENTS });
+    { enabled, corpora: DOCUMENTS, scope: stableScope });
   const target = provider.daemonTarget;
   const selectedTarget = provider.selectedDaemonTarget;
   const unavailableMachine = React.useMemo<MemoryDocumentSummary>(() => selectedTarget && account
@@ -45,7 +49,7 @@ export function useMemoryDocumentSummary(params: Readonly<{
     ? { state: 'unavailable', cause: { reason: 'status_pending', target } }
     : UNAVAILABLE, [target]);
   const key = JSON.stringify([account?.serverId, account?.accountId, target?.serverId, target?.machineId,
-    view?.ref, view?.revision, sessionId, params.preparationBasis, source.status, source.stale]);
+    view?.ref, view?.revision, scopeKey, params.preparationBasis, source.status, source.stale]);
   const [loaded, setLoaded] = React.useState<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
   React.useEffect(() => {
     if (!enabled || !view || !target || !account || custody?.isCurrent() !== true) return;
@@ -53,7 +57,7 @@ export function useMemoryDocumentSummary(params: Readonly<{
     setLoaded({ key, summary: awaitingStatus });
     void fetchDaemonMemoryDocumentSummary({ ...target, accountId: account.accountId,
       ref: view.ref, revision: view.revision, signal: controller.signal,
-      scope: sessionId ? { type: 'session', sessionId } : { type: 'global' },
+      scope: stableScope,
     }).then(summary => {
       if (!controller.signal.aborted && custody.isCurrent()) setLoaded({ key, summary: summary.state === 'pending'
         ? { state: 'unavailable', cause: { reason: 'coverage_pending', target } }
@@ -65,7 +69,7 @@ export function useMemoryDocumentSummary(params: Readonly<{
       } } });
     });
     return () => controller.abort();
-  }, [account, awaitingStatus, custody, enabled, key, params.preparationBasis, sessionId, target, view]);
+  }, [account, awaitingStatus, custody, enabled, key, params.preparationBasis, stableScope, target, view]);
   if (!enabled || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
   if (!target) return unavailableMachine;
   return loaded?.key === key ? loaded.summary : awaitingStatus;

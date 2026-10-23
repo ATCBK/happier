@@ -48,6 +48,8 @@ const { ProjectContextBody } = await import('@/components/projects/context/Proje
 const { useMemoryDocument } = await import('./useMemoryDocument');
 const { useMemoryDocumentSummary } = await import('./useMemoryDocumentSummary');
 const { MemoryDocumentBody } = await import('./MemoryDocumentBody');
+const { MemoryDocumentScreen } = await import('./MemoryDocumentScreen');
+const { ContextMemorySection } = await import('@/components/settings/prompts/context/ContextMemorySection');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let administration: Awaited<ReturnType<typeof createMachineAdministrationFixture>>;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -375,7 +377,7 @@ describe('MemorySearchPanel corpus coverage', () => {
             });
         } finally { await hook.unmount(); clock.mockRestore(); }
     });
-    it('keeps a fresh summary stable and refuses late scoped status after its context changes', async () => {
+    it.each(['session', 'project'] as const)('keeps a fresh summary narrow to %s and refuses late scoped status after its context changes', async scopeType => {
         const serverId = administration.serverIds[0]!;
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: [{ id: 'key', text: 'Key fact', createdAtMs: 1, sourceSessionRef: null }], topics: [],
@@ -387,18 +389,22 @@ describe('MemorySearchPanel corpus coverage', () => {
         }] } });
         const pending: ((value: unknown) => void)[] = [];
         machineRpc.mockResolvedValueOnce(response(1)).mockImplementation(() => new Promise(resolve => pending.push(resolve)));
-        const scope = { type: 'session' as const, sessionId: 'current-session' };
-        const hook = await renderHook(({ basis }: { basis: string }) => {
+        const scope = scopeType === 'session' ? { type: 'session' as const, sessionId: 'current-session' }
+            : { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } };
+        const hook = await renderHook(({ basis, projectKey }: { basis: string; projectKey: string }) => {
             const source = useMemoryDocument({ ref, serverId });
-            return useMemoryDocumentSummary({ source, serverId, scope, preparationBasis: basis });
-        }, { initialProps: { basis: 'initial' }, wrapper: ({ children }) =>
+            return useMemoryDocumentSummary({ source, serverId, scope: scopeType === 'project'
+                ? { type: 'project', projectRef: { serverId, projectKey } } : scope, preparationBasis: basis });
+        }, { initialProps: { basis: 'initial', projectKey: 'payments' }, wrapper: ({ children }) =>
             <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
         await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 1, indexedFactCount: 5 }); });
+        expect(machineRpc.mock.calls.filter(([request]) => request.payload.scope.type === 'global')).toHaveLength(0);
+        expect(machineRpc.mock.calls[0]![0].payload.scope).toEqual(scope);
         await hook.rerender();
         expect(machineRpc.mock.calls).toHaveLength(1);
-        await hook.rerender({ basis: 'changed' });
+        await hook.rerender({ basis: 'changed', projectKey: 'payments' });
         expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: { reason: 'status_pending' } });
-        await hook.rerender({ basis: 'latest' });
+        await hook.rerender({ basis: 'latest', projectKey: 'payments' });
         expect(machineRpc.mock.calls[1]?.[0].signal.aborted).toBe(true);
         await act(async () => pending[0]!(response(2)));
         expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: { reason: 'status_pending' } });
@@ -406,7 +412,68 @@ describe('MemorySearchPanel corpus coverage', () => {
         expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 3, indexedFactCount: 5 });
         await hook.rerender();
         expect(machineRpc.mock.calls).toHaveLength(3);
+        if (scopeType === 'project') {
+            await hook.rerender({ basis: 'latest', projectKey: 'billing' });
+            expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: { reason: 'status_pending' } });
+            expect(machineRpc.mock.calls[2]?.[0].signal.aborted).toBe(true);
+            expect(machineRpc.mock.calls[3]?.[0].payload.scope).toEqual({
+                type: 'project', projectRef: { serverId, projectKey: 'billing' },
+            });
+            await act(async () => pending[2]!(response(4)));
+            expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 4, indexedFactCount: 5 });
+            await hook.rerender();
+            expect(machineRpc.mock.calls).toHaveLength(4);
+            machineRpc.mockRejectedValue(createRpcCallError({ error: 'Project status unavailable', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+            await hook.rerender({ basis: 'unsupported', projectKey: 'billing' });
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: {
+                    reason: 'status_failed', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                } });
+            });
+            await hook.rerender();
+            expect(machineRpc.mock.calls).toHaveLength(5);
+            // Predecessor status ignores scoped payloads and returns no document coverage.
+            machineRpc.mockResolvedValue(status);
+            await hook.rerender({ basis: 'older-daemon', projectKey: 'billing' });
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent()).toEqual({ state: 'unavailable' });
+            });
+            await hook.rerender();
+            expect(machineRpc.mock.calls).toHaveLength(6);
+            expect(machineRpc.mock.calls.filter(([request]) => request.payload.scope.type === 'global')).toHaveLength(0);
+        }
         await hook.unmount();
+    });
+    it.each(['page', 'context'] as const)('keeps Project %s counts narrow with zero global Session/context admissions', async surface => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Key fact', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const searchScope = { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } };
+        machineRpc.mockResolvedValue({ ...status, documents: { state: 'ready', facts: [{
+            ref: { kind: 'doc', serverId, artifactId }, revision: { headerVersion: 1, bodyVersion: 1 },
+            loadedFactCount: 1, indexedFactCount: 5,
+        }] } });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            {surface === 'page' ? <MemoryDocumentScreen artifactId={artifactId} serverId={serverId}
+                project={{ name: 'Payments', searchScope, href: () => '/projects/payments/memory' }} />
+                : <ContextMemorySection testID="project-context.memory" serverId={serverId} searchScope={searchScope}
+                    title="Memory" description="Project memory" footer="" emptyText=""
+                    entry={{ id: 'memory', ref: { kind: 'doc', serverId, artifactId }, enabled: true, placement: 'system_append' }} />}
+        </InjectedAuthProvider>);
+        try {
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(screen.getTextContent()).toContain('5 facts');
+            });
+            const requests = machineRpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS);
+            expect(requests.filter(([request]) => request.payload.scope.type === 'global')).toHaveLength(0);
+            expect(requests).toHaveLength(1);
+            expect(requests[0]![0].payload.scope).toEqual(searchScope);
+        } finally { await screen.unmount(); }
     });
     it.each(['ready', 'pending', 'failed'] as const)('reports unavailable counts with the selected-daemon cause while an unanswered read remains cancellable, then accepts a late %s result', async outcome => {
         const serverId = administration.serverIds[0]!;

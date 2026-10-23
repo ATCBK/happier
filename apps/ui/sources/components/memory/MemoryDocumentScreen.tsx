@@ -240,6 +240,7 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
       testID="memory-document"
       source={source}
       serverId={serverId ?? ''}
+      preparationScope={project?.searchScope}
       readOnly={readOnly}
       composing={composing}
       onComposingChange={setComposing}

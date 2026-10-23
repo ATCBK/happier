@@ -129,6 +129,7 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
                 testID={props.testID}
                 source={source}
                 serverId={serverId}
+                preparationScope={props.searchScope}
                 collapsedFactCount={COLLAPSED_FACTS}
                 footer={typeof props.footer === 'function' ? props.footer(source.stale ? null : source.view?.shared ?? null) : props.footer}
                 readOnly={props.readOnly}
