@@ -223,7 +223,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
   const settingsGate: { release?: () => void } = {};
   const releaseSettingsRead = () => settingsGate.release?.();
   let savedSettings: Record<string, unknown> = {};
-  let sourceProject = 'other';
+  let sourceProject = surface === 'follow-pending' ? 'payments' : 'other';
   let freshFollowRule = false;
   let followAccountChanges: ChangeEntry[] = [];
   let followChangesReads = 0;
@@ -301,7 +301,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
       if (path.endsWith('/session-follow-preferences')) return { status: 200, data: { assigned: true, direct: false, team: false, group: false } };
       const receiver = { kind: 'session' as const, sessionId: surface === 'follow-source' || surface === 'follow-receiver' ? followDestinationId : requesterSessionId };
       const definition = { v: 1 as const, enabled: receiverEnabled, filter: normalizeSessionListFilterV1({ homeServerIds: ['bob-home'],
-        scope: 'all_accessible', ...(surface === 'follow-source' || surface === 'follow-receiver' ? { projects: { include: [{ serverId: 'bob-home', projectKey: 'payments' }], exclude: [] } } : {}) }), policy: { preset: 'important' as const } };
+        scope: 'all_accessible', ...(surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? { projects: { include: [{ serverId: 'bob-home', projectKey: 'payments' }], exclude: [] } } : {}) }), policy: { preset: 'important' as const } };
       const ruleId = freshFollowRule ? 'bob-fresh-rule' : 'bob-private-rule';
       return { status: 200, data: { rules: [{ ruleId, version: freshFollowRule ? 0 : 1, receiver,
         ...(freshFollowRule ? { inception: { createdAt: 20, accountChangeCursor: 0 } } : surface === 'follow-pending' ? { sources: [{ sourceSessionId: 'bob-follow-source',
@@ -1038,7 +1038,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
             requestedAt: 1, admittedTarget: activationTarget },
         }) };
         if (request.url === '/v2/sessions/bob-follow-source') return { session: createSessionRecordFixture({
-          id: 'bob-follow-source', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }),
+          id: 'bob-follow-source', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo', projectId: sourceProject }),
           dataEncryptionKey: null, share: null, ownerAccountId: 'bob', origin: { kind: 'none' }, seq: sourceTranscriptSeq,
           agentStateVersion: sourceAgentStateVersion, agentState: JSON.stringify({ requests: sourceRequests, completedRequests: {} }),
           latestTurnId: surface === 'follow-pending' ? null : 'failed-turn', latestTurnStatus: surface === 'follow-pending' ? null : 'failed' }) };
@@ -1110,6 +1110,21 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
         }
         if (surface === 'follow-pending') {
           expect(acceptedOriginals).toHaveLength(1);
+          const inactivePath = `/v2/sessions/${requesterSessionId}/follows/inactive-observations`;
+          const inactiveBeforeSource = requests.filter(path => path === inactivePath).length;
+          const sourcesBefore = requests.filter(path => path === '/v2/sessions/bob-follow-source').length;
+          sourceProject = 'other';
+          followAccountChanges = [{ cursor: 1, kind: 'session', entityId: 'bob-follow-source', changedAt: 10 }];
+          await channel.hintAccountChange();
+          await vi.waitFor(() => expect(requests.filter(path => path === '/v2/sessions/bob-follow-source').length).toBeGreaterThan(sourcesBefore));
+          await new Promise<void>(resolve => setImmediate(resolve));
+          expect(requests.filter(path => path === inactivePath)).toHaveLength(inactiveBeforeSource);
+          // A later predicate match still reaches the same real requester/bootstrap intake.
+          sourceProject = 'payments';
+          followAccountChanges.push({ cursor: 2, kind: 'session', entityId: 'bob-follow-source', changedAt: 11 });
+          await channel.hintAccountChange();
+          await vi.waitFor(() => expect(requests.filter(path => path === inactivePath).length).toBeGreaterThan(inactiveBeforeSource));
+          await new Promise<void>(resolve => setImmediate(resolve));
           expect(acceptedOriginals[0]).toMatchObject({ followRelations: [{ relation: 'manager', attachedAt: 1 }, { relation: 'follower' }],
             followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-private-rule', ruleVersion: 1 } }],
             followDeliveryV1: { original: { sourceSessionId: 'bob-follow-source', sourceMessage: { localId: 'source-failed-original', seq: 1 } }, delivery: 'wake' } });
@@ -1145,8 +1160,8 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
           // rule with no edge/progress; Alice's installed Account is never used.
           freshFollowRule = true;
           sourceTranscriptSeq = 3;
-          followAccountChanges = [{ cursor: 1, kind: 'account', entityId: 'session-follows', changedAt: 30,
-            hint: buildSessionFollowChangeHintV1() }, { cursor: 2, kind: 'session', entityId: 'bob-follow-source', changedAt: 30 }];
+          followAccountChanges = [{ cursor: 3, kind: 'account', entityId: 'session-follows', changedAt: 30,
+            hint: buildSessionFollowChangeHintV1() }, { cursor: 4, kind: 'session', entityId: 'bob-follow-source', changedAt: 30 }];
           await channel.hintAccountChange();
           await vi.waitFor(() => expect(acceptedOriginals).toHaveLength(5));
           expect(acceptedOriginals[4]).toMatchObject({ followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-fresh-rule', ruleVersion: 0 } }],
