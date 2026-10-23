@@ -54,7 +54,7 @@ function createExecutor(params: Readonly<{
 }
 
 describe('runRemoteHomeEnrollmentRecipe', () => {
-  it('accepts four-minute consent within the recipe budget and gives wait only the remainder', async () => {
+  it('accepts four-minute consent and gives wait the remainder of the pairing lifetime', async () => {
     vi.useFakeTimers();
     try {
       const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
@@ -78,8 +78,31 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
       });
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       await expect(completed).resolves.toMatchObject({ machineId: 'joined' });
-      expect(budgets).toEqual([10 * 60_000, 6 * 60_000]);
+      expect(budgets).toEqual([10 * 60_000, 11 * 60_000]);
     } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps the streaming command under the learned pairing deadline owner', async () => {
+    const now = Date.now();
+    const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+      publicKey: PUBLIC_KEY, homeServerIdentityId: descriptor.homeServerIdentityId,
+      pairing: { ...pairing, createdAtMs: now, expiresAtMs: now + 15 * 60_000 },
+      supportsTokenOnly: true, pairingRequirement: 'v3' };
+    const result = { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
+      homeServerIdentityId: descriptor.homeServerIdentityId, machineId: 'joined',
+      encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: 'remote-home-profile' };
+    let commandTimeout: number | null | undefined;
+    await expect(runRemoteHomeEnrollmentRecipe({
+      homeTargetInput: { kind: 'descriptor', descriptor, authority: 'trusted_enrollment' },
+      executor: { runHappierJson: async () => { throw new Error('not used'); },
+        runHappierText: async (_args, options) => {
+          commandTimeout = options?.timeoutMs;
+          options?.onStdoutChunk?.(`${JSON.stringify(request)}\n${JSON.stringify(result)}\n`);
+          return { status: 0, stdout: '', stderr: '' };
+        } },
+      approvePairingRequest: async () => {}, timeoutMs: 10 * 60_000,
+    })).resolves.toMatchObject({ machineId: 'joined' });
+    expect(commandTimeout).toBeNull();
   });
 
   it.each(['request', 'wait'] as const)('retains the typed %s failure and exit phase without subprocess secrets', async phase => {

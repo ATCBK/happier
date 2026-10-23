@@ -194,23 +194,29 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
   /** Let the controller's authority reads consume this exact recipe deadline. */
   onEnrollmentDeadline?(deadlineMs: number): void;
 }>): Promise<RemoteHomeEnrollmentResult> {
-  const deadlineMs = Date.now() + params.timeoutMs;
+  let deadlineMs = Date.now() + params.timeoutMs;
+  let pairingDeadlineActive = false;
+  let onDeadlineChanged: (() => void) | undefined;
   params.onEnrollmentDeadline?.(deadlineMs);
   const timedOut = () => new SystemTaskExecutionError('auth_enrollment_timeout',
     'Remote Home enrollment timed out. Retry setup to request fresh approval.');
+  const pairingExpired = () => new SystemTaskExecutionError('auth_request_expired',
+    'Remote machine pairing approval expired. Retry setup to request fresh approval.');
   const remainingMs = (): number => {
     params.signal?.throwIfAborted();
     const remaining = deadlineMs - Date.now();
-    if (remaining <= 0) throw timedOut();
+    if (remaining <= 0) throw pairingDeadlineActive ? pairingExpired() : timedOut();
     return remaining;
   };
   const approvePairingRequest = async (request: RemoteHomeEnrollmentPairingRequest): Promise<void> => {
-    // One recipe budget contains request, human consent and claim. The Home's
-    // security expiry may end consent earlier; neither phase gets a new budget.
-    const approvalDeadlineMs = Math.min(deadlineMs, request.pairing.expiresAtMs);
-    const expired = () => approvalDeadlineMs === deadlineMs ? timedOut()
-      : new SystemTaskExecutionError('auth_request_expired',
-        'Remote machine pairing approval expired. Retry setup to request fresh approval.');
+    // Installation has only a provisional operation budget. Once the Home has
+    // issued a pairing request, its signed expiry is the consent boundary.
+    deadlineMs = request.pairing.expiresAtMs;
+    pairingDeadlineActive = true;
+    params.onEnrollmentDeadline?.(deadlineMs);
+    onDeadlineChanged?.();
+    const approvalDeadlineMs = deadlineMs;
+    const expired = pairingExpired;
     params.signal?.throwIfAborted();
     if (Date.now() >= approvalDeadlineMs) throw expired();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -323,6 +329,27 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
   let approvalPromise: Promise<void> | null = null;
   let approvalError: unknown = null;
   let authHelpOutput = false;
+  let streamDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const armStreamDeadline = (): void => {
+    clearTimeout(streamDeadlineTimer);
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) {
+      approvalError = state.pairingRequest
+        ? pairingExpired()
+        : timedOut();
+      linked.controller.abort();
+      return;
+    }
+    streamDeadlineTimer = setTimeout(() => {
+      approvalError = state.pairingRequest
+        ? pairingExpired()
+        : timedOut();
+      linked.controller.abort();
+    }, remaining);
+  };
+  onDeadlineChanged = armStreamDeadline;
+  armStreamDeadline();
 
   const consumeLine = (line: string): void => {
     const trimmed = line.trim();
@@ -393,7 +420,9 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         {
           input: JSON.stringify(managedEnrollment ? { homeTarget: homeTargetInput, managedEnrollment } : homeTargetInput),
           signal: linked.controller.signal,
-          timeoutMs: remainingMs(),
+          // This process spans request creation and consent. The recipe owns a
+          // re-armable deadline because the pairing expiry is learned on stdout.
+          timeoutMs: null,
           includeStdoutInError: false,
           onStdoutChunk: (chunk) => {
             lineBuffer += chunk;
@@ -440,6 +469,8 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
     }
     return result;
   } finally {
+    clearTimeout(streamDeadlineTimer);
+    onDeadlineChanged = undefined;
     linked.dispose();
   }
 }

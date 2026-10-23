@@ -18,7 +18,7 @@ type RemoteEnrollmentExecutorParams = Parameters<
 >[0];
 
 describe('native transport through the remote bootstrap task', () => {
-  it.each([60_000, 480_000])('gives service installation and start only the enrollment lifetime remaining after sign-in (%i ms)', async signInMs => {
+  it.each([60_000, 480_000])('gives service installation and start only the pairing lifetime remaining after sign-in (%i ms)', async signInMs => {
     vi.useFakeTimers();
     try {
       const startedAt = Date.now();
@@ -53,15 +53,13 @@ describe('native transport through the remote bootstrap task', () => {
         },
       });
       const result = task.run({ params: {}, emit() {}, prompt: async () => ({ approved: true }) });
-      if (signInMs === 480_000) {
-        await expect(result).rejects.toMatchObject({ code: 'auth_enrollment_timeout' });
-        expect(seen).toEqual([]);
-        return;
-      }
       await expect(result).resolves.toMatchObject({ machineId: 'joined' });
-      expect(seen).toEqual([
-        ['service', 'install', '--wait-timeout-ms', '420000', '--json'],
-        ['service', 'start', '--wait-timeout-ms', '275000', '--json'],
+      expect(seen).toEqual(signInMs === 60_000 ? [
+        ['service', 'install', '--wait-timeout-ms', '720000', '--json'],
+        ['service', 'start', '--wait-timeout-ms', '575000', '--json'],
+      ] : [
+        ['service', 'install', '--wait-timeout-ms', '300000', '--json'],
+        ['service', 'start', '--wait-timeout-ms', '155000', '--json'],
       ]);
     } finally { vi.useRealTimers(); }
   });
@@ -93,7 +91,38 @@ describe('native transport through the remote bootstrap task', () => {
       expect(deadlines.every(deadline => deadline === startedAt + 10 * 60_000)).toBe(true);
     } finally { vi.useRealTimers(); }
   });
-  it.each([60_000, 15 * 60_000])('settles unanswered pairing at the earlier Home/operation deadline (%i ms) with a Retry outcome', async lifetimeMs => {
+  it('replaces the provisional install deadline with the pairing expiry once consent exists', async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      const pairingCreatedAt = startedAt + 4 * 60_000;
+      const pairingExpiresAt = pairingCreatedAt + 15 * 60_000;
+      const deadlines: number[] = [];
+      const task = createRemoteNativeBootstrapMachineTaskKind({
+        onEnrollmentDeadline: deadline => { deadlines.push(deadline); },
+        configuration: { relay: { relayUrl: HOME_TARGET.canonicalAuthUrl }, homeTarget: HOME_TARGET, serviceMode: 'none' },
+        assertCurrent: async () => {},
+        installRemoteCli: async () => { vi.setSystemTime(pairingCreatedAt); },
+        approveLocalAuthRequest: async () => { vi.setSystemTime(pairingCreatedAt + 11 * 60_000); },
+        executor: {
+          runHappierJson: async () => ({ ok: true, data: { authenticated: true, credentialState: 'valid', machineRegistrationState: 'server-confirmed', machineId: 'joined' },
+            daemon: { running: true }, auth: { needsAuth: false, machineId: 'joined' }, server: { activeServerId: 'guest-home' } }),
+          runHappierText: async args => ({ status: 0, stderr: '', stdout: JSON.stringify(args[1] === 'request' ? {
+            kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+            publicKey: Buffer.alloc(32, 1).toString('base64'), homeServerIdentityId: HOME_TARGET.homeServerIdentityId,
+            pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: pairingCreatedAt, expiresAtMs: pairingExpiresAt },
+            supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home',
+          } : { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
+            homeServerIdentityId: HOME_TARGET.homeServerIdentityId, machineId: 'joined', encryptionType: 'tokenOnly',
+            pairingAuthentication: 'v3', remoteProfileId: 'guest-home' }) }),
+        },
+      });
+
+      await expect(task.run({ params: {}, emit() {}, prompt: async () => ({ approved: true }) })).resolves.toMatchObject({ machineId: 'joined' });
+      expect(deadlines).toEqual([startedAt + 10 * 60_000, pairingExpiresAt]);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([60_000, 15 * 60_000])('settles unanswered pairing at the Home pairing deadline (%i ms) with a Retry outcome', async lifetimeMs => {
     vi.useFakeTimers();
     try {
       const now = Date.now();
@@ -116,9 +145,9 @@ describe('native transport through the remote bootstrap task', () => {
       await runner.startAdmitted({ taskId: 'expiring-consent', kind: 'remote.ssh.bootstrapMachine.v1', params: {} }, task);
       await vi.advanceTimersByTimeAsync(0);
       expect((await runner.poll({ taskId: 'expiring-consent', cursor: 0 })).pendingPrompt?.kind).toBe('auth.approveRemoteProvisioning');
-      await vi.advanceTimersByTimeAsync(Math.min(lifetimeMs, 10 * 60_000) + 1);
+      await vi.advanceTimersByTimeAsync(lifetimeMs + 1);
       expect(await runner.poll({ taskId: 'expiring-consent', cursor: 0 })).toMatchObject({
-        pendingPrompt: null, result: { ok: false, error: { code: lifetimeMs < 10 * 60_000 ? 'auth_request_expired' : 'auth_enrollment_timeout', message: expect.stringContaining('Retry') } },
+        pendingPrompt: null, result: { ok: false, error: { code: 'auth_request_expired', message: expect.stringContaining('Retry') } },
       });
       await expect(runner.respond({ taskId: 'expiring-consent', answer: { approved: true } })).rejects.toThrow();
       expect(approved).toBe(false);
