@@ -666,12 +666,12 @@ describe('authenticated finite Project Action owner', () => {
                 { ...h.context, transportRequestId: '10000000-0000-4000-8000-000000000089' });
             expect(result).not.toMatchObject({ ok: false });
             expect(ProjectCommandActionOutputV1Schema.parse(result)).toMatchObject({ operation: { actionId: 'projects.script.run' } });
-            const requestsAtAcceptance = requests.length;
             await h.firstSpawn;
             // Acceptance, dequeue and final native admission remain separate decisions.
             // A no-effect setup and a primary Sync no-op introduce no new decision.
             // Currentness is descriptive; each decision still reads fresh mode authority.
-            expect.soft(requestsAtAcceptance).toBe(2);
+            // Dequeue can start its next fresh read before the accepted RPC
+            // returns. Count each decision below, not that scheduling race.
             expect.soft(requests.filter(path => path.endsWith('/read'))).toHaveLength(3);
             const projectReads = h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/list'));
             expect.soft(projectReads).toHaveLength(2);
@@ -1606,6 +1606,52 @@ describe('authenticated finite Project Action owner', () => {
         expect(h.operationRuntime.store.list(scope).items).toHaveLength(outerActionId === 'projects.script.run' ? 1 : 2);
         h.spawned[0]!.pty.exit(0);
         await expect.poll(() => h.operationRuntime.store.get(scope, expectedId)?.state).toBe('succeeded');
+    });
+
+    it.each(['run', 'cancelled'] as const)('reads Script placement preferences while SOURCE tool inspection is pending (%s)', async scenario => {
+        const h = await harness(portableNativeManifest, null, 'source-machine');
+        await h.addWorkerTarget();
+        const preferenceHttp = h.installPreferenceReadHttpBoundary();
+        Object.assign(h.runtime, { resolveWorkspaceExecutionConfig: async (context: Parameters<ProjectFiniteActionRuntime['resolveWorkspaceExecutionConfig']>[0]) =>
+            createAccountServerWorkspaceWorkerPreferenceClient({ token: 'requester', credentials: h.runtime.credentials,
+                serverHttpBaseUrl: h.runtime.serverHttpBaseUrl, context, actionId: 'projects.script.run',
+                resolveRequestHeaders: () => ({ Authorization: 'Bearer requester' }) }) });
+        const resolveTool = h.runtime.nativeIo.resolveTool;
+        let inspectionStarted = false;
+        let releaseInspection!: () => void;
+        const heldInspection = new Promise<void>(resolve => { releaseInspection = resolve; });
+        const nativeIo: ProjectFiniteActionRuntime['nativeIo'] = { ...h.runtime.nativeIo, resolveTool: async (tool, input) => {
+            if (input.cwd === h.root) { inspectionStarted = true; await heldInspection; }
+            return resolveTool(tool, input);
+        } };
+        Object.assign(h.runtime, { nativeIo });
+        const transport = new AbortController();
+        const pending = h.rpcInvoke('projects.script.run', { workspace: h.address, selection: { kind: 'named', name: 'checked' },
+            choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'machine' } } }, { ...h.context, signal: transport.signal });
+        try {
+            await vi.waitFor(() => expect(inspectionStarted).toBe(true));
+            // Two necessary passive Home reads share one wave; neither may
+            // accept work or begin copying while SOURCE facts are outstanding.
+            await vi.waitFor(() => expect(preferenceHttp.mock.calls.filter(([config]) =>
+                config.url === `https://home.example${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`)).toHaveLength(1));
+            expect(h.runtime.workerAdmission.dependencies()).toEqual([]);
+            expect(h.spawned).toEqual([]);
+        } finally {
+            if (scenario === 'cancelled') transport.abort();
+            releaseInspection();
+        }
+        const result = await pending;
+        if (scenario === 'cancelled') {
+            expect(ActionExecuteFailureSchema.parse(result)).toMatchObject({ ok: false });
+            expect(h.spawned).toEqual([]);
+            expect(h.runtime.workerAdmission.dependencies()).toEqual([]);
+        } else {
+            expect(result).toMatchObject({ operation: { operationId: 'operation' } });
+            h.continueCopy();
+            await h.firstSpawn;
+            h.spawned[0]!.pty.exit(0);
+            await expect.poll(() => h.runtime.workerAdmission.dependencies()).toEqual([]);
+        }
     });
 
     it('admits the immutable remote SOURCE before clean-copy and reviews only the copied worker target bytes', async () => {
