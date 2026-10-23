@@ -446,6 +446,7 @@ export function buildActivityNotificationContent(
       sessionTitle,
       agentDisplayName: event.agentDisplayName,
       requestId: event.requestId,
+      turnId: event.turnId,
       toolName: event.toolName,
       toolInput: event.toolInput,
       includeMessageText: includePreview && options.requestIncludeMessageText !== false,

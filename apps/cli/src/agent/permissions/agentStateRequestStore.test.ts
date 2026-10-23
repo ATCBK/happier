@@ -81,12 +81,17 @@ describe('AgentStateRequestStore', () => {
             }),
         });
         try {
-            await store.publishRequestAndWait({ requestId: 'joined', toolName: 'AskUserQuestion', toolInput: {}, createdAt: Date.now() });
+            await store.publishRequestAndWait({ requestId: 'joined', turnId: 'turn-joined', toolName: 'AskUserQuestion', toolInput: {}, createdAt: Date.now() });
             await new Promise(resolve => setImmediate(resolve));
             expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
             admit({ personalFollow: { sourceSessionId: session.sessionId,
                 requests: [{ requestId: 'joined', policies: [{ preset: 'important' }] }] } });
             await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+            expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
+                expect.any(String), expect.any(String),
+                expect.objectContaining({ requestId: 'joined', turnId: 'turn-joined', type: 'user_action_request' }),
+                expect.any(Object),
+            );
             expect(session.agentState.requests!.joined.pushNotifiedAt).toEqual(expect.any(Number));
             store.notifyPermissionRequestPushBestEffort({ permissionId: 'joined', toolName: 'AskUserQuestion', toolInput: {} });
             await new Promise(resolve => setImmediate(resolve));
@@ -103,8 +108,13 @@ describe('AgentStateRequestStore', () => {
                 fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
         });
         try {
-            await store.publishRequestAndWait({ requestId: 'fallback', toolName: 'Write', toolInput: {}, createdAt: Date.now() });
+            await store.publishRequestAndWait({ requestId: 'fallback', turnId: 'turn-fallback', toolName: 'Write', toolInput: {}, createdAt: Date.now() });
             await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+            expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
+                expect.any(String), expect.any(String),
+                expect.objectContaining({ requestId: 'fallback', turnId: 'turn-fallback', type: 'permission_request' }),
+                expect.any(Object),
+            );
             expect(session.agentState.requests!.fallback.pushNotifiedAt).toEqual(expect.any(Number));
         } finally { store.dispose(); }
     });

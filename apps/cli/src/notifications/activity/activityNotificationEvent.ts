@@ -37,6 +37,7 @@ export type ActivityNotificationEvent =
     sessionTitle?: string | null;
     agentDisplayName?: string | null;
     requestId: string;
+    turnId?: string;
     toolName: string;
     toolInput?: unknown;
     toolDetails?: string | null;

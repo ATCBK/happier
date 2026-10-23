@@ -10,6 +10,7 @@ import { sendAgentRequestPushNotificationAsync, type PermissionRequestPushSender
 import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 type RequestNotificationAdmission = Readonly<{
+  turnId?: string;
   admittedRulePolicies?: readonly FollowPolicyV1[];
   isCurrent: () => boolean;
 }>;
@@ -179,6 +180,7 @@ export class PermissionRequestPushNotifier {
       sessionTitle: this.readSessionTitle(),
       agentDisplayName: this.readAgentDisplayName(),
       requestId: permissionId,
+      turnId: admission?.turnId,
       toolName: entry.toolName,
       kind: entry.kind,
       settings,

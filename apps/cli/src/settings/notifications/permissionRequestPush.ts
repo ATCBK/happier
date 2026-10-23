@@ -26,6 +26,7 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
   sessionTitle?: string | null;
   agentDisplayName?: string | null;
   requestId: string;
+  turnId?: string;
   toolName: string;
   kind: AgentRequestKind;
   settings: AccountSettings | null;
@@ -56,6 +57,7 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
         sessionTitle: params.sessionTitle,
         agentDisplayName: params.agentDisplayName,
         requestId: params.requestId,
+        turnId: params.turnId,
         toolName: params.toolName,
         toolInput: params.toolInput,
         toolDetails: details,

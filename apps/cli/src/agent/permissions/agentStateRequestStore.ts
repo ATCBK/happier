@@ -1611,7 +1611,8 @@ export class AgentStateRequestStore {
                 const contribution = result?.personalFollow;
                 const policies = contribution?.sourceSessionId === session.sessionId
                     ? contribution.requests?.find(candidate => candidate.requestId === requestId)?.policies : undefined;
-                return { isCurrent, ...(policies ? { admittedRulePolicies: policies } : {}) };
+                return { isCurrent, ...(request.turnId ? { turnId: request.turnId } : {}),
+                    ...(policies ? { admittedRulePolicies: policies } : {}) };
             },
             sessionId: session.sessionId,
             logPrefix: this.logPrefix,

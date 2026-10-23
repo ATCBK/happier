@@ -11,6 +11,7 @@ export function buildAgentRequestNotificationContent(params: Readonly<{
   sessionTitle?: string | null;
   agentDisplayName?: string | null;
   requestId: string;
+  turnId?: string;
   toolName: string;
   toolInput?: unknown;
   toolDetails?: string | null;
@@ -50,6 +51,7 @@ export function buildAgentRequestNotificationContent(params: Readonly<{
     data: {
       sessionId: params.sessionId,
       requestId: params.requestId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
       tool: params.toolName,
       type,
       kind: params.kind,
