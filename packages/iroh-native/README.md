@@ -36,6 +36,11 @@ In 0.3 development source, the binding dispatches synchronous lifecycle calls
 to that native runtime's blocking pool and settles JavaScript promises through
 NAPI deferreds. Pending peer dials therefore leave Node's shared filesystem/DNS
 workers available for daemon logging, heartbeat persistence and request admission.
+The runtime starts on the first native lifecycle operation, not addon load or
+allocator maintenance. One background worker drives the asynchronous endpoint,
+relay and tunnel I/O, including between lifecycle calls; blocking lifecycle waits
+use the separate on-demand blocking pool. Standard-only daemon startup skips the
+endpoint; Iroh-eligible Machines keep it listening for incoming carrier work.
 Existing processes need the rebuilt addon and a runtime restart to consume this
 correction; changing TypeScript source alone does not replace a loaded addon.
 

@@ -353,6 +353,8 @@ static STATE: OnceLock<NativeRuntime> = OnceLock::new();
 fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         Builder::new_multi_thread()
+            // One background event loop serves async network I/O; lifecycle waits use the blocking pool.
+            .worker_threads(1)
             .enable_all()
             .build()
             .expect("Iroh runtime must build")
@@ -2082,6 +2084,26 @@ mod android {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_dispatch_uses_one_autonomous_network_worker() {
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        spawn_lifecycle_operation(move || {
+            runtime().spawn(async move {
+                tokio::task::yield_now().await;
+                completed_tx
+                    .send(runtime().metrics().num_workers())
+                    .expect("report worker count after lifecycle dispatch returns");
+            });
+        });
+        let workers = completed_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("network work progresses without an active host lifecycle call");
+        assert_eq!(
+            workers, 1,
+            "Iroh needs one network event loop, not host-core workers"
+        );
+    }
 
     #[test]
     fn endpoint_lifecycle_closes_admission_and_waits_for_admitted_work() {

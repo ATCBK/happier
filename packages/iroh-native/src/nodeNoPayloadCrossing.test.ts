@@ -39,6 +39,7 @@ function createNullAddon(): IrohNodeNativeAddon {
     startMachineHttpTunnel: nullEnvelope,
     stopMachineTunnel: nullEnvelope,
     getMachineTunnelStatus: nullEnvelope,
+    waitMachineTunnelClosed: nullEnvelope,
   };
 }
 
