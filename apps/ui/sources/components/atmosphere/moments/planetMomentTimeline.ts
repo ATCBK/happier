@@ -17,8 +17,8 @@ const { L4 } = PLANET_MOMENT_TIMINGS;
 const CROSSFADE_S = motionTokens.atmosphere.reducedCrossFadeMs / 1000;
 /** The rest after Welcome: about 15 % of the field digits re-type, each every 2 s (lab `rate: 0.5`). */
 export const WELCOME_RETYPE_RATE = 0.5;
-/** The rest is redrawn this often while digits re-type (lab: one redraw every 0.5 s). */
-export const WELCOME_RETYPE_STEP_S = 0.5;
+/** R-11's resting digits advance once every two seconds, without a frame loop. */
+export const WELCOME_RETYPE_STEP_S = 2;
 
 /** Where Loading's cloud gathers: the lab's centre of the pane, a sixth of its short side across. */
 export type PlanetMomentOrigin = Readonly<{
@@ -166,7 +166,7 @@ export function welcomePlanetPhase(
   };
 }
 
-/** The rest's typewriter time after Welcome, stepped so the planet is redrawn only every half second. */
+/** The rest's typewriter time after Welcome, stepped at the resting digit cadence. */
 export function welcomeRetypeTime(restSeconds: number): number {
   return (
     Math.floor(restSeconds / WELCOME_RETYPE_STEP_S) * WELCOME_RETYPE_STEP_S

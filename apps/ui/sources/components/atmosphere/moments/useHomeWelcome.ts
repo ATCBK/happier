@@ -8,7 +8,7 @@ export type HomeWelcome = Readonly<{
   /** Home's planet takes over from the landed assembly in the same frame. */
   arrive: 'fade' | 'instant';
   onLanded: () => void;
-  /** After Welcome, this visit may re-type digits. The planet leaf owns the rest clock. */
+  /** After Welcome, this visit may re-type digits. Only the drawing leaf owns the rest clock. */
   retype: boolean;
 }>;
 
@@ -50,11 +50,8 @@ export function useHomeWelcome(
     setStatus('done');
     setInstant(true);
   }, [input.reducedMotion, status]);
-  // The resting re-type belongs to this visit: it ends when Home is left.
+  // A retained Home pauses its landed rest while ineligible, without replaying Welcome on return.
   const resting = status === 'resting';
-  React.useEffect(() => {
-    if (resting && !input.eligible) setStatus('done');
-  }, [input.eligible, resting]);
   return {
     playing: status === 'playing' || play,
     arrive: instant ? 'instant' : 'fade',

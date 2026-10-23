@@ -5,8 +5,15 @@ import { orderedFadeMask } from './orderedFadeMask';
 import { createPlanetCanvasSceneCache, snapCanvasBox } from './planetCanvasScene';
 import type { PlanetCanvasProps } from './planetCanvas.types';
 import { paintNativePlanetScene } from './planetCanvasPaint.native';
+import { usePlanetDigits } from './usePlanetDigits';
 
 export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvasProps) {
+    return <PlanetDigits {...props} />;
+});
+
+/** One surface keeps the original body/emboss/haze/digits blend and ordered fade intact. */
+function PlanetDigits(input: PlanetCanvasProps) {
+    const props = usePlanetDigits(input);
     const regular = useFont(require('@/assets/fonts/IBMPlexMono-Regular.ttf'), 12);
     const strong = useFont(require('@/assets/fonts/IBMPlexMono-SemiBold.ttf'), 12);
     const dpr = props.options?.dpr ?? PixelRatio.get();
@@ -41,4 +48,4 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
     return <Canvas pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID={props.testID} style={[props.style, { width: box.width, height: box.height }]}>
         {picture ? <Picture picture={picture} /> : null}
     </Canvas>;
-});
+}

@@ -10,7 +10,6 @@ import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { useSessionRipplePlayback } from './sessionRipple';
 import { PlanetCanvas } from './PlanetCanvas';
 import type { PlanetSceneOptions } from '@happier-dev/brand/planet';
-import { WELCOME_RETYPE_RATE, WELCOME_RETYPE_STEP_S, welcomeRetypeTime } from './moments/planetMomentTimeline';
 import {
   homePlanetGeometry,
   homePlanetDrawnHeight,
@@ -47,7 +46,7 @@ export type HomePlanetLook = Readonly<{
  * Home's planet scene for its pane and hero: the one place its options are made, shared with the
  * moments that land on it. Null while it cannot be placed yet (Rise waits for the composer).
  */
-export function useHomePlanetOptions(look: HomePlanetLook, retypeTime: number | null = null): PlanetSceneOptions | null {
+export function useHomePlanetOptions(look: HomePlanetLook): PlanetSceneOptions | null {
   const { pane, placement, hero, phone, theme, style, digits } = look;
   const projectBand = look.band ? projectPlanetBand(look.band) : null;
   const widgets = hero ? hero.nextTop !== null : undefined;
@@ -62,9 +61,8 @@ export function useHomePlanetOptions(look: HomePlanetLook, retypeTime: number | 
     // The scene's view reaches as far down as the planet is drawn (Rise's foot fade may pass the fold).
     const drawn = { width: pane.width, height: homePlanetDrawnHeight(pane.height, fadeTo === undefined ? undefined : { to: fadeTo }) };
     const options = homePlanetSceneOptions(geometry, drawn, { theme, style, digits });
-    // After Welcome the field re-types slowly (lab rest: `rate: 0.5`).
-    return retypeTime === null ? options : { ...options, time: retypeTime, rate: WELCOME_RETYPE_RATE };
-  }, [digits, fadeTo, limb, pane, phone, placement, ready, retypeTime, style, theme, widgets]);
+    return options;
+  }, [digits, fadeTo, limb, pane, phone, placement, ready, style, theme, widgets]);
 }
 
 /** Rise's ordered foot fade before the widgets, in the pane (lab `layout()`); none for the other placements. */
@@ -98,7 +96,7 @@ export const HomePlanet = React.memo(function HomePlanet(
     /** A moment that landed on this planet hands over in the same frame. */
     arrive?: 'fade' | 'instant';
     reducedMotion: boolean;
-    /** This visit may re-type after Welcome. The leaf owns its clock. */
+    /** This visit may re-type after Welcome. Only the drawing leaf owns its clock. */
     retype?: boolean;
     writing?: boolean;
     /** Each time the planet's canvas has drawn. */
@@ -112,8 +110,7 @@ export const HomePlanet = React.memo(function HomePlanet(
   const { pane } = props;
   const activelyViewed = useHostActivelyViewed();
   const paused = !activelyViewed || props.focused === false || props.writing === true || props.hidden;
-  const retypeTime = useRetypeTime(props.retype === true && props.digits && !paused && !props.reducedMotion);
-  const options = useHomePlanetOptions(props, props.retype ? retypeTime : null);
+  const options = useHomePlanetOptions(props);
   const fade = homePlanetFootFade(props);
   const height = homePlanetDrawnHeight(pane.height, fade);
   const [drawn, setDrawn] = React.useState(false);
@@ -152,6 +149,7 @@ export const HomePlanet = React.memo(function HomePlanet(
         width={pane.width}
         height={height}
         options={lit}
+        retype={props.retype && props.digits ? { paused: paused || props.reducedMotion } : undefined}
         fade={fade}
         onReady={onReady}
         testID="home-planet"
@@ -180,21 +178,6 @@ function SessionFinishWatch(props: Readonly<{ visible: boolean; onAnswer: () => 
   }, [answers, onAnswer]);
   return null;
 }
-
-/** Welcome's low-rate rest clock belongs only to the planet that draws its digits. */
-function useRetypeTime(running: boolean): number {
-  const [time, setTime] = React.useState(0);
-  React.useEffect(() => {
-    if (!running) return;
-    const id = setInterval(
-      () => setTime(current => welcomeRetypeTime(current + WELCOME_RETYPE_STEP_S)),
-      WELCOME_RETYPE_STEP_S * 1000,
-    );
-    return () => clearInterval(id);
-  }, [running]);
-  return time;
-}
-
 
 const styles = StyleSheet.create({
   layer: { position: 'absolute', left: 0, top: 0 },

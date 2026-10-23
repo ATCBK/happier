@@ -5,6 +5,7 @@ import { createPlanetCanvasSceneCache, snapCanvasBox } from './planetCanvasScene
 import { paintPlanetScene } from './planetCanvasPaint.web';
 import { orderedFade } from '@happier-dev/brand/atmosphere';
 import type { PlanetCanvasProps } from './planetCanvas.types';
+import { usePlanetDigits } from './usePlanetDigits';
 
 // Canvas text does not resolve CSS var() itself, so read the typography owner's variable.
 export function planetCanvasFonts() {
@@ -16,6 +17,12 @@ export function planetCanvasFonts() {
 }
 
 export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvasProps) {
+    return <PlanetDigits {...props} />;
+});
+
+/** Repaint one canvas, preserving the original source-atop composition rather than overlaying it. */
+function PlanetDigits(input: PlanetCanvasProps) {
+    const props = usePlanetDigits(input);
     const ref = React.useRef<HTMLCanvasElement>(null);
     const ready = React.useRef(props.onReady); ready.current = props.onReady;
     const failed = React.useRef(props.onError); failed.current = props.onError;
@@ -60,4 +67,4 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
         ref, width: box.pixelWidth, height: box.pixelHeight, 'data-testid': props.testID, 'aria-hidden': true,
         style: { ...StyleSheet.flatten(props.style), width: box.width, height: box.height, pointerEvents: 'none', display: 'block', fontFamily: getMonoFont() },
     });
-});
+}
