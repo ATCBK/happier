@@ -26,6 +26,11 @@ import { readSessionAccessHttpFailureCode, SessionAccessApiError } from './sessi
 export { SessionAccessApiError } from './sessionAccessHttpFailure';
 import type { SessionPublicVisualNetworkConsequence } from './sessionPublicVisualNetworkConsequence';
 import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
+import { SessionAccessEncryptionPrepareResultV1Schema, SessionAccessLayoutUpdateResultV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
+import { prepareSessionDataKeyEnvelopesDetached } from './sessionDataKeyEnvelopesApi';
+import type { CurrentSessionPreparationProgress } from '@/sync/encryption/prepareCurrentSessionDataKeyEnvelopes';
+import { migrateSessionForSharing } from '@/sync/ops/sessions/migrateSessionForSharing';
+import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 /** Batch preview from the same Home policy owner that admits a grant. Older Homes fail closed. */
 export async function inspectSessionAccessCandidates(options: SessionAccessRequestOptions & Readonly<{
@@ -88,9 +93,11 @@ export type SessionAccessRequestOptions = Readonly<{
     signal?: AbortSignal;
     /** Optional mounted-sheet notification; the approved result also carries the full URL. */
     onPublicLinkIssued?: (material: Readonly<{ lookupId: string; secret: string }>) => void;
+    /** View observation only; the existing detached preparation owner retains the work. */
+    onEncryptionPreparationProgress?: (progress: CurrentSessionPreparationProgress) => void;
 }>;
 
-async function materializeDirectAccountEnvelope(params: Readonly<{
+async function materializeSessionGrant(params: Readonly<{
     authority: ServerAccountRequestAuthority;
     check(): void;
     sessionId: string;
@@ -100,9 +107,6 @@ async function materializeDirectAccountEnvelope(params: Readonly<{
     retainedEnvelopeFallback: boolean;
     checkCurrentness: () => void;
 }>> {
-    if (params.mutation.subject.kind !== 'account') {
-        return { mutation: params.mutation, retainedEnvelopeFallback: false, checkCurrentness: params.check };
-    }
     const encryption = params.authority.context.encryption;
     const encryptionCurrentness = captureEncryptionGenerationCurrentness(encryption, {
         serverId: params.authority.scope.serverId,
@@ -124,6 +128,18 @@ async function materializeDirectAccountEnvelope(params: Readonly<{
         throw error;
     });
     checkEncryptionScope();
+    // Sharing a historical tuple first needs its owner/private split. This is
+    // preparation of the admitted grant, including generic approval replay;
+    // no mounted control may migrate before grant admission. The tuple owner
+    // rechecks ownership, currentness and CAS from the actual stored tuple.
+    if (readSessionMetadataLayoutVersion(snapshot.session.metadataLayoutVersion) === 0) {
+        await migrateSessionForSharing({ scope: params.authority.scope, sessionId: params.sessionId,
+            isCurrent: () => { checkEncryptionScope(); return true; } });
+        checkEncryptionScope();
+    }
+    if (params.mutation.subject.kind !== 'account') {
+        return { mutation: params.mutation, retainedEnvelopeFallback: false, checkCurrentness: checkEncryptionScope };
+    }
     if ((snapshot.session.encryptionMode ?? 'e2ee') === 'plain') {
         return { mutation: params.mutation, retainedEnvelopeFallback: false, checkCurrentness: checkEncryptionScope };
     }
@@ -262,9 +278,33 @@ export async function executeSessionAccessHttpAction(params: SessionAccessReques
         throw new SessionAccessApiError('session_access_sharing_unavailable');
     }
     const spec = getActionSpec(actionId);
-    if (!spec.serverTransport || !spec.outputSchema) throw new SessionAccessApiError('unsupported_action');
+    if (!spec.outputSchema) throw new SessionAccessApiError('unsupported_action');
     if (!isSessionAccessActionIdV1(actionId)) throw new SessionAccessApiError('unsupported_action');
     const publicInput = spec.inputSchema.parse(params.input);
+    // These intents need the answering client's existing keys and tuple writer.
+    // They share the family front door, not its HTTP descriptor binder; pages
+    // and CAS writes remain owned by the existing crypto/metadata operations.
+    if (actionId === 'session.access.encryption.prepare' || actionId === 'session.access.encryption.reprepare'
+        || actionId === 'session.access.layout.update') {
+        // The declared strict input above has already admitted these operands.
+        const input = publicInput as { sessionId: string; recipientAccountId?: string };
+        return await runWithServerAccountScopeRequestGuard({ scope: params.scope, isCurrent: params.isCurrent,
+            signal: params.signal, staleError: () => new SessionAccessApiError('session_access_stale_scope'),
+        }, async guard => {
+            guard.check();
+            if (actionId === 'session.access.layout.update') {
+                await migrateSessionForSharing({ scope: params.scope, sessionId: input.sessionId, isCurrent: guard.isCurrent });
+                guard.check();
+                return { status: 'complete' as const };
+            }
+            return await prepareSessionDataKeyEnvelopesDetached({ scope: params.scope, availability: params.availability,
+                sessionId: input.sessionId,
+                ...(input.recipientAccountId === undefined ? {} : { reprepareRecipientAccountId: input.recipientAccountId }),
+                ...(params.onEncryptionPreparationProgress ? { onProgress: params.onEncryptionPreparationProgress } : {}),
+            });
+        });
+    }
+    if (!spec.serverTransport) throw new SessionAccessApiError('unsupported_action');
     const mutation = spec.sideEffectClass !== 'none' && spec.sideEffectClass !== 'read';
     // An already-aborted request proves this host never handed bytes to the
     // transport. After dispatch, cancellation can no longer prove that.
@@ -300,7 +340,7 @@ export async function executeSessionAccessHttpAction(params: SessionAccessReques
             }
             if (actionId === 'session.access.grant.set') {
                 const { sessionId, ...grant } = publicInput as Record<string, unknown> & { sessionId: string };
-                const materialized = await materializeDirectAccountEnvelope({
+                const materialized = await materializeSessionGrant({
                     authority,
                     check,
                     sessionId,
@@ -461,6 +501,11 @@ export function createSessionAccessClient(options: SessionAccessRequestOptions &
         set: async (input: SessionGrantIntentV1) => SetSessionAccessGrantResponseV1Schema.parse(await execute('session.access.grant.set', { sessionId: options.sessionId, ...input })),
         remove: async (subject: PrincipalRefV1) => RemoveSessionAccessGrantResponseV1Schema.parse(await execute('session.access.grant.remove', { sessionId: options.sessionId, subject })),
         setContext: async (primaryTeamId: string | null) => SetSessionAccessContextResponseV1Schema.parse(await execute('session.access.context.set', { sessionId: options.sessionId, primaryTeamId })),
+        prepareAccess: async (recipientAccountId?: string) => SessionAccessEncryptionPrepareResultV1Schema.parse(await execute(
+            recipientAccountId === undefined ? 'session.access.encryption.prepare' : 'session.access.encryption.reprepare',
+            { sessionId: options.sessionId, ...(recipientAccountId === undefined ? {} : { recipientAccountId }) },
+        )),
+        updateHistoricalLayout: async () => SessionAccessLayoutUpdateResultV1Schema.parse(await execute('session.access.layout.update', { sessionId: options.sessionId })),
         getPublicLink: async () => SessionPublicLinkGetActionResultV1Schema.parse(
             await execute('session.public_link.get', { sessionId: options.sessionId }),
         ),

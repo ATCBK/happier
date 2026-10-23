@@ -290,6 +290,8 @@ describe('Session envelope exact Account transport', () => {
         });
 
         expect(outcome.status).toBe('complete');
+        const { SessionAccessEncryptionPrepareResultV1Schema } = await import('@happier-dev/protocol/sessions/access/sessionAccessActionsV1');
+        expect(SessionAccessEncryptionPrepareResultV1Schema.parse(outcome)).toEqual(outcome);
         expect(outcome.preparedCount).toBe(1);
         expect(env.request.mock.calls.some(([url]) => url.endsWith('/turns'))).toBe(false);
         // The recipient recovers the exact 32 bytes the manager opened from its own envelope —

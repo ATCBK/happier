@@ -31,9 +31,10 @@ export type { SessionDataKeyEnvelopeCollectionState } from './sessionDataKeyEnve
  * collection, and the production host that drives the canonical preparation pass
  * over it.
  *
- * The collection is domain-native rather than an Action: it is the internal page
- * an already-authorized manager works through, not a user-invocable operation,
- * so it carries no Action catalog entry and no per-page approval policy. What it
+ * The collection is the internal page an already-authorized manager works
+ * through. Manual preparation enters the Session-access Action family once;
+ * committed grants continue here without another approval. Pages have no
+ * independent Action or per-page approval policy. What this collection
  * does share with the Collaboration surface beside it is the authority contract —
  * one captured Home/Account authority spans the Session snapshot, the local key
  * opening, and every GET/PATCH of the pass, so a page can never be sealed under

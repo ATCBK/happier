@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { AES256Encryption } from '@/sync/encryption/encryptor';
+import { createDataKeyAccountEncryptionCurrentnessFixture, createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 // Transform the real, shared runtime once during collection rather than inside
 // the first transport assertion's deadline. setup() installs each HTTP answer.
@@ -49,13 +53,27 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
     setRuntimeFetch(createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/auth/ping') return new Response('{}', { status: 200 });
+        // Current-layout owner metadata uses the currentness route, independently
+        // of the mode-only route the per-case grant boundary exercises.
+        if (path === '/v1/account/encryption/currentness') return Response.json(options?.accountEncryption === 'e2ee'
+            ? createDataKeyAccountEncryptionCurrentnessFixture({ machineKey: MANAGER_CONTENT_KEYS.secretKey, publicKey: MANAGER_CONTENT_KEYS.publicKey })
+            : createPlainAccountEncryptionCurrentnessFixture());
         // The shared Action front door reads the Account's own settings before it
         // dispatches. That is front-door lifecycle, not this transport's contract,
         // so it is answered here rather than in every per-test route table.
         if (path === '/v2/account/settings') return new Response(JSON.stringify({ content: null, version: 0 }));
         return request(String(url), init);
     }));
-    return { target, request, credentials, token, storage, active, TokenStorage };
+    const currentSession = createPlainSessionCurrentProjectionRecordFixture({ metadata: {} });
+    if (currentSession.ownerMetadata?.t !== 'plain') throw new Error('Expected the canonical owner fixture');
+    const ownerMetadata = options?.accountEncryption === 'e2ee' ? sealSessionOwnerMetadataEnvelopeV1({
+        material: { type: 'dataKey', machineKey: MANAGER_CONTENT_KEYS.secretKey },
+        ownerMetadata: currentSession.ownerMetadata.v, randomBytes: tweetnacl.randomBytes,
+    }) : currentSession.ownerMetadata;
+    const [encryptedShared] = options?.accountEncryption === 'e2ee'
+        ? await new AES256Encryption(new Uint8Array(32).fill(11)).encrypt([{ v: 1 }]) : [];
+    const sharedMetadata = encryptedShared ? encodeBase64(encryptedShared, 'base64') : currentSession.metadata;
+    return { target, request, credentials, token, storage, active, TokenStorage, ownerMetadata, sharedMetadata };
 }
 
 describe('Session access exact Account transport', () => {
@@ -225,7 +243,7 @@ describe('Session access exact Account transport', () => {
             if (path === '/v2/sessions/same%2Fid') return new Response(JSON.stringify({ session: {
                 id: 'same/id', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                 encryptionMode: 'plain', dataEncryptionKey: null,
-                metadataLayoutVersion: 0, metadataVersion: 1, metadata: '',
+                metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
             if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -269,7 +287,7 @@ describe('Session access exact Account transport', () => {
             if (path === '/v2/sessions/same') return new Response(JSON.stringify({ session: {
                 id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                 encryptionMode: 'e2ee', dataEncryptionKey: callerEnvelope,
-                metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
+                metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
             if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -359,7 +377,7 @@ describe('Session access exact Account transport', () => {
             if (path === '/v2/sessions/same') return new Response(JSON.stringify({ session: {
                 id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                 encryptionMode: 'e2ee', dataEncryptionKey: callerEnvelope,
-                metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
+                metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
             if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -432,7 +450,7 @@ describe('Session access exact Account transport', () => {
                 return new Response(JSON.stringify({ session: {
                     id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                     encryptionMode: 'e2ee', dataEncryptionKey: callerEnvelope,
-                    metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
+                    metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                     agentStateVersion: 1, agentState: null, share: null,
                 } }));
             }
@@ -506,7 +524,7 @@ describe('Session access exact Account transport', () => {
             if (path === '/v2/sessions/same') return new Response(JSON.stringify({ session: {
                 id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                 encryptionMode: 'e2ee', dataEncryptionKey: callerEnvelope,
-                metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
+                metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
             if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -565,7 +583,7 @@ describe('Session access exact Account transport', () => {
             if (path === '/v2/sessions/same') return new Response(JSON.stringify({ session: {
                 id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                 encryptionMode: 'e2ee', dataEncryptionKey: null,
-                metadataLayoutVersion: 0, metadataVersion: 1, metadata: 'sealed',
+                metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
             if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
@@ -666,7 +684,7 @@ describe('Session access exact Account transport', () => {
                 return new Response(JSON.stringify({ session: {
                     id: 'same/id', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
                     encryptionMode: 'e2ee', dataEncryptionKey: 'retained-owner-envelope',
-                    metadataLayoutVersion: 0, metadataVersion: 1, metadata: '',
+                    metadataLayoutVersion: 1, metadataVersion: 1, metadata: env.sharedMetadata, ownerMetadata: env.ownerMetadata,
                     agentStateVersion: 1, agentState: null, share: null,
                 } }));
             }

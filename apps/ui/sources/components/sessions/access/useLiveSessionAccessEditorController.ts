@@ -39,7 +39,6 @@ import type {
 } from './sessionAccessEditorTypes';
 import { presentSessionAccessFailure, presentSessionAccessReason } from './presentSessionAccessFailure';
 import { useSessionAccessApprovalHold } from './useSessionAccessApprovalHold';
-import { migrateSessionForSharing } from './migrateSessionForSharing';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 
@@ -49,8 +48,13 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     sessionId: string;
     /** The Session's persisted metadata layout as the host's projection knows it; absent when unknown. */
     metadataLayoutVersion?: number | null;
+    /** The card needs grants; recipient and directory details need an open Share panel. */
+    detailsDemanded?: boolean;
 }>): SessionAccessEditorController {
     const availability = useSessionCollaborationAvailability(input.scope.serverId);
+    const detailsDemanded = input.detailsDemanded ?? true;
+    const detailsDemandedRef = React.useRef(detailsDemanded);
+    detailsDemandedRef.current = detailsDemanded;
     const viewerProfile = useShareViewerProfile(input.scope);
     const scopeKey = `${serverAccountScopeKeySuffix(input.scope)}:${input.sessionId}:${availability}`;
     const [state, dispatch] = React.useReducer(reduceSessionAccessEditorState,scopeKey,createSessionAccessEditorState);
@@ -63,6 +67,10 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     const client = React.useMemo(()=>createSessionAccessClient({
         scope:{serverId:input.scope.serverId,accountId:input.scope.accountId},sessionId:input.sessionId,
         availability,isCurrent:()=>lifetime.current && currentScope.current===scopeKey,
+        onEncryptionPreparationProgress:(progress)=>{
+            if(!lifetime.current||currentScope.current!==scopeKey)return;
+            dispatch({type:'preparing',scopeKey,preparedCount:progress.preparedCount,actionableTotal:progress.actionableTotal});
+        },
     }),[availability,input.scope.serverId,input.scope.accountId,input.sessionId,lifetime,scopeKey]);
     const stateRef=React.useRef(state);
     stateRef.current=state;
@@ -85,7 +93,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
             // preparation work. No grant has to be mutated first: an existing Team
             // grant whose member finished setup on another device is exactly the case
             // a mutation-only trigger could never find.
-            if (availability === 'available' && snapshot.effectiveAccess.capabilities.manageAccess) {
+            if (detailsDemandedRef.current && availability === 'available' && snapshot.effectiveAccess.capabilities.manageAccess) {
                 try {
                     const page = await readSessionDataKeyEnvelopeCollectionPage({
                         scope: { serverId: input.scope.serverId, accountId: input.scope.accountId }, sessionId: input.sessionId, availability,
@@ -138,6 +146,11 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         void refresh();
         return ()=>{lifetime.current=false;requestRevision.current++;unsubscribe();unsubscribeAccountChange();};
     },[input.scope.serverId,input.sessionId,lifetime,refresh,scopeKey]);
+    React.useEffect(() => {
+        // Initial mount already reads through refresh. Opening a retained panel
+        // reuses that owner for current grants and details without resetting its draft.
+        if (detailsDemanded && stateRef.current.scopeKey === scopeKey && stateRef.current.snapshot) void refresh();
+    }, [detailsDemanded, refresh, scopeKey]);
     // The rows beneath the aggregate. Discovery hands over the exception rows it
     // already fetched; the explicit `Show all people` view and every re-read page
     // the same authorized collection, so one transport and one summary serve both.
@@ -194,7 +207,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         // itself. This controller only starts that pass for the Session it is already
         // scoped to and renders the Session-scoped aggregate the Home reports back. A
         // Home that does not share Sessions exposes no envelope collection at all.
-        if(availability!=='available')return;
+        if(availability!=='available'||(passOrigin==='manual'&&approvalHeldRef.current))return;
         if(!lifetime.current||currentScope.current!==scopeKey)return;
         const active=preparationRun.current;
         // A grant committed while a pass is already walking its pages re-enters that
@@ -215,9 +228,10 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
             try {
                 do {
                     run.rerun=false;
+                    const previousPreparation=stateRef.current.preparation;
                     dispatch({type:'preparing',scopeKey,preparedCount:0,actionableTotal:null});
                     try {
-                        const outcome=await prepareSessionDataKeyEnvelopesDetached({
+                        const outcome=run.origin==='manual' ? await client.prepareAccess(selectedRecipient) : await prepareSessionDataKeyEnvelopesDetached({
                             scope:{serverId:input.scope.serverId,accountId:input.scope.accountId},
                             sessionId:input.sessionId,availability,
                             ...(selectedRecipient===undefined?{}:{reprepareRecipientAccountId:selectedRecipient}),
@@ -238,6 +252,23 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
                         loadRecipientPage(currentRecipientsView(),null);
                     } catch(error) {
                         if(!lifetime.current||currentScope.current!==scopeKey)return;
+                        if(error instanceof SessionAccessApprovalPendingError){
+                            dispatch({type:'prepared',scopeKey,origin:'manual',preparation:previousPreparation});
+                            const actionId=selectedRecipient===undefined?'session.access.encryption.prepare':'session.access.encryption.reprepare';
+                            holdForApproval(error,actionId,{sessionId:input.sessionId,
+                                ...(selectedRecipient===undefined?{}:{recipientAccountId:selectedRecipient})},{
+                                isCurrent:isScopeCurrent,
+                                onSucceeded:async(outcome)=>{
+                                    dispatch({type:'prepared',scopeKey,origin:'manual',preparation:settledEncryptionFromOutcome(outcome)});
+                                    loadRecipientPage(currentRecipientsView(),null);
+                                },
+                                onFailed:(issue)=>{if(issue)dispatch({type:'preparationFailed',scopeKey,origin:'manual',error:issue});},
+                            });
+                            // A separately admitted grant may have queued its
+                            // continuation while this manual intent was routing.
+                            if(run.rerun&&run.origin==='pass'){selectedRecipient=undefined;continue;}
+                            return;
+                        }
                         // The grant was already acknowledged. Key preparation is a separate
                         // obligation, so its failure stays in this Session-scoped encryption
                         // state and never re-labels that committed mutation as failed.
@@ -251,7 +282,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
                 if(preparationRun.current===run)preparationRun.current=null;
             }
         })();
-    },[availability,currentRecipientsView,input.scope.accountId,input.scope.serverId,input.sessionId,lifetime,loadRecipientPage,scopeKey]);
+    },[availability,client,currentRecipientsView,holdForApproval,input.scope.accountId,input.scope.serverId,input.sessionId,isScopeCurrent,lifetime,loadRecipientPage,scopeKey]);
     /**
      * @param adds True only for the action that turned a searched-for candidate into a
      *   grant row. That action, and only that one, consumed the typed query; editing a
@@ -272,26 +303,33 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     const historicalLayoutPending=viewerOwnsSession&&sessionRowLayout===0&&currentLayoutMigration?.phase!=='migrated';
     const historicalLayoutPendingRef=React.useRef(historicalLayoutPending);
     historicalLayoutPendingRef.current=historicalLayoutPending;
-    const migrateHistoricalLayout=React.useCallback(async():Promise<true|SessionAccessUiError>=>{
+    const migrateHistoricalLayout=React.useCallback(async():Promise<void>=>{
         const isMigrationCurrent=()=>lifetime.current&&currentScope.current===scopeKey;
         setLayoutMigration({scopeKey,phase:'updating'});
         try {
-            await migrateSessionForSharing({
-                scope:{serverId:input.scope.serverId,accountId:input.scope.accountId},
-                sessionId:input.sessionId,isCurrent:isMigrationCurrent,
-            });
+            await client.updateHistoricalLayout();
             // The list row catches up on its own refresh; this editor already knows.
             if(isMigrationCurrent()){
                 historicalLayoutPendingRef.current=false;
                 setLayoutMigration({scopeKey,phase:'migrated'});
             }
-            return true;
         } catch(error) {
+            if(error instanceof SessionAccessApprovalPendingError){
+                setLayoutMigration(null);
+                holdForApproval(error,'session.access.layout.update',{sessionId:input.sessionId},{
+                    isCurrent:isMigrationCurrent,
+                    onSucceeded:async()=>{
+                        historicalLayoutPendingRef.current=false;
+                        setLayoutMigration({scopeKey,phase:'migrated'});
+                    },
+                    onFailed:(issue)=>setLayoutMigration(issue?{scopeKey,phase:'failed',error:issue}:null),
+                });
+                return;
+            }
             const issue=presentSessionAccessFailure(error);
             if(isMigrationCurrent())setLayoutMigration({scopeKey,phase:'failed',error:issue});
-            return issue;
         }
-    },[input.scope.accountId,input.scope.serverId,input.sessionId,lifetime,scopeKey]);
+    },[client,holdForApproval,input.scope.accountId,input.scope.serverId,input.sessionId,lifetime,scopeKey]);
     const updateHistoricalLayout=React.useCallback(()=>{
         if(!historicalLayoutPendingRef.current||approvalHeldRef.current)return;
         if(currentLayoutMigration?.phase==='updating')return;
@@ -320,6 +358,10 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         dispatch({type:'operation',scopeKey,key,operation:{kind:'idle'}});
         dispatch({type:'confirm',scopeKey,key:null});
         if(adds)setQuery('');
+        if(mutation&&historicalLayoutPendingRef.current){
+            historicalLayoutPendingRef.current=false;
+            setLayoutMigration({scopeKey,phase:'migrated'});
+        }
         if(!alreadyCurrent)setDirectoryRevision(value=>value+1);
         // A newly authorized recipient can hold a grant long before it can open
         // anything, so the key owner's pass starts from the acknowledged audience.
@@ -349,15 +391,6 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         const previous=stateRef.current.operations[key];
         if(previous?.kind==='saving'||previous?.kind==='removing')return;
         dispatch({type:'operation',scopeKey,key,operation:{kind:mutation?'saving':'removing'}});
-        if(mutation&&historicalLayoutPendingRef.current){
-            // PA-L2: a historical Session is split by its owner before it is shared.
-            const migrated=await migrateHistoricalLayout();
-            if(!lifetime.current||currentScope.current!==scopeKey)return;
-            if(migrated!==true){
-                dispatch({type:'operation',scopeKey,key,operation:{kind:'error',error:migrated}});
-                return;
-            }
-        }
         try {
             const result=mutation?await client.set(mutation):await client.remove(subject);
             if(!lifetime.current||currentScope.current!==scopeKey)return;
@@ -380,7 +413,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
             }
             await settleFailedMutation(key,mutation,subject,presentSessionAccessFailure(error, { outcomeUnknown: true }));
         }
-    },[approvalHeldRef,client,holdForApproval,input.sessionId,isScopeCurrent,lifetime,migrateHistoricalLayout,scopeKey,settleCommittedMutation,settleFailedMutation]);
+    },[approvalHeldRef,client,holdForApproval,input.sessionId,isScopeCurrent,lifetime,scopeKey,settleCommittedMutation,settleFailedMutation]);
     const retryMutation = React.useCallback((subject: PrincipalRefV1) => {
         const operation = stateRef.current.scopeKey === scopeKey
             ? stateRef.current.operations[sessionAccessSubjectKey(subject)]
@@ -461,7 +494,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         .map(row=>({teamId:row.grant.kind==='team'?row.grant.teamId:'',name:row.principal.displayName})),[projection.grants]);
     const directory=useSessionAccessDirectory({
         scope:input.scope,sessionId:input.sessionId,availability,contextTeams,
-        operations:current.operations,revision:directoryRevision,enabled:projection.accessMode==='editable',
+        operations:current.operations,revision:directoryRevision,enabled:detailsDemanded&&projection.accessMode==='editable',
     });
     const [candidatePolicy, setCandidatePolicy] = React.useState<Readonly<{
         scopeKey: string;
@@ -500,11 +533,11 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
         }
     }, [availability, input.scope.serverId, input.scope.accountId, input.sessionId, isScopeCurrent, scopeKey]);
     React.useEffect(() => {
-        if (projection.accessMode !== 'editable' || !current.snapshot?.primaryTeamId) return;
+        if (!detailsDemanded || projection.accessMode !== 'editable' || !current.snapshot?.primaryTeamId) return;
         const abort = new AbortController();
         void inspectCandidatePolicy([], abort.signal);
         return () => abort.abort();
-    }, [current.snapshot, directoryRevision, inspectCandidatePolicy, projection.accessMode]);
+    }, [current.snapshot, detailsDemanded, directoryRevision, inspectCandidatePolicy, projection.accessMode]);
     const admittedCandidateContext = candidatePolicy?.scopeKey === scopeKey
         && candidatePolicy.primaryTeamId === current.snapshot?.primaryTeamId ? candidatePolicy : null;
     const contextPolicyReason: SessionAccessUiReason | undefined = !current.snapshot?.primaryTeamId ? undefined
@@ -653,7 +686,7 @@ export function useLiveSessionAccessEditorController(input: Readonly<{
     const teamRecipientLabelFor=useSessionAccessTeamRecipientLabels({
         scope:input.scope,teamIds:sessionTeamIds,visibleRecipientAccountIds,
         isAlreadyNamed:(accountId)=>grantedDisplayNameForAccount(accountId)!==undefined,
-        enabled:availability==='available'&&current.snapshot?.effectiveAccess.capabilities.manageAccess===true
+        enabled:detailsDemanded&&availability==='available'&&current.snapshot?.effectiveAccess.capabilities.manageAccess===true
             &&current.recipients.view==='all',
     });
     const displayNameForAccount=React.useCallback(
