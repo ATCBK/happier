@@ -28,16 +28,23 @@ import { decodeHelperCensus } from '@/processes/census/decodeHelperCensus';
 
 // Native census and vitals I/O are system boundaries; the sampler and every domain owner are real.
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
-vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
+vi.mock('@/processes/census/processCensus', async importOriginal => ({
+    ...await importOriginal<typeof import('@/processes/census/processCensus')>(), readProcessCensus: boundary.read,
+}));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
 it('projects no process rows while an unchanged watch parks and projects each changed row once', async () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     const processCount = 1501;
-    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2,
+    const snapshot = () => ({ v: 1, capturedAtMs: Date.now(), logicalCpus: 2,
         rows: Array.from({ length: processCount }, (_, index) => ({ pid: 100 + index, ppid: index ? 100 : 1,
             start: { startTimeMs: 100 + index }, principal: { kind: 'uid', value: '1000' }, name: 'fixture',
-            memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null })) }));
-    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
+            memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null })) });
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc',
+        // Native helper execution is the OS boundary; keep census decoding and
+        // ownership resolution real for this scale-shaped projection contract.
+        censusDependencies: { platform: 'darwin', selfPid: 100, helperExecutablePath: '/fixture/helper',
+            execFile: async () => ({ stdout: JSON.stringify(snapshot()), stderr: '' }) },
+        listRoots: () => [
         { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
     ] });
     const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });

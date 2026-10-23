@@ -15,7 +15,7 @@ import type { createLeftBehindPass } from '../leftBehind/leftBehindPass';
 import { equalProcessStart, processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef } from '../ownership/types';
 import { createProcessMetrics } from './processMetrics';
 import { decodeProcessRef, processRef } from './processRef';
-import { projectMachineProcesses, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessesProjectionOptions, type ProcessOwnershipRead } from './projectMachineProcesses';
+import { projectMachineProcesses, resolveMachineProcessesUnavailableReason, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessesProjectionOptions, type ProcessOwnershipRead } from './projectMachineProcesses';
 
 export type MachineProcessesViewOptions = Readonly<{
     processOwnershipRuntime: ReturnType<typeof createProcessOwnershipRuntime>;
@@ -267,7 +267,9 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             const identities = await options.readRequesterIdentities?.().catch(() => undefined);
             if (signal?.aborted || disposed) return { changed: false };
             const read = () => project(latestRead!, request, requester, true);
-            const newer = () => !!latestRead && (latestRead.status !== 'ok' || read().state === 'unavailable'
+            const newer = () => !!latestRead && (latestRead.status !== 'ok'
+                || resolveMachineProcessesUnavailableReason(latestRead, request, requester, { platform: options.platform,
+                    bootTimeMs, allProcessesVisible: options.allProcessesVisible() }) !== undefined
                 || latestRead !== ownershipAtArm
                 || (latestMetricAtMs ?? latestRead.snapshot.capturedAtMs) > since);
             const controller = new AbortController();

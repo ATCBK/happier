@@ -56,6 +56,15 @@ function matches(row: ProcessRowV1, query: string | undefined): boolean {
         .some(value => value?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 }
 
+/** Availability needs no row projection; shared by answers and parked-watch admission. */
+export function resolveMachineProcessesUnavailableReason(read: ProcessOwnershipRead, request: ProcessesProjectionInput,
+    requester: ProcessRequester, options: Pick<ProcessesProjectionOptions, 'platform' | 'bootTimeMs' | 'allProcessesVisible'>
+): MachineProcessesAnswerV1['reason'] {
+    return read.status !== 'ok' ? read.reason : request.scope === 'all' && requester.accountId !== requester.custodianAccountId ? 'permission_denied'
+        : request.scope === 'all' && !options.allProcessesVisible ? 'all_processes_disabled'
+        : options.platform === 'linux' && options.bootTimeMs === undefined ? 'read_failed' : undefined;
+}
+
 /** Privacy is enforced on canonical ownership, before commands or histories enter any wire projection. */
 export function projectMachineProcesses(read: ProcessOwnershipRead, request: ProcessesProjectionInput,
     requester: ProcessRequester, options: ProcessesProjectionOptions): MachineProcessesAnswerV1 {
@@ -64,9 +73,7 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
         ?? (read.status === 'ok' ? read.snapshot.capturedAtMs : Date.now()),
         platform: options.platform, evidenceModel: options.platform === 'darwin' ? 'tree_and_marker' as const : 'fenced' as const };
     const custodian = requester.accountId === requester.custodianAccountId;
-    const reason = read.status !== 'ok' ? read.reason : request.scope === 'all' && !custodian ? 'permission_denied'
-        : request.scope === 'all' && !options.allProcessesVisible ? 'all_processes_disabled'
-        : options.platform === 'linux' && options.bootTimeMs === undefined ? 'read_failed' : undefined;
+    const reason = resolveMachineProcessesUnavailableReason(read, request, requester, options);
     if (reason) return { ...base, state: 'unavailable', reason, owners: [], leftBehind: [], totals: { happier: zero, leftBehind: zero } };
     if (read.status !== 'ok') throw new Error('Unreachable unavailable process read');
     const index = indexCensus(read.snapshot.rows);
