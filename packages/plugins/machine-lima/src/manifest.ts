@@ -41,12 +41,6 @@ async function provider(context: PluginInvocationContext) {
     });
 }
 
-function decodePrivateBytes(value: string) {
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.toString('base64') !== value) throw Object.assign(new Error('invalid private byte encoding'), { code: 'invalid_request' });
-  return bytes;
-}
-
 export const LIMA_MACHINE_PROVISIONER = {
   title: 'Lima', icon: 'terminal', resourceKind: 'lima-vm', schemaVersion: 1,
   kindTitle: machinePresentationLabel('kind'), description: machinePresentationLabel('description'),
@@ -175,7 +169,7 @@ export const LIMA_PLUGIN = definePlugin({
       inputSchema: LIMA_ROLE_SCHEMAS.execInput, resultSchema: MachineProvisionerNativeExecResultV1Schema,
       async run(input, context) {
         const result = await (await provider(context)).exec(input.resource, input.argv,
-          input.inputBase64 === undefined ? undefined : decodePrivateBytes(input.inputBase64));
+          input.inputBase64 === undefined ? undefined : Buffer.from(input.inputBase64, 'base64'));
         return { termination: result.process.termination, stdoutBase64: Buffer.from(result.process.stdout).toString('base64'),
           stderrBase64: Buffer.from(result.process.stderr).toString('base64'),
           stdoutTruncated: result.process.stdoutTruncated, stderrTruncated: result.process.stderrTruncated };

@@ -5,6 +5,7 @@ import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { ManagedDependencyStatus } from '@happier-dev/plugin-sdk/managed-services';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { createPluginTestkit, type PluginTestServicesFixture } from '@happier-dev/plugin-sdk/testing';
 import { LIMA_PLUGIN } from './manifest.js';
 
 const resource = {
@@ -45,6 +46,27 @@ async function activatedAction(id: string, exec: Pick<ExecService, 'run'>, ready
 }
 
 describe('activated public Lima actions', () => {
+  it('delivers shared-admitted exec bytes and rejects malformed input before native IO', async () => {
+    const requests: Parameters<ExecService['run']>[0][] = [];
+    const exec: Pick<ExecService, 'run'> = { run: async request => {
+      requests.push(request);
+      return request.args?.[0] === 'list'
+        ? processResult(new TextEncoder().encode(JSON.stringify(native))) : processResult();
+    } };
+    const { context } = await activatedAction('exec', exec);
+    const kit = await createPluginTestkit({ manifest: LIMA_PLUGIN.manifest, module: LIMA_PLUGIN,
+      services: context.services as unknown as PluginTestServicesFixture });
+    try {
+      await expect(kit.invokeAction('exec', { resource, argv: ['cat'], inputBase64: 'AA==\n' }, { surface: 'plugin' }))
+        .rejects.toThrow();
+      expect(requests).toEqual([]);
+      expect(await kit.invokeAction('exec', { resource, argv: ['cat'], inputBase64: 'AB==' }, { surface: 'plugin' }))
+        .toMatchObject({ stdoutBase64: '', stderrBase64: '' });
+      const shell = requests.find(request => request.args?.[0] === 'shell');
+      expect(shell?.stdin && Array.from(shell.stdin)).toEqual([0]);
+      expect(requests.filter(request => request.stdin !== undefined)).toEqual([shell]);
+    } finally { await kit.dispose(); }
+  });
   it('recovers the exact reviewed guest without a native effect and refuses a foreign name', async () => {
     const launch = { ...resource, memoryGiB: 4, diskGiB: 20 };
     const { memoryBytes: _memory, diskBytes: _disk, ...choices } = launch;
