@@ -8,6 +8,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
+import type { SessionListQueryHomeState } from '@/sync/domains/session/listing/sessionListQueryController';
 import { readableSessionDisplayTitle, useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionListRowsByServerId, useSessionDisplayNameProjections, type SessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { getSessionWorkContext, getSessionWorkContextParts } from '@/utils/sessions/sessionUtils';
@@ -25,6 +26,23 @@ const sessionAgentId = (source: SessionDisplayNameSource | null) => source ? get
 const sessionTitleReadable = (source: SessionDisplayNameSource | null) => readableSessionDisplayTitle(source) !== null;
 
 /**
+ * What the Session listing is doing, from the query owner's own Home state: nothing while the picker is
+ * closed or its Account retired, `loading`/`failed` until a first page is applied, then `ready`. A
+ * continuation exists only while the owner holds a cursor; a page that failed after rows were applied
+ * keeps them (`pageFailed`).
+ */
+function readSessionChoices(enabled: boolean, state: SessionListQueryHomeState | null) {
+    if (!enabled) return { status: 'idle' as const, hasMore: false, loadingMore: false, pageFailed: false };
+    if (state === null || state.appliedQueryKey === null) {
+        return { status: state?.phase === 'error' ? 'failed' as const : 'loading' as const,
+            hasMore: false, loadingMore: false, pageFailed: false };
+    }
+    return { status: 'ready' as const,
+        hasMore: (state.hasNext && state.nextCursor !== null) || (state.attentionHasNext && state.attentionNextCursor !== null),
+        loadingMore: state.phase === 'loading', pageFailed: state.phase === 'error' };
+}
+
+/**
  * Mount only while Invite/New participant selection is demanded. Home people search and optional
  * Team roster reuse the shared collaboration directory; existing Sessions/Bots use the ordinary
  * exact-Home listing owner. Models arrive from U4's ordinary authoring picker after user setup,
@@ -32,7 +50,8 @@ const sessionTitleReadable = (source: SessionDisplayNameSource | null) => readab
  * Build that optional model choice with buildExecutableModelParticipantSelectionFromAuthoringDraft
  * and buildExecutableParticipantPickerOption, preserving the ordinary selected setup/readiness.
  * People resolve(query, signal) and both loadMore/retry pairs keep their source owner's pagination;
- * `sessions.complete` is required before treating the loaded Session choices as the whole roster.
+ * `sessions.complete` is required before treating the loaded Session choices as the whole roster, and
+ * `sessions.status`/`hasMore`/`pageFailed` say whether the listing is still loading, failed, or has more.
  */
 export function useDiscussionInviteCandidates(input: Readonly<{
     accountLifetime: ServerAccountScopeLifetime;
@@ -104,15 +123,21 @@ export function useDiscussionInviteCandidates(input: Readonly<{
         }
     }, [accountLifetime, enabled, peopleSource, project, teamMatches]);
     const candidates = React.useMemo(() => enabled ? project(peopleSource?.candidates ?? []) : [], [enabled, peopleSource?.candidates, project]);
+    const sessionState = source.statesByServerId[scope.serverId] ?? null;
+    const choices = React.useMemo(() => readSessionChoices(enabled, sessionState), [enabled, sessionState]);
     return React.useMemo(() => ({ candidates,
         people: { status: peopleSource?.status ?? 'idle', error: peopleSource?.error, hasMore: enabled && (peopleSource?.hasMore ?? false),
             loadingMore: peopleSource?.loadingMore ?? false, resolverKey: peopleSource?.resolverKey,
             resolve: resolvePeople, loadMore: () => { if (enabled && accountLifetime.isCurrent()) directory.loadMore('account'); },
             retry: () => { if (enabled && accountLifetime.isCurrent()) directory.retry('account'); } },
-        sessions: { state: source.statesByServerId[scope.serverId] ?? null, complete: enabled && source.coverageComplete,
+        sessions: { state: sessionState, complete: enabled && source.coverageComplete, ...choices,
             loadMore: async () => { if (enabled && accountLifetime.isCurrent()) await source.loadNext(); },
-            retry: async () => { if (enabled && accountLifetime.isCurrent()) await source.refresh(); } },
-    }), [accountLifetime, candidates, directory, enabled, peopleSource, resolvePeople, scope.serverId, source]);
+            // One recovery: the failed next page when the owner still holds its cursor, else a fresh first read.
+            retry: async () => {
+                if (!enabled || !accountLifetime.isCurrent()) return;
+                await (choices.status === 'ready' && choices.hasMore ? source.loadNext() : source.refresh());
+            } },
+    }), [accountLifetime, candidates, choices, directory, enabled, peopleSource, resolvePeople, scope.serverId, sessionState, source]);
 }
 
 export type DiscussionInviteCandidateSource = ReturnType<typeof useDiscussionInviteCandidates>;

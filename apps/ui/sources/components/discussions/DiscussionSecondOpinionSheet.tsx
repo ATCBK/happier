@@ -374,14 +374,8 @@ function BoundForm(
           {reviewers.length === 0 ? (
             <SurfaceStateCard
               size="line"
-              kind={candidateSource.sessions.state ? 'empty' : 'loading'}
-              title={
-                candidateSource.sessions.state
-                  ? t(
-                      'session.collaboration.discussion.secondOpinion.noReviewers',
-                    )
-                  : t('session.collaboration.discussion.participants.loading')
-              }
+              kind="empty"
+              title={t('session.collaboration.discussion.secondOpinion.noReviewers')}
             />
           ) : (
             reviewers.map((candidate) => {

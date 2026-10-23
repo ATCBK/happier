@@ -119,6 +119,27 @@ describe('host participant controller using the public picker', () => {
     expect(reads().some(request => request.path.endsWith('/second-bot'))).toBe(false);
     await screen.unmount();
   });
+  it('says a Session read failed in the real picker and recovers the choices from its Retry', async () => {
+    const accountLifetime = await captureHome();
+    const home = accountLifetime.scope.serverId;
+    boundary.setRows(home, ['recovered-bot']);
+    boundary.failQueries(home, 'all');
+    const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+    const signal = new AbortController();
+    let result!: ReturnType<typeof presentExecutableParticipantPicker>;
+    await act(async () => { result = presentExecutableParticipantPicker({ accountLifetime, multiple: true, signal: signal.signal }); });
+    const { t } = await import('@/text');
+    await vi.waitFor(() => expect(screen.findByTestId('discussion-invite-sessions-retry')).not.toBeNull());
+    expect(screen.getTextContent()).toContain(t('workflows.conversation.sessionsFailed'));
+    expect(screen.findByTestId('discussion-invite-sessions-more')).toBeNull();
+    boundary.failQueries(home, null);
+    await screen.pressByTestIdAsync('discussion-invite-sessions-retry');
+    await vi.waitFor(() => expect(screen.findByTestId('discussion-invite-session-recovered-bot')).not.toBeNull());
+    expect(screen.findByTestId('discussion-invite-sessions-retry')).toBeNull();
+    await act(async () => signal.abort());
+    await expect(result).resolves.toBeNull();
+    await screen.unmount();
+  });
   it('confirms an already configured model without a selected Session option id', async () => {
     const accountLifetime = await captureHome();
     const selected = ExecutableParticipantSelectionV1Schema.parse({ kind: 'model', launch: {

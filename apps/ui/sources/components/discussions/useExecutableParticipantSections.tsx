@@ -9,6 +9,7 @@ import {
 import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { Text } from '@/components/ui/text/Text';
@@ -155,30 +156,48 @@ export function useExecutableParticipantSections(
           ]
         : [],
     );
-    if (
-      needle.length === 0 &&
-      !candidates.sessions.complete &&
-      candidates.sessions.state !== null
-    ) {
-      sessions.push({
-        id: 'sessions:more',
-        testID: 'discussion-invite-sessions-more',
-        label: t('session.collaboration.discussion.secondOpinion.moreSessions'),
-        subtitle: '',
-        icon: (
-          <Icon
-            name="dots-three"
-            size={ICON_SIZE.md}
-            color={theme.colors.text.tertiary}
-          />
-        ),
-        disabled: false,
-        onHighlight: () => onReadinessSessionChange?.(null),
-        onPressIn: () => onReadinessSessionChange?.(null),
-        onSelect: () => {
-          void candidates.sessions.loadMore();
-        },
-      });
+    const stateRow = (
+      id: string,
+      label: string,
+      icon: React.ReactElement,
+      extra: Partial<ExecutableParticipantSectionOption>,
+    ): ExecutableParticipantSectionOption => ({
+      id: `sessions:${id}`,
+      testID: `discussion-invite-sessions-${id}`,
+      label,
+      subtitle: '',
+      icon,
+      onHighlight: () => onReadinessSessionChange?.(null),
+      onPressIn: () => onReadinessSessionChange?.(null),
+      ...extra,
+    });
+    const spinner = <ActivitySpinner size={iconMatchedSpinnerSize(ICON_SIZE.md)} color={theme.colors.text.tertiary} />;
+    const { status, hasMore, loadingMore, pageFailed } = candidates.sessions;
+    const retryRow = (label: string) => stateRow(
+      'retry',
+      label,
+      <Icon name="arrow-clockwise" size={ICON_SIZE.md} color={theme.colors.text.secondary} />,
+      { subtitle: t('workflows.conversation.retryLoadingSessions'), onSelect: () => { void candidates.sessions.retry(); } },
+    );
+    // The query owner's real state, in place: a first read that has not landed is neither empty nor
+    // pagination; only a held continuation offers More, and a failed page keeps what was loaded.
+    if (status === 'loading') {
+      sessions.push(stateRow('loading', t('workflows.conversation.sessionsLoading'), spinner, { disabled: true }));
+    } else if (status === 'failed') {
+      sessions.push(retryRow(t('workflows.conversation.sessionsFailed')));
+    } else if (status === 'ready' && needle.length === 0) {
+      if (pageFailed) {
+        sessions.push(retryRow(t('session.collaboration.discussion.participants.moreSessionsFailed')));
+      } else if (loadingMore) {
+        sessions.push(stateRow('more', t('session.collaboration.discussion.secondOpinion.moreSessions'), spinner, { disabled: true }));
+      } else if (hasMore) {
+        sessions.push(stateRow(
+          'more',
+          t('session.collaboration.discussion.secondOpinion.moreSessions'),
+          <Icon name="dots-three" size={ICON_SIZE.md} color={theme.colors.text.tertiary} />,
+          { onSelect: () => { void candidates.sessions.loadMore(); } },
+        ));
+      }
     }
     // Setup remains selectable offline. Start re-admits through the ordinary authoring owner.
     const inventory = machines ?? [];
