@@ -437,11 +437,16 @@ async function readDirectorySourceRemovalImpactInTx(
     tx: Tx,
     input: Readonly<{ teamId: string; sourceId: string }>,
 ): Promise<TeamDirectorySourceRemoveResultV1["impact"]> {
-    const [ownedMemberships, directoryCreatedGroupsRetained, nativeMembershipsPreserved] =
-        await Promise.all([
-            tx.teamProvisionedIdentity.findMany({
+    const sourceOwnedMembership = { provisionedIdentity: { is: { directorySourceId: input.sourceId } } };
+    const sourceContribution = { binding: { directorySourceId: input.sourceId } };
+    // Count at the relation owner: a source can manage an entire Team, so its
+    // membership ids and contribution rosters must not become query parameters
+    // or be transferred merely to calculate the confirmation's six numbers.
+    const [teamMembershipsRemoved, directoryCreatedGroupsRetained, nativeMembershipsPreserved,
+        groupContributionsRemoved, ownedParentGroupMembershipsRemoved,
+        sourceOnlyEffectiveMembershipsRemoved, nativeGroupContributionsPreserved] = await Promise.all([
+            tx.teamProvisionedIdentity.count({
                 where: { directorySourceId: input.sourceId, teamMembershipId: { not: null } },
-                select: { teamMembershipId: true },
             }),
             tx.teamExternalGroupBinding.count({
                 where: { directorySourceId: input.sourceId, bindingMode: "directory_created" },
@@ -454,75 +459,30 @@ async function readDirectorySourceRemovalImpactInTx(
                     boundAccount: { teamMemberships: { some: { teamId: input.teamId } } },
                 },
             }),
-        ]);
-    const ownedMembershipIds = ownedMemberships.flatMap(({ teamMembershipId }) =>
-        teamMembershipId === null ? [] : [teamMembershipId]
-    );
-    const groupContributionsRemoved = await tx.teamGroupMembershipExternalContribution.count({
-        where: {
-            OR: [
-                { binding: { directorySourceId: input.sourceId } },
-                ...(ownedMembershipIds.length > 0
-                    ? [{ membership: { teamMembershipId: { in: ownedMembershipIds } } }]
-                    : []),
-            ],
-        },
-    });
-    const [ownedParentGroupMembershipsRemoved, sourceContributions] = await Promise.all([
-        ownedMembershipIds.length > 0
-            ? tx.teamGroupMembership.count({ where: { teamMembershipId: { in: ownedMembershipIds } } })
-            : Promise.resolve(0),
-        tx.teamGroupMembershipExternalContribution.findMany({
-            where: {
-                binding: { directorySourceId: input.sourceId },
-                ...(ownedMembershipIds.length > 0
-                    ? { teamMembershipId: { notIn: ownedMembershipIds } }
-                    : {}),
-            },
-            select: {
-                teamGroupId: true,
-                teamMembershipId: true,
-                membership: {
-                    select: {
-                        nativeContribution: true,
-                        externalContributions: {
-                            select: { binding: { select: { directorySourceId: true } } },
-                        },
-                    },
+            tx.teamGroupMembershipExternalContribution.count({
+                where: { OR: [sourceContribution, { membership: { teamMembership: sourceOwnedMembership } }] },
+            }),
+            tx.teamGroupMembership.count({
+                where: { teamMembership: sourceOwnedMembership },
+            }),
+            tx.teamGroupMembership.count({
+                where: {
+                    NOT: { teamMembership: sourceOwnedMembership },
+                    nativeContribution: false,
+                    externalContributions: { some: sourceContribution, every: sourceContribution },
                 },
-            },
-        }),
-    ]);
-    const sourceOnlyEffectiveMemberships = new Set(
-        sourceContributions
-            .filter(({ membership }) =>
-                !membership.nativeContribution
-                && membership.externalContributions.every(({ binding }) =>
-                    binding.directorySourceId === input.sourceId
-                )
-            )
-            .map(({ teamGroupId, teamMembershipId }) => `${teamGroupId}\0${teamMembershipId}`),
-    );
-    const preservedNativeMembershipRows = await tx.teamGroupMembershipExternalContribution.findMany({
-        where: {
-            binding: { directorySourceId: input.sourceId },
-            membership: {
-                nativeContribution: true,
-                ...(ownedMembershipIds.length > 0
-                    ? { teamMembershipId: { notIn: ownedMembershipIds } }
-                    : {}),
-            },
-        },
-        select: { teamGroupId: true, teamMembershipId: true },
-    });
-    const nativeGroupContributionsPreserved = new Set(
-        preservedNativeMembershipRows.map(({ teamGroupId, teamMembershipId }) =>
-            `${teamGroupId}\0${teamMembershipId}`
-        ),
-    ).size;
+            }),
+            tx.teamGroupMembership.count({
+                where: {
+                    NOT: { teamMembership: sourceOwnedMembership },
+                    nativeContribution: true,
+                    externalContributions: { some: sourceContribution },
+                },
+            }),
+        ]);
     return {
-        teamMembershipsRemoved: ownedMembershipIds.length,
-        groupMembershipsRemoved: ownedParentGroupMembershipsRemoved + sourceOnlyEffectiveMemberships.size,
+        teamMembershipsRemoved,
+        groupMembershipsRemoved: ownedParentGroupMembershipsRemoved + sourceOnlyEffectiveMembershipsRemoved,
         groupContributionsRemoved,
         directoryCreatedGroupsRetained,
         nativeMembershipsPreserved,
