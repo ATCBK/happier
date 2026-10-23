@@ -108,6 +108,16 @@ describe('requester HTTP authority on the existing external Action carrier', () 
     })).resolves.toEqual({ ok: false, code: 'credential_scope_denied' });
   });
 
+  it('preserves a typed Machine admission refusal instead of reporting unavailable authentication', async () => {
+    const refusal = projectExternalActionHttpError('target_unavailable');
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: refusal.statusCode, data: refusal.payload });
+    await expect(executionAuthorizationOwner.mintExternalActionExecutionAuthorization({
+      actionId: 'providers.models.projection', machineId: target.machineId, envelope,
+      pat: 'terminal-credential', serverHttpBaseUrl: 'https://home.test',
+    })).resolves.toEqual({ ok: false, code: 'target_unavailable' });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
   it.each([401, 403])('correlates a native Home mint refusal (%s) without disclosing its proof or response', async status => {
     const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const requestId = '45ee9e08-acd9-4df7-a899-426badc7e635';

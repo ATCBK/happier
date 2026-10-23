@@ -634,7 +634,7 @@ export function createExternalActionSourceMachineRpcExecution(input: Readonly<{
 
 type ExternalActionAuthorizationHttpFailure = Readonly<{
   ok: false;
-  code: 'invalid_token' | 'credential_scope_denied' | 'auth_unavailable' | 'server_unavailable';
+  code: 'invalid_token' | 'credential_scope_denied' | 'auth_unavailable' | 'server_unavailable' | 'target_unavailable';
   /** Private preparation fact; HTTP adapters still project only their existing code. */
   retryable?: true;
 }>;
@@ -1266,6 +1266,12 @@ export async function mintExternalActionExecutionAuthorization(input: Readonly<{
   }
   if (response.status === 401 || response.status === 403) {
     return { ok: false, code: 'invalid_token' };
+  }
+  if (response.status === 409) {
+    const refusal = ExternalActionHttpErrorSchema.safeParse(response.data);
+    if (refusal.success && refusal.data.error === 'invalid_request' && refusal.data.code === 'target_unavailable') {
+      return { ok: false, code: 'target_unavailable' };
+    }
   }
   if ([404, 405, 501].includes(response.status)) {
     return { ok: false, code: 'server_unavailable' };

@@ -145,7 +145,7 @@ export function registerDaemonExternalActionRoute(
       signal?: AbortSignal;
     }>) => Promise<
       | Readonly<{ ok: true; authorization: ExternalActionExecutionAuthorizationV1 }>
-      | Readonly<{ ok: false; code: 'invalid_token' | 'credential_scope_denied' | 'auth_unavailable' | 'server_unavailable' }>
+      | Readonly<{ ok: false; code: 'invalid_token' | 'credential_scope_denied' | 'auth_unavailable' | 'server_unavailable' | 'target_unavailable' }>
     >;
     externalActionMachineRequestPrivateKey?: string | Uint8Array;
     resolveInstallationId?: () => string | null;
