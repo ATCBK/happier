@@ -1,3 +1,8 @@
+import { readFileSync } from 'node:fs';
+import type { ClaudeScreenState } from '../screenState.js';
+import type { ClaudeUnifiedVisibleNativeToolDialog } from './dialogRegistry.js';
+import { parseClaudeNativePermissionScreen } from './nativePermissionScreen.js';
+import { encodeClaudeNativeTextInput as wrapBracketedPaste } from './controlRuntime.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseClaudeScreenState } from '../screenState.js';
@@ -272,5 +277,125 @@ describe('answerClaudeUnifiedRegisteredDialog', () => {
 
     expect(result).toEqual({ status: 'failed', reason: 'host_dead:unrecoverable' });
     expect(onSubmitted).toHaveBeenCalledTimes(1);
+  });
+});
+
+const IDLE = IDLE_COMPOSER;
+const NATIVE_PERMISSION = [
+  '──────────────────', 'Bash command', 'python3 -c "print(671)"',
+  'Do you want to proceed?', '❯ 1. Yes', '  2. Yes, remember python3 *', '  3. No',
+  'Esc to cancel · Tab to amend',
+].join('\n');
+
+function nativePermission(state: ClaudeScreenState): ClaudeUnifiedVisibleNativeToolDialog | null {
+  const presentation = parseClaudeNativePermissionScreen(state.text);
+  if (!presentation) return null;
+  return {
+    kind: 'native', dialogId: 'tool_permission', occurrenceId: 'native-permission-1',
+    toolName: presentation.kind === 'plan' ? 'ExitPlanMode' : 'Bash',
+    toolInput: presentation.kind === 'plan' ? { plan: '# A harmless probe plan' } : { command: 'python3 -c "print(671)"' }, questions: [], responseLocation: 'app_and_terminal',
+    owner: null, questionId: 'permission', requestReason: 'permission', header: 'Bash', question: presentation.context,
+    options: presentation.options.map((option, index) => ({
+      choice: String(index + 1), label: option.label, description: option.label,
+      answer: { kind: 'selection', targetLabel: option.label },
+    })),
+    permissionPresentation: presentation,
+  };
+}
+
+describe('native Claude permission answers', () => {
+  it('navigates to native No through scopes whose footer omits the unavailable amendment hint', async () => {
+    const second = readFileSync(new URL('./__fixtures__/claude-2.1.309-permission-remember-focused.txt', import.meta.url), 'utf8');
+    const initial = second.replace(' ❯ 2.', '   2.').replace('   1.', ' ❯ 1.').replace(' Esc to cancel', ' Esc to cancel · Tab to amend');
+    const third = second.replace(' ❯ 2.', '   2.').replace('   3.', ' ❯ 3.');
+    const fourth = readFileSync(new URL('./__fixtures__/claude-2.1.309-permission-no-focused.txt', import.meta.url), 'utf8');
+    const port = createFakeControlPort({ captures: [initial, second, third, fourth, IDLE] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(initial))!.options[3]!,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['ArrowDown', 'ArrowDown', 'ArrowDown', 'Enter']);
+  });
+  it('uses canonical bracketed paste for plan feedback and preserves conflicting terminal text', async () => {
+    const filled = readFileSync(new URL('./__fixtures__/claude-2.1.304-plan-feedback.txt', import.meta.url), 'utf8');
+    const feedback = 'Keep this harmless probe; do not execute the plan.';
+    const empty = filled.replace(feedback, 'Tell Claude what to change');
+    const port = createFakeControlPort({ captures: [empty, filled, IDLE] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(empty))!.options[2]!, feedback,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentRaw).toEqual([wrapBracketedPaste(feedback)]);
+    expect(port.sentKeys).toEqual(['Enter']);
+    const conflicting = createFakeControlPort({ captures: [filled] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port: conflicting, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(filled))!.options[2]!, feedback: 'Different feedback',
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(conflicting.sentRaw).toEqual([]);
+    expect(conflicting.sentKeys).toEqual([]);
+  });
+  it('preserves multiline plan feedback through the same native rejection choice', async () => {
+    const filled = readFileSync(new URL('./__fixtures__/claude-2.1.304-plan-feedback-multiline.txt', import.meta.url), 'utf8');
+    const feedback = 'Keep this harmless probe.\nDo not execute the plan — 雪 🦦';
+    const empty = filled.replace('Keep this harmless probe.\n        Do not execute the plan — 雪 🦦', 'Tell Claude what to change');
+    const port = createFakeControlPort({ captures: [empty, filled, IDLE] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(empty))!.options[2]!, feedback,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentRaw).toEqual([wrapBracketedPaste(feedback)]);
+    expect(port.sentKeys).toEqual(['Enter']);
+  });
+  it('preserves a TAB in plan feedback through canonical bracketed paste', async () => {
+    const filled = readFileSync(new URL('./__fixtures__/claude-2.1.304-plan-feedback-tab.txt', import.meta.url), 'utf8');
+    const feedback = 'Keep\tthis harmless probe.\nDo not execute the plan.';
+    const empty = filled.replace('Keep    this harmless probe.\n        Do not execute the plan.', 'Tell Claude what to change');
+    const port = createFakeControlPort({ captures: [empty, filled, IDLE] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(empty))!.options[2]!, feedback,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentRaw).toEqual([wrapBracketedPaste(feedback)]);
+    expect(port.sentKeys).toEqual(['Enter']);
+  });
+  it('confirms a native permission only after its form is gone and the canonical composer is visible', async () => {
+    const port = createFakeControlPort({ captures: [NATIVE_PERMISSION, IDLE] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(NATIVE_PERMISSION))!.options[0]!,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toEqual({ status: 'answered' });
+    expect(port.sentKeys).toEqual(['Enter']);
+  });
+  it('does not report a changed native permission form or an incomplete redraw as completed approval', async () => {
+    for (const after of [NATIVE_PERMISSION.replace('remember python3 *', 'remember every command'), 'redrawing']) {
+      const port = createFakeControlPort({ captures: [NATIVE_PERMISSION, after] });
+      await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(NATIVE_PERMISSION))!.options[0]!,
+        resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+        verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+      })).resolves.toMatchObject({ status: 'failed' });
+      expect(port.sentKeys).toEqual(['Enter']);
+    }
+  });
+
+  it('recaptures a native permission before typing even when its caller supplied an earlier capture', async () => {
+    const initialState = parseClaudeScreenState(NATIVE_PERMISSION);
+    const initial = nativePermission(initialState)!;
+    const port = createFakeControlPort({ captures: [NATIVE_PERMISSION.replace('remember python3 *', 'remember every command')] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(NATIVE_PERMISSION))!.options[0]!,
+      initialState, expectedIdentity: getClaudeUnifiedDialogIdentity(initial), resolveDialog: nativePermission,
+      isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toMatchObject({ status: 'dialog_changed' });
+    expect(port.sentKeys).toEqual([]);
+  });
+
+  it('requires native form completion even if a generic caller requests no verification', async () => {
+    const port = createFakeControlPort({ captures: [NATIVE_PERMISSION] });
+    await expect(answerClaudeUnifiedRegisteredDialog({ port, dialogId: 'tool_permission', option: nativePermission(parseClaudeScreenState(NATIVE_PERMISSION))!.options[0]!,
+      resolveDialog: nativePermission, isCurrent: () => true, settleMs: 0, wait: async () => undefined,
+      verifyAfterSubmit: false, verifyPollIntervalMs: 1, verifyPollTimeoutMs: 2,
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(port.sentKeys).toEqual(['Enter']);
   });
 });

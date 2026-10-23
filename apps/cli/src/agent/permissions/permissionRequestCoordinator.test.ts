@@ -96,7 +96,7 @@ class RejectingUpdateSession extends FakeSession {
     }
 }
 
-type TestPermissionResult = Readonly<{ decision: string; answers?: Readonly<Record<string, string>> }>;
+type TestPermissionResult = Readonly<{ decision: string; answers?: Readonly<Record<string, string | readonly string[]>> }>;
 
 function createHarness(session: FakeSession = new FakeSession()) {
     const store = new AgentStateRequestStore({
@@ -168,7 +168,7 @@ describe('PermissionRequestCoordinator', () => {
     });
 
     it.each(['dispose', 'reset', 'plugin', 'turn', 'signal'] as const)(
-        'retains native and occurrence questions through incidental %s while retiring approvals', async (lifecycle) => {
+        'retains durable questions through %s and occurrence questions only while their occurrence remains live', async (lifecycle) => {
             const { coordinator, session, store } = createHarness();
             const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
             const question = { requestId: 'native-question', toolName: 'AskUserQuestion',
@@ -185,6 +185,7 @@ describe('PermissionRequestCoordinator', () => {
                 toolName: 'AskUserQuestion', kind: 'permission', source: 'happier_action' },
                 { signal: abort.signal }).catch(() => null);
             store.publishRequest({ ...question, requestId: 'stored-only-question' });
+            store.publishRequest({ ...asynchronous, requestId: 'stored-only-occurrence-question' });
             if (lifecycle === 'dispose') await coordinator.dispose();
             if (lifecycle === 'reset') await coordinator.reset();
             if (lifecycle === 'plugin') await coordinator.cancelByPlugin('plugin-a', 'agent_runtime_replaced');
@@ -193,15 +194,21 @@ describe('PermissionRequestCoordinator', () => {
                 abort.abort();
                 await Promise.all([nativeWait, asyncWait, approvalWait, planApprovalWait, questionNamedApprovalWait]);
             }
+            if (lifecycle === 'turn') expect(coordinator.getResponseContext(asynchronous.requestId))
+                .toMatchObject({ status: 'live', correlation: 'record' });
             expect(Object.keys(session.agentState.requests ?? {}).sort())
-                .toEqual(['native-question', 'occurrence-question', 'stored-only-question']);
+                .toEqual(['native-question', 'stored-only-question',
+                    ...(lifecycle === 'turn' ? ['occurrence-question'] : []),
+                    ...(lifecycle === 'turn' || lifecycle === 'signal' ? ['stored-only-occurrence-question'] : []),
+                ].sort());
             expect(session.agentState.completedRequests?.approval).toMatchObject({ status: 'canceled' });
             expect(session.agentState.completedRequests?.['plan-approval']).toMatchObject({ status: 'canceled' });
             expect(session.agentState.completedRequests?.['question-named-approval']).toMatchObject({ status: 'canceled' });
-            await Promise.all([nativeWait, asyncWait, approvalWait, planApprovalWait, questionNamedApprovalWait]);
+            await Promise.all([nativeWait, ...(lifecycle === 'turn' ? [] : [asyncWait]), approvalWait, planApprovalWait, questionNamedApprovalWait]);
+            if (lifecycle === 'turn') expect(await settledState(asyncWait)).toBe('pending');
             expect(coordinator.getResponseContext(question.requestId)).toMatchObject({ requestId: question.requestId });
-            const reloaded = lifecycle === 'signal' ? coordinator : createPermissionRequestCoordinator<TestPermissionResult>({ store });
-            const rejoined = lifecycle === 'signal' ? null : reloaded.requestDecision(question);
+            const reloaded = lifecycle === 'signal' || lifecycle === 'turn' ? coordinator : createPermissionRequestCoordinator<TestPermissionResult>({ store });
+            const rejoined = lifecycle === 'signal' || lifecycle === 'turn' ? null : reloaded.requestDecision(question);
             expect(await reloaded.handleResponse({ requestId: question.requestId, buildCompletion: () => ({
                 result: { decision: 'approved', answers: { 'Which branch?': 'main' } },
                 completedRequest: { status: 'approved', decision: 'approved' },
@@ -209,9 +216,10 @@ describe('PermissionRequestCoordinator', () => {
             if (rejoined) await expect(rejoined).resolves.toMatchObject({ answers: { 'Which branch?': 'main' } });
             else expect(session.agentState.completedRequests?.[question.requestId]).toMatchObject({ status: 'approved' });
             await reloaded.cancelAll('Explicit person Stop');
+            await asyncWait;
             expect(session.agentState.requests).toEqual({});
             expect(session.agentState.completedRequests?.['occurrence-question'])
-                .toMatchObject({ status: 'canceled', reason: 'Explicit person Stop' });
+                .toMatchObject({ status: 'canceled', ...(lifecycle === 'turn' ? { reason: 'Explicit person Stop' } : {}) });
         },
     );
 
@@ -965,6 +973,65 @@ describe('PermissionRequestCoordinator', () => {
         await expect(response).resolves.toBe(false);
         await expect(pending).rejects.toThrow('Applied request retired');
         expect(apply).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers the observed native result into the original waiter without granting a later request', async () => {
+        const session = new RejectingUpdateSession();
+        const { coordinator, store } = createHarness(session);
+        const request = { ...bashRequest, requestId: 'native-observed-recovery',
+            toolName: 'AskUserQuestion', kind: 'user_action', source: 'native.question', lifetime: 'occurrence',
+            toolInput: { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }] },
+            owner: { kind: 'plugin', pluginId: 'fixture.plugin', runtimeId: 'native-runtime' } } as const;
+        const pending = coordinator.requestDecision(request);
+        const context = coordinator.getResponseContext(request.requestId)!;
+        const answers = { 'Continue?': ['No'] };
+        const completion = { result: { decision: 'approved', answers },
+            completedRequest: { status: 'approved', decision: 'approved', structuredAnswersV1: answers } };
+        session.rejectNextUpdate();
+        await expect(coordinator.completeObservedResponse({ context, completion })).rejects.toThrow('agent state persistence failed');
+        expect(store.readAppliedCompletion({ requestId: request.requestId, ...completion.completedRequest })).toMatchObject({ matches: true });
+        expect(await settledState(pending)).toBe('pending');
+        const replacement = new AgentStateRequestStore({ session, logPrefix: '[Observed replacement]' });
+        replacement.adoptAppliedCompletions(store);
+        store.dispose();
+        await replacement.recoverAppliedCompletions();
+        expect(coordinator.getResponseContext(request.requestId)).toBeNull();
+        await expect(pending).resolves.toEqual(completion.result);
+        expect(session.agentState.requests?.[request.requestId]).toBeUndefined();
+        expect(session.agentState.completedRequests?.[request.requestId]).toMatchObject({ status: 'approved', structuredAnswersV1: answers });
+        await expect(coordinator.completeObservedResponse({ context, completion })).resolves.toBe(false);
+        const later = coordinator.requestDecision({ ...request, requestId: 'native-observed-later' }).catch(() => null);
+        expect(session.agentState.requests?.['native-observed-later']).toBeDefined();
+        expect(session.agentState.completedRequests?.['native-observed-later']).toBeUndefined();
+        expect(await settledState(later)).toBe('pending');
+        await coordinator.cancelAll('test cleanup');
+        await later;
+        replacement.dispose();
+    });
+
+    it.each([1, 2])('retires an occurrence question only after the last of %i waiters aborts', async waiterCount => {
+        const { coordinator, session } = createHarness();
+        const request = { ...bashRequest, requestId: 'native-occurrence-expired', toolName: 'AskUserQuestion',
+            kind: 'user_action', source: 'native.question', lifetime: 'occurrence',
+            owner: { kind: 'plugin', pluginId: 'fixture.plugin' } } as const;
+        const firstSignal = new AbortController();
+        const secondSignal = new AbortController();
+        const first = coordinator.requestDecision(request, { signal: firstSignal.signal }).catch(() => null);
+        const second = waiterCount === 2 ? coordinator.requestDecision(request, { signal: secondSignal.signal }).catch(() => null) : null;
+        firstSignal.abort();
+        await first;
+        if (second) {
+            expect(await settledState(second)).toBe('pending');
+            expect(session.agentState.requests?.[request.requestId]).toBeDefined();
+            expect(session.agentState.completedRequests?.[request.requestId]).toBeUndefined();
+            secondSignal.abort();
+            await second;
+        }
+        expect(session.agentState.requests?.[request.requestId]).toBeUndefined();
+        expect(session.agentState.completedRequests?.[request.requestId]).toMatchObject({ status: 'canceled', decision: 'abort' });
+        await expect(coordinator.handleResponse({ requestId: request.requestId, buildCompletion: () => ({
+            result: { decision: 'approved' }, completedRequest: { status: 'approved', decision: 'approved' },
+        }) })).resolves.toBe(false);
     });
 
     it('settles the original waiter after recovery through a replacement Session request store', async () => {

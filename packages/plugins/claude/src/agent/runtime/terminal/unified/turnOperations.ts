@@ -34,6 +34,7 @@ import { isRuntimeConfigUpdateOutcomeApplied } from '@happier-dev/plugin-sdk/age
 import { readClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
 import type { ClaudeUnifiedTerminalWorkspaceTrustPolicy } from '../../../../agentSettings/definition.js';
 import { createClaudeRuntimeActivityPublisher } from '../../shared/runtimeActivityPublisher.js';
+import { resolveClaudeUnifiedTerminalResponseLocations } from '@happier-dev/plugin-sdk/first-party/claude';
 import type { ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
 import { readClaudeNativeCommands } from '../../../transcripts/nativeCommands.js';
 import { buildClaudeSettingSourcesArgs, resolveClaudeLaunchSettingsOverlayArgs, type ClaudeHelperModelEnv } from '../../launchSettings.js';
@@ -63,7 +64,7 @@ import { parseClaudeStatuslinePayload } from '../../../statusline/payload.js';
 
 import { recordClaudeRuntimeProviderAccountUsageSnapshot } from '../../accountUsage.js';
 import type { ClaudeRuntimeAccountUsageService } from '../../accountUsage.js';
-import type { ClaudePermissionContext } from '../../../permissions/createClaudePermissionEngine.js';
+import { completeClaudePlanModeBestEffort, type ClaudePermissionContext } from '../../../permissions/createClaudePermissionEngine.js';
 import type { ClaudeRuntimeLogger } from '../../dependencies.js';
 import {
   containsDefinitiveClaudeOAuthRevocationEvidence,
@@ -252,6 +253,7 @@ export type ClaudeUnifiedTerminalContext = ClaudePermissionContext & Readonly<{
     accountUsage: ClaudeRuntimeAccountUsageService;
     nativeHome?: AgentSessionHostServices['nativeHome'];
     toolExecution: AgentSessionHostServices['toolExecution'];
+    modes?: AgentSessionHostServices['modes'];
   }>;
   sessions: Readonly<{
     current: ClaudePermissionContext['sessions']['current'] & Readonly<{
@@ -396,6 +398,7 @@ export type ClaudeUnifiedTerminalTurnOperationsParams = Readonly<{
   allowedTools?: readonly string[];
   unlistedTools?: 'ask' | 'deny';
   workspaceWrites?: 'allow' | 'deny';
+  responseLocations?: ReturnType<typeof resolveClaudeUnifiedTerminalResponseLocations>;
   /** Persisted workflow headline from the session snapshot that created this runtime. */
   initialWorkflowActivityHeadline?: unknown;
   /** Its agent-scoped half, written in the same metadata update — the only one that names agents. */
@@ -866,6 +869,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
         });
       }
       if (!observation.historicalReplay) {
+        await resumeChoiceStartupHandler?.observeTranscript(row);
         for (const result of extractToolResultBlocksFromSdkMessage(observation.projectedTaskResult ?? row)) {
           publishClaudeUnifiedRuntimeEvent({
             handlers, logger: params.ctx.logger,
@@ -1619,10 +1623,13 @@ export function createClaudeUnifiedTerminalTurnOperations(
     resumeChoiceStartupHandler = createClaudeUnifiedResumeChoiceStartupHandler({
       ctx: params.ctx,
       sessionId: params.happierSessionId,
+      onNativeToolApproved: (toolName) => completeClaudePlanModeBestEffort(params.ctx, toolName),
       policy: params.resumeChoice,
       workspaceTrustPolicy: params.workspaceTrustPolicy,
       port,
       settleMs: params.tuiControl?.timings?.commandSettleMs ?? DEFAULT_CLAUDE_TUI_CONTROL_TIMINGS.commandSettleMs,
+      verifyPollIntervalMs: params.tuiControl?.timings?.verifyPollIntervalMs ?? DEFAULT_CLAUDE_TUI_CONTROL_TIMINGS.verifyPollIntervalMs,
+      verifyPollTimeoutMs: params.tuiControl?.timings?.verifyPollTimeoutMs ?? DEFAULT_CLAUDE_TUI_CONTROL_TIMINGS.verifyPollTimeoutMs,
       wait: waitMs,
       runtimeConfig: {
         model: launchModelId,
@@ -2027,6 +2034,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
             );
             if (explicitResumeIdentityFailure) return;
           }
+          if (hookEventName === 'PreToolUse' && state.handle) {
+            await (await ensureResumeChoiceStartupHandler(state.handle))?.observeSessionHook(payload);
+          } else {
+            await resumeChoiceStartupHandler?.observeSessionHook(payload);
+          }
           if (hookEventName === 'SessionStart') {
             pendingTaskNotificationReaction = null;
             const source = readNonEmptyString(payload.source);
@@ -2174,7 +2186,27 @@ export function createClaudeUnifiedTerminalTurnOperations(
             ensureReadinessWake();
           }
         },
-        onPermissionHook: createClaudePermissionHookHandler(params.ctx),
+        onPermissionHook: createClaudePermissionHookHandler(params.ctx, {
+          unifiedTerminalActive: true,
+          responseLocations: params.responseLocations ?? resolveClaudeUnifiedTerminalResponseLocations({}),
+          unlistedTools: params.unlistedTools,
+          resolveToolUseId: async (payload) => state.handle
+            ? (await ensureResumeChoiceStartupHandler(state.handle))?.resolveToolUseId(payload) ?? null : null,
+          onNativePrompt: async (payload) => {
+            if (!state.handle) throw new Error('claude_native_prompt_terminal_unavailable');
+            const owner = await ensureResumeChoiceStartupHandler(state.handle);
+            if (!owner) throw new Error('claude_native_prompt_control_unavailable');
+            await owner.observeSessionHook(payload);
+            void probeVisibleDialogOnce().catch((error: unknown) => {
+              params.ctx.logger.warn('[ClaudeUnifiedTerminal] Native prompt observation failed', { error });
+            });
+          },
+          onPermissionLifecycle: async (payload) => {
+            if (state.handle) await (await ensureResumeChoiceStartupHandler(state.handle))?.observeSessionHook(payload);
+            const observation = mapClaudeUnifiedHookLifecyclePayload(payload, params.happierSessionId);
+            if (observation) await nativeRuntime.observeTerminalLifecycle(observation);
+          },
+        }),
         defaultPermissionHookResponse: data => buildDefaultPermissionHookResponse(data, params.unlistedTools),
         permissionHookSecret: hookSecret,
         // Host response ceiling aligned with the installed Claude permission-hook `timeout`
@@ -2217,6 +2249,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       sessionForwarderScript: assets.sessionForwarderScript,
       permissionForwarderScript: assets.permissionForwarderScript,
       enableLocalPermissionBridge: true,
+      observeNativeToolPrompts: true,
       unlistedTools: params.unlistedTools,
       ...(sessionHookServer.sessionHookSecretFile ? { sessionHookSecretFile: sessionHookServer.sessionHookSecretFile } : {}),
       ...(sessionHookServer.permissionHookSecretFile ? { permissionHookSecretFile: sessionHookServer.permissionHookSecretFile } : {}),
@@ -3247,7 +3280,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
     const inputState = await params.ctx.agentRuntime.terminalHost.captureInputState(handle).catch(() => null);
     if (!inputState || !inputState.stable) return false;
     const screen = parseClaudeScreenState(inputState.currentInput, { cursor: inputState.cursor });
-    if (!hasClaudeUnifiedVisibleDialog(screen)) return true;
+    if (!hasClaudeUnifiedVisibleDialog(screen) && !resumeChoiceStartupHandler?.hasNativePrompt()) return true;
     // Reuse the Lane 1 resolver as the probe — no second prober. Published / handled / awaiting-user
     // all count as resolved (the tail stops); an `unhandled` recognized dialog (latched or owned but
     // not published) keeps the bounded re-arm going.

@@ -84,7 +84,7 @@ describe('createClaudeNativePermissionEngine', () => {
 
     await expect(engine.canCallTool('mcp__happier__action_execute', {
       actionId: 'session.board.item.remove',
-    }, { signal })).resolves.toEqual({
+    }, { signal, toolUseId: 'toolu-approval' })).resolves.toEqual({
       behavior: 'deny',
       message: 'Permission denied',
       interrupt: true,
@@ -95,6 +95,7 @@ describe('createClaudeNativePermissionEngine', () => {
       subject: {
         kind: 'tool',
         name: 'mcp__happier__action_execute',
+        toolCallId: 'toolu-approval',
         input: { actionId: 'session.board.item.remove' },
       },
     }, { signal });

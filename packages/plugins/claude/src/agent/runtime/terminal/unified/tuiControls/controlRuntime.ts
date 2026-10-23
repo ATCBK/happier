@@ -1,3 +1,4 @@
+import { TERMINAL_BRACKETED_PASTE_START, TERMINAL_BRACKETED_PASTE_END } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
   TerminalControlPort,
   TerminalControlSendResult,
@@ -26,6 +27,22 @@ export type CaptureOutcome =
 export type SendFailureResult =
   | Extract<ControlAttemptResult, Readonly<{ kind: 'unsupported' }>>
   | Extract<ControlAttemptResult, Readonly<{ kind: 'failed' }>>;
+
+/** Display verification for exact text already written by this operation, never a preexisting draft. */
+export function doesClaudeOwnedTextMatchCapture(expected: string, captured: string): boolean {
+  const visibleText = (text: string) => text.trim().replace(/\s+/gu, ' ');
+  return visibleText(expected) === visibleText(captured);
+}
+
+/** Native question and plan editors preserve TAB/LF/CR inside bracketed paste (2.1.304 probes). */
+export function hasUnsupportedClaudeNativeTextControls(text: string): boolean {
+  return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text);
+}
+
+/** Native editors consume exact payload bytes, unlike interactive terminal paste encoding. */
+export function encodeClaudeNativeTextInput(text: string): string {
+  return TERMINAL_BRACKETED_PASTE_START + text + TERMINAL_BRACKETED_PASTE_END;
+}
 
 export async function captureScreenState(port: TerminalControlPort): Promise<CaptureOutcome> {
   const result = await port.captureScreen();

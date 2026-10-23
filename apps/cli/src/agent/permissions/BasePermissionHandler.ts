@@ -36,7 +36,7 @@ import { SessionPermissionRemoteGrantRecordV1Schema, SessionPermissionRemoteSett
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionPermissionRespondRpcParamsV1Schema, SessionUserActionPassUpRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
-import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
+import { NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { StructuredQuestionAnswersV1Schema, StructuredQuestionResponseV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
@@ -68,6 +68,7 @@ import {
     isPermissionRequestOwnedByPlugin,
     isPermissionRequestOwnedByPluginTurn,
     normalizePermissionRequestOwner,
+    permissionRequestOwnersEqual,
     type PermissionRequestOwner,
 } from './permissionRequestOwner';
 import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
@@ -4085,6 +4086,44 @@ export abstract class BasePermissionHandler {
             params.signal?.removeEventListener('abort', onAbort);
             if (this.pendingRequests.get(params.requestId) === pending) this.pendingRequests.delete(params.requestId);
         }
+    }
+
+    /** Record only an owned native question or native tool result, without applying another choice. */
+    async settleObservedDecision(params: Readonly<{
+        requestId: string;
+        source: string;
+        owner: PermissionRequestOwner;
+        decision: 'approved' | 'denied' | 'abort';
+        answers?: StructuredQuestionAnswersV1;
+    }>): Promise<boolean> {
+        const pending = this.pendingRequests.get(params.requestId);
+        const context = this.requestCoordinator.getResponseContext(params.requestId);
+        const outstanding = this.requestStore.readOutstandingRequest(params.requestId);
+        const occurrenceQuestion = pending?.causalPermissionContext?.origin === 'host_occurrence_question'
+            && outstanding?.lifetime === 'occurrence'
+            && context !== null && isAgentStructuredQuestionRequest(context);
+        const nativeApproval = context !== null
+            && (context.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE
+                || context.source === NATIVE_TOOL_APPROVAL_REQUEST_SOURCE)
+            && (context.kind ?? resolveAgentRequestKind(context.toolName)) === 'permission';
+        if (!pending || !context || !outstanding
+            || (!occurrenceQuestion && !nativeApproval)
+            || !params.source.trim() || context.source !== params.source.trim()
+            || !permissionRequestOwnersEqual(
+                normalizePermissionRequestOwnerWithoutSourceAuthority(context.owner),
+                normalizePermissionRequestOwnerWithoutSourceAuthority(params.owner),
+            )) return false;
+        const answers = params.answers === undefined ? undefined : StructuredQuestionAnswersV1Schema.parse(params.answers);
+        const result: PermissionResult = { decision: params.decision, ...(answers ? { answers } : {}) };
+        return await this.requestCoordinator.completeObservedResponse({ context, completion: {
+            result,
+            completedRequest: {
+                status: params.decision === 'abort' ? 'canceled' : params.decision,
+                decision: params.decision,
+                answeredBy: { kind: 'person' },
+                ...(answers ? { structuredAnswersV1: answers } : {}),
+            },
+        } });
     }
 
     protected async requestPermissionDecision(

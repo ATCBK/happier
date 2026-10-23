@@ -9,6 +9,7 @@ function createContextWithRequestDecision(
     requestDecision: ReturnType<typeof vi.fn>,
 ): ClaudePermissionContext {
     return {
+        agentRuntime: { modes: { bind: () => ({ dispose() {} }), complete: async () => {} } },
         sessions: {
             current: {
                 permissions: {
@@ -30,6 +31,17 @@ function createContextFixture(decision: 'approved' | 'denied' | 'abort') {
 }
 
 describe('createClaudePermissionEngine', () => {
+    it.each(['ExitPlanMode', 'exit_plan_mode'])('clears the saved Plan selection when %s is approved', async (toolName) => {
+        const { ctx } = createContextFixture('approved');
+        let selectedMode: string | null = 'plan';
+        const engine = createClaudePermissionEngine({ ...ctx, agentRuntime: { modes: {
+            bind: () => ({ dispose() {} }),
+            complete: async ({ modeId }) => { if (selectedMode === modeId) selectedMode = null; },
+        } } });
+        expect((await engine.canCallTool(toolName, { plan: 'Review the change' })).behavior).toBe('allow');
+        expect(selectedMode).toBeNull();
+    });
+
     it('maps Claude tool checks to the host session permission surface', async () => {
         const { ctx, requestDecision } = createContextFixture('approved');
         const engine = createClaudePermissionEngine(ctx);
@@ -65,22 +77,26 @@ describe('createClaudePermissionEngine', () => {
         const ctx = createContextWithRequestDecision(requestDecision);
         const engine = createClaudePermissionEngine(ctx);
 
+        const questions = [
+            { question: 'Continue with cleanup?' },
+            { question: 'Which checks?', multiSelect: true },
+        ];
         const result = await engine.canCallTool('AskUserQuestion', {
-            questions: [{ question: 'Continue with cleanup?' }],
+            questions,
         }, {
             toolUseId: 'toolu_ask_1',
         });
 
         expect(requestDecision).toHaveBeenCalledWith(expect.objectContaining({
             input: {
-                questions: [{ question: 'Continue with cleanup?', freeform: {} }],
+                questions: questions.map(question => ({ ...question, freeform: {} })),
             },
         }), expect.any(Object));
 
         expect(result).toEqual({
             behavior: 'allow',
             updatedInput: {
-                questions: [{ question: 'Continue with cleanup?' }],
+                questions,
                 answers: {
                     'Continue with cleanup?': 'Keep the files',
                     'Which checks?': 'Unit tests, Typecheck',

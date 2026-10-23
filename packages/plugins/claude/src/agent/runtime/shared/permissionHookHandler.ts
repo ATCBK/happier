@@ -5,7 +5,11 @@ import {
   readPermissionHookEventName,
   type PermissionHookData,
   type PermissionHookResponse,
+  type SessionHookData,
 } from '../../hooks/protocol.js';
+import { isSidechainSessionHook } from '../../hooks/sidechain.js';
+import { isAskUserQuestionToolName } from '../../permissions/askUserQuestion.js';
+import type { ClaudeUnifiedTerminalResponseLocation } from '@happier-dev/plugin-sdk/first-party/claude';
 import {
   createClaudePermissionEngine,
   type ClaudePermissionContext,
@@ -96,15 +100,29 @@ function buildPermissionResponse(
   };
 }
 
+export type ClaudePermissionHookIngress = Readonly<{
+  unifiedTerminalActive: boolean;
+  responseLocations: Readonly<{
+    question: ClaudeUnifiedTerminalResponseLocation;
+    permission: ClaudeUnifiedTerminalResponseLocation;
+  }>;
+  unlistedTools?: 'ask' | 'deny';
+  resolveToolUseId?(data: PermissionHookData): string | null | Promise<string | null>;
+  onNativePrompt(data: SessionHookData): void | Promise<void>;
+  onPermissionLifecycle?(data: SessionHookData): void | Promise<void>;
+}>;
+
 export function createClaudePermissionHookHandler(
   ctx: ClaudeToolExecutionContext,
+  ingress?: ClaudePermissionHookIngress,
 ): (data: PermissionHookData, options?: Readonly<{ signal?: AbortSignal }>) => Promise<PermissionHookResponse> {
   const permissionEngine = 'permissionEngine' in ctx ? ctx.permissionEngine : createClaudePermissionEngine(ctx);
   return async (data, options) => {
     const toolName = readToolName(data);
     if (!toolName) return buildDefaultPermissionHookResponse(data);
 
-    const toolUseId = readToolUseId(data);
+    const toolUseId = readToolUseId(data) ?? await ingress?.resolveToolUseId?.(data) ?? null;
+    if (toolUseId) data = { ...data, tool_use_id: toolUseId };
     const input = readToolInputRecord(readToolInput(data));
     if (!input) {
       return buildPermissionResponse(data, deniedToolInterception('Claude supplied invalid tool input.'));
@@ -132,11 +150,50 @@ export function createClaudePermissionHookHandler(
     if (!transformedInput) {
       return buildPermissionResponse(data, deniedToolInterception('Tool interception returned invalid input.'));
     }
-    const result = await permissionEngine.canCallTool(toolName, transformedInput, {
-      requestId: toolUseId,
-      toolUseId,
-      signal: options?.signal,
-    });
-    return buildPermissionResponse(data, result);
+    const question = isAskUserQuestionToolName(toolName);
+    const location = ingress?.responseLocations[question ? 'question' : 'permission'];
+    const hookEventName = readPermissionHookEventName(data);
+    const inputChanged = !isDeepStrictEqual(input, transformedInput);
+    // Confined calls must reach the existing host permission authority: its policy
+    // decides allowedTools/unlistedTools. Native passthrough cannot enforce it.
+    const native = ingress?.unifiedTerminalActive === true
+      && ingress.unlistedTools !== 'deny'
+      && location !== 'app_only'
+      // PermissionRequest applies rewrites only with an explicit allow decision.
+      // Preserve the host rewrite through that owner instead of native passthrough.
+      && (hookEventName === 'PreToolUse' || !inputChanged)
+      && !isSidechainSessionHook(data);
+    if (native) {
+      // AskUserQuestion emits both hooks; only PreToolUse has its exact tool-use ID.
+      if (!question || hookEventName === 'PreToolUse') {
+        await ingress.onNativePrompt({
+          ...data,
+          tool_input: transformedInput,
+          toolInput: transformedInput,
+          hook_event_name: 'ClaudeNativePrompt',
+          hookEventName: 'ClaudeNativePrompt',
+          happierResponseLocation: location,
+        });
+      }
+      const response = buildDefaultPermissionHookResponse(data);
+      if (inputChanged) {
+        response.hookSpecificOutput = { ...response.hookSpecificOutput, updatedInput: transformedInput };
+      }
+      return response;
+    }
+    const publish = async (hookEventName: string): Promise<void> => {
+      await ingress?.onPermissionLifecycle?.({ ...data, hook_event_name: hookEventName, hookEventName });
+    };
+    await publish('PermissionRequest');
+    try {
+      const result = await permissionEngine.canCallTool(toolName, transformedInput, {
+        requestId: toolUseId,
+        toolUseId,
+        signal: options?.signal,
+      });
+      return buildPermissionResponse(data, result);
+    } finally {
+      await publish('PermissionRequestCompleted');
+    }
   };
 }

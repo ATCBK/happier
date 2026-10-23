@@ -1,7 +1,7 @@
 import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { deepEqual } from '@/utils/deterministicJson';
 import { logger } from '@/ui/logger';
-import { isAgentStructuredQuestionRequest } from './requestKind';
+import { isAgentStructuredQuestionRequest, isDurableAgentStructuredQuestionRequest } from './requestKind';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import type { SessionQuestionContextV1, SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 import type { StructuredQuestionAnswersV1 } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
@@ -218,6 +218,10 @@ type PendingPermissionRequest<TResult> = {
     waiters: Map<string, PendingPermissionWaiter<TResult>>;
     cancelReason: string | null;
     completionPersistence: Promise<boolean> | null;
+    observedCompletion?: Readonly<{
+        completion: PermissionRequestCoordinatorCompletion<TResult>;
+        persistence: Promise<boolean>;
+    }>;
 };
 
 type CachedPermissionDecision<TResult> = {
@@ -521,6 +525,31 @@ export class PermissionRequestCoordinator<TResult> {
         });
     }
 
+    /** Native application is already observed, including while an app ACK awaits that fact. */
+    async completeObservedResponse(params: Readonly<{
+        context: PermissionRequestCoordinatorContext;
+        completion: PermissionRequestCoordinatorCompletion<TResult>;
+    }>): Promise<boolean> {
+        const { context, completion } = params;
+        const entry = this.pendingRequests.get(context.requestId);
+        if (!entry || entry.cancelReason || entry.observedCompletion) return false;
+        const application = this.store.captureRequestApplication?.(context.requestId);
+        if (!application || !isSameAgentStateRequestOccurrence(application.pending, {
+            ...entry, tool: entry.toolName, arguments: entry.toolInput,
+        })) return false;
+        const persistence = Promise.resolve(this.store.completeRequest({
+            requestId: context.requestId,
+            ...completion.completedRequest,
+            applicationAcknowledged: application,
+        })).then(saved => saved !== false);
+        entry.observedCompletion = { completion, persistence: this.observeAppliedCompletion(entry, completion) ?? persistence };
+        const saved = await persistence;
+        if (saved && this.pendingRequests.get(context.requestId) === entry) {
+            this.settleCompletedEntry(entry, completion.result);
+        }
+        return saved;
+    }
+
     async completeResponse(params: Readonly<{
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
@@ -550,6 +579,13 @@ export class PermissionRequestCoordinator<TResult> {
                 if (params.acknowledgeDecisionApplication) {
                     await params.acknowledgeDecisionApplication(completion.result);
                 }
+                // The native result can settle during the callback. Never replace its actual
+                // answer with the app's requested answer, even when that callback succeeds.
+                if (entry.observedCompletion) {
+                    const observed = entry.observedCompletion;
+                    return await observed.persistence
+                        && deepEqual(observed.completion.result, completion.result);
+                }
                 const persistence = this.store.completeRequest({
                     requestId: entry.requestId,
                     ...completion.completedRequest,
@@ -573,16 +609,7 @@ export class PermissionRequestCoordinator<TResult> {
                         ...(entry.owner ? { owner: entry.owner } : {}),
                     },
                 });
-                const applied = this.store.readAppliedCompletion?.({ requestId: entry.requestId,
-                    ...completion.completedRequest });
-                if (applied) void applied.acknowledgement.then((saved) => {
-                    if (this.pendingRequests.get(entry.requestId) !== entry) return;
-                    if (saved && !entry.cancelReason) {
-                        this.settleCompletedEntry(entry, completion.result);
-                    } else {
-                        this.retireAppliedEntry(entry);
-                    }
-                });
+                this.observeAppliedCompletion(entry, completion);
                 const persisted = await persistence;
                 if (application && persisted === false) this.retireAppliedEntry(entry);
                 if (persisted !== false) return true;
@@ -650,6 +677,21 @@ export class PermissionRequestCoordinator<TResult> {
             ...(application ? { applicationAcknowledged: application } : {}),
         });
         return persisted !== false;
+    }
+
+    private observeAppliedCompletion(
+        entry: PendingPermissionRequest<TResult>,
+        completion: PermissionRequestCoordinatorCompletion<TResult>,
+    ): Promise<boolean> | undefined {
+        const applied = this.store.readAppliedCompletion?.({ requestId: entry.requestId,
+            ...completion.completedRequest });
+        if (!applied) return undefined;
+        void applied.acknowledgement.then((saved) => {
+            if (this.pendingRequests.get(entry.requestId) !== entry) return;
+            if (saved && !entry.cancelReason) this.settleCompletedEntry(entry, completion.result);
+            else this.retireAppliedEntry(entry);
+        });
+        return applied.acknowledgement;
     }
 
     private retireAppliedEntry(entry: PendingPermissionRequest<TResult>): void {
@@ -750,7 +792,7 @@ export class PermissionRequestCoordinator<TResult> {
         const isSelected = (requestId: string) => options?.scope !== 'foreground'
             || !readRunScopedExecutionPermissionRequestIdentity(requestId);
         const selectedEntries = [...this.pendingRequests.values()].filter(entry => isSelected(entry.requestId));
-        const entries = selectedEntries.filter(entry => !options?.preserveQuestions || !isAgentStructuredQuestionRequest(entry));
+        const entries = selectedEntries.filter(entry => !options?.preserveQuestions || !isDurableAgentStructuredQuestionRequest(entry));
         const cachedDecisions = [...this.cachedDecisions.entries()].filter(([requestId]) => isSelected(requestId));
         // The Session store may hold requests without coordinator-local waiters.
         await this.cancelEntries({
@@ -766,7 +808,7 @@ export class PermissionRequestCoordinator<TResult> {
         });
         if (options?.preserveQuestions) {
             for (const entry of selectedEntries) {
-                if (isAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
+                if (isDurableAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
             }
         }
         for (const [requestId, cached] of cachedDecisions) {
@@ -793,7 +835,7 @@ export class PermissionRequestCoordinator<TResult> {
             });
         }
         for (const entry of this.pendingRequests.values()) {
-            if (isAgentStructuredQuestionRequest(entry)
+            if (isDurableAgentStructuredQuestionRequest(entry)
                 && isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId)
                 && (entry.turnId === undefined || entry.turnId === turnId)) this.cancelRequest(entry.requestId, reason);
         }
@@ -805,7 +847,7 @@ export class PermissionRequestCoordinator<TResult> {
         const allOwnedEntries = [...this.pendingRequests.values()].filter(
             (entry) => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
         );
-        const ownedEntries = allOwnedEntries.filter(entry => !isAgentStructuredQuestionRequest(entry));
+        const ownedEntries = allOwnedEntries.filter(entry => !isDurableAgentStructuredQuestionRequest(entry));
         if (ownedEntries.length > 0 || this.store.listOutstandingRequests().some(
             entry => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
         )) {
@@ -823,7 +865,7 @@ export class PermissionRequestCoordinator<TResult> {
             });
         }
         for (const entry of allOwnedEntries) {
-            if (isAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
+            if (isDurableAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
         }
     }
 
@@ -931,7 +973,7 @@ export class PermissionRequestCoordinator<TResult> {
             return;
         }
 
-        if (isAgentStructuredQuestionRequest(entry)) {
+        if (isDurableAgentStructuredQuestionRequest(entry)) {
             // The native waiter belongs to this runtime; its question belongs
             // to the durable Session and remains answerable after replacement.
             rejectWaiter(waiter, createPermissionRequestAbortError());
@@ -941,6 +983,7 @@ export class PermissionRequestCoordinator<TResult> {
 
         if (
             entry.completionPersistence
+            || entry.observedCompletion
             || this.store.hasPermissionResponseClaim?.(entry.requestId) === true
         ) {
             rejectWaiter(waiter, createPermissionRequestAbortError());

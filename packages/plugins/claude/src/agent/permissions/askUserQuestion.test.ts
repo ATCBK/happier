@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
     normalizeAskUserQuestionAnswers,
+    buildNativeAskUserQuestionAnswersForClaude,
+    normalizeNativeAskUserQuestionAnswers,
     normalizeAskUserQuestionInputForPublication,
 } from './askUserQuestion.js';
 
@@ -75,5 +77,52 @@ describe('Claude AskUserQuestion permissions helpers', () => {
         });
         expect(normalizeAskUserQuestionAnswers({})).toBeNull();
         expect(normalizeAskUserQuestionAnswers(null)).toBeNull();
+    });
+});
+
+
+describe('native Claude answer projection', () => {
+    it('projects semantic choice ids in provider order while preserving literal question keys and custom values', () => {
+        const questions = [{
+            id: 'native-q', question: '__proto__', header: 'Prototype', multiSelect: true,
+            options: [{ id: 'a', label: 'Alpha, beta' }, { id: 'b', label: '雪 🦦' }],
+        }];
+        const output = buildNativeAskUserQuestionAnswersForClaude(questions, {
+            'native-q': ['b', 'custom\nvalue', 'a'],
+        });
+        expect(Object.entries(output)).toEqual([['__proto__', 'Alpha, beta, 雪 🦦, custom\nvalue']]);
+    });
+});
+
+
+describe('observed native Claude answer projection', () => {
+    const closed = [{ id: 'native-q', question: 'Pick values', multiSelect: true, freeform: false,
+        options: [{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Beta' }] }];
+    it('recovers proven closed multiple-choice arrays through canonical semantic ids', () => {
+        expect(normalizeNativeAskUserQuestionAnswers(closed, { 'Pick values': 'Alpha, Beta' }))
+            .toEqual({ 'native-q': ['a', 'b'] });
+    });
+    it('does not guess between a native multi-select join and punctuation in custom text', () => {
+        const questions = closed.map(({ freeform: _, ...question }) => question);
+        expect(normalizeNativeAskUserQuestionAnswers(questions, { 'Pick values': 'Alpha, Beta' })).toBeNull();
+        expect(normalizeNativeAskUserQuestionAnswers(questions, { 'Pick values': 'Coffee, tea\n雪 🦦' }))
+            .toEqual({ 'native-q': ['Coffee, tea\n雪 🦦'] });
+    });
+    it('keeps comma-bearing labels intact and rejects indistinguishable closed choice combinations', () => {
+        const questions = [{ ...closed[0], options: [
+            { id: 'comma', label: 'Alpha, Beta' }, { id: 'gamma', label: 'Gamma' },
+        ] }];
+        expect(normalizeNativeAskUserQuestionAnswers(questions, { 'Pick values': 'Alpha, Beta, Gamma' }))
+            .toEqual({ 'native-q': ['comma', 'gamma'] });
+        expect(normalizeNativeAskUserQuestionAnswers([{ ...closed[0], options: [
+            ...closed[0]!.options, { id: 'comma', label: 'Alpha, Beta' },
+        ] }], { 'Pick values': 'Alpha, Beta' })).toBeNull();
+    });
+    it('preserves exact single-choice custom punctuation and rejects incomplete provider evidence', () => {
+        const questions = [{ id: 'native-q', question: 'Pick one', options: ['Alpha', 'Beta'] }];
+        expect(normalizeNativeAskUserQuestionAnswers(questions, { 'Pick one': 'Coffee, tea\n雪 🦦' }))
+            .toEqual({ 'native-q': ['Coffee, tea\n雪 🦦'] });
+        expect(normalizeNativeAskUserQuestionAnswers(questions, {})).toBeNull();
+        expect(normalizeNativeAskUserQuestionAnswers(questions, { 'Pick one': 'Alpha', extra: 'Beta' })).toBeNull();
     });
 });

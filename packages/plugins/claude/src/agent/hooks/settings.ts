@@ -60,6 +60,8 @@ export type BuildClaudeHookPluginHooksParams = Readonly<{
     sessionHookSecretFile?: string;
     permissionForwarderScript?: string;
     enableLocalPermissionBridge?: boolean;
+    /** Observe exact native tool-use identities through the authenticated session endpoint. */
+    observeNativeToolPrompts?: boolean;
     unlistedTools?: 'ask' | 'deny';
     permissionHookSecretFile?: string;
     /**
@@ -156,6 +158,20 @@ export function buildClaudeHookPluginHooks(params: BuildClaudeHookPluginHooksPar
             // The existing host permission owner must see every confined call first.
             matcher: params.unlistedTools === 'deny' ? '*' : 'AskUserQuestion',
             timeout: permissionHookTimeoutSeconds,
+        })];
+    }
+
+    if (params.observeNativeToolPrompts === true) {
+        hooks.PreToolUse = [...(hooks.PreToolUse ?? []), buildCommandHook({
+            command: buildForwarderCommand({
+                platform: params.platform,
+                nodeExecutable: params.nodeExecutable,
+                scriptPath: params.sessionForwarderScript,
+                port: params.port,
+                hookEventName: 'PreToolUse',
+                secretFile: params.sessionHookSecretFile,
+            }),
+            matcher: '*',
         })];
     }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
@@ -61,6 +62,7 @@ function createFixture(
         handler,
         current: currentSessionUi.interactions,
         public: publicServices.interactions,
+        sessions: publicServices.sessions,
         availability: publicServices.availability,
         async publishedRequest() {
             await vi.waitFor(() => expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(1));
@@ -230,16 +232,35 @@ describe('native Agent current-session interactions', () => {
         });
     });
 
-    it('fails closed on missing required, unknown, or empty real question answers', async () => {
+    it('rejects missing required or unknown real question answers without consuming the request', async () => {
         for (const answers of [
-            {}, { notes: ['note'], components: ['gamma'], unknown: ['ignored?'] }, { notes: [''], components: ['gamma'] },
+            {}, { notes: ['note'], components: ['gamma'], unknown: ['ignored?'] },
         ]) {
             const fixture = createFixture();
             const pending = fixture.public.askQuestions(questionsRequest);
             const { id } = await fixture.publishedRequest();
-            await expect(fixture.respond({ id, approved: true, answers })).resolves.toBeUndefined();
-            await expect(pending).resolves.toMatchObject({ kind: 'questions', status: 'unavailable' });
+            await expect(fixture.respond({ id, approved: true, answers })).resolves.toMatchObject({
+                ok: false, errorCode: 'permission_response_invalid', requestId: id,
+            });
+            expect(fixture.session.__getAgentState().requests?.[id]).toBeDefined();
+            expect(fixture.session.__getAgentState().completedRequests?.[id]).toBeUndefined();
+            await expect(fixture.respond({ id, approved: true, answers: {
+                notes: ['Valid notes'], components: ['gamma'],
+            } })).resolves.toBeUndefined();
+            await expect(pending).resolves.toMatchObject({ kind: 'questions', status: 'answered' });
         }
+    });
+
+    it('fails closed on empty required text at the transient interaction settlement boundary', async () => {
+        const fixture = createFixture();
+        const pending = fixture.public.askQuestions(questionsRequest);
+        const { id } = await fixture.publishedRequest();
+        // Structured answer normalization permits the string shape; the transient
+        // contract validates required text before accepting the presenter result.
+        await expect(fixture.respond({ id, approved: true, answers: {
+            notes: [''], components: ['gamma'],
+        } })).resolves.toBeUndefined();
+        await expect(pending).resolves.toMatchObject({ kind: 'questions', status: 'unavailable' });
     });
 
     it('rejects malformed decisions, duplicate answers, and effect-bearing user-action replies without settling', async () => {
@@ -269,8 +290,13 @@ describe('native Agent current-session interactions', () => {
             const fixture = createFixture();
             const pending = fixture.public.confirm({ kind: 'confirmation', message: 'Continue?' });
             const { id } = await fixture.publishedRequest();
-            await expect(fixture.respond({ id, approved: true, ...fields })).resolves.toBeUndefined();
-            await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status: 'unavailable' });
+            await expect(fixture.respond({ id, approved: true, ...fields })).resolves.toMatchObject({
+                ok: false, errorCode: 'permission_response_invalid', requestId: id,
+            });
+            expect(fixture.session.__getAgentState().requests?.[id]).toBeDefined();
+            expect(fixture.session.__getAgentState().completedRequests?.[id]).toBeUndefined();
+            await expect(fixture.respond({ id, approved: true, answers: { confirmation: ['confirm'] } })).resolves.toBeUndefined();
+            await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status: 'approved' });
         }
     });
 
@@ -299,8 +325,10 @@ describe('native Agent current-session interactions', () => {
                 session.abort();
             }
             await expect(pending).resolves.toMatchObject({ status });
-            await vi.waitFor(() => expect(fixture.session.__getAgentState().requests ?? {}).toEqual({}));
-            expect(fixture.session.__getAgentState().completedRequests?.[id]).toMatchObject({ status: 'canceled' });
+            expect(fixture.session.__getAgentState().requests?.[id]).toMatchObject({
+                kind: 'user_action', questionV1: { mode: 'wait', lasting: false },
+            });
+            expect(fixture.session.__getAgentState().completedRequests?.[id]).toBeUndefined();
         }
     });
 
@@ -371,4 +399,68 @@ describe('native Agent current-session interactions', () => {
         });
         expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
     });
+});
+
+
+describe('observed native tool approval through the existing permission owner', () => {
+    it.each([
+        { decision: 'approved', allowSessionPersistence: false, source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE, name: 'Bash' },
+        { decision: 'denied', allowSessionPersistence: false, source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE, name: 'Bash' },
+        { decision: 'approved', allowSessionPersistence: true, source: NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, name: 'mcp__docs__query' },
+        { decision: 'denied', allowSessionPersistence: true, source: NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, name: 'mcp__docs__query' },
+    ] as const)('records actual $decision for $name without granting a later request', async ({ decision, allowSessionPersistence, source, name }) => {
+        const fixture = createFixture({
+            interactionDeadlineMs: undefined,
+            credentials: { token: 'fixture-account-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+        });
+        const pending = fixture.public.requestApproval({
+            ...approvalRequest,
+            subject: { ...approvalRequest.subject, name, toolCallId: 'native-tool-A' },
+            allowSessionPersistence,
+        });
+        const { id, request } = await fixture.publishedRequest();
+        expect(id).toBe('native-tool-A');
+        expect(request).toMatchObject({ source,
+            owner: { kind: 'plugin', pluginId: 'acme.plugin', runtimeId: 'acme.agent/runtime' } });
+        const permissions = fixture.sessions.current?.permissions;
+        if (!permissions?.settleObservedDecision) throw new Error('Expected native settlement capability');
+        await expect(permissions.settleObservedDecision({ requestId: id, source: 'unrelated-source', decision })).resolves.toBe(false);
+        await expect(permissions.settleObservedDecision({ requestId: id, source, decision })).resolves.toBe(true);
+        await expect(pending).resolves.toMatchObject({ kind: 'approval', status: decision === 'approved' ? 'approved' : 'declined' });
+        expect(fixture.session.__getAgentState().completedRequests?.[id]).toMatchObject({ status: decision, decision });
+        expect(fixture.session.__getAgentState().requests?.[id]).toBeUndefined();
+
+        const later = fixture.public.requestApproval({
+            ...approvalRequest,
+            subject: { ...approvalRequest.subject, name, toolCallId: 'native-tool-B' },
+            allowSessionPersistence,
+        });
+        const next = await fixture.publishedRequest();
+        expect(next.id).toBe('native-tool-B');
+        expect(fixture.session.__getAgentState().completedRequests?.[next.id]).toBeUndefined();
+        await fixture.respond({ id: next.id, approved: false, decision: 'denied' }, 'permission');
+        await expect(later).resolves.toMatchObject({ kind: 'approval', status: 'declined' });
+    });
+});
+
+
+it('settles a runtime-native question through the guarded public Session handle', async () => {
+    const fixture = createFixture({
+        interactionDeadlineMs: undefined,
+        credentials: { token: 'fixture-account-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+    });
+    const permissions = fixture.sessions.current?.permissions;
+    if (!permissions?.settleObservedDecision) throw new Error('Expected native settlement capability');
+    const source = 'fixture.native.question';
+    const pending = permissions.requestDecision({
+        requestId: 'native-question-A', source, toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }] },
+    });
+    const { id, request } = await fixture.publishedRequest();
+    expect(id).toBe('native-question-A');
+    expect(request).toMatchObject({ source, lifetime: 'occurrence', kind: 'user_action' });
+    const answers = { 'Continue?': ['No'] };
+    await expect(permissions.settleObservedDecision({ requestId: id, source, decision: 'approved', answers })).resolves.toBe(true);
+    await expect(pending).resolves.toEqual({ decision: 'approved', answers });
+    expect(fixture.session.__getAgentState().completedRequests?.[id]).toMatchObject({ status: 'approved', structuredAnswersV1: answers });
 });

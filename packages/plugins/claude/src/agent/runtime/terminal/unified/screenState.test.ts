@@ -1363,3 +1363,32 @@ describe('parseClaudeScreenState — bash mode prompt (2.1.301)', () => {
     expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
   });
 });
+
+
+describe('native question control exclusion', () => {
+  it('reserves a provider native question for its correlated answer owner', () => {
+    const screen = readFileSync(new URL('./tuiControls/__fixtures__/claude-2.1.304-question-single.txt', import.meta.url), 'utf8');
+    const state = parseClaudeScreenState(screen);
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('native_question');
+  });
+});
+
+
+describe('native permission classifier ownership', () => {
+  const write = [
+    '──────────────────', ' Create file', ' native-write-probe.txt', '  1 native write probe',
+    ' Do you want to create native-write-probe.txt?', ' ❯ 1. Yes',
+    '   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session',
+    '      (shift+tab)', '   3. No', '', ' Esc to cancel · Tab to amend',
+  ].join('\n');
+  it.each(['Write', 'ExitPlanMode'])('keeps known %s permissions out of the generic dialog publisher', (tool) => {
+    const screen = tool === 'Write' ? write
+      : readFileSync(new URL('./tuiControls/__fixtures__/claude-2.1.304-plan-exit.txt', import.meta.url), 'utf8');
+    const state = parseClaudeScreenState(screen);
+    expect(state.permissionPromptVisible).toBe(true);
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('permission_prompt');
+  });
+});

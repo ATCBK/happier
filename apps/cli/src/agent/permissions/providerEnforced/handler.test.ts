@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude';
 
 import { ProviderEnforcedPermissionHandler } from './handler';
+import { createPluginSessionHandleCapabilitiesFactory } from '@/session/services/pluginSessionHandleCapabilities';
 import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
 import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
@@ -1334,6 +1335,117 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
       await expect(pending).resolves.toEqual({ decision: 'denied' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe('observed native occurrence question settlement', () => {
+  const owner = { kind: 'plugin', pluginId: 'fixture.plugin', runtimeId: 'native-runtime' } as const;
+  const source = 'fixture.native.dialog';
+  const input = { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+
+  it('records actual native answers and keeps another occurrence pending across waiter cancellation', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[native settlement]' });
+    const abort = new AbortController();
+    const context = { owner, source, origin: 'host_occurrence_question', lifetime: 'occurrence' } as const;
+    const first = handler.handleToolCall('native-A', 'AskUserQuestion', input, { ...context, signal: abort.signal });
+    const second = handler.handleToolCall('native-B', 'AskUserQuestion', input, context).catch(() => null);
+    const answers = { 'Continue?': ['No'] };
+    const scope = createPluginSessionHandleCapabilitiesFactory({
+      // This test exercises no credential-consuming operation.
+      credentials: {} as never,
+      caller: { pluginId: owner.pluginId, runtimeId: owner.runtimeId, contributionId: 'agent',
+        sourceCustody: { kind: 'managed', immutableGenerationId: 'fixture-generation', installSource: 'npm' } },
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      readAgentId: async () => 'fixture',
+      resolveLiveCapabilities: () => ({ scopeId: liveScope, permissionHandler: handler, readPermissionMode: () => 'default' }),
+    })(session.sessionId).permissions;
+    const liveScope = Symbol('native-runtime');
+    if (!scope?.settleObservedDecision) throw new Error('Native settlement capability is missing');
+    try {
+      await vi.waitFor(() => expect(session.agentState.requests['native-A']).toBeDefined());
+      await expect(handler.settleObservedDecision({ requestId: 'native-A', source, owner: { ...owner, runtimeId: 'other' }, decision: 'approved', answers })).resolves.toBe(false);
+      await expect(scope.settleObservedDecision({ requestId: 'native-A', source: 'other', decision: 'approved', answers })).resolves.toBe(false);
+      const incumbent = session.agentState.requests['native-A'];
+      session.agentState.requests['native-A'] = { ...incumbent, createdAt: incumbent.createdAt + 1 };
+      await expect(scope.settleObservedDecision({ requestId: 'native-A', source, decision: 'approved', answers })).resolves.toBe(false);
+      session.agentState.requests['native-A'] = incumbent;
+      await expect(scope.settleObservedDecision({ requestId: 'native-A', source, decision: 'approved', answers })).resolves.toBe(true);
+      abort.abort();
+      await expect(first).resolves.toEqual({ decision: 'approved', answers });
+      expect(session.agentState.completedRequests['native-A']).toMatchObject({ status: 'approved', decision: 'approved', structuredAnswersV1: answers });
+      expect(session.agentState.requests['native-B']).toBeDefined();
+      expect(await settledState(second)).toBe('pending');
+      await expect(handler.settleObservedDecision({ requestId: 'native-A', source, owner, decision: 'abort' })).resolves.toBe(false);
+    } finally {
+      await handler.abortPendingRequestsAndFlush('test cleanup');
+      await second;
+    }
+  });
+
+  it('retires a rich native occurrence question after its waiter expires and rejects a late app answer', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[native expiry]' });
+    const liveScope = Symbol('native-expiry');
+    const permissions = createPluginSessionHandleCapabilitiesFactory({
+      // This test exercises no credential-consuming operation.
+      credentials: {} as never,
+      caller: { pluginId: owner.pluginId, runtimeId: owner.runtimeId, contributionId: 'agent',
+        sourceCustody: { kind: 'managed', immutableGenerationId: 'fixture-generation', installSource: 'npm' } },
+      signal: new AbortController().signal, isCurrent: () => true, readAgentId: async () => 'fixture',
+      resolveLiveCapabilities: () => ({ scopeId: liveScope, permissionHandler: handler, readPermissionMode: () => 'default' }),
+    })(session.sessionId).permissions;
+    if (!permissions) throw new Error('Native permission capability is missing');
+    const abort = new AbortController();
+    const pending = permissions.requestDecision({ requestId: 'native-expired', source, toolName: 'AskUserQuestion', input }, { signal: abort.signal });
+    const rejected = expect(pending).rejects.toThrow('Permission request aborted');
+    await vi.waitFor(() => expect(session.agentState.requests['native-expired']).toMatchObject({ lifetime: 'occurrence' }));
+    abort.abort();
+    await rejected;
+    expect(session.agentState.requests['native-expired']).toBeUndefined();
+    expect(session.agentState.completedRequests['native-expired']).toMatchObject({ status: 'canceled', decision: 'abort' });
+    await expect(session.rpcHandlerManager.handlers.get('permission')?.({ id: 'native-expired', approved: true, decision: 'approved', answers: { 'Continue?': ['Yes'] } }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'permission_request_not_found' });
+    await handler.abortPendingRequestsAndFlush('test cleanup');
+  });
+
+  it.each([
+    { decision: 'approved', rejectAck: true, matches: false },
+    { decision: 'abort', rejectAck: true, matches: false },
+    { decision: 'approved', rejectAck: false, matches: false },
+    { decision: 'approved', rejectAck: false, matches: true },
+  ] as const)('retains observed $decision with rejectAck=$rejectAck, matches=$matches', async ({ decision, rejectAck, matches }) => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[native ACK]' });
+    let acknowledged!: () => void;
+    const started = new Promise<void>(resolve => { acknowledged = resolve; });
+    let release!: () => void;
+    const applying = new Promise<void>(resolve => { release = resolve; });
+    const pending = handler.handleToolCall('native-ACK', 'AskUserQuestion', input, {
+      owner, source, origin: 'host_occurrence_question', lifetime: 'occurrence',
+      acknowledgeDecisionApplication: async () => { acknowledged(); await applying; if (rejectAck) throw new Error('native answer differs'); },
+    });
+    try {
+      await vi.waitFor(() => expect(session.agentState.requests['native-ACK']).toBeDefined());
+      const answer = session.rpcHandlerManager.handlers.get('permission')?.({ id: 'native-ACK', approved: true, decision: 'approved', answers: { 'Continue?': ['Yes'] } });
+      const appOutcome = Promise.resolve(answer).then(result => ({ ok: true as const, result }), error => ({ ok: false as const, error }));
+      await started;
+      const answers = decision === 'approved' ? { 'Continue?': [matches ? 'Yes' : 'No'] } : undefined;
+      await expect(handler.settleObservedDecision({ requestId: 'native-ACK', source, owner, decision, ...(answers ? { answers } : {}) })).resolves.toBe(true);
+      release();
+      const outcome = await appOutcome;
+      if (rejectAck) expect(outcome).toMatchObject({ ok: false, error: { message: 'native answer differs' } });
+      else if (matches) expect(outcome).toEqual({ ok: true, result: undefined });
+      else expect(outcome).toMatchObject({ ok: true, result: { ok: false, errorCode: 'permission_request_not_found' } });
+      await expect(pending).resolves.toEqual({ decision, ...(answers ? { answers } : {}) });
+      expect(session.agentState.requests['native-ACK']).toBeUndefined();
+      expect(session.agentState.completedRequests['native-ACK']).toMatchObject({ status: decision === 'abort' ? 'canceled' : 'approved', decision, ...(answers ? { structuredAnswersV1: answers } : {}) });
+    } finally {
+      release();
+      await handler.abortPendingRequestsAndFlush('test cleanup');
     }
   });
 });

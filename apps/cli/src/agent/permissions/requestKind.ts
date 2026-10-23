@@ -24,6 +24,13 @@ export function isAgentStructuredQuestionRequest(request: Readonly<{
     && request.source !== HAPPIER_ACTION_REQUEST_SOURCE;
 }
 
+/** Durable questions outlive a detached waiter; occurrence questions end with their native owner. */
+export function isDurableAgentStructuredQuestionRequest(request: Parameters<typeof isAgentStructuredQuestionRequest>[0] & Readonly<{
+  lifetime?: unknown;
+}>): boolean {
+  return isAgentStructuredQuestionRequest(request) && request.lifetime !== 'occurrence';
+}
+
 /** A host-bound occurrence question requests an answer without granting tool authority. */
 export function isHostOccurrenceQuestion(toolName: string, context: AcpPermissionCallContext | undefined): boolean {
   return context?.origin === 'host_occurrence_question'

@@ -1,6 +1,6 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { readClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
-import { isSidechainSessionHook } from '../../../hooks/sidechain.js';
+import { isSidechainSessionHook, isClaudeSidechainRuntimeEvidence } from '../../../hooks/sidechain.js';
 import type {
   AgentSessionHooksService,
   AgentSessionHostServices,
@@ -138,7 +138,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isClaudeUnifiedPrimaryTranscriptRow(row: Readonly<Record<string, unknown>>, providerSessionId: string): boolean {
   return (readClaudeProviderIdentityValue(row.session_id) ?? readClaudeProviderIdentityValue(row.sessionId)) === providerSessionId
-    && row.isSidechain !== true && !isSidechainSessionHook(row);
+    && !isClaudeSidechainRuntimeEvidence(row) && !isSidechainSessionHook(row);
 }
 
 function readString(value: unknown): string | null {

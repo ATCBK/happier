@@ -21,7 +21,7 @@ import {
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { toStructuredQuestionPermissionInput } from '@/agent/permissions/structuredQuestionPermissionInput';
 import { normalizeQuestionAnswers, type QuestionAnswerWireValue } from '@/agent/permissions/structuredQuestionAnswers';
-import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
+import { NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
@@ -213,8 +213,9 @@ async function presentBoundPermissionRequest(
             toolName,
             toPermissionInput(request),
             {
-                ...(request.kind === 'approval' && request.allowedPersistenceScopes?.includes('session') !== true
-                    ? { source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE }
+                ...(request.kind === 'approval'
+                    ? { source: request.allowedPersistenceScopes?.includes('session') === true
+                        ? NATIVE_TOOL_APPROVAL_REQUEST_SOURCE : NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE }
                     : {}),
                 ...(request.kind === 'questions' && permissionContext?.lifetime === 'occurrence'
                     ? { origin: 'host_occurrence_question' as const }

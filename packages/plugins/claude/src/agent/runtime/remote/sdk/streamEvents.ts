@@ -1,3 +1,4 @@
+import { isClaudeSidechainRuntimeEvidence } from '../../../hooks/sidechain.js';
 import type { SDKMessage } from '../../../sdk/types.js';
 import { withClaudeNativeToolResultMetadata } from '../../../transcripts/nativeSemanticProjection.js';
 import { redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from '@happier-dev/plugin-sdk';
@@ -52,25 +53,17 @@ export function readClaudeAgentSdkResultFailure(message: unknown): string | null
 
 const claudeRuntimeAuthAdapter = createClaudeConnectedServiceRuntimeAuthAdapter();
 
-function isSubagentScopedClaudeMessage(message: unknown): boolean {
-    if (!message || typeof message !== 'object') return false;
-    const record = message as Record<string, unknown>;
-    if (record.isSidechain === true) return true;
-    const parentToolUseId = record.parent_tool_use_id ?? record.parentToolUseId;
-    return typeof parentToolUseId === 'string' && parentToolUseId.trim().length > 0;
-}
-
 export function shouldSurfaceClaudeAgentSdkRuntimeFailure(message: unknown): boolean {
     // Sidechain/subagent-scoped failures are never parent runtime-failure evidence: a transient
     // 401 inside a Task-tool subagent must not fail the parent turn nor trigger reactive auth
     // recovery/restart of a healthy parent session (incident 2026-06-12, cmq8y3nlx).
-    if (isSubagentScopedClaudeMessage(message)) return false;
+    if (isClaudeSidechainRuntimeEvidence(message)) return false;
     if (resolveClaudeAgentSdkRuntimeAuthRetryDecision(message).action === 'await_provider_retry') return false;
     return true;
 }
 
 export function hasClaudeAgentSdkDefinitiveSubagentRuntimeAuthFailureEvidence(message: unknown): boolean {
-    if (!isSubagentScopedClaudeMessage(message)) return false;
+    if (!isClaudeSidechainRuntimeEvidence(message)) return false;
     if (!containsDefinitiveClaudeOAuthRevocationEvidence(message)) return false;
     const classification = claudeRuntimeAuthAdapter.classifyRuntimeAuthFailure({
         target: { agentId: 'claude' },

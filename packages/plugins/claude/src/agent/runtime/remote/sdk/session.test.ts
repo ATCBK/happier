@@ -1169,7 +1169,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
           behavior: 'deny', message: 'Permission denied', interrupt: true,
         } } }));
       expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
-        subject: { kind: 'tool', name: 'mcp__first__team__mutate', input: {} },
+        subject: { kind: 'tool', name: 'mcp__first__team__mutate', input: {}, toolCallId: 'run-mcp' },
       }), expect.anything());
     } finally { await operations.disposeProviderSession(); }
   });

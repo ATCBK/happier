@@ -3,6 +3,7 @@ import {
   type AgentSessionOpenRequest,
   type AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { resolveClaudeUnifiedTerminalResponseLocations } from '@happier-dev/plugin-sdk/first-party/claude';
 import type { TerminalHostPreference } from '@happier-dev/plugin-sdk/agents/runtime';
 import { join } from 'node:path';
 import {
@@ -84,6 +85,7 @@ function createClaudeNativeUnifiedTerminalContext(
       accountUsage: sdkContext.agentRuntime.accountUsage,
       ...(sdkContext.agentRuntime.nativeHome ? { nativeHome: sdkContext.agentRuntime.nativeHome } : {}),
       toolExecution: sdkContext.agentRuntime.toolExecution,
+      modes: sdkContext.agentRuntime.modes,
     },
     sessions: sdkContext.sessions,
   };
@@ -149,10 +151,12 @@ export async function openClaudeNativeUnifiedTerminalSession(
   if (input.request.kind === 'fork') {
     throw new Error(`Claude Unified Terminal native ${input.request.kind} opening is not yet available.`);
   }
-  const [hostSetting, resumeChoiceSetting, workspaceTrustSetting] = await Promise.all([
+  const [hostSetting, resumeChoiceSetting, workspaceTrustSetting, questionLocation, permissionLocation] = await Promise.all([
     readSetting(input.context, CLAUDE_UNIFIED_TERMINAL_HOST_SETTING_KEY),
     readSetting(input.context, CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE_SETTING_KEY),
     readSetting(input.context, CLAUDE_UNIFIED_TERMINAL_WORKSPACE_TRUST_SETTING_KEY),
+    readSetting(input.context, 'claudeUnifiedTerminalQuestionResponseLocation'),
+    readSetting(input.context, 'claudeUnifiedTerminalPermissionResponseLocation'),
   ]);
   const launchSettings = await resolveClaudeNativeLaunchSettings({
     settings: input.context.services.settings.forScope({ kind: 'account' }),
@@ -208,6 +212,10 @@ export async function openClaudeNativeUnifiedTerminalSession(
       ? { providerModel: input.request.providerBinding.model }
       : {}),
     permissionMode: resolvePermissionMode(input),
+    responseLocations: resolveClaudeUnifiedTerminalResponseLocations({
+      claudeUnifiedTerminalQuestionResponseLocation: questionLocation,
+      claudeUnifiedTerminalPermissionResponseLocation: permissionLocation,
+    }),
     allowedTools: input.request.configuration?.allowedTools,
     unlistedTools: input.request.configuration?.unlistedTools,
     workspaceWrites: input.request.configuration?.workspaceWrites,

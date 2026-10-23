@@ -30,8 +30,37 @@ describe('createClaudeNativeAgentSdkContext', () => {
 
     expect(response.hookSpecificOutput?.decision).toEqual({ behavior: 'allow' });
     expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
-      subject: { kind: 'tool', name: 'Bash', input: { command: 'ls -d /usr/bin' } },
+      subject: expect.objectContaining({ kind: 'tool', name: 'Bash', input: { command: 'ls -d /usr/bin' } }),
     }), undefined);
+  });
+
+  it('retains app-prompt question identity and canonical structured answers at the existing Session permission owner', async () => {
+    // The host permission service and tool interception are the external SDK boundary.
+    const requestDecision = vi.fn(async () => ({ decision: 'approved' as const, answers: { 'Which colors?': ['amber-id', 'blue-id'] } }));
+    const context = {
+      services: {
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }, exec: {},
+        sessions: { current: { permissions: { requestDecision } } },
+        interactions: { askQuestions: async () => ({ requestId: 'host-generated-question', kind: 'questions', status: 'answered',
+          answers: { 'which-colors': { kind: 'multipleChoice', answers: [{ kind: 'choice', choiceId: 'choice-1' }, { kind: 'choice', choiceId: 'choice-2' }] } },
+        }) },
+      },
+      session: { services: { toolExecution: {
+        before: async (request: { input: Record<string, unknown> }) => ({ status: 'continue' as const, input: request.input }),
+      } } },
+    } as unknown as AgentSessionRuntimeContext;
+    const handler = createClaudePermissionHookHandler(createClaudeNativeAgentSdkContext(context));
+    const response = await handler({ hook_event_name: 'PreToolUse', session_id: 'native-session',
+      tool_use_id: 'toolu-question', tool_name: 'AskUserQuestion', tool_input: { questions: [{
+        question: 'Which colors?', multiSelect: true, options: [{ label: 'Amber', value: 'amber-id' }, { label: 'Blue', value: 'blue-id' }],
+      }] },
+    });
+    expect(response.hookSpecificOutput?.decision).toEqual(expect.objectContaining({ behavior: 'allow',
+      updatedInput: expect.objectContaining({ answers: { 'Which colors?': 'Amber, Blue' } }),
+    }));
+    expect(requestDecision).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'toolu-question',
+      toolCallId: 'toolu-question', source: 'claude_native_question', toolName: 'AskUserQuestion',
+    }), expect.anything());
   });
 
   it('decodes each settled revision from the exact native home without exposing rotation material', async () => {

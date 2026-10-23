@@ -1,3 +1,4 @@
+import type { AgentSessionModesService } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
     SessionPermissionDecisionResult as SessionPermissionDecisionResultV1,
     SessionPermissionsService,
@@ -8,7 +9,10 @@ import {
     isAskUserQuestionToolName,
     normalizeAskUserQuestionInputForPublication,
     normalizeAskUserQuestionAnswers,
+    buildNativeAskUserQuestionAnswersForClaude,
 } from './askUserQuestion.js';
+
+export const CLAUDE_NATIVE_QUESTION_REQUEST_SOURCE = 'claude_native_question';
 
 export type ClaudePermissionEngine = Readonly<{
     canCallTool(
@@ -25,9 +29,12 @@ export type ClaudePermissionEngine = Readonly<{
 export type ClaudePermissionDecision = SessionPermissionDecisionResultV1;
 
 export type ClaudePermissionContext = Readonly<{
+    agentRuntime?: Readonly<{ modes?: AgentSessionModesService }>;
+    logger?: Readonly<{ warn(message: string, fields?: Readonly<Record<string, unknown>>): void }>;
+
     sessions: Readonly<{
         current: Readonly<{
-            permissions: Pick<SessionPermissionsService, 'requestDecision'>;
+            permissions: Pick<SessionPermissionsService, 'requestDecision' | 'settleObservedDecision'>;
         }>;
     }>;
 }>;
@@ -50,7 +57,9 @@ function resolveAllowedToolInput(
     const baseInput = readToolInputRecord(result.updatedInput) ?? normalizedInput;
     if (!isAskUserQuestionToolName(toolName)) return baseInput;
 
-    const answers = normalizeAskUserQuestionAnswers(result.answers);
+    const answers = result.answers && Array.isArray(normalizedInput.questions)
+        ? buildNativeAskUserQuestionAnswersForClaude(normalizedInput.questions, result.answers)
+        : normalizeAskUserQuestionAnswers(result.answers);
     return answers ? { ...baseInput, answers } : baseInput;
 }
 
@@ -83,6 +92,21 @@ function resolveAllowUpdatedPermissions(
     return undefined;
 }
 
+/** Native acceptance completes the saved Plan intent without guessing its next permission policy. */
+export async function completeClaudePlanModeBestEffort(ctx: ClaudePermissionContext, toolName: string): Promise<void> {
+    if (!isExitPlanModeToolName(toolName)) return;
+    try {
+        const modes = ctx.agentRuntime?.modes;
+        if (!modes?.complete) throw new Error('claude_native_plan_completion_unavailable');
+        await modes.complete({ modeId: 'plan' });
+    } catch (error) {
+        if (!ctx.logger) throw error;
+        ctx.logger.warn('[Claude] accepted native Plan completion could not update the saved mode', {
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
+
 export function createClaudePermissionEngine(ctx: ClaudePermissionContext): ClaudePermissionEngine {
     return Object.freeze({
         async canCallTool(toolName, input, options = {}) {
@@ -103,6 +127,7 @@ export function createClaudePermissionEngine(ctx: ClaudePermissionContext): Clau
                 || result.decision === 'approved_for_session'
                 || result.decision === 'approved_execpolicy_amendment'
             ) {
+                await completeClaudePlanModeBestEffort(ctx, toolName);
                 const updatedPermissions = resolveAllowUpdatedPermissions(toolName, result);
                 return {
                     behavior: 'allow',

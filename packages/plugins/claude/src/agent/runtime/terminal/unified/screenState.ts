@@ -6,9 +6,12 @@
  * Parsing operates on host-captured pane text (tmux `capture-pane -p` / zellij dump);
  * a defensive local normalization strips stray ANSI/control sequences. This is for
  * readiness, steering, and control verification ONLY — never for screen-derived
- * permission approval. Markers are keyed to real Claude Code 2.1.170–2.1.174 probe
+ * permission approval without a correlated tool occurrence. Markers are keyed to real Claude Code 2.1.170–2.1.174 probe
  * captures; newer versions add fixtures rather than mutating these in place.
  */
+
+import { parseClaudeNativePermissionScreen } from './tuiControls/nativePermissionScreen.js';
+import { parseClaudeNativeQuestionScreen, type ClaudeNativeQuestionPresentation } from './tuiControls/nativeQuestionScreen.js';
 
 import { hasComposerLineStyleEvidence, SGR_SEQUENCE_PREFIX } from './composerStyleEvidence.js';
 
@@ -73,6 +76,8 @@ export type ClaudeScreenState = Readonly<{
   visibleNumberedDialog: ClaudeUnifiedGenericNumberedDialog | null;
   /** Current provider-rendered selection mechanics, used to derive answers at send time. */
   visibleDialogSelection: ClaudeUnifiedDialogSelectionPresentation | null;
+  /** Native question correlated by the hook-owned occurrence before answering. */
+  nativeQuestionPresentation: ClaudeNativeQuestionPresentation | null;
   /** Safe generic presentation, or null when the numbered prompt is incomplete/ambiguous. */
   unrecognizedConfirmationDialog: ClaudeUnifiedGenericNumberedDialog | null;
   /** Lowercased target level from the dialog body ("Switching to high means…"), when visible. */
@@ -776,7 +781,8 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
     ? ((EFFORT_CHANGE_DIALOG_TARGET.exec(text)?.[1] ?? EFFORT_DEFAULT_NUDGE_DIALOG.exec(text)?.[1])?.toLowerCase() ?? null)
     : null;
   const trustFolderPromptVisible = TRUST_FOLDER_PROMPT.test(text) || TRUST_FOLDER_NUMBERED_CHOICES.test(text);
-  const permissionPromptVisible = !trustFolderPromptVisible && PERMISSION_PROMPT.test(text);
+  const permissionPromptVisible = !trustFolderPromptVisible
+    && (PERMISSION_PROMPT.test(text) || parseClaudeNativePermissionScreen(text) !== null);
   const permissionEditorOpen = PERMISSION_EDITOR.test(text) || PERMISSION_EDITOR_HEADER.test(text);
   const queuedMessageBannerVisible = QUEUED_MESSAGE_BANNER.test(text);
   const generating = ESC_TO_INTERRUPT.test(text) || GENERATING_SPINNER_LINE.test(text) || queuedMessageBannerVisible;
@@ -805,6 +811,7 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
   // Known matchers already establish the dialog class, so bind their mutable visible context/options
   // from the active tail instead of unrelated numbered scrollback. Unknown dialogs remain stricter:
   // their generic answer path requires exactly one bounded, unambiguous selection block.
+  const nativeQuestionPresentation = parseClaudeNativeQuestionScreen(text);
   const unrecognizedConfirmationDialogVisible = securityNotesContinuation !== null || (
     (NUMBERED_SELECTION_OPTION.test(text) || visibleDialogSelection?.kind === 'focused')
     && !activeComposerOwnsInput
@@ -815,13 +822,15 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
     && !effortChangeDialogVisible
     && !trustFolderPromptVisible
     && !permissionPromptVisible
-    && !permissionEditorOpen);
+    && !permissionEditorOpen
+    && nativeQuestionPresentation === null);
   const unrecognizedConfirmationDialog = unrecognizedConfirmationDialogVisible
     ? securityNotesContinuation ?? resolveGenericSelectionDialog(visibleTail, visibleNumberedDialog, visibleDialogSelection)
     : null;
 
   const anyDialog =
-    switchModelDialogVisible
+    nativeQuestionPresentation !== null
+    || switchModelDialogVisible
     || usageLimitDialogVisible
     || resumeChoiceDialogVisible
     || safeguardPauseDialogVisible
@@ -864,6 +873,7 @@ export function parseClaudeScreenState(rawText: string, context?: ClaudeScreenPa
     unrecognizedConfirmationDialogVisible,
     visibleNumberedDialog,
     visibleDialogSelection,
+    nativeQuestionPresentation,
     unrecognizedConfirmationDialog,
     effortChangeDialogTarget,
     latestEffortConfirmation: latestEffort === null ? null : { kind: latestEffort.kind, level: latestEffort.level },
@@ -902,6 +912,7 @@ function hasBlockingOverlay(state: ClaudeScreenState): boolean {
     || state.safeguardPauseDialogVisible
     || state.effortChangeDialogVisible
     || state.unrecognizedConfirmationDialogVisible
+    || state.nativeQuestionPresentation !== null
     || state.queuedMessageBannerVisible
     || state.userDraftPresent
     || state.selectionListVisible
@@ -945,6 +956,7 @@ export function isClaudeUsageLimitWaitBlockingComposerClear(state: ClaudeScreenS
 }
 
 export function resolveClaudeScreenInFlightSteerVeto(state: ClaudeScreenState): string | null {
+  if (state.nativeQuestionPresentation !== null) return 'native_question';
   if (state.permissionPromptVisible) return 'permission_prompt';
   if (state.trustFolderPromptVisible) return 'trust_prompt';
   if (state.switchModelDialogVisible) return 'switch_model_dialog';

@@ -17,8 +17,7 @@ import {
 import { createClaudeNativeSdkQueryContext } from '../sdk/nativeExec.js';
 import { createClaudeNativePermissionEngine } from '../permissions/nativePermissionEngine.js';
 import { isAskUserQuestionToolName } from '../permissions/askUserQuestion.js';
-import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from './terminal/unified/constants.js';
-import type { ClaudePermissionDecision } from '../permissions/createClaudePermissionEngine.js';
+import { CLAUDE_NATIVE_QUESTION_REQUEST_SOURCE, type ClaudePermissionDecision } from '../permissions/createClaudePermissionEngine.js';
 import { readClaudeCodeNativeCredentialPayload } from '../auth/services/native/credentials.js';
 import {
   createClaudeWorkflowSystemRecordBridge,
@@ -150,18 +149,23 @@ function readStructuredQuestionAnswers(
 function createNativePermissionDecisionAdapter(context: AgentSessionRuntimeContext) {
   const engine = createClaudeNativePermissionEngine(context);
   return {
+    async settleObservedDecision(request: Parameters<NonNullable<SessionPermissionsService['settleObservedDecision']>>[0]): Promise<boolean> {
+      const permissions = context.services.sessions.current?.permissions;
+      if (!permissions?.settleObservedDecision) return unavailable('native dialog settlement');
+      return await permissions.settleObservedDecision(request);
+    },
     async requestDecision(
       request: SessionPermissionDecisionRequest,
       options?: Parameters<SessionPermissionsService['requestDecision']>[1],
     ): Promise<ClaudePermissionDecision> {
       const toolName = typeof request.toolName === 'string' ? request.toolName.trim() : '';
       if (!toolName) return { decision: 'denied', rationale: 'Claude supplied an invalid tool request.' };
-      if (request.source === CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE && isAskUserQuestionToolName(toolName)) {
+      if (isAskUserQuestionToolName(toolName)) {
         const permissions = context.services.sessions.current?.permissions;
         if (!permissions) return unavailable('native dialog permission scope');
         // Runtime-authored terminal dialogs retain their source, presentation,
         // cancellation and apply-before-answer acknowledgement at the rich host seam.
-        return await permissions.requestDecision(request, options);
+        return await permissions.requestDecision({ ...request, source: request.source ?? CLAUDE_NATIVE_QUESTION_REQUEST_SOURCE }, options);
       }
       const requestId = typeof request.requestId === 'string' ? request.requestId : null;
       const toolUseId = typeof request.toolCallId === 'string' ? request.toolCallId : null;
@@ -239,6 +243,7 @@ export function createClaudeNativeAgentSdkContext(
       ...(services.nativeHome ? { nativeHome: services.nativeHome } : {}),
       ...(services.inputFiles ? { inputFiles: services.inputFiles } : {}),
       toolExecution: services.toolExecution,
+      modes: services.modes,
     },
     sessions: {
       current: {

@@ -105,6 +105,52 @@ describe('Claude hook settings leaf', () => {
         expect(JSON.stringify(hooksJson)).not.toContain('secret-123');
     });
 
+    it.each([undefined, 'deny'] as const)('observes exact native tool calls alongside permission enforcement (%s)', (unlistedTools) => {
+        const hooksJson = buildClaudeHookPluginHooks({
+            port: 43124,
+            nodeExecutable: '/bin/node',
+            sessionForwarderScript: '/app/session_hook_forwarder.cjs',
+            permissionForwarderScript: '/app/permission_hook_forwarder.cjs',
+            sessionHookSecretFile: '/tmp/happier-hooks/session.secret',
+            permissionHookSecretFile: '/tmp/happier-hooks/permission.secret',
+            enableLocalPermissionBridge: true,
+            observeNativeToolPrompts: true,
+            unlistedTools,
+        });
+
+        expect(hooksJson.hooks.PreToolUse).toEqual([
+            expect.objectContaining({
+                matcher: unlistedTools === 'deny' ? '*' : 'AskUserQuestion',
+                hooks: [expect.objectContaining({
+                    command: expect.stringContaining("'/app/permission_hook_forwarder.cjs' '43124' 'PreToolUse'"),
+                    timeout: 604800,
+                })],
+            }),
+            {
+                matcher: '*',
+                hooks: [{ type: 'command', command:
+                    "'/bin/node' '/app/session_hook_forwarder.cjs' '43124' 'PreToolUse' '--secret-file' '/tmp/happier-hooks/session.secret'" }],
+            },
+        ]);
+        if (unlistedTools === 'deny') {
+            expect(hooksJson.hooks.PreToolUse?.[0]?.hooks[0]?.command).toContain("'--deny-on-unavailable'");
+        }
+    });
+
+    it('observes native calls without enabling permission decisions', () => {
+        const hooksJson = buildClaudeHookPluginHooks({
+            port: 43124,
+            nodeExecutable: '/bin/node',
+            sessionForwarderScript: '/app/session_hook_forwarder.cjs',
+            observeNativeToolPrompts: true,
+        });
+        expect(hooksJson.hooks.PermissionRequest).toBeUndefined();
+        expect(hooksJson.hooks.PreToolUse).toEqual([{
+            matcher: '*', hooks: [{ type: 'command', command:
+                "'/bin/node' '/app/session_hook_forwarder.cjs' '43124' 'PreToolUse'" }],
+        }]);
+    });
+
     it('installs an effectively-unlimited (7d) timeout on the permission hooks only', () => {
         const hooksJson = buildClaudeHookPluginHooks({
             port: 43125,

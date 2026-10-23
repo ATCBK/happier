@@ -170,6 +170,7 @@ type ClaudeAgentSdkContextBase = Readonly<{
 
 export type ClaudeAgentSdkSessionContext = ClaudeAgentSdkContextBase & Readonly<{
     agentRuntime: ClaudeAgentSdkContextBase['agentRuntime'] & Readonly<{
+        modes?: ClaudeUnifiedTerminalContext['agentRuntime']['modes'];
         sessionHooks: ClaudeUnifiedTerminalContext['agentRuntime']['sessionHooks'];
         transcripts: ClaudeUnifiedTerminalContext['agentRuntime']['transcripts'];
         accountUsage: ClaudeUnifiedTerminalContext['agentRuntime']['accountUsage'];

@@ -149,6 +149,10 @@ async function answerClaudeQuestions(
   };
 }
 
+export function allowsClaudeNativeSessionPersistence(toolName: string): boolean {
+  return toolName.startsWith('mcp__') && !toolName.startsWith('mcp__happier__') && !toolName.startsWith('mcp__happy__');
+}
+
 export function createClaudeNativePermissionEngine(
   context: AgentRuntimeContext,
 ): ClaudePermissionEngine {
@@ -161,12 +165,15 @@ export function createClaudeNativePermissionEngine(
       if (!toolInput.success) {
         return { behavior: 'deny', message: 'Claude supplied invalid tool input', interrupt: true };
       }
+      const toolCallId = options.toolUseId ?? options.requestId;
       const result = await context.services.interactions.requestApproval({
         kind: 'approval',
         title: 'Claude permission',
-        subject: { kind: 'tool', name: toolName, input: toolInput.data },
+        subject: { kind: 'tool', name: toolName, input: toolInput.data,
+          ...(toolCallId ? { toolCallId } : {}),
+        },
         // The host owns MCP session grants; the native reply remains invocation-only.
-        ...(toolName.startsWith('mcp__') && !toolName.startsWith('mcp__happier__') && !toolName.startsWith('mcp__happy__')
+        ...(allowsClaudeNativeSessionPersistence(toolName)
           ? { allowSessionPersistence: true } : {}),
       }, options.signal ? { signal: options.signal } : undefined);
       return result.status === 'approved'

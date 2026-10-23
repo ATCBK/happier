@@ -1,7 +1,7 @@
 import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import type { AgentState } from '@/api/types';
 import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
-import { HAPPIER_ACTION_REQUEST_SOURCE, isAgentStructuredQuestionRequest, resolveAgentRequestKind } from '@/agent/permissions/requestKind';
+import { HAPPIER_ACTION_REQUEST_SOURCE, isAgentStructuredQuestionRequest, isDurableAgentStructuredQuestionRequest, resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import {
     applyAgentStateRequestPushNotifiedAt,
     clonePlainObjectToNullProto,
@@ -42,10 +42,14 @@ import {
 type AgentStateRequestEntry = NonNullable<AgentState['requests']>[string];
 type AgentStateCompletedEntry = NonNullable<AgentState['completedRequests']>[string];
 
-function isStoredQuestion(entry: Readonly<Record<string, unknown>>): boolean {
-    return isAgentStructuredQuestionRequest({ toolName: typeof entry.tool === 'string' ? entry.tool : '',
+function readStoredQuestionClassification(entry: Readonly<Record<string, unknown>>) {
+    return { toolName: typeof entry.tool === 'string' ? entry.tool : '', lifetime: entry.lifetime,
         ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
-        ...(typeof entry.source === 'string' ? { source: entry.source } : {}) });
+        ...(typeof entry.source === 'string' ? { source: entry.source } : {}) };
+}
+
+function isStoredQuestion(entry: Readonly<Record<string, unknown>>): boolean {
+    return isAgentStructuredQuestionRequest(readStoredQuestionClassification(entry));
 }
 
 /**
@@ -1062,12 +1066,14 @@ export class AgentStateRequestStore {
         }
         if (
             params.status === 'canceled'
+            && !params.applicationAcknowledged
             && existingEntry
             && hasOpaquePermissionResponseClaim(existingEntry)
         ) {
             // A persisted first-answer claim is an active terminal owner.
             // Cancellation cannot turn it into a different terminal state
-            // while its owner may still be linearizing the response.
+            // while its owner may still be linearizing the response. An acknowledged native
+            // cancellation above records the already-applied fact rather than applying a choice.
             return { state: currentState };
         }
         didCompleteRequest = true;
@@ -1338,7 +1344,7 @@ export class AgentStateRequestStore {
                     for (const [id, request] of Object.entries(pendingRequests)) {
                         if (params.scope === 'foreground' && readRunScopedExecutionPermissionRequestIdentity(id)) continue;
                         const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
-                        if (params.preserveQuestions && isStoredQuestion(entry)) continue;
+                        if (params.preserveQuestions && isDurableAgentStructuredQuestionRequest(readStoredQuestionClassification(entry))) continue;
                         if (params.turnId && !isPermissionRequestOwnedByPluginTurn({
                             owner: normalizePermissionRequestOwner(entry.owner, 'stored'),
                             ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
@@ -1377,7 +1383,7 @@ export class AgentStateRequestStore {
                         const completed = completedRequests[id];
                         if (!completed) continue;
                         const entry = clonePlainObjectToNullProto(completed) ?? Object.create(null);
-                        if (params.preserveQuestions && isStoredQuestion(entry)) continue;
+                        if (params.preserveQuestions && isDurableAgentStructuredQuestionRequest(readStoredQuestionClassification(entry))) continue;
                         if (params.turnId && !isPermissionRequestOwnedByPluginTurn({
                             owner: normalizePermissionRequestOwner(entry.owner, 'stored'),
                             ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),

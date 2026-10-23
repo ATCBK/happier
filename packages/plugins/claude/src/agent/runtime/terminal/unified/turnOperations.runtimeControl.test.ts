@@ -409,12 +409,12 @@ describe('Claude Unified TUI runtime control integration (updateSessionRuntimeCo
     try {
       await runtime.startProviderSession();
       const outcome = await runtime.updateSessionRuntimeConfig({
-        permissionMode: 'read-only',
+        permissionMode: 'dontAsk',
       });
 
       expect(outcome).toMatchObject({
         status: 'requires_restart',
-        reason: 'mode_not_cycle_reachable:read-only',
+        reason: 'mode_not_cycle_reachable:dontAsk',
       });
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);

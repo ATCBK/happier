@@ -23,3 +23,12 @@ export function isSidechainSessionHook(
 ): boolean {
   return readSessionHookSidechainAgentId(record) !== null;
 }
+
+/** Scope carried by Claude SDK and JSONL records; hook agent attribution is a separate producer contract. */
+export function isClaudeSidechainRuntimeEvidence(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  const parentToolUseId = record.parent_tool_use_id ?? record.parentToolUseId;
+  return record.isSidechain === true
+    || (typeof parentToolUseId === 'string' && parentToolUseId.trim().length > 0);
+}
