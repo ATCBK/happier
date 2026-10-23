@@ -3990,6 +3990,14 @@ Account key `mcpServersStrictMode`; the Settings MCP preview route is retired.
 Push-channel changes retain
 `notifications.expoPush.update`; native permission and token repair are separate
 operations, not Account preference writes.
+Enable requests permission separately through `notifications.push.permission.request`,
+so refusing that Action still permits the channel preference but prevents its prompt.
+Onboarding's local-notification consent uses the same permission Action with
+`purpose: 'local_notifications'`; it does not enable remote push. Automatic
+startup priming waits for a known Account settings version and consumes its one
+startup observation even when push is off, leaving later Enable consent to its
+admitted operation. Native sound Preview uses `notifications.sounds.preview`
+and the current Account sound and device override, not a second sender.
 
 In 0.3 development source, `desktop.startOnLogin` binds to the common native
 autostart mode of this computer's desktop-managed background services. The
