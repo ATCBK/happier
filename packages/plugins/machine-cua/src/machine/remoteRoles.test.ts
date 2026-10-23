@@ -6,6 +6,9 @@ import { CUA_PLUGIN } from '../manifest.js';
 import type { ConnectedAccountReadContext } from '@happier-dev/plugin-sdk/connected-accounts';
 import { connectedAccountRuntime } from './remoteConnection.js';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createPluginTestkit, type PluginTestServicesFixture } from '@happier-dev/plugin-sdk/testing';
 
 const managedId = 'ac2c7f10-2a41-4af1-88ac-d64eeb18bdc7';
 const name = `happier-${managedId}`;
@@ -20,6 +23,7 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
     cliMissing?: boolean; cliStatusFailed?: boolean; noAccount?: boolean; cloudConnected?: boolean; cloudStatusUnreadable?: boolean } = {}) {
     const actions = new Map<string, ActionHandler>();
     const processRequests: PluginExecSpawnRequest[] = [];
+    const copiedBytes: Buffer[] = [];
     const purposes: string[] = [];
     let created = false, suspended = false;
     let hideCreatedOnce = false;
@@ -69,7 +73,13 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
                 if (options.cleanupFailure === 'delete-reply') throw new Error('Delete response lost');
                 return processResult({ deleted: `aws:${name}`, missing: false });
             }
-            if (args.includes('shell')) return { ...processResult(null), stdout: new Uint8Array([0, 128, 255]) };
+            if (args.includes('cp')) {
+                const content = await readFile(args[args.indexOf('cp') + 1]!);
+                copiedBytes.push(content);
+                return processResult({ direction: 'upload', size: content.length, sha256: createHash('sha256').update(content).digest('hex') });
+            }
+            if (args.includes('shell')) return { ...processResult(null), stdout: args.at(-1)?.startsWith('mktemp -d')
+                ? new TextEncoder().encode('/tmp/happier-cua.byoc-action\n') : new Uint8Array([0, 128, 255]) };
             throw new Error('Unexpected native IO');
         } },
     } } as unknown as PluginInvocationContext;
@@ -78,10 +88,24 @@ async function harness(options: { lostCreateReply?: boolean; cleanupFailure?: 'r
         if (!action) throw new Error(`Missing activated role ${id}`);
         return action(input, context);
     }
-    return { invoke, context, processRequests, purposes };
+    return { invoke, context, processRequests, copiedBytes, purposes };
 }
 
 describe('activated Cua remote contributions', () => {
+    it('writes shared-admitted padding bits exactly through the BYOC file Action', async () => {
+        const h = await harness();
+        const acquired = await h.invoke('byoc-acquire', { launch: byocLaunch, managedId });
+        if (acquired.kind !== 'bound') throw new Error('Expected bound native fixture');
+        const kit = await createPluginTestkit({ manifest: CUA_PLUGIN.manifest, module: CUA_PLUGIN,
+            services: h.context.services as unknown as PluginTestServicesFixture });
+        try {
+            const input = { resource: acquired.resource.value, guestPath: '/tmp/bootstrap-binary', bytesBase64: 'AB==', mode: 384 };
+            expect(await kit.invokeAction('byoc-put-file', input, { surface: 'plugin' })).toEqual({ kind: 'confirmed' });
+            expect(h.copiedBytes).toEqual([Buffer.from([0])]);
+            await expect(kit.invokeAction('byoc-put-file', { ...input, bytesBase64: 'AA==\n' }, { surface: 'plugin' })).rejects.toThrow();
+            expect(h.copiedBytes).toHaveLength(1);
+        } finally { await kit.dispose(); }
+    });
     it('admits exactly the local and BYOC native provisioners with localized kind and purpose at the public authoring boundary', () => {
         expect(parsePluginManifest(CUA_PLUGIN.manifest)).toMatchObject({ ok: true });
         const provisioners = CUA_PLUGIN.manifest.contributes.machineProvisioners ?? [];

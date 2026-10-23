@@ -26,9 +26,7 @@ async function provider(id: CuaLocalProvisionerId, context: PluginInvocationCont
         id, context.invokedAtMs, context.signal);
 }
 function bytes(encoded: string) {
-    const value = Buffer.from(encoded, 'base64');
-    if (value.toString('base64') !== encoded) throw new Error('cua_invalid_private_input');
-    return value;
+    return Buffer.from(encoded, 'base64');
 }
 function roles(id: CuaLocalProvisionerId) {
     return {

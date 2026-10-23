@@ -14,9 +14,7 @@ function reference<T>(value: T) {
 }
 function pending<T>(operation: T) { return { kind: 'pending' as const, nativeOperationRef: reference(operation) }; }
 function bytes(encoded: string) {
-    const value = Buffer.from(encoded, 'base64');
-    if (value.toString('base64') !== encoded) throw new Error('cua_invalid_private_input');
-    return value;
+    return Buffer.from(encoded, 'base64');
 }
 
 // Invoked only after host admission. Account bindings, row custody, budgets and
@@ -65,9 +63,10 @@ export async function invokeCuaRemoteRole(role: CuaRemoteRole, input: unknown, c
             return result.kind === 'deleted' ? { kind: 'confirmed' } : { kind: 'unknown', code: 'cua_cleanup_incomplete' };
         }
     }
-    const resource = (role === 'exec' ? schemas.execInput.parse(input) : role === 'putFile' ? schemas.putFileInput.parse(input)
+    const fileRequest = role === 'putFile' ? schemas.putFileInput.parse(input) : undefined;
+    const resource = (fileRequest ?? (role === 'exec' ? schemas.execInput.parse(input)
         : role === 'bootstrap' ? schemas.bootstrapInput.parse(input) : role === 'power' ? schemas.powerInput.parse(input)
-        : schemas.resourceInput.parse(input)).resource;
+        : schemas.resourceInput.parse(input))).resource;
     if (role === 'inspect') return byoc.observe(resource, now, signal);
     if (role === 'destroy') {
         const result = await byoc.destroy(resource, signal);
@@ -85,12 +84,11 @@ export async function invokeCuaRemoteRole(role: CuaRemoteRole, input: unknown, c
     if (observed.existence !== 'present' || observed.power !== 'running') throw new Error('cua_guest_unavailable');
     if (role === 'bootstrap') return { kind: 'native', transport: { contributionRef: reference(resource).contributionRef, schemaVersion: 1 } };
     const target = ByocProvisionerSchemas.resourceInput.parse({ resource }).resource.sandboxId;
+    if (fileRequest) return native.putGuestFile(target, fileRequest.guestPath, bytes(fileRequest.bytesBase64), fileRequest.mode, signal);
     if (role === 'exec') {
         const request = schemas.execInput.parse(input);
         const result = await native.execGuest(target, request.argv, request.inputBase64 === undefined ? undefined : bytes(request.inputBase64), signal, request.timeoutMs);
         return { termination: result.termination, stdoutBase64: Buffer.from(result.stdout).toString('base64'), stderrBase64: Buffer.from(result.stderr).toString('base64'),
             stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated };
     }
-    const request = schemas.putFileInput.parse(input);
-    return native.putGuestFile(target, request.guestPath, bytes(request.bytesBase64), request.mode, signal);
 }

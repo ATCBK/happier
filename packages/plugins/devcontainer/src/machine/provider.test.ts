@@ -6,6 +6,8 @@ import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/e
 import { createDevcontainerProvider } from './provider.js';
 import { readDevcontainerEffectReview } from './effectReview.js';
 import type { DevcontainerLaunch, DevcontainerResource } from './schemas.js';
+import { DEVCONTAINER_PLUGIN } from '../manifest.js';
+import { createPluginTestkit, type PluginTestServicesFixture } from '@happier-dev/plugin-sdk/testing';
 
 const containerId = 'a'.repeat(64);
 let launch: DevcontainerLaunch;
@@ -70,6 +72,21 @@ function native(overrides: Readonly<{ up?: PluginProcessResult; running?: boolea
 }
 
 describe('Devcontainer native roles', () => {
+  it('writes shared-admitted padding bits exactly through the activated file Action', async () => {
+    const h = native();
+    const services = {
+      exec: h.tools.exec, managedServices: { dependencies: { status: async (id: string) => ({ state: 'ready',
+        executable: { kind: 'managedDependency', id: { pluginId: DEVCONTAINER_PLUGIN.manifest.id, localId: id } } }) } },
+    } as unknown as PluginTestServicesFixture;
+    const kit = await createPluginTestkit({ manifest: DEVCONTAINER_PLUGIN.manifest, module: DEVCONTAINER_PLUGIN, services });
+    try {
+      expect(await kit.invokeAction('put-file', { resource, guestPath: '/tmp/private-payload', bytesBase64: 'AB==', mode: 0o600 }, { surface: 'plugin' }))
+        .toEqual({ kind: 'confirmed' });
+      expect(h.requests.filter(request => request.stdin !== undefined).map(request => request.stdin)).toEqual([Buffer.from([0])]);
+      await expect(kit.invokeAction('put-file', { resource, guestPath: '/tmp/private-payload', bytesBase64: 'AA==\n' }, { surface: 'plugin' })).rejects.toThrow();
+      expect(h.requests.filter(request => request.stdin !== undefined)).toHaveLength(1);
+    } finally { await kit.dispose(); }
+  });
   it('uses the same inherited native environment for review, realization and retained control', async () => {
     vi.stubEnv('PATH', 'controlled-native-path');
     vi.stubEnv('HAPPIER_DEVCONTAINER_TEST_LOCAL_ENV', 'reviewed-local-value');

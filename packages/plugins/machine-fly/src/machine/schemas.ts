@@ -1,5 +1,6 @@
 import * as z from 'zod/mini';
 import { defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion, type ProtocolSchemaOutput } from '@happier-dev/plugin-sdk/protocol';
+import { defineMachineProvisionerSchemas } from '@happier-dev/plugin-sdk/machine-provisioners';
 
 const id = z.string().check(z.trim(), z.minLength(1));
 const positiveInt = z.int().check(z.gt(0));
@@ -54,9 +55,9 @@ export const FlyResourceV1Schema = defineProtocolObject({
 export const FlyExecRequestSchema = z.strictObject({
   command: z.array(z.string()).check(z.minLength(1)), stdin: z.optional(z.string()), timeout: z.optional(positiveInt),
 });
-export const FlyPutFileRequestSchema = z.strictObject({
+export const FLY_ROLE_SCHEMAS = defineMachineProvisionerSchemas({ launch: FlyLaunchV1Schema, resource: FlyResourceV1Schema });
+export const FlyPutFileOptionsSchema = z.strictObject({
   guestPath: absolutePath,
-  bytesBase64: z.string().check(z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)),
   // chmod accepts Unix permission/special bits, not file-type bits.
   mode: z._default(z.int().check(z.gte(0), z.lte(0o7777)), 0o600),
   timeout: z.optional(positiveInt),
@@ -64,7 +65,7 @@ export const FlyPutFileRequestSchema = z.strictObject({
 export type FlyLaunchV1 = ProtocolSchemaOutput<typeof FlyLaunchV1Schema>;
 export type FlyResourceV1 = ProtocolSchemaOutput<typeof FlyResourceV1Schema>;
 export type FlyExecRequest = z.infer<typeof FlyExecRequestSchema>;
-export type FlyPutFileRequest = z.input<typeof FlyPutFileRequestSchema>;
+export type FlyPutFileRequest = z.input<typeof FlyPutFileOptionsSchema> & Readonly<{ bytesBase64: string }>;
 
 export const FlyAcquireOperationV1Schema = defineProtocolObject({
   app: defineProtocolObject({ name: portableId, ownership: defineProtocolUnion([

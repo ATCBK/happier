@@ -34,9 +34,7 @@ async function nativeTools(context: PluginInvocationContext) {
     environment: readDevcontainerNativeEnvironment() };
 }
 function bytes(value: string) {
-  const decoded = Buffer.from(value, 'base64');
-  if (decoded.toString('base64') !== value) throw Object.assign(new Error('Invalid private bytes'), { code: 'invalid_request' });
-  return decoded;
+  return Buffer.from(value, 'base64');
 }
 export const DEVCONTAINER_MACHINE_PROVISIONER = {
   title: 'Devcontainer', icon: 'cube', resourceKind: 'devcontainer', schemaVersion: 1,

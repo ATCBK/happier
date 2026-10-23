@@ -1,5 +1,5 @@
 import * as z from 'zod/mini';
-import { FLY_DEFAULT_IMAGE, FlyAcquireOperationV1Schema, FlyAcquireRequestSchema, FlyExecRequestSchema, FlyExecResponseSchema, FlyGuestBootSchema, FlyLaunchV1Schema, FlyMachineSchema, FlyProcessConfigurationSchema, FlyPutFileRequestSchema, FlyResourceV1Schema, FlyVolumeSchema, type FlyAcquireOperationV1, type FlyAcquireRequest, type FlyExecRequest, type FlyGuestBoot, type FlyLaunchV1, type FlyPutFileRequest, type FlyResourceV1 } from './schemas.js';
+import { FLY_DEFAULT_IMAGE, FLY_ROLE_SCHEMAS, FlyAcquireOperationV1Schema, FlyAcquireRequestSchema, FlyExecRequestSchema, FlyExecResponseSchema, FlyGuestBootSchema, FlyLaunchV1Schema, FlyMachineSchema, FlyProcessConfigurationSchema, FlyPutFileOptionsSchema, FlyResourceV1Schema, FlyVolumeSchema, type FlyAcquireOperationV1, type FlyAcquireRequest, type FlyExecRequest, type FlyGuestBoot, type FlyLaunchV1, type FlyPutFileRequest, type FlyResourceV1 } from './schemas.js';
 
 // REST v1; fly-go v0.9.4 characterizes identity/rootfs. The current official
 // docs.machines.dev/machines/Machines_exec declares command argv and stdin
@@ -251,12 +251,16 @@ export function createFlyNativeClient(token: string, request: typeof fetch = fet
   }
 
   async function putFile(resource: FlyResourceV1, inputRequest: FlyPutFileRequest) {
-    const args = FlyPutFileRequestSchema.parse(inputRequest);
+    const { bytesBase64, ...options } = inputRequest;
+    const args = FlyPutFileOptionsSchema.parse(options);
+    // This public native client is also a direct ingress. Reuse host role
+    // admission, retaining only Fly's path/mode/timeout checks locally.
+    const admitted = FLY_ROLE_SCHEMAS.putFileInput.parse({ resource, guestPath: args.guestPath, bytesBase64, mode: args.mode });
     // Only the path/mode enter argv. Payload stays in the authenticated exec
     // request's private stdin, including for quotes/newlines in the guest path.
     const result = await exec(resource, {
       command: ['/bin/sh', '-c', `umask 077; touch ${quote(args.guestPath)} && chmod 600 ${quote(args.guestPath)} && base64 -d > ${quote(args.guestPath)} && chmod ${args.mode.toString(8)} ${quote(args.guestPath)}`],
-      stdin: args.bytesBase64, ...(args.timeout === undefined ? {} : { timeout: args.timeout }),
+      stdin: admitted.bytesBase64, ...(args.timeout === undefined ? {} : { timeout: args.timeout }),
     });
     if (result.kind !== 'completed') return result;
     return result.exitCode === 0 && !result.exitSignal ? { kind: 'written' as const }

@@ -10,6 +10,7 @@ import { createCuaNativeClient } from './nativeClient.js';
 import { createCuaLocalProvisioner } from './localProvisioner.js';
 import { CUA_PLUGIN } from '../manifest.js';
 import { CuaLocalLaunchV1Schema } from './schemas.js';
+import { createPluginTestkit, type PluginTestServicesFixture } from '@happier-dev/plugin-sdk/testing';
 
 const size = { cpu: 4, memoryBytes: 4096 * 1024 ** 2, diskBytes: 20 * 1024 ** 3 };
 const launch = { on: 'local', runtimeId: 'qemu', imageId: 'ghcr.io/trycua/linux:24.04-disk', size };
@@ -27,6 +28,7 @@ function result(value: unknown): PluginProcessResult {
 }
 function harness(createReplyLost = false, observedRuntime: 'qemu' | 'gvisor' | 'runc' = 'qemu') {
     const requests: PluginExecSpawnRequest[] = [];
+    const copiedBytes: Buffer[] = [];
     let temporaryId = 0;
     const run = async (request: PluginExecSpawnRequest) => {
         requests.push(request);
@@ -43,6 +45,7 @@ function harness(createReplyLost = false, observedRuntime: 'qemu' | 'gvisor' | '
             kind: observedRuntime === 'qemu' ? 'vm' : 'container', image: launch.imageId, status: 'ready', state: 'running', ephemeral: false });
         if (args.includes('cp')) {
             const content = await readFile(args[args.indexOf('cp') + 1]);
+            copiedBytes.push(content);
             return result({ direction: 'upload', size: content.length, sha256: createHash('sha256').update(content).digest('hex') });
         }
         // A runc guest shell runs as the image's `cua` user, whose home is /home/cua (observed with `cua sandbox shell`).
@@ -52,7 +55,7 @@ function harness(createReplyLost = false, observedRuntime: 'qemu' | 'gvisor' | '
                     ? new TextEncoder().encode('/home/cua\n') : new Uint8Array() };
         throw new Error('unexpected native effect');
     };
-    return { requests, run, provider: createCuaLocalProvisioner(createCuaNativeClient({ exec: { run }, executable: { kind: 'systemTool', id: 'cua' } }), 'local-sandbox', 10) };
+    return { requests, copiedBytes, run, provider: createCuaLocalProvisioner(createCuaNativeClient({ exec: { run }, executable: { kind: 'systemTool', id: 'cua' } }), 'local-sandbox', 10) };
 }
 
 async function activated(dependencyReady = true, nativeRun?: ExecService['run'], signal = new AbortController().signal,
@@ -266,6 +269,18 @@ describe('consumed Cua local provisioner roles', () => {
             .toEqual({ kind: 'confirmed' });
         expect(JSON.stringify(h.requests)).not.toContain('AP4K');
         await expect(h.action('sandbox-exec')({ resource: { ...resource, future: true }, argv: ['cat'] }, h.context)).rejects.toThrow();
+    });
+    it('writes shared-admitted padding bits exactly through the local file Action', async () => {
+        const h = await activated();
+        const kit = await createPluginTestkit({ manifest: CUA_PLUGIN.manifest, module: CUA_PLUGIN,
+            services: h.context.services as unknown as PluginTestServicesFixture });
+        try {
+            expect(await kit.invokeAction('sandbox-put-file', { resource, guestPath: '/tmp/bootstrap-binary', bytesBase64: 'AB==', mode: 384 }, { surface: 'plugin' }))
+                .toEqual({ kind: 'confirmed' });
+            expect(h.copiedBytes).toEqual([Buffer.from([0])]);
+            await expect(kit.invokeAction('sandbox-put-file', { resource, guestPath: '/tmp/bootstrap-binary', bytesBase64: 'AA==\n' }, { surface: 'plugin' })).rejects.toThrow();
+            expect(h.copiedBytes).toHaveLength(1);
+        } finally { await kit.dispose(); }
     });
     it('qualifies only the observed runc foreground hold while leaving QEMU on its system service path', async () => {
         const runc = harness(false, 'runc');

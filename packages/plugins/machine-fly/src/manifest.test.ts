@@ -1,5 +1,9 @@
 import * as z from 'zod/mini';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { resolveEffectiveInputFields, writeInputPath, type ActionHandler } from '@happier-dev/plugin-sdk/actions';
@@ -7,6 +11,10 @@ import { normalizePluginActionInputHintsV2, PluginActionInputHintsV2Schema } fro
 import { MachineProvisionerOptionsResultV1Schema } from '@happier-dev/plugin-sdk/machine-provisioners';
 import * as exports from './index.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { deliverManagedNativeFile } from '../../../../apps/cli/src/machines/managed/nativeFileDelivery';
+import { MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
+import { FlyExecRequestSchema } from './machine/schemas.js';
+import { createPluginTestkit, type PluginTestServicesFixture } from '@happier-dev/plugin-sdk/testing';
 
 const resource = { app: { name: 'managed', ownership: 'existing' }, machineId: 'machine-1', volume: { id: 'vol-1', ownership: 'attached' } };
 const launch = { app: { name: 'managed', ownership: 'existing' }, region: 'ams', imageReference: 'ubuntu:24.04', guest: { cpuKind: 'shared', cpus: 1, memoryMb: 1024 }, volume: { kind: 'attach', volumeId: 'vol-1' } };
@@ -48,6 +56,46 @@ async function activated(response: unknown | ((request: { url: string; body?: Ui
   return { handlers, context, requests, materializations };
 }
 describe('public fly machine provisioner', () => {
+  it.skipIf(process.platform === 'win32')('writes an exact maximum host-produced fragment through the activated file Action and native client', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'fly-native-fragment-'));
+    try {
+      const source = join(directory, 'source');
+      const destination = join(directory, "guest's-payload");
+      const expected = Buffer.alloc(MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 / 4 * 3, 0xa5);
+      expected[0] = 0; expected[expected.length - 1] = 0xff;
+      await writeFile(source, expected);
+      const runtime = await activated(request => {
+        const body = FlyExecRequestSchema.parse(JSON.parse(new TextDecoder().decode(request.body)));
+        execFileSync(body.command[0]!, body.command.slice(1), { input: body.stdin });
+        return { exit_code: 0, stdout: '', stderr: '' };
+      });
+      const kit = await createPluginTestkit({ manifest: exports.PLUGIN_MANIFEST, module: exports.PLUGIN,
+        services: runtime.context.services as unknown as PluginTestServicesFixture });
+      const sizes: number[] = [];
+      try {
+        await deliverManagedNativeFile({ localPath: source, guestPath: destination, resource }, {
+          async putFile(request) {
+            const bytesBase64 = Buffer.from(request.bytes.buffer, request.bytes.byteOffset, request.bytes.byteLength).toString('base64');
+            sizes.push(bytesBase64.length);
+            expect(await kit.invokeAction('put-file', { resource, guestPath: request.path, bytesBase64 }, { surface: 'plugin' }))
+              .toEqual({ kind: 'confirmed' });
+          },
+          async exec(request) {
+            execFileSync('/bin/sh', ['-c', request.command]);
+            return { status: 0, stdout: '', stderr: '' };
+          },
+        });
+        const metadataBytes = Buffer.byteLength(JSON.stringify({ resource, guestPath: `${destination}.chunk`, bytesBase64: '' }));
+        expect(sizes).toHaveLength(2);
+        expect(sizes[0]).toBe(Math.floor((MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 - metadataBytes) / 4) * 4);
+        expect((await readFile(destination)).equals(expected)).toBe(true);
+        expect(await kit.invokeAction('put-file', { resource, guestPath: destination, bytesBase64: 'AB==' }, { surface: 'plugin' }))
+          .toEqual({ kind: 'confirmed' });
+        expect(await readFile(destination)).toEqual(Buffer.from([0]));
+        await expect(kit.invokeAction('put-file', { resource, guestPath: destination, bytesBase64: 'AA==\n' }, { surface: 'plugin' })).rejects.toThrow();
+      } finally { await kit.dispose(); }
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
   it.each(['created', 'attached'] as const)('observes completed pending %s-volume cleanup without mutating pre-existing attachments', async ownership => {
     const runtime = await activated(request => request.url.endsWith('/volumes/vol-owned')
       ? { id: 'vol-owned', state: 'destroyed', attached_machine_id: null }

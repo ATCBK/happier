@@ -3,20 +3,20 @@ import { machinePresentationLabel, machineCheckPresentation } from './ui/transla
 import { definePlugin, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/plugin-sdk/connected-accounts';
 import type { ActionContribution } from '@happier-dev/plugin-sdk/actions';
-import { defineMachineProvisionerSchemas, defineMachineProvisionerReconciliationSchemas, prepareMachineProvisionerStoredSchemas,
+import { defineMachineProvisionerReconciliationSchemas, prepareMachineProvisionerStoredSchemas,
   MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerCheckResultV1Schema,
   MachineProvisionerObservationV1Schema, MachineProvisionerOptionsResultV1Schema,
   MachineProvisionerPowerResultV1Schema, MachineProvisionerNativeExecResultV1Schema, MachineProvisionerPutFileResultV1Schema,
   type MachineProvisionerAuthorDefinitionV1,
 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createFlyNativeClient, isLaunchAvailable } from './machine/nativeClient.js';
-import { FLY_DEFAULT_IMAGE, FLY_GUEST_BOOT, FlyLaunchQueryV1Schema, FlyLaunchV1Schema, FlyPendingAcquireV1Schema, FlyResourceV1Schema, resolveFlyLaunchQueryCandidate, type FlyAcquireOperationV1, type FlyLaunchV1 } from './machine/schemas.js';
+import { FLY_DEFAULT_IMAGE, FLY_GUEST_BOOT, FLY_ROLE_SCHEMAS, FlyLaunchQueryV1Schema, FlyLaunchV1Schema, FlyPendingAcquireV1Schema, FlyResourceV1Schema, resolveFlyLaunchQueryCandidate, type FlyAcquireOperationV1, type FlyLaunchV1 } from './machine/schemas.js';
 import { ACCOUNT_ID, ACCOUNT_PURPOSE, connectedAccountRuntime, nativeFetch } from './account.js';
 import { FLY_CONFIGURATION_LABELS, FLY_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 export const PLUGIN_ID = 'happier.machine.fly';
 export const PROVISIONER_ID = 'fly';
-export const ROLE_SCHEMAS = defineMachineProvisionerSchemas({ launch: FlyLaunchV1Schema, resource: FlyResourceV1Schema });
+export const ROLE_SCHEMAS = FLY_ROLE_SCHEMAS;
 const reconciliation = defineMachineProvisionerReconciliationSchemas({ launch: FlyLaunchV1Schema, resource: FlyResourceV1Schema, nativeOperation: FlyPendingAcquireV1Schema });
 export const prepareStoredSchemas = () => prepareMachineProvisionerStoredSchemas({ launch: FlyLaunchV1Schema, resource: FlyResourceV1Schema, nativeOperation: FlyPendingAcquireV1Schema });
 function configurationLabel(id: keyof typeof FLY_CONFIGURATION_LABELS.en) {
@@ -50,11 +50,6 @@ async function organization(context: PluginInvocationContext) {
     { kind: 'environment', keys: ['FLY_ORGANIZATION'] }, { signal: context.signal });
   if (material.kind !== 'environment' || !material.env.FLY_ORGANIZATION) throw new Error('credential_unavailable');
   return material.env.FLY_ORGANIZATION;
-}
-function bytes(value: string) {
-  const decoded = Buffer.from(value, 'base64');
-  if (decoded.toString('base64') !== value) throw new Error('invalid_request');
-  return decoded;
 }
 export const MACHINE_PROVISIONER = {
   title: 'Fly Machines', icon: 'hard-drives', resourceKind: 'fly-machine', schemaVersion: 1,
@@ -229,7 +224,7 @@ export const PLUGIN = definePlugin({
         }
         // Fly accepts a JSON UTF-8 stdin string. Refuse unrepresentable bytes
         // rather than silently replacing them; putFile preserves arbitrary bytes.
-        const stdin = input.inputBase64 === undefined ? undefined : new TextDecoder('utf-8', { fatal: true }).decode(bytes(input.inputBase64));
+        const stdin = input.inputBase64 === undefined ? undefined : new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(input.inputBase64, 'base64'));
         // flyctl v0.3.214 internal/command/machine/exec.go declares the native
         // integer timeout in seconds. Round upward so its unit conversion never
         // shortens the host's millisecond budget; cancellation stays host-owned.
@@ -246,7 +241,6 @@ export const PLUGIN = definePlugin({
       confirmation: { title: 'Write this Fly Machine’s setup file?', body: 'This writes the private setup payload to its reviewed path inside the exact managed Machine.' },
       inputSchema: ROLE_SCHEMAS.putFileInput, resultSchema: MachineProvisionerPutFileResultV1Schema,
       async run(input, context) {
-        bytes(input.bytesBase64);
         const result = await runtime(context).putFile(input.resource, { guestPath: input.guestPath, bytesBase64: input.bytesBase64, ...(input.mode === undefined ? {} : { mode: input.mode }) });
         return result.kind === 'written' && !context.signal.aborted ? { kind: 'confirmed' } : { kind: 'unknown', code: 'native_write_unconfirmed' };
       },

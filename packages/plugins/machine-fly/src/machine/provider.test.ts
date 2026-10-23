@@ -40,6 +40,11 @@ function http(replies: readonly Readonly<{ status?: number; body?: unknown }>[])
 }
 
 describe('Fly exact native resource adapter', () => {
+  it.each(['not base64', 'AA==\n', 'AAA', '===='])('rejects invalid base64 at the direct native-client ingress: %j', async bytesBase64 => {
+    const { adapter, calls } = http([]);
+    await expect(adapter.putFile(resource, { guestPath: '/tmp/private-payload', bytesBase64 })).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
   it('cleans proven-owned partial app and volume without inventing a Machine id or allocating again', async () => {
     const replies = [
       { body: { id: resource.volume.id, state: 'created', attached_machine_id: null } },
