@@ -552,7 +552,7 @@ import {
   resolveActionBackendTargetSelection,
   resolveExecutionBackendTargetSelectionForValue,
 } from './resolveActionBackendTargetSelection.js';
-import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema, projectActionExecuteFailure, type ActionOperationCredentialUseV1 } from './actionExecutionResult.js';
+import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema, projectActionExecuteFailure, readUnexpectedActionErrorDiagnosticV1, type ActionOperationCredentialUseV1 } from './actionExecutionResult.js';
 import { dispatchRuntimeAction } from './executor/dispatch.js';
 import type { RuntimeActionExecute } from './executor/types.js';
 import type { SessionConnectedServiceAuthSwitchRpcParams } from '../connect/sessionConnectedServiceAuthSwitch.js';
@@ -2511,10 +2511,12 @@ function hasExecutionRunStartIdentityEvidence(result: unknown): boolean {
 function classifyExecutionRunStartFailure(
   result: ActionExecuteFailure,
   runCreation: 'noRunCreated' | 'outcomeUnknown',
+  error?: unknown,
 ): ActionExecuteFailure {
   return {
     ...result,
-    details: withExecutionRunStartFailureDetails(result.details, runCreation),
+    details: withExecutionRunStartFailureDetails(result.details, runCreation,
+      error === undefined ? undefined : readUnexpectedActionErrorDiagnosticV1(error).errorClass),
   };
 }
 
@@ -7988,6 +7990,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return classifyExecutionRunStartFailure(
               { ok: false, errorCode: failure.errorCode, error: failure.error, ...(details !== undefined ? { details } : {}) },
               readExecutionRunStartRunCreation(details),
+              error,
             );
           }
           const returnedIdentity = readCompleteExecutionRunStartIdentity(rawStartResult);
@@ -11731,7 +11734,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(normalized.details !== undefined ? { details: normalized.details } : {}),
       };
       return actionId === 'execution.run.start'
-        ? classifyExecutionRunStartFailure(failure, executionRunStartDispatched ? 'outcomeUnknown' : 'noRunCreated')
+        ? classifyExecutionRunStartFailure(failure, executionRunStartDispatched ? 'outcomeUnknown' : 'noRunCreated', error)
         : failure;
     }
   };
@@ -12057,7 +12060,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     } catch (error) {
       // Preparation never enters the Run transport; only the ready invocation can do so.
       if (actionId !== 'execution.run.start') throw error;
-      return settlePrepareResult(actionId, { ok: false, ...normalizeActionExecutorThrownError(error) });
+      return settlePrepareResult(actionId, classifyExecutionRunStartFailure(
+        { ok: false, ...normalizeActionExecutorThrownError(error) }, 'noRunCreated', error));
     }
   };
 
