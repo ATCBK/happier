@@ -70,6 +70,18 @@ export const SessionSystemRecordListQuerySchema = lazyZodSchema(() => z.discrimi
 ]));
 export type SessionSystemRecordListQuery = z.infer<typeof SessionSystemRecordListQuerySchema>;
 
+/** A scalar Board inventory projection; never a generic plugin or body read. */
+export const SessionSystemRecordCountQuerySchema = lazyZodSchema(() => z.strictObject({
+  owner: z.literal('host'),
+  namespace: z.literal('surface'),
+  kind: z.literal('item.v1'),
+  projection: z.literal('count'),
+}));
+export const SessionSystemRecordCountResponseSchema = lazyZodSchema(() => z.strictObject({
+  count: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
+export type SessionSystemRecordCountResponse = z.infer<typeof SessionSystemRecordCountResponseSchema>;
+
 export const SessionSystemRecordPageSchema = lazyZodSchema(() => z.strictObject({
   records: z.array(SessionSystemRecordSchema),
   nextCursor: z.nullable(z.string().check(z.trim(), z.minLength(1))),
