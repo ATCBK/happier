@@ -1,5 +1,6 @@
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { ArtifactCoarseKindV1Schema, deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
+    ArtifactKindWriteBatchResponseV1Schema, decodeArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { ArtifactAccessGrantsListResponseV1Schema, ArtifactAccessRecipientCensusResponseV1Schema,
     ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
     type ArtifactAccessGrantRowV1, type ArtifactAccessLevelV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -99,7 +100,23 @@ export function createArtifactListHttpResponse(url: URL, inventory: readonly Art
     }
     const kind = url.searchParams.get('kind');
     if (kind !== null && !ArtifactCoarseKindV1Schema.safeParse(kind).success) return json({ error: 'Invalid parameters' }, 400);
-    const selected = inventory.filter(row => kind === null || row.kind === kind)
+    let kinds: readonly string[] | undefined;
+    const encodedKinds = url.searchParams.get('kinds');
+    if (encodedKinds !== null) {
+        try {
+            const value: unknown = JSON.parse(encodedKinds);
+            if (!Array.isArray(value) || value.length === 0 || !value.every(item => typeof item === 'string' && item.length > 0)) return json({ error: 'Invalid parameters' }, 400);
+            kinds = value;
+        } catch { return json({ error: 'Invalid parameters' }, 400); }
+    }
+    const unclassified = url.searchParams.get('unclassified');
+    if ((unclassified !== null && unclassified !== 'true' && unclassified !== 'coarse')
+        || Number(kind !== null) + Number(kinds !== undefined) + Number(unclassified !== null) > 1
+        || (unclassified !== null && url.searchParams.get('includeBody') === 'true')) return json({ error: 'Invalid parameters' }, 400);
+    const unknownKind = (row: Artifact) => kinds !== undefined || unclassified === 'true'
+        ? !Object.hasOwn(row, 'kindHint') : row.kind == null;
+    const selected = inventory.filter(row => unclassified !== null ? row.access === 'owner' && unknownKind(row)
+        : kinds !== undefined ? typeof row.kindHint === 'string' && kinds.includes(row.kindHint) : kind === null || row.kind === kind)
         .filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
         .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
     const items = selected.slice(0, limit).map(row => {
@@ -107,7 +124,8 @@ export function createArtifactListHttpResponse(url: URL, inventory: readonly Art
         const { body: _body, ...header } = row;
         return header;
     });
-    return json(kind === null ? items : { items, hasUnclassified: inventory.some(row => row.kind == null) });
+    return json(kind === null && kinds === undefined && unclassified === null ? items
+        : { items, hasUnclassified: inventory.some(unknownKind) });
 }
 
 export function createArtifactStoreBoundary(params: Readonly<{
@@ -132,11 +150,15 @@ export function createArtifactStoreBoundary(params: Readonly<{
     };
     let pendingBeforeUpdate: (() => Promise<void>) | null = null;
     let pendingAfterCreate: (() => Promise<void>) | null = null;
-    const storedKind = (header: string, supplied: unknown) => {
-        if (params.encryptionMode !== 'plain') return ArtifactCoarseKindV1Schema.safeParse(supplied).data ?? null;
-        const decoded = decodePlainArtifactStoredContent(header);
-        if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return null;
-        return deriveArtifactCoarseKindV1(decoded as Readonly<Record<string, unknown>>);
+    const kindProjection = (header: string, supplied: unknown) => {
+        let stored = supplied;
+        if (params.encryptionMode === 'plain') {
+            const decoded = decodePlainArtifactStoredContent(header);
+            stored = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+                ? deriveArtifactStoredKindV1(decoded as Readonly<Record<string, unknown>>) : null;
+        }
+        const decoded = decodeArtifactKindV1(stored);
+        return { kind: decoded.kind, ...(decoded.classified ? { kindHint: decoded.kindHint } : {}) };
     };
 
     const accessFor = (row: Artifact, accountId: string): Artifact['access'] | null =>
@@ -186,7 +208,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             id, header, headerVersion: 1, body, bodyVersion: 1, dataEncryptionKey, seq: 0, createdAt: now, updatedAt: now,
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
-            kind: storedKind(header, input?.kind),
+            ...kindProjection(header, input?.kind),
         };
         rows.set(id, row);
         publish(row);
@@ -199,8 +221,10 @@ export function createArtifactStoreBoundary(params: Readonly<{
             ? { bytes: header, expected: expectedHeaderVersion } : null;
         const bodyChange = typeof body === 'string' && isVersion(expectedBodyVersion)
             ? { bytes: body, expected: expectedBodyVersion } : null;
+        const kindOnly = header === undefined && body === undefined && input?.kind !== undefined && isVersion(expectedHeaderVersion);
         if ((header !== undefined && !headerChange) || (body !== undefined && !bodyChange)
-            || (!headerChange && !bodyChange)) {
+            || (!headerChange && !bodyChange && !kindOnly)
+            || (input?.kind !== undefined && !ArtifactStoredKindV1Schema.safeParse(input.kind).success)) {
             return json({ error: 'Invalid parameters' }, 400);
         }
         if (!writableRow(rows.get(artifactId), callerAccountId)) return json({ error: 'Artifact not found' }, 404);
@@ -209,7 +233,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
         await hook?.();
         const current = rows.get(artifactId);
         if (!current || !writableRow(current, callerAccountId)) return json({ error: 'Artifact not found' }, 404);
-        if ((headerChange && headerChange.expected !== current.headerVersion)
+        if ((headerChange && headerChange.expected !== current.headerVersion) || (kindOnly && expectedHeaderVersion !== current.headerVersion)
             || (bodyChange && bodyChange.expected !== current.bodyVersion)) {
             return json({
                 success: false,
@@ -218,16 +242,21 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 ...(bodyChange ? { currentBodyVersion: current.bodyVersion, currentBody: current.body } : {}),
             });
         }
+        const classification = headerChange || input?.kind !== undefined ? kindProjection(headerChange?.bytes ?? current.header, input?.kind) : null;
+        if (kindOnly && classification && classification.kind === current.kind
+            && Object.hasOwn(classification, 'kindHint') === Object.hasOwn(current, 'kindHint')
+            && classification.kindHint === current.kindHint) return json({ success: true });
         const next: Artifact = {
             ...current,
             ...(headerChange ? { header: headerChange.bytes, headerVersion: headerChange.expected + 1 } : {}),
             ...(bodyChange ? { body: bodyChange.bytes, bodyVersion: bodyChange.expected + 1 } : {}),
             ...(typeof provenance === 'string' || provenance === null ? { provenance } : {}),
             ...(typeof provenanceDataEncryptionKey === 'string' || provenanceDataEncryptionKey === null ? { provenanceDataEncryptionKey } : {}),
-            ...(headerChange ? { kind: storedKind(headerChange.bytes, input?.kind) } : {}),
-            seq: current.seq + 1,
-            updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+            ...classification,
+            seq: kindOnly ? current.seq : current.seq + 1,
+            updatedAt: kindOnly ? current.updatedAt : Math.max(Date.now(), current.updatedAt + 1),
         };
+        if (classification && !Object.hasOwn(classification, 'kindHint')) delete next.kindHint;
         rows.set(artifactId, next);
         publish(next);
         return json({
@@ -279,6 +308,22 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     return { artifactId, ok: true, artifact: readable,
                         recipientCensus: readable.encryptionMode === 'plain' ? null : recipientCensus(readable, readable.access) };
                 }));
+            }
+            if (url.pathname === `${ARTIFACTS_PATH}/query-hints/batch` && method === 'POST') {
+                const input = ArtifactKindWriteBatchInputV1Schema.safeParse(parseBody(init));
+                if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
+                return (async () => {
+                    const items = [];
+                    for (const { artifactId, ...hint } of input.data.items) {
+                        const response = await update(callerAccountId, artifactId, hint);
+                        const result: unknown = await response.json();
+                        items.push(result && typeof result === 'object' && Reflect.get(result, 'success') === true
+                            ? { artifactId, success: true as const }
+                            : { artifactId, success: false as const, error: result && typeof result === 'object'
+                                && typeof Reflect.get(result, 'error') === 'string' ? String(Reflect.get(result, 'error')) : 'artifact_update_failed' });
+                    }
+                    return json(ArtifactKindWriteBatchResponseV1Schema.parse({ items }));
+                })();
             }
             if (url.pathname === ARTIFACTS_PATH && method === 'GET') {
                 const inventory = [...rows.values()].flatMap(row => {
@@ -360,9 +405,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             return row ? { ...row } : null;
         },
         replaceStoredRow(artifact: Artifact): void {
-            // Omitted hints model a current producer; explicit null still models
-            // a retained pre-backfill row for inventory compatibility tests.
-            const row = { ...artifact, kind: artifact.kind === undefined ? storedKind(artifact.header, undefined) : artifact.kind };
+            const row = { ...artifact, ...(artifact.kind === undefined ? kindProjection(artifact.header, undefined) : {}) };
             rows.set(artifact.id, row);
             publish(row);
         },
@@ -468,7 +511,8 @@ export async function createPlainArtifactHomeFixture(serverUrl: string, options?
         await setActiveServer({ serverId: home.id, scope: 'device' });
         // Explicit fixture inputs model an admitted plain Account/Home. This is
         // not a cold Sync bootstrap; credentials still traverse the real owner.
-        storage.setState({ settingsScope: { serverId: home.id, accountId }, profileScope: { serverId: home.id, accountId }, artifacts: {} });
+        storage.setState({ settingsScope: { serverId: home.id, accountId }, profileScope: { serverId: home.id, accountId },
+            artifacts: {}, artifactSkillRevisions: {}, artifactInventoryUnreadyCount: 0 });
         applied.publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     } catch (error) {
         try { await credentialWrite?.rollback(); } finally { restoreFixtureState(); }

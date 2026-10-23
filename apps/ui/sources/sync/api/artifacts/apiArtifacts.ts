@@ -105,6 +105,9 @@ function readArtifactResponse(value: unknown): Artifact {
 export type ArtifactApiOptions = Readonly<{
     serverId?: string;
     coarseKind?: ArtifactCoarseKindV1;
+    kinds?: readonly string[];
+    /** Owner-only legacy header repair, mutually exclusive with kind selectors. */
+    unclassified?: boolean | 'coarse';
     includeBody?: boolean;
     retry?: 'default' | 'none';
     request?: ServerFetch;
@@ -330,7 +333,7 @@ export async function fetchArtifactStorageUsage(credentials: AuthCredentials,
 
 /** The key holder may reseal the selected body with new restore attribution; its content stays unchanged. */
 export async function restoreArtifactRevision(credentials: AuthCredentials, input: Readonly<{
-    kind?: ArtifactCoarseKindV1;
+    kind?: string;
     artifactId: string; bodyVersion: number; header: string; body?: string; expectedRevision: ArtifactRevisionV1;
     provenance?: string | null; provenanceDataEncryptionKey?: string | null;
 }>, opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'serverId' | 'readTransport'> = {}): Promise<ArtifactRevisionV1> {
@@ -419,12 +422,14 @@ export async function fetchArtifacts(
 export async function fetchArtifactListPage(credentials: AuthCredentials, opts: ArtifactApiOptions = {}): Promise<ArtifactListPage> {
     throwIfAborted(opts.signal);
     const binding = captureArtifactReadBinding(opts);
-    const filtered = opts.coarseKind !== undefined;
+    const filtered = opts.coarseKind !== undefined || opts.kinds !== undefined || Boolean(opts.unclassified);
     const query = new URLSearchParams();
     if (opts.limit !== undefined) query.set('limit', String(opts.limit));
     if (opts.cursor !== undefined) query.set('cursor', opts.cursor);
     if (opts.includeBody) query.set('includeBody', 'true');
-    if (filtered && opts.coarseKind) query.set('kind', opts.coarseKind);
+    if (opts.coarseKind) query.set('kind', opts.coarseKind);
+    if (opts.kinds !== undefined) query.set('kinds', JSON.stringify(opts.kinds));
+    if (opts.unclassified) query.set('unclassified', String(opts.unclassified));
     const search = query.toString();
     const key = JSON.stringify(['artifact-inventory', binding.key, resolveAuthCredentialsScopeKey(credentials), search, opts.ownerAccountId, opts.retry ?? 'default']);
     const result = await artifactInventoryReads.run(key, async sharedSignal => {

@@ -1,7 +1,7 @@
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod/mini';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, decodePlainArtifactStoredContent, type AccountSettings } from '@happier-dev/protocol';
-import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { deriveArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -65,11 +65,29 @@ export function registerPlainArtifactRoutes(app: FastifyInstance, accountId: str
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
     };
     const idOf = (params: unknown) => String((params as { id: string }).id);
-    app.get('/v1/artifacts', async request => {
-        const kind = new URL(request.url, 'http://fixture.test').searchParams.get('kind');
+    app.get('/v1/artifacts', async (request, reply) => {
+        const query = new URL(request.url, 'http://fixture.test').searchParams;
+        const kind = query.get('kind');
+        const exactKinds = query.get('kinds');
+        const unclassified = query.get('unclassified');
+        if ([kind, exactKinds, unclassified].filter(value => value !== null).length > 1) {
+            return reply.code(400).send({ error: 'Failed to get artifacts' });
+        }
+        let selectedKinds: string[] | undefined;
+        if (exactKinds !== null) {
+            try {
+                selectedKinds = z.array(z.string().check(z.minLength(1))).parse(JSON.parse(exactKinds));
+            } catch {
+                return reply.code(400).send({ error: 'Failed to get artifacts' });
+            }
+        }
         const items = [...rows.values()];
-        return kind ? { items: items.filter(row => deriveArtifactCoarseKindV1(z.looseObject({}).parse(decodePlainArtifactStoredContent(row.header))) === kind),
-            hasUnclassified: false } : items;
+        if (kind === null && selectedKinds === undefined && unclassified === null) return items;
+        return { items: unclassified !== null ? [] : items.filter(row => {
+            const classification = deriveArtifactKindV1(z.looseObject({}).parse(decodePlainArtifactStoredContent(row.header)));
+            return kind !== null ? classification.kind === kind
+                : classification.kindHint !== null && selectedKinds?.includes(classification.kindHint) === true;
+        }), hasUnclassified: false };
     });
     app.get('/v1/artifacts/:id', async (request, reply) => rows.get(idOf(request.params)) ?? reply.code(404).send({ error: 'not_found' }));
     app.get('/v1/artifacts/:id/access/recipients', async (request, reply) => {
@@ -99,4 +117,15 @@ export function registerPlainArtifactRoutes(app: FastifyInstance, accountId: str
         return { success: true, headerVersion: next.headerVersion, bodyVersion: next.bodyVersion };
     });
     return { seed, read: (id: string) => rows.get(id) };
+}
+
+/** Preserve the published list envelope when an HTTP-boundary fixture has no Artifacts. */
+export async function readEmptyPlainArtifactListFixture(url: string, accountId: string) {
+    const app = Fastify();
+    registerPlainArtifactRoutes(app, accountId);
+    try {
+        const requestUrl = new URL(url);
+        const response = await app.inject({ method: 'GET', url: requestUrl.pathname + requestUrl.search });
+        return { status: response.statusCode, data: response.json() };
+    } finally { await app.close(); }
 }

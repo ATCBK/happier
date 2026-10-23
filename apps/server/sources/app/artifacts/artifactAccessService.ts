@@ -25,7 +25,7 @@ import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublic
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactBodyEnvelopeV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
-import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactCoarseKindV1Schema, decodeArtifactKindV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { artifactAccessFactsSelect, artifactGrantFacts, artifactGrantStorageAdapter, type ArtifactAccessFacts } from './artifactGrantStorageAdapter';
 
@@ -45,17 +45,13 @@ export async function resolveArtifactAccessInTx(tx: Tx, input: Readonly<{
 }
 
 /** Candidate discovery is a database predicate; only the access owner admits rows. */
-function artifactCandidateWhere(actorAccountId: string, kind?: ArtifactCoarseKindV1 | null): Prisma.ArtifactWhereInput {
+function artifactCandidateWhere(actorAccountId: string): Prisma.ArtifactWhereInput {
     return { OR: [
-        { accountId: actorAccountId, ...artifactVisibleWhere, ...(kind !== undefined ? { kind } : {}) },
+        { accountId: actorAccountId, ...artifactVisibleWhere },
         { accountGrants: { some: { accountId: actorAccountId } } },
         { teamGrants: { some: { team: { memberships: { some: { accountId: actorAccountId } } } } } },
         { groupGrants: { some: { teamGroup: { memberships: { some: { teamMembership: { accountId: actorAccountId } } } } } } },
     ] };
-}
-
-export async function listArtifactCandidatesInTx(tx: Tx, actorAccountId: string, kind?: ArtifactCoarseKindV1 | null): Promise<string[]> {
-    return (await tx.artifact.findMany({ where: artifactCandidateWhere(actorAccountId, kind), select: { id: true } })).map(row => row.id);
 }
 
 /** Fan-out and recipient preparation consume the same live access decision. */
@@ -121,6 +117,7 @@ export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: st
 export interface ArtifactForCaller {
     id: string;
     kind: ArtifactCoarseKindV1 | null;
+    kindHint?: string | null;
     ownerAccountId: string;
     access: ArtifactCallerAccessV1;
     encryptionMode: "plain" | "e2ee";
@@ -138,6 +135,7 @@ export interface ArtifactForCaller {
 
 type ArtifactReadFailure = Readonly<{ ok: false; error: "artifact_not_found" | "artifact_content_unavailable"; ownerAccountId?: string }>;
 export type ArtifactReadResult = Readonly<{ ok: true; artifact: ArtifactForCaller }> | ArtifactReadFailure;
+type ArtifactFullReadResult = Readonly<{ ok: true; artifact: ArtifactForCaller & { publicAudience: 'retained' | 'none' } }> | ArtifactReadFailure;
 export type ArtifactHeaderForCaller = Omit<ArtifactForCaller, "body" | "bodyVersion" | "provenance">;
 export type ArtifactListItemForCaller = ArtifactHeaderForCaller & Pick<ArtifactForCaller, "bodyVersion" | "provenance">
     & Partial<Pick<ArtifactForCaller, "body">> & Readonly<{ publicAudience: "retained" | "none" }>;
@@ -174,7 +172,8 @@ function projectArtifactHeader(row: StoredArtifactHeader, access: ArtifactAccess
     const header = openArtifactStoredContentBytes({ accountId: access.ownerAccountId, artifactId: row.id,
         mode: access.encryptionMode, dataEncryptionKey: row.dataEncryptionKey, content: row.header, field: "header" });
     if (!header) return { ok: false, error: "artifact_content_unavailable", ownerAccountId: access.ownerAccountId };
-    return { ok: true, artifact: { id: row.id, kind: ArtifactCoarseKindV1Schema.safeParse(row.kind).data ?? null, ownerAccountId: access.ownerAccountId,
+    const kind = decodeArtifactKindV1(row.kind);
+    return { ok: true, artifact: { id: row.id, kind: kind.kind, ...(kind.classified ? { kindHint: kind.kindHint } : {}), ownerAccountId: access.ownerAccountId,
         access: access.level, encryptionMode: access.encryptionMode, header,
         headerVersion: row.headerVersion, dataEncryptionKey: key,
         provenanceDataEncryptionKey: provenanceKey,
@@ -229,16 +228,20 @@ export async function readArtifactHeaderForCallerInTx(tx: Tx, input: Readonly<{
 }
 
 /** Open only server at-rest Plain content; E2EE stays opaque with the caller's envelope. */
+export function readArtifactForCallerInTx(tx: Tx, input: Readonly<{ actorAccountId: string; artifactId: string; projection?: never }>):
+    Promise<ArtifactFullReadResult>;
+export function readArtifactForCallerInTx(tx: Tx, input: Readonly<{ actorAccountId: string; artifactId: string; projection?: 'headers' }>):
+    Promise<Readonly<{ ok: true; artifact: ArtifactListItemForCaller }> | ArtifactReadFailure>;
 export async function readArtifactForCallerInTx(tx: Tx, input: Readonly<{
-    actorAccountId: string; artifactId: string;
-}>): Promise<Readonly<{ ok: true; artifact: ArtifactForCaller & { publicAudience: "retained" | "none" } }> | ArtifactReadFailure> {
+    actorAccountId: string; artifactId: string; projection?: 'headers';
+}>): Promise<Readonly<{ ok: true; artifact: ArtifactListItemForCaller }> | ArtifactReadFailure> {
     const row = await tx.artifact.findFirst({ where: artifactAddress(input.artifactId), select: {
-        ...artifactReadAdmissionSelect(input.actorAccountId), body: true, bodyVersion: true, provenance: true,
+        ...artifactReadAdmissionSelect(input.actorAccountId), body: input.projection !== 'headers', bodyVersion: true, provenance: true,
     } });
     if (!row) return { ok: false, error: "artifact_not_found" };
     const header = projectArtifactAdmittedHeader(row, input.actorAccountId);
     if (!header.ok) return header;
-    const read = projectArtifactBody(header.artifact, row);
+    const read = input.projection === 'headers' ? projectArtifactRevisionMetadata(header.artifact, row) : projectArtifactBody(header.artifact, row);
     if (!read.ok) return read;
     const publication = await tx.publicSessionShare.findUnique({ where: { artifactId: input.artifactId }, select: { expiresAt: true } });
     return { ok: true, artifact: { ...read.artifact, publicAudience: isPublicSessionShareActive(publication) ? "retained" : "none" } };
@@ -255,8 +258,8 @@ export async function readmitArtifactContentInTx(tx: Tx, input: Readonly<{ actor
     return current;
 }
 
-export async function readArtifactForCaller(input: Readonly<{ actorAccountId: string; artifactId: string }>): Promise<Awaited<ReturnType<typeof readArtifactForCallerInTx>>> {
-    return await readSnapshotWithCurrentAdmission<Awaited<ReturnType<typeof readArtifactForCallerInTx>>>(
+export async function readArtifactForCaller(input: Readonly<{ actorAccountId: string; artifactId: string }>): Promise<ArtifactFullReadResult> {
+    return await readSnapshotWithCurrentAdmission<ArtifactFullReadResult>(
         tx => readArtifactForCallerInTx(tx, input), async (tx, captured) => {
             if (!captured.ok) return captured;
             const current = await readmitArtifactContentInTx(tx, input, captured.artifact);
@@ -300,7 +303,38 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; limit: number; cursor: Readonly<{ updatedAt: Date; id: string }> | null;
     includeBody?: boolean;
     kind?: ArtifactCoarseKindV1 | null;
+    kinds?: readonly string[];
+    unclassified?: boolean | 'coarse';
 }>): Promise<ArtifactListItemForCaller[]> {
+    if (input.kinds !== undefined) {
+        // Exact strings use indexed equality over every existing family. Chunk at
+        // the DB transport boundary, merging only selected page-sized projections.
+        const exactKinds = new Set(input.kinds);
+        const values = [...exactKinds].flatMap(kind => ArtifactCoarseKindV1Schema.options
+            .map(coarse => `v1:${coarse}:${kind}`));
+        const selected: ArtifactListItemForCaller[] = [];
+        // Four candidate Account operands, four caller-filtered relation operands,
+        // three keyset operands when present, and LIMIT/OFFSET in the joined provider plan.
+        for (const kinds of portableQueryChunks({ values, bindingsPerValue: 1, fixedBindings: 4 + 4 + 3 + 2 })) {
+            selected.push(...await listArtifactHeaderSelectionInTx(tx, input, { kind: { in: [...kinds] } }, new Set(kinds)));
+        }
+        return selected.sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()
+            || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0)).slice(0, input.limit);
+    }
+    const selection: Prisma.ArtifactWhereInput = input.unclassified
+        ? { accountId: input.actorAccountId, ...artifactUnclassifiedWhere(input.unclassified === 'coarse') }
+        : input.kind === null ? { kind: null }
+            : input.kind === undefined ? {} : { OR: [{ kind: input.kind }, { kind: { startsWith: `v1:${input.kind}:` } }] };
+    return listArtifactHeaderSelectionInTx(tx, input, selection);
+}
+
+function artifactUnclassifiedWhere(coarseOnly = false): Prisma.ArtifactWhereInput {
+    if (coarseOnly) return { kind: null };
+    return { OR: [{ kind: null }, { kind: { in: [...ArtifactCoarseKindV1Schema.options] } }] };
+}
+
+async function listArtifactHeaderSelectionInTx(tx: Tx, input: Parameters<typeof listArtifactHeadersForCallerInTx>[1],
+    selection: Prisma.ArtifactWhereInput, storedKinds?: ReadonlySet<string>): Promise<ArtifactListItemForCaller[]> {
     const result: ArtifactListItemForCaller[] = [];
     let cursor = input.cursor;
     while (result.length < input.limit) {
@@ -311,17 +345,22 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
             ...(getDbProviderFromEnv(process.env, "postgres") === "postgres" ? { relationLoadStrategy: "query" as const } : {}),
             where: {
                 ...artifactVisibleWhere,
-                ...(input.kind !== undefined ? { kind: input.kind } : {}),
-                AND: [artifactCandidateWhere(input.actorAccountId, input.kind), ...(cursor ? [{ OR: [
+                ...selection,
+                AND: [artifactCandidateWhere(input.actorAccountId), ...(cursor ? [{ OR: [
                     { updatedAt: { lt: cursor.updatedAt } },
                     { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
                 ] }] : [])],
             }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: input.limit, select: {
                 ...artifactReadAdmissionSelect(input.actorAccountId),
-                body: input.includeBody === true, bodyVersion: true, provenance: true,
+                body: !input.unclassified && input.includeBody === true, bodyVersion: true, provenance: true,
                 publicShare: { select: { expiresAt: true } },
             } });
         for (const row of rows) {
+            // MySQL's retained column collation is case-insensitive. Indexed SQL
+            // narrows candidates; exact literal membership precedes private opening.
+            if (storedKinds && (row.kind === null || !storedKinds.has(row.kind))) continue;
+            if (input.kind !== undefined && input.kind !== null && row.kind !== input.kind
+                && !row.kind?.startsWith(`v1:${input.kind}:`)) continue;
             const access = resolveArtifactAccessFromFacts(row, input.actorAccountId);
             if (!access) continue;
             const read = projectArtifactAdmittedHeader(row, input.actorAccountId);
@@ -329,7 +368,7 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
                 if (access.level === "owner") throw new Error("Artifact content is unavailable");
                 continue;
             }
-            const content = input.includeBody ? projectArtifactBody(read.artifact, row) : projectArtifactRevisionMetadata(read.artifact, row);
+            const content = input.includeBody && !input.unclassified ? projectArtifactBody(read.artifact, row) : projectArtifactRevisionMetadata(read.artifact, row);
             if (!content.ok) {
                 if (access.level === "owner") throw new Error("Artifact content is unavailable");
                 continue;
@@ -345,22 +384,39 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     return result;
 }
 
+/** Completeness is an access fact, never a reason to open unrelated private content. */
+async function hasUnclassifiedArtifactsInTx(tx: Tx, actorAccountId: string, coarseOnly: boolean): Promise<boolean> {
+    let cursor: { updatedAt: Date; id: string } | undefined;
+    for (;;) {
+        const rows = await tx.artifact.findMany({ where: { ...artifactVisibleWhere, ...artifactUnclassifiedWhere(coarseOnly),
+            AND: [artifactCandidateWhere(actorAccountId), ...(cursor ? [{ OR: [
+                { updatedAt: { lt: cursor.updatedAt } }, { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
+            ] }] : [])] }, take: 1, orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+            select: { id: true, updatedAt: true, ...artifactAccessFactsSelect(actorAccountId) } });
+        const row = rows[0];
+        if (!row) return false;
+        if (resolveArtifactAccessFromFacts(row, actorAccountId)) return true;
+        cursor = { id: row.id, updatedAt: row.updatedAt };
+    }
+}
+
 /** The filtered page and its completeness witness share the canonical stable read snapshot. */
 export async function listArtifactHeaderPageForCaller(input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<{
     items: ArtifactListItemForCaller[]; hasUnclassified: boolean;
 }> {
+    if (input.kinds?.length === 0) return { items: [], hasUnclassified: false };
     return await readSnapshotWithCurrentAdmission(async tx => ({
         items: await listArtifactHeadersForCallerInTx(tx, input),
-        hasUnclassified: input.kind !== undefined && (await listArtifactHeadersForCallerInTx(tx, {
-            actorAccountId: input.actorAccountId, kind: null, limit: 1, cursor: null,
-        })).length > 0,
+        hasUnclassified: (input.kind !== undefined || input.kinds !== undefined || Boolean(input.unclassified))
+            && await hasUnclassifiedArtifactsInTx(tx, input.actorAccountId,
+                input.kind !== undefined || input.unclassified === 'coarse'),
     }), async (tx, captured) => {
         if (captured.items.length === 0) return captured;
         const rows = await tx.artifact.findMany({ where: { id: { in: captured.items.map(row => row.id) }, ...artifactVisibleWhere },
             select: artifactReadAdmissionSelect(input.actorAccountId) });
         const currentById = new Map(rows.map(row => [row.id, projectArtifactAdmittedHeader(row, input.actorAccountId)]));
         return {
-            // This conservative snapshot witness requests a fresh authorized full scan;
+            // This conservative snapshot witness requests indexed owner repair;
             // losing one witness's admission cannot establish completeness.
             hasUnclassified: captured.hasUnclassified,
             items: captured.items.flatMap(artifact => {

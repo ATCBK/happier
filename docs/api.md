@@ -2459,16 +2459,23 @@ Artifact bytes and grants. See the
 - In 0.3 development, `GET /v1/artifacts?kind=skill`
   (accepted kinds are owned by Protocol's `artifacts/artifactKindV1.ts`) returns
   `{items: [...], hasUnclassified: boolean}` with the same authorized header
-  projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
-  rows readable by the caller, including grants, independently of the current page.
-  The page and witness share one read snapshot; a true witness stays conservative
-  while classification or access changes, and the fallback scan rechecks access.
-  A true flag makes predecessor-family inventories restart with the full inventory.
-  Widget layout, definition and saved-group inventories stay filtered: these
-  families originate in 0.3 and their writers supply the kind. Existing pre-cut
-  development widget hints need the canonical inventory writer's repair first.
-  Omitting `kind` preserves the array response. Rows expose nullable plaintext
-  `kind`; clients still open and validate their private header before using content.
+  projection and paging as the unfiltered list. Exact selection uses
+  `kinds=<URL-encoded JSON string array>`, for example the set
+  `["account_notice.v1","usage_notice.v1"]`, and the same filtered envelope.
+  Selection occurs before pagination; no title, name or content filter is sent.
+  `hasUnclassified` covers accessible null-kind rows for coarse selection and
+  null/old-coarse rows for exact selection, independently of the current page.
+  Page and witness share one read snapshot and final access readmission.
+  A witness reports incomplete classification; it does not trigger UI or
+  shared-reader writes. `unclassified=coarse` pages owner null rows;
+  `unclassified=true` pages owner null/old-coarse rows. These discovery selectors
+  cannot be combined with a coarse or exact filter. The owning daemon's bounded
+  notice backfill is being revised before re-landing; the former automatic
+  read-side repair was withdrawn. There is no full-inventory read fallback.
+  An already-complete exact list needs one header query and no repair request.
+  Omitting selectors preserves the array response.
+  Rows expose coarse nullable `kind` and, when canonically classified,
+  `kindHint` (exact string or null). Clients still validate private headers.
 - `GET /v1/artifacts?limit=...&cursor=...` lists Artifact headers in
   stable `updatedAt`, `id` order. The optional opaque cursor resumes after the
   last observed row, allowing typed clients to continue through sparse pages
@@ -2525,16 +2532,29 @@ Artifact bytes and grants. See the
 - `POST /v1/artifacts/:id` (versioned update)
 - `DELETE /v1/artifacts/:id`
 
-The development kind-filtering extension accepts optional coarse `kind` on
+The development kind-filtering extension accepts optional `kind` on
 Artifact JSON create/update and restore writes (`artifactKind` in the framed binary
-upload metadata, whose `kind` already identifies create/update). Writers derive it
-from the logical header with Protocol's `deriveArtifactCoarseKindV1`, without a
-feature gate. Older writers remain valid; an opaque header write without kind
+upload metadata, whose `kind` already identifies create/update). Writers use
+Protocol's `deriveArtifactStoredKindV1` to encode the existing family and exact
+header type as `v1:<coarse>:<exact-or-empty>`, without a feature gate. The existing
+MySQL column's 191-character boundary is validated without truncation. Older
+coarse/absent-hint writers remain valid; an opaque header write without kind
 clears the previous hint. The existing update
-route also accepts `{kind, expectedHeaderVersion}` alone for best-effort backfill.
+route also accepts `{kind, expectedHeaderVersion}` alone for owner backfill.
 It requires header-edit authority and the current header version, and changes no
-header/body bytes or content versions. These changes are development-only and
-require the additive Artifact-kind migration before the new server is loaded.
+header/body bytes, content versions, recency timestamp or Artifact row sequence.
+Required AccountChange/discovery invalidations remain. The same owner also accepts
+`POST /v1/artifacts/query-hints/batch` with
+`{items:[{artifactId,kind,expectedHeaderVersion}]}`. It returns ordered
+`{items:[{artifactId,success:true}|{artifactId,success:false,error:string}]}`;
+failure projections contain no private conflicting header/body. Each item uses
+the incumbent independent update transaction, access, mode and CAS, not a new
+cross-Artifact transaction. Existing HTTP-byte limits frame batches; there is no
+new item-count cap. The two-segment route preserves retained arbitrary Artifact
+ids at the existing single-id update route. Hint-only admission, conflict handling and
+recipient projection do not select/open body bytes. Equal hints are no-ops.
+These changes are development-only: they reuse the existing kind column/index
+and add no schema migration. Load the matching server before changed clients.
 
 The in-progress 0.3 ordinary binary extension uses a strict body reference
 `{blobId,mime,sizeBytes,sha256}` within the normal plain/E2EE body envelope.

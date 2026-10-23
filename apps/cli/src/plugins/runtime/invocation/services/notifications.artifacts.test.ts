@@ -6,6 +6,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encod
 import { readAccountNoticeArtifactV1, readAccountNoticeArtifactHeaderV1, AccountNoticeArtifactHeaderV1Schema, AccountNoticeArtifactBodyV1Schema,
   UsageNoticeArtifactHeaderV1Schema, UsageNoticeArtifactBodyV1Schema, type UsageNoticeArtifactHeaderV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { ArtifactAccessRecipientCensusResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { decodeArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { openEncryptedDataKeyEnvelopeV1, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { decodeBase64, decryptWithDataKey, encodeBase64, encryptWithDataKey } from '@/api/encryption';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
@@ -16,7 +17,7 @@ describe('plugin notification Account Artifact custody', () => {
   it.each(['plain', 'e2ee'] as const)('persists and updates one %s private item with badges disabled, preserving dismissal, resolution, and plugin isolation', async mode => {
     // Real service + mode-aware Artifact codec + HTTP transport. This server is
     // the persistent-service boundary, including the real revision contract.
-    type Row = { id: string; header: string; body: string; dataEncryptionKey: string; headerVersion: number; bodyVersion: number };
+    type Row = { id: string; kind?: string; header: string; body: string; dataEncryptionKey: string; headerVersion: number; bodyVersion: number };
     const rows = new Map<string, Row>();
     let accountMode = mode;
     const secret = randomBytes(32);
@@ -33,6 +34,12 @@ describe('plugin notification Account Artifact custody', () => {
       return encodeBase64(encryptWithDataKey(header, key));
     };
     let dismissDuringUpdate = false;
+    const wireRow = (row: Row) => {
+      const kind = decodeArtifactKindV1(row.kind);
+      return { ...row, kind: kind.kind, ...(kind.classified ? { kindHint: kind.kindHint } : {}),
+        ownerAccountId: 'owner', access: 'owner', publicAudience: 'none', encryptionMode: accountMode,
+        seq: 1, createdAt: 1, updatedAt: 2 };
+    };
     const server = createServer(async (request, response) => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const id = decodeURIComponent(url.pathname.slice('/v1/artifacts/'.length));
@@ -47,14 +54,24 @@ describe('plugin notification Account Artifact custody', () => {
       }
       if (request.method === 'GET' && url.pathname === '/v1/artifacts') {
         request.resume();
-        return reply(200, [...rows.values()].map(({ body, ...row }) => ({ ...row, ownerAccountId: 'owner', access: 'owner',
-          publicAudience: 'none', encryptionMode: accountMode, seq: 1, createdAt: 1, updatedAt: 2,
-          ...(url.searchParams.get('includeBody') ? { body } : {}) })));
+        const kinds: unknown = url.searchParams.has('kinds') ? JSON.parse(url.searchParams.get('kinds')!) : undefined;
+        const coarse = url.searchParams.get('kind');
+        const unclassified = url.searchParams.get('unclassified');
+        const selected = [...rows.values()].filter(row => unclassified ? unclassified === 'coarse' ? row.kind == null : !decodeArtifactKindV1(row.kind).classified
+          : Array.isArray(kinds) ? kinds.includes(decodeArtifactKindV1(row.kind).kindHint) : !coarse || decodeArtifactKindV1(row.kind).kind === coarse);
+        const cursor = url.searchParams.get('cursor');
+        const after = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { id: string } : null;
+        const start = after ? selected.findIndex(row => row.id === after.id) + 1 : 0;
+        const items = selected.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(row => {
+          const { body, ...header } = wireRow(row);
+          return { ...header, ...(url.searchParams.get('includeBody') ? { body } : {}) };
+        });
+        return reply(200, kinds !== undefined || coarse || unclassified ? { items,
+          hasUnclassified: [...rows.values()].some(row => kinds !== undefined || unclassified === 'true' ? !decodeArtifactKindV1(row.kind).classified : row.kind == null) } : items);
       }
       if (request.method === 'GET') {
         request.resume();
-        return existing ? reply(200, { ...existing, ownerAccountId: 'owner', access: 'owner', publicAudience: 'none',
-          encryptionMode: accountMode, seq: 1, createdAt: 1, updatedAt: 2 }) : reply(404, {});
+        return existing ? reply(200, wireRow(existing)) : reply(404, {});
       }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -66,6 +83,11 @@ describe('plugin notification Account Artifact custody', () => {
         return reply(200, row);
       }
       if (!existing) return reply(404, {});
+      if (input.kind !== undefined && input.header === undefined && input.body === undefined) {
+        if (input.expectedHeaderVersion !== existing.headerVersion) return reply(409, { success: false, error: 'version-mismatch' });
+        existing.kind = input.kind;
+        return reply(200, { success: true });
+      }
       if (dismissDuringUpdate) {
         dismissDuringUpdate = false;
         existing.header = encodeHeader(existing, { ...decodeHeader(existing) as object, status: 'dismissed', readAt: 100 });
@@ -76,6 +98,7 @@ describe('plugin notification Account Artifact custody', () => {
       }
       existing.header = input.header;
       existing.body = input.body;
+      existing.kind = input.kind;
       existing.headerVersion += 1;
       existing.bodyVersion += 1;
       return reply(200, { success: true, headerVersion: existing.headerVersion, bodyVersion: existing.bodyVersion });
@@ -157,6 +180,7 @@ describe('plugin notification Account Artifact custody', () => {
             header: { ...header, notice: event }, body: JSON.stringify({ ...content, notice: event }) });
           const created = await createHost(notice);
           const retained = rows.get(created.artifactId)!;
+          retained.kind = legacy ? undefined : 'other';
           retained.header = encodeHeader(retained, legacy
             ? UsageNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: 'usage_notice.v1', title: 'Host alert', status: 'dismissed', notice })
             : { ...header, status: 'dismissed', readAt: 100 });

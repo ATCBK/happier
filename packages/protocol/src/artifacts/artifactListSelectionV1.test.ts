@@ -8,6 +8,44 @@ type PageOptions = Readonly<{ cursor?: string; coarseKind?: string }>;
 const encodeCursor = (row: Readonly<{ artifactId: string }>) => row.artifactId;
 
 describe('Artifact coarse selection', () => {
+  it('keeps exact selection query-only and reports unresolved legacy membership', async () => {
+    const requests: unknown[] = [];
+    const page = await listArtifactHeadersV1({ options: { kinds: ['role.v1'], includeBody: true }, encodeCursor,
+      readPage: async options => {
+        requests.push(options);
+        return { items: [{ ...legacy, header: { kind: 'role.v1' } }], hasUnclassified: true };
+      },
+      readBodies: async items => items.map(row => ({ ...row, body: 'selected' })),
+    });
+    expect(requests).toEqual([{ limit: 500, kinds: ['role.v1'] }]);
+    expect(page).toMatchObject({ items: [{ artifactId: 'legacy', body: 'selected' }], coverage: 'partial' });
+  });
+
+  it('never opens 35k unrelated headers to refine known coarse classifications', async () => {
+    const rows = Array.from({ length: 35000 }, (_, index) => ({ ...prompt, artifactId: String(index) }));
+    let opened = 0;
+    let queries = 0;
+    const result = await listArtifactHeadersV1({ options: { coarseKind: 'skill' }, encodeCursor,
+      readPage: async options => {
+        queries++;
+        if (!options?.unclassified) return { items: [], hasUnclassified: false };
+        const start = Number(options.cursor ?? 0);
+        const items = rows.slice(start, start + 500);
+        opened += items.length;
+        return { items, ...(start + 500 < rows.length ? { nextCursor: String(start + 500) } : {}) };
+      } });
+    expect(opened).toBe(0);
+    expect(queries).toBe(1);
+    expect(result).toEqual({ items: [], coverage: 'complete' });
+  });
+
+  it('reports unresolved classification as partial without an inventory fallback', async () => {
+    const requests: unknown[] = [];
+    const page = await listArtifactHeadersV1({ options: { kinds: ['role.v1'] }, encodeCursor,
+      readPage: async options => { requests.push(options); return { items: [], hasUnclassified: true }; } });
+    expect(page).toEqual({ items: [], coverage: 'partial' });
+    expect(requests).toEqual([{ limit: 500, kinds: ['role.v1'] }]);
+  });
   it.each([false, true])('pages a Role catalog once with unclassified membership %s', async hasUnclassified => {
     const roles = Array.from({ length: 1201 }, (_, index) => ({ artifactId: `role-${index}`,
       header: { kind: 'role.v1', title: `Role ${index}` }, createdAt: 1, updatedAt: 2402 - index * 2 }));
@@ -22,27 +60,25 @@ describe('Artifact coarse selection', () => {
         includeBody: true, limit: 500, ...(cursor ? { cursor } : {}) }, encodeCursor,
         readPage: async options => {
           physicalCursors.push(options?.cursor);
-          const start = options?.cursor ? rows.findIndex(row => row.artifactId === options.cursor) + 1 : 0;
-          const items = rows.slice(start, start + (options?.limit ?? 500));
-          return { items, ...(start + items.length < rows.length ? { nextCursor: items.at(-1)!.artifactId } : {}),
-            ...(options?.coarseKind ? { hasUnclassified } : {}) };
+          const candidates = options?.kinds ? roles : rows;
+          const start = options?.cursor ? candidates.findIndex(row => row.artifactId === options.cursor) + 1 : 0;
+          const items = candidates.slice(start, start + (options?.limit ?? 500));
+          return { items, ...(start + items.length < candidates.length ? { nextCursor: items.at(-1)!.artifactId } : {}), hasUnclassified };
         },
         readBodies: async items => {
           opened.push(...items.map(item => item.artifactId));
           return items.map(item => ({ ...item, body: `content:${item.artifactId}` }));
         },
       });
-      expect(page.coverage).toBe('complete');
+      expect(page.coverage).toBe(hasUnclassified ? 'partial' : 'complete');
       returned.push(...page.items.map(item => item.artifactId));
       cursor = page.nextCursor;
     } while (cursor);
     expect(returned).toEqual(roles.map(role => role.artifactId));
     expect(opened).toHaveLength(roles.length);
     expect(opened).toEqual(returned);
-    // Five physical pages for 2,402 headers, plus one completeness-witness
-    // fallback per logical page when predecessor membership is unclassified.
-    expect(physicalCursors).toHaveLength(hasUnclassified ? 8 : 5);
-    expect(physicalCursors.filter(value => value === undefined)).toHaveLength(hasUnclassified ? 2 : 1);
+    expect(physicalCursors).toHaveLength(3);
+    expect(physicalCursors.filter(value => value === undefined)).toHaveLength(1);
   });
 
   it.each(['title_asc', 'created_desc'] as const)('opens only each returned body for %s', async sort => {
@@ -166,22 +202,23 @@ describe('Artifact coarse selection', () => {
     expect(page.coverage).toBe('complete');
   });
 
-  it('keeps unclassified membership complete while continuing from the selected page', async () => {
+  it('keeps unresolved classification partial while continuing only the indexed selector', async () => {
     const requests: PageOptions[] = [];
     const readPage = async (options?: PageOptions) => {
       requests.push(options ?? {});
-      if (options?.coarseKind) return { items: [skill], hasUnclassified: true };
-      return options?.cursor ? { items: [legacy, prompt] } : { items: [skill], nextCursor: 'full-page-2' };
+      return options?.cursor ? { items: [legacy], hasUnclassified: true }
+        : { items: [skill], nextCursor: 'skill', hasUnclassified: true };
     };
     const page = await listArtifactHeadersV1({ options: { coarseKind: 'skill', limit: 1 }, encodeCursor, readPage });
     expect(page.items.map(row => row.artifactId)).toEqual(['skill']);
     expect(page.nextCursor).toBe('skill');
-    expect(requests).toEqual([{ limit: 500, coarseKind: 'skill' }, { limit: 500 }]);
+    expect(requests).toEqual([{ limit: 500, coarseKind: 'skill' }]);
     const next = await listArtifactHeadersV1({ options: { coarseKind: 'skill', limit: 1, cursor: page.nextCursor }, encodeCursor, readPage });
     expect(next.items.map(row => row.artifactId)).toEqual(['legacy']);
     expect(next.nextCursor).toBeUndefined();
-    expect(requests.slice(2)).toEqual([{ limit: 500, coarseKind: 'skill', cursor: 'skill' }, { limit: 500, cursor: 'skill' }]);
-    expect(page.coverage).toBe('complete');
+    expect(requests.slice(1)).toEqual([{ limit: 500, coarseKind: 'skill', cursor: 'skill' }]);
+    expect(page.coverage).toBe('partial');
+    expect(next.coverage).toBe('partial');
   });
 
 });

@@ -310,41 +310,52 @@ existing catalog snapshot. Read-only Session tool projection still denies
 unclassified tools; checking an `allow_read_only` server first supplies the read
 annotations needed to expose its read tools after restart with resume.
 
-## Coarse Artifact kind (0.3 development)
+## Artifact query hints (0.3 development)
 
 Artifact kind filtering is an additive HTTP and persistence extension.
-Current readers send the optional `kind` query and writers derive kind metadata
-without a feature gate.
+Current readers send the optional coarse `kind` query or exact `kinds` set.
+Writers derive metadata without a feature gate. This is a coordinated development
+contract, not a released or mixed-component availability claim.
 
 The one-way 0.3 upgrade does not support a 0.3 client against a 0.2 Home.
 No legacy-server adapter is required or provided. Current readers still require
 authenticated owner, access and Account-mode projections. The compatibility
 obligation is retained 0.2-created data opened through the current Home.
 
-Writes without kind remain accepted by the current Home. Historical rows have null kind;
-an opaque header edit without kind invalidates its previous classification. New
-writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
-The filtered response reports readable unclassified rows, and the shared
-`listArtifactHeadersV1` owner restarts a full scan for predecessor families while any remain. Header
-decryption, content validation and access remain authoritative. After publishing
-the inventory, `syncArtifacts.ts` best-effort repairs null or stale hints from
-headers it already opened, using the metadata-only write fenced by that header's
-version. Locked rows are never classified. The server makes repeated writes of
-the same kind no-ops without changing content bytes or versions. Inbox reads do
-not perform a separate backfill; explicit content writes derive the current hint.
+Writes without kind remain accepted. Predecessor rows have null kind; earlier
+development rows can have only a coarse kind. An opaque header edit without a
+hint invalidates the previous classification; a body-only write retains it.
+Protocol's single extraction keeps the existing coarse family and the exact
+private `header.kind`, without extracting content, names or titles. Its stored
+form is `v1:<coarse>:<exact-or-empty>` in the existing nullable string column and
+Account/kind index. Read projections still expose coarse `kind`; `kindHint`
+presence distinguishes a canonical exact classification from a legacy row.
+The existing MySQL column's 191-character boundary is validated without
+truncating private data. This encoding needs no additional schema migration.
 
-The new nullable column and Account/kind index require an additive migration
-before loading the new server Prisma projection. Migration deployment and shared
-Prisma client generation belong to the environment owner; source validation may
-generate private clients for disposable test databases without changing live
-clients. Full scans remain necessary for predecessor inventories with unclassified rows.
+The shared `listArtifactHeadersV1` owner requests the indexed selector and
+reports unknown membership as explicitly incomplete. Neither UI inventory nor
+selective reads perform metadata writes or a full-inventory fallback. The
+previous automatic read-triggered repair was withdrawn after a live write-burst
+regression. The owning daemon labels its existing notices, only for currently
+consumed notice kinds; its bounded backfill and typed refusal lifecycle are
+being revised before re-landing. New Artifact writers set hints at create.
+Labels use the observed header CAS at the existing metadata-only update owner.
+Equal labels are no-ops, and labels
+change neither private bytes, header/body content versions, nor Artifact recency
+and row sequence; discovery AccountChanges remain independent. Needed labels
+share the existing CAS owner through the ordered metadata batch transport, not
+per-id HTTP bursts. Ordinary coarse-only inventory does not demand exact hint
+refinement. Private header
+validation, Account-mode, current access and custody remain authoritative.
 
-Widget layouts, definitions and saved groups have separate coarse kinds and
-originate in 0.3. Their readers remain filtered even when unrelated predecessor
-rows are unclassified. Pre-cut development widgets stored as `other` are repaired
-by the existing opened-header inventory writer before filtered discovery. This
-is an undeployed direct cut, with no legacy-server adapter or schema migration;
-the nullable string column and existing kind index already store these hints.
+The original nullable kind column/index migration is still required for a Home
+that lacks that earlier extension. Environment owners deploy migrations and
+generate shared Prisma clients; this exact-kind extension adds neither another
+column/index nor an operator backfill. The current server contract must load
+before changed tagged writers/exact readers are used, followed by matching
+client reloads. Retained 0.2 notices require automatic owning-daemon backfill
+through the current Home, not UI-reader repair or an operator full scan.
 
 ## Map the seam
 

@@ -3,11 +3,15 @@ import { throwIfAborted } from '../abortSignal.js';
 
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
+  kinds?: readonly string[];
   coarseKind?: ArtifactCoarseKindV1;
   /** Keyholding host selection over admitted private headers; never a wire filter. */
   headerFilter?: (header: Readonly<Record<string, unknown>>) => boolean;
   sort?: 'updated_desc' | 'created_desc' | 'title_asc'; includeBody?: boolean; signal?: AbortSignal;
 }>;
+
+export type ArtifactListPageOptionsV1 = Readonly<Pick<ArtifactListSelectionOptionsV1,
+  'limit' | 'cursor' | 'includeBody' | 'coarseKind' | 'kinds' | 'signal'> & { unclassified?: boolean | 'coarse' }>;
 
 type ArtifactListHeader = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; createdAt: number; updatedAt: number;
@@ -17,16 +21,20 @@ type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; 
 /** Decrypted selection shared by keyholding hosts; transport pages retain their own codecs and custody. */
 export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params: Readonly<{
   options?: ArtifactListSelectionOptionsV1;
-  /** Apply requested coarse-kind filtering and report any readable unclassified rows. */
-  readPage: (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>) => Promise<ArtifactListPage<T>>;
+  /** Apply indexed selectors before paging; report readable legacy membership. */
+  readPage: (options?: ArtifactListPageOptionsV1) => Promise<ArtifactListPage<T>>;
   readBodies?: (items: readonly T[]) => Promise<readonly T[]>;
   encodeCursor: (item: T) => string;
 }>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> {
   const options = params.options;
   throwIfAborted(options?.signal);
+  const requestedKinds = options?.kinds ?? (options?.kind ? [options.kind] : undefined);
+  const kinds = requestedKinds === undefined ? undefined
+    : [...new Set(requestedKinds.filter(kind => !options?.kind || kind === options.kind))].sort();
+  if (kinds?.length === 0) return { items: [], coverage: 'complete' };
   // The incumbent /v1/artifacts route admits at most 500 structural rows per request.
   if (!options || (options.limit !== undefined && options.limit <= 500
-    && options.search === undefined && options.kind === undefined && options.coarseKind === undefined && !options.headerFilter
+    && options.search === undefined && options.kind === undefined && kinds === undefined && options.coarseKind === undefined && !options.headerFilter
     && (options.sort === undefined || options.sort === 'updated_desc'))) {
     const page = await params.readPage(options);
     throwIfAborted(options?.signal);
@@ -38,33 +46,21 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   // need a complete header view before applying their logical cursor.
   const updatedOrder = options.sort === undefined || options.sort === 'updated_desc';
   let cursor = updatedOrder ? options.cursor : undefined;
-  let coarseKind = options.coarseKind;
+  const kindSet = kinds === undefined ? undefined : new Set(kinds);
   const search = options.search?.trim().toLocaleLowerCase();
   const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
   const matches = (item: T) => (!options.kind || item.header.kind === options.kind)
+    && (!kindSet || (typeof item.header.kind === 'string' && kindSet.has(item.header.kind)))
     && (!options.headerFilter || options.headerFilter(item.header))
-    && (coarseKind !== undefined || !options.coarseKind || deriveArtifactCoarseKindV1(item.header) === options.coarseKind)
+    && (!options.coarseKind || deriveArtifactCoarseKindV1(item.header) === options.coarseKind)
     && (!search || title(item).toLocaleLowerCase().includes(search));
   let hasMorePhysicalRows = false;
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
-      ...(coarseKind ? { coarseKind } : {}),
+      ...(kinds !== undefined ? { kinds } : options.coarseKind ? { coarseKind: options.coarseKind } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     throwIfAborted(options.signal);
-    // Widget families originate in the one-way 0.3 cut: their writers always
-    // classify them. Unclassified predecessor documents cannot be widgets.
-    // Reclassifying pre-cut development rows belongs to the existing inventory
-    // writer, never a widget read that opens every unrelated Account key.
-    const widgetKind = coarseKind === 'widget_area_layout' || coarseKind === 'widget_definition' || coarseKind === 'widget_layout_fragment';
-    if (coarseKind && page.hasUnclassified === true && !widgetKind) {
-      // Unknown membership is not an empty library. Restart from the complete
-      // inventory; no classifier or backfill at a consumer can prove absence.
-      coarseKind = undefined;
-      all.length = 0;
-      coverage = 'complete';
-      cursor = updatedOrder ? options.cursor : undefined;
-      continue;
-    }
+    if (page.hasUnclassified === true) coverage = 'partial';
     if (page.coverage === 'partial') coverage = 'partial';
     all.push(...page.items.filter(matches));
     cursor = page.nextCursor;

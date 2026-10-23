@@ -16,6 +16,7 @@ import { decodeBase64 } from '@/encryption/base64';
 import { shouldRetryError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import { createStore } from 'zustand/vanilla';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
+import { createArtifactListHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 const runtimeFetch = vi.hoisted(() => vi.fn());
 
@@ -25,13 +26,16 @@ vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// The shared setup resets this real owner; load its cold graph outside the hook budget.
+await vi.importActual('@/sync/domains/machines/reachability/machineReachability');
+
 function json(value: unknown): Response {
     return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
 function plainHead(index: number): Artifact {
     return { id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
-        kind: 'other',
+        kind: 'other', kindHint: null,
         ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
         header: encodePlainArtifactStoredContent({ title: `Document ${index}` }),
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -42,6 +46,25 @@ describe('fetchAndApplyArtifactsList', () => {
     afterEach(() => {
         runtimeFetch.mockReset();
         vi.resetModules();
+    });
+
+    it('never writes classification while repeatedly opening 35000 unclassified or stale inventory headers', async () => {
+        const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
+        const rows = Array.from({ length: 35000 }, (_, index) => {
+            const { kindHint: _legacyHint, ...legacy } = plainHead(index + 1);
+            return { ...legacy, kind: index % 2 === 0 ? null : 'skill' as const,
+                header: encodePlainArtifactStoredContent({ kind: 'role.v1' }) };
+        });
+        const writes: unknown[] = [];
+        const refresh = () => fetchAndApplyArtifactsList({ credentials: { token: 'token' }, encryption: null,
+            artifactDataKeys: new Map(), applyArtifacts: () => {}, request: async (path, init) => {
+                if (init?.method === 'POST') { writes.push(JSON.parse(String(init.body))); return json({ success: true }); }
+                expect(path).toContain('/v1/artifacts');
+                return createArtifactListHttpResponse(new URL(path, 'http://localhost'), rows);
+            } });
+        await refresh();
+        await refresh();
+        expect(writes).toHaveLength(0);
     });
 
     it('keeps body batch successes, missing identities and malformed content independent', async () => {
@@ -129,7 +152,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
             actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
-        const head: Artifact = { ...plainHead(2), header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)) };
+        const head: Artifact = { ...plainHead(2), kindHint: 'approval_request.v1', header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)) };
         const detail = createDeferred<Response>();
         const detailReads: string[] = [];
         runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -168,7 +191,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
             actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
-        const head = { ...plainHead(1), header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)) };
+        const head = { ...plainHead(1), kindHint: 'approval_request.v1', header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)) };
         const origins: string[] = [];
         runtimeFetch.mockImplementation(async (url: unknown) => {
             const target = new URL(String(url));
@@ -193,6 +216,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const dataEncryptionKey = encodeBase64(await encryption.encryptEncryptionKey(key));
         const changedDataEncryptionKey = encodeBase64(await encryption.encryptEncryptionKey(new Uint8Array(32).fill(23)));
         const rows: Artifact[] = await Promise.all([1, 2].map(async index => ({ ...plainHead(index),
+            kindHint: 'approval_request.v1',
             encryptionMode: 'e2ee' as const, dataEncryptionKey,
             header: await artifactEncryption.encryptHeader({ title: `Profile ${index}`, kind: 'approval_request.v1', approvalStatus: 'open' }),
             body: await artifactEncryption.encryptBody({ body: `Profile body ${index}` }), publicAudience: 'none' as const })));
@@ -329,7 +353,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const id = '11111111-1111-4111-8111-111111111111';
         const source = { sessionId: 'session', machineId: 'machine', path: 'private/output.ts', sha: 'a'.repeat(64) };
         const provenance = { savedBy: { kind: 'agent' as const, accountId: 'owner', sessionId: source.sessionId }, source };
-        const row = { id, kind: 'other' as const, ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: mode,
+        const row = { id, kind: 'other' as const, kindHint: null, ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: mode,
             header: mode === 'plain' ? encodePlainArtifactStoredContent({ title: 'Published output' }) : await new ArtifactEncryption(contentKey).encryptHeader({ title: 'Published output' }),
             headerVersion: 1, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2,
             dataEncryptionKey: encryption ? encodeBase64(await encryption.encryptEncryptionKey(contentKey)) : ARTIFACT_PLAIN_DATA_KEY_MARKER,

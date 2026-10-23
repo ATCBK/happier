@@ -1,8 +1,9 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { deriveArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { digest } from '@/platform/digest';
 import { fetchChanges, fetchCurrentChangesCursor } from '@/sync/api/session/apiChanges';
 import { loadSyncTuning } from '@/sync/runtime/syncTuning';
@@ -92,7 +93,8 @@ async function requireArtifactHtmlWriteContent(params: Readonly<{
 }
 
 function artifactAccessProjection(artifact: Artifact) {
-    return { kind: artifact.kind, access: artifact.access, ownerAccountId: artifact.ownerAccountId,
+    return { kind: artifact.kind, ...(Object.hasOwn(artifact, 'kindHint') ? { kindHint: artifact.kindHint } : {}),
+        access: artifact.access, ownerAccountId: artifact.ownerAccountId,
         publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
         storageIdentity: { contentKeyEnvelope: artifact.dataEncryptionKey,
             provenanceKeyEnvelope: artifact.provenanceDataEncryptionKey ?? null } };
@@ -373,6 +375,8 @@ function createLockedArtifactView(params: Readonly<{
 }>): DecryptedArtifact {
     const { artifact, reason } = params;
     return {
+        kind: artifact.kind,
+        ...(Object.hasOwn(artifact, 'kindHint') ? { kindHint: artifact.kindHint } : {}),
         ...(artifact.ownerAccountId === undefined ? {} : { ownerAccountId: artifact.ownerAccountId }),
         ...(artifact.access === undefined ? {} : { access: artifact.access }),
         publicAudience: ArtifactPublicAudienceV1ReadSchema.parse(artifact.publicAudience),
@@ -720,12 +724,26 @@ export async function fetchAndApplyArtifactsList(params: {
         let cursor: string | null = null;
         let decryptedArtifacts: DecryptedArtifact[] | null = null;
         let retained: ArtifactInventoryWarmCache | null = null;
+        let persistedHeaders: ArtifactInventoryWarmCache['artifacts'] | null = null;
         try { retained = scope && binding ? loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, binding) : null; }
         catch { /* Unreadable device storage means an unknown cursor and a cold listing. */ }
         if (retained) {
+            const baselineHeaders = retained.artifacts;
+            let currentHeaders = baselineHeaders;
             // A warm refresh retains already-opened bodies/custody. The device
             // projection is only a fallback for rows absent from this process.
-            const rows = retained.artifacts.map(row => params.inventoryReadStartedWith?.[row.id] ?? restoreInventoryHeader(row));
+            const rows = baselineHeaders.map((previous, index) => {
+                const current = params.inventoryReadStartedWith?.[previous.id];
+                if (!current) return restoreInventoryHeader(previous);
+                // Exact reads can update display/access facts without advancing this
+                // checkpoint's cursor. Preserve them, but allocate only changed projections.
+                const header = projectInventoryHeader(current, previous);
+                if (header !== previous) {
+                    if (currentHeaders === baselineHeaders) currentHeaders = [...baselineHeaders];
+                    currentHeaders[index] = header;
+                }
+                return current;
+            });
             params.hydrateArtifacts?.(rows);
             cursor = retained.cursor;
             // Account writes may continue throughout catch-up. The incumbent
@@ -766,12 +784,31 @@ export async function fetchAndApplyArtifactsList(params: {
                     encryption, artifactDataKeys, includeProvenance: params.includeProvenance === true });
                 if (!shouldContinue()) return;
                 const byId = new Map(rows.map(row => [row.id, row]));
+                const changedHeaders = new Map<string, ArtifactInventoryWarmCache['artifacts'][number]>();
                 for (const item of reads) if (!item.ok) byId.delete(item.artifactId);
-                for (const row of opened) if (row) byId.set(row.id, row);
+                for (const row of opened) if (row) {
+                    byId.set(row.id, row);
+                    changedHeaders.set(row.id, projectInventoryHeader(row));
+                }
                 decryptedArtifacts = [...byId.values()];
+                // The cursor owner identified changed headers. Retain every other admitted
+                // projection instead of rebuilding the full persistence graph from live bodies.
+                let headersChanged = false;
+                const mergedHeaders = currentHeaders.flatMap(previous => {
+                    const replacement = changedHeaders.get(previous.id);
+                    changedHeaders.delete(previous.id);
+                    if (!byId.has(previous.id)) { headersChanged = true; return []; }
+                    const header = replacement && !sameStrictJsonValue(previous, replacement) ? replacement : previous;
+                    if (header !== previous) headersChanged = true;
+                    return [header];
+                });
+                for (const header of changedHeaders.values()) { mergedHeaders.push(header); headersChanged = true; }
+                if (headersChanged) currentHeaders = mergedHeaders;
             }
+            persistedHeaders = currentHeaders;
         }
         if (decryptedArtifacts === null) {
+            persistedHeaders = null;
             // Capture BEFORE listing: changes racing pagination remain replayable on
             // the next read, rather than disappearing behind a post-list cursor.
             if (scope) {
@@ -805,29 +842,18 @@ export async function fetchAndApplyArtifactsList(params: {
         }
         if (!shouldContinue()) return;
         if (scope && binding && cursor !== null) {
-            try { saveArtifactInventoryWarmCache(scope.serverId, scope.accountId, { binding, cursor,
-                artifacts: decryptedArtifacts.map(projectInventoryHeader) }); }
+            try {
+                const artifacts = persistedHeaders ?? decryptedArtifacts.map(row => projectInventoryHeader(row));
+                const checkpoint = retained && cursor === retained.cursor && artifacts === retained.artifacts
+                    ? retained : { binding, cursor, artifacts };
+                saveArtifactInventoryWarmCache(scope.serverId, scope.accountId, checkpoint);
+            }
             catch { /* Device quota/storage failure leaves the live inventory usable. */ }
         }
         applyArtifacts(decryptedArtifacts, 'inventory');
         // Membership is usable before independent actionable-body hydration.
         finishInventory();
         log.log(`📦 fetchArtifactsList: Applied ${decryptedArtifacts.length} artifact headers`);
-
-        // Repair only hints whose private headers this reader opened. Publish
-        // membership first; refused or slow metadata writes never hold it back.
-        // The server fences the observed header version and repeated kinds are no-ops.
-        for (const artifact of decryptedArtifacts) {
-            if (!shouldContinue()) break;
-            if (!artifact.isDecrypted || !artifact.rawHeader) continue;
-            const kind = deriveArtifactCoarseKindV1(artifact.rawHeader);
-            if (artifact.kind === kind) continue;
-            void updateArtifactApi(credentials, artifact.id, { kind, expectedHeaderVersion: artifact.headerVersion },
-                { request: params.request, readTransport: params.readTransport, serverId: params.serverId,
-                    signal: params.signal, retry: 'none' }).catch(error => {
-                log.log(`📦 fetchArtifactsList: Kind backfill refused for ${artifact.id}: ${error}`);
-            });
-        }
 
         // The always-mounted Inbox badge consumes strict open approval bodies and
         // private Account notices. Settled receipts are demanded by their transcript;
@@ -860,10 +886,23 @@ export async function fetchAndApplyArtifactsList(params: {
     }
 }
 
-function projectInventoryHeader(row: DecryptedArtifact): ArtifactInventoryWarmCache['artifacts'][number] {
-    return { id: row.id, kind: row.kind, rawHeader: row.rawHeader ?? null, isDecrypted: row.isDecrypted,
-        ...(row.isDecrypted ? {} : { lockedReason: row.availability.reason }),
-        storageMode: row.storageMode ?? 'e2ee', access: row.access, ownerAccountId: row.ownerAccountId,
+function projectInventoryHeader(row: DecryptedArtifact,
+    previous?: ArtifactInventoryWarmCache['artifacts'][number]): ArtifactInventoryWarmCache['artifacts'][number] {
+    const rawHeader = row.rawHeader ?? null;
+    const lockedReason = row.isDecrypted ? undefined : row.availability.reason;
+    const storageMode = row.storageMode ?? 'e2ee';
+    if (previous && previous.id === row.id && previous.kind === row.kind
+        && Object.hasOwn(previous, 'kindHint') === Object.hasOwn(row, 'kindHint') && previous.kindHint === row.kindHint
+        && previous.isDecrypted === row.isDecrypted && previous.lockedReason === lockedReason
+        && previous.storageMode === storageMode && previous.access === row.access
+        && previous.ownerAccountId === row.ownerAccountId && previous.headerVersion === row.headerVersion
+        && previous.bodyVersion === row.bodyVersion && previous.seq === row.seq
+        && previous.createdAt === row.createdAt && previous.updatedAt === row.updatedAt
+        && sameStrictJsonValue(previous.rawHeader, rawHeader)) return previous;
+    return { id: row.id, kind: row.kind, ...(Object.hasOwn(row, 'kindHint') ? { kindHint: row.kindHint } : {}),
+        rawHeader, isDecrypted: row.isDecrypted,
+        ...(row.isDecrypted ? {} : { lockedReason }),
+        storageMode, access: row.access, ownerAccountId: row.ownerAccountId,
         headerVersion: row.headerVersion, bodyVersion: row.bodyVersion, seq: row.seq,
         createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
@@ -1165,7 +1204,7 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
         existingArtifact: current, bodyVersion: params.expectedRevision.bodyVersion + 1,
         provenance: artifactRevisionProvenance(params.credentials, params.savedBy, params.bodyVersion, selected.provenance?.source) });
     const revision = await restoreArtifactRevision(params.credentials, { artifactId: artifact.id,
-        kind: deriveArtifactCoarseKindV1(rawHeader),
+        kind: deriveArtifactStoredKindV1(rawHeader),
         bodyVersion: params.bodyVersion, expectedRevision: params.expectedRevision, header, body, ...privateMetadata.write }, params);
     await acknowledgeArtifactProvenanceWrite(params, privateMetadata);
     const restored = await fetchArtifactWithBodyFromApi({ ...params, fresh: true });
@@ -1285,7 +1324,7 @@ export async function createArtifactWithHeaderViaApi(params: {
         // Create the request
         const privateMetadata = await prepareArtifactProvenanceWrite({ ...params, artifactId, bodyVersion: 1, mode: accountMode, provenance });
         const request: ArtifactCreateRequest = {
-            kind: deriveArtifactCoarseKindV1(rawHeader),
+            kind: deriveArtifactStoredKindV1(rawHeader),
             id: artifactId,
             header: storedHeader,
             body: storedBody,
@@ -1507,7 +1546,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
     }
 
     // Send update to server
-    updateRequest.kind = deriveArtifactCoarseKindV1(rawHeader);
+    updateRequest.kind = deriveArtifactStoredKindV1(rawHeader);
     if (params.memoryDecisionSource) updateRequest.memoryDecisionSource = params.memoryDecisionSource;
     throwIfAborted(params.signal);
     const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, readTransport: params.readTransport,
@@ -1525,7 +1564,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
     // Update local storage
     const updatedArtifact: DecryptedArtifact = {
         ...currentArtifact,
-        kind: updateRequest.kind,
+        ...deriveArtifactKindV1(rawHeader),
         header: normalizedHeader,
         rawHeader,
         title: normalizedHeader.title,

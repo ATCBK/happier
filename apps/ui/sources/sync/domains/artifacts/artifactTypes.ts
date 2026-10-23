@@ -15,6 +15,8 @@ export type ArtifactBodyInput = ArtifactBodyV1 | null | Readonly<{ bytes: Uint8A
  */
 export interface Artifact {
     kind?: ArtifactCoarseKindV1 | null;
+    /** Omitted means legacy; explicit null is classified with no exact discriminator. */
+    kindHint?: string | null;
     id: string;
     /** Authenticated sharing and owner Account-mode projection from HTTP. */
     ownerAccountId: string;
@@ -73,6 +75,7 @@ export type ArtifactLockedReason =
 export interface DecryptedArtifactBase {
     /** Server-visible coarse kind; absence retains unknown classification across warm reloads. */
     kind?: ArtifactCoarseKindV1 | null;
+    kindHint?: string | null;
     /** HTTP grant projection; content-only socket events do not carry authority. */
     access?: 'owner' | 'view' | 'edit' | 'admin';
     ownerAccountId?: string;
@@ -132,7 +135,7 @@ export type DecryptedArtifact =
  * Request to create a new artifact
  */
 export interface ArtifactCreateRequest {
-    kind?: ArtifactCoarseKindV1;
+    kind?: string;
     memoryDecisionSource?: CoordinationMessageRefV1;
     id: string;  // UUID generated client-side
     header: string;  // Base64 encoded encrypted header
@@ -147,7 +150,7 @@ export interface ArtifactCreateRequest {
  * Request to update an existing artifact
  */
 export interface ArtifactUpdateRequest {
-    kind?: ArtifactCoarseKindV1;
+    kind?: string;
     memoryDecisionSource?: CoordinationMessageRefV1;
     provenance?: string | null;
     provenanceDataEncryptionKey?: string | null;

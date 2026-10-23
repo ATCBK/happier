@@ -111,6 +111,7 @@ export const ArtifactHttpReadV1Schema = lazyZodSchema(() => z.strictObject({
   id: z.string().check(z.minLength(1)), ownerAccountId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema,
   encryptionMode: AccountEncryptionModeSchema,
   kind: z.optional(z.nullable(ArtifactCoarseKindV1Schema)),
+  kindHint: z.optional(z.nullable(z.string())),
   header: z.string(), headerVersion: z.number(), body: z.string(), bodyVersion: z.number(),
   publicAudience: z.enum(['retained', 'none']),
   provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),

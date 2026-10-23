@@ -44,7 +44,8 @@ import { executeDiscussionActionInAccountContext } from '@/sync/api/discussions/
 import { createArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createDeferred } from '@/dev/testkit';
-import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createArtifactListHttpResponse, createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decodeArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -59,6 +60,10 @@ vi.mock('@/text', async () => {
 });
 await loadSyncSingletonForTests();
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+function artifactKindProjection(storedKind: unknown) {
+    const { kind, kindHint, classified } = decodeArtifactKindV1(storedKind);
+    return { kind, ...(classified ? { kindHint } : {}) };
+}
 // Adapt the existing HTTP facts through the canonical Session batch fixture;
 // Coach now reads exact Session snapshots, turns and messages on this transport.
 function installSessionBatchHttpFixture(accountId: string, route: (url: unknown, init?: RequestInit) => Promise<Response>) {
@@ -936,22 +941,23 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(reads).toEqual([]);
         } finally { account.dispose(); }
     });
-    it.each([{ unclassified: false }, { unclassified: true }])('lists WorkBoards through one filtered Artifact request, and from the full inventory while rows are unclassified (unclassified=$unclassified)', async ({ unclassified }) => {
+    it.each([{ unclassified: false }, { unclassified: true }])('keeps indexed WorkBoard reads query-only with honest coverage (unclassified=$unclassified)', async ({ unclassified }) => {
         const home = await upsertAndActivateServer({ serverUrl: `https://board-listing-${unclassified}.test`, scope: 'tab' });
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const row = (id: string, header: Record<string, unknown>, kind: NonNullable<Artifact['kind']> | null): Artifact => ({
-            id, kind, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            id, kind, ...(kind === null ? {} : { kindHint: typeof header.kind === 'string' ? header.kind : null }),
+            ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
             header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: 'retained body' }),
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
         });
         const board = (id: string) => ({ kind: 'work-board.v1', v: 1, title: id, pinnedInSessions: false, readsNeedsYou: false });
         const rows = [...Array.from({ length: 700 }, (_, index) => row(`other-${index}`, { kind: 'memory_doc.v1' }, 'other')),
             row('board-classified', board('board-classified'), 'work_board'),
-            // A legacy row is only discoverable through the full inventory.
             row('board-legacy', board('board-legacy'), unclassified ? null : 'work_board')];
         const urls: URL[] = [];
-        runtimeFetch.mockImplementation(async (url: unknown) => {
+        const labeled: string[] = [];
+        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
             const target = new URL(String(url));
             if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
             if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -959,22 +965,33 @@ describe('scoped Account workflow Artifact operations', () => {
                 currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
             } } });
             if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if ((target.pathname === '/v1/artifacts/board-legacy' || target.pathname === '/v1/artifacts/query-hints/batch') && init?.method === 'POST') {
+                const batched = target.pathname.endsWith('/batch');
+                expect(JSON.parse(String(init.body))).toEqual(batched
+                    ? { items: [{ artifactId: 'board-legacy', kind: 'v1:work_board:work-board.v1', expectedHeaderVersion: 1 }] }
+                    : { kind: 'v1:work_board:work-board.v1', expectedHeaderVersion: 1 });
+                const legacy = rows.at(-1)!;
+                legacy.kind = 'work_board'; legacy.kindHint = 'work-board.v1';
+                labeled.push(legacy.id);
+                return json(batched ? { items: [{ artifactId: legacy.id, success: true }] } : { success: true });
+            }
             if (target.pathname !== '/v1/artifacts') return json({ error: 'unexpected_route' }, 404);
             urls.push(target);
-            const kind = target.searchParams.get('kind');
-            if (!kind) {
-                const cursor = target.searchParams.get('cursor');
-                const after = cursor ? JSON.parse(new TextDecoder().decode(decodeBase64(cursor, 'base64url'))) as { id: string } : null;
-                const start = after ? rows.findIndex(item => item.id === after.id) + 1 : 0;
-                return json(rows.slice(start, start + Number(target.searchParams.get('limit') ?? 100)));
-            }
-            return json({ items: rows.filter(item => item.kind === kind), hasUnclassified: rows.some(item => item.kind === null) });
+            expect(target.searchParams.has('includeBody')).toBe(false);
+            if (!target.searchParams.has('kind') && !target.searchParams.has('unclassified')) return json({ error: 'unfiltered_inventory_forbidden' }, 400);
+            return createArtifactListHttpResponse(target, rows);
         });
         const account = await captureLazyActionAccountContext(home.id);
         try {
-            const port = createWorkBoardArtifactPortV1(account.workflowArtifacts);
-            expect((await port.list()).map(item => item.id).sort()).toEqual(['board-classified', 'board-legacy']);
-            expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['work_board', null, null] : ['work_board']);
+            for (let index = 0; index < 2; index++) {
+                const page = await account.workflowArtifacts.list({ coarseKind: 'work_board' });
+                expect(page.items.map(item => item.artifactId).sort()).toEqual(unclassified
+                    ? ['board-classified'] : ['board-classified', 'board-legacy']);
+                expect(page.coverage).toBe(unclassified ? 'partial' : 'complete');
+            }
+            expect(labeled).toEqual([]);
+            expect(urls.map(url => url.searchParams.get('unclassified') ?? url.searchParams.get('kind')))
+                .toEqual(['work_board', 'work_board']);
         } finally { account.dispose(); }
     });
     it('selects ordinary Artifact lists across structural pages without leaking filters or truncating omitted limits', async () => {
@@ -982,7 +999,7 @@ describe('scoped Account workflow Artifact operations', () => {
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const row = (id: string, title: string, kind: string, updatedAt: number, createdAt = updatedAt): Artifact => ({
-            id, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            id, kind: 'other', kindHint: kind, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
             header: encodePlainArtifactStoredContent({ title, kind }), body: encodePlainArtifactStoredContent({ body: 'retained body' }),
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt, updatedAt,
         });
@@ -1000,12 +1017,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
             if (target.pathname !== '/v1/artifacts') return json({ error: 'unexpected_route' }, 404);
             urls.push(target);
-            const cursor = target.searchParams.get('cursor');
-            const after = cursor ? JSON.parse(new TextDecoder().decode(decodeBase64(cursor, 'base64url'))) as { id: string } : null;
-            const start = after ? rows.findIndex(item => item.id === after.id) + 1 : 0;
-            const limit = Number(target.searchParams.get('limit') ?? 100);
-            if (limit > 500) return json({ error: 'invalid_limit' }, 400);
-            return json(rows.slice(start, start + limit));
+            return createArtifactListHttpResponse(target, rows);
         });
         const account = await captureLazyActionAccountContext(home.id);
         try {
@@ -1039,7 +1051,7 @@ describe('scoped Account workflow Artifact operations', () => {
         const home = await upsertAndActivateServer({ serverUrl: `https://selected-artifact-${outcome}.test`, scope: 'tab' });
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
-        const stored: Artifact = { id: 'selected-role', kind: 'other', ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+        const stored: Artifact = { id: 'selected-role', kind: 'other', kindHint: 'role.v1', ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
             publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
             header: encodePlainArtifactStoredContent({ kind: 'role.v1', title: 'Original' }),
             body: encodePlainArtifactStoredContent({ body: 'Original body' }),
@@ -1055,8 +1067,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
             if (target.pathname === '/v1/artifacts') {
                 expect(target.searchParams.has('includeBody')).toBe(false);
-                const { body: _body, ...head } = stored;
-                return json([head]);
+                return createArtifactListHttpResponse(target, [stored]);
             }
             if (target.pathname === '/v1/artifacts/read') return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)), artifactId => {
                 expect(artifactId).toBe(stored.id);
@@ -1110,6 +1121,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 const metadata = decodeArtifactUploadMetadataV1(frame.subarray(0, frame.indexOf(10)));
                 if (metadata.kind !== 'create') throw new Error('Expected publication create');
                 stored = { id: metadata.artifactId, header: metadata.header, body: metadata.body, dataEncryptionKey: metadata.dataEncryptionKey,
+                    ...artifactKindProjection(metadata.artifactKind),
                     provenance: metadata.provenance, provenanceDataEncryptionKey: metadata.provenanceDataEncryptionKey,
                     ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none',
                     seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
@@ -1117,7 +1129,7 @@ describe('scoped Account workflow Artifact operations', () => {
             }
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none',
+                stored = { ...write, ...artifactKindProjection(write.kind), ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none',
                     seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
                 return json(stored);
             }
@@ -1135,7 +1147,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (init?.method !== 'POST') return json(stored);
             const write = JSON.parse(String(init.body)) as ArtifactUpdateRequest;
             if (write.expectedHeaderVersion !== stored.headerVersion || write.expectedBodyVersion !== stored.bodyVersion) return json({ success: false, error: 'version-mismatch' });
-            stored = { ...stored, header: write.header!, body: write.body!, kind: write.kind ?? stored.kind,
+            stored = { ...stored, header: write.header!, body: write.body!, ...(write.kind === undefined ? {} : artifactKindProjection(write.kind)),
                 provenance: write.provenance === undefined ? stored.provenance : write.provenance,
                 provenanceDataEncryptionKey: write.provenanceDataEncryptionKey === undefined ? stored.provenanceDataEncryptionKey : write.provenanceDataEncryptionKey,
                 headerVersion: 2, bodyVersion: 2 };
@@ -1432,7 +1444,7 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname === '/v1/account/encryption') return json({ mode, updatedAt: 0 });
             if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
                 const body = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                stored = { ...body, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 9 };
+                stored = { ...body, ...artifactKindProjection(body.kind), ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode, publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 9 };
                 return json(stored);
             }
             if (target.pathname === '/v1/artifacts') return json(stored ? [stored] : []);
@@ -1451,6 +1463,7 @@ describe('scoped Account workflow Artifact operations', () => {
             const update = JSON.parse(String(init.body)) as ArtifactUpdateRequest;
             if (update.expectedHeaderVersion !== stored.headerVersion || update.expectedBodyVersion !== stored.bodyVersion) return json({ success: false, error: 'version-mismatch' });
             stored = { ...stored, header: update.header!, body: update.body!, provenance: update.provenance,
+                ...(update.kind === undefined ? {} : artifactKindProjection(update.kind)),
                 ...(update.provenanceDataEncryptionKey === undefined ? {} : { provenanceDataEncryptionKey: update.provenanceDataEncryptionKey }),
                 headerVersion: 2, bodyVersion: 2 };
             return json({ success: true, headerVersion: 2, bodyVersion: 2 });

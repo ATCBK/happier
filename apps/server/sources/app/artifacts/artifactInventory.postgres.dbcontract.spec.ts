@@ -21,6 +21,42 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
 
+    it('selects exact kind sets before paging with no unrelated content reads', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const bytes = (value: unknown) => privacyKit.decodeBase64(encodePlainArtifactStoredContent(value));
+        const template = { accountId: owner.id, header: bytes({ kind: 'account_notice.v1' }),
+            body: new Uint8Array([0xff]), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            headerVersion: 1, bodyVersion: 1 };
+        await db.artifact.createMany({ data: Array.from({ length: 2500 }, () => ({ ...template,
+            id: randomUUID(), kind: 'v1:other:unrelated.v1' })) });
+        const selected = await db.artifact.create({ data: { ...template, id: randomUUID(),
+            kind: 'v1:other:account_notice.v1', updatedAt: new Date(0) } });
+        const queries: Array<{ ids: string[]; bodies: boolean }> = [];
+        await db.$transaction(async tx => {
+            const observed = new Proxy(tx, { get(target, property, receiver) {
+                if (property !== 'artifact') {
+                    const value = Reflect.get(target, property, receiver);
+                    return typeof value === 'function' ? value.bind(target) : value;
+                }
+                return new Proxy(tx.artifact, { get(delegate, operation, delegateReceiver) {
+                    const value = Reflect.get(delegate, operation, delegateReceiver);
+                    if (operation !== 'findMany') return value;
+                    return async (...args: Parameters<typeof tx.artifact.findMany>) => {
+                        const rows = await tx.artifact.findMany(...args);
+                        queries.push({ ids: rows.map(row => row.id), bodies: args[0]?.select?.body === true });
+                        return rows;
+                    };
+                } });
+            } });
+            const page = await listArtifactHeadersForCallerInTx(observed, { actorAccountId: owner.id,
+                kinds: ['account_notice.v1', ...Array.from({ length: 130 }, (_, index) => `absent.${index}.v1`)], limit: 1, cursor: null });
+            expect(page).toMatchObject([{ id: selected.id, kind: 'other', kindHint: 'account_notice.v1' }]);
+            expect(page).toHaveLength(1);
+        }, { isolationLevel: 'RepeatableRead' });
+        expect(new Set(queries.flatMap(query => query.ids))).toEqual(new Set([selected.id]));
+        expect(queries.some(query => query.bodies)).toBe(false);
+    });
+
     it('filters kinds and unclassified rows through the same current grant admission', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
         const recipient = await db.account.create({ data: { encryptionMode: 'plain' } });

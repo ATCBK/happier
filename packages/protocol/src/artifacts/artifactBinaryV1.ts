@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
-import { ArtifactCoarseKindV1Schema } from './artifactKindV1.js';
+import { ArtifactStoredKindV1Schema } from './artifactKindV1.js';
 
 /** Sensitive file metadata stays inside the ordinary Artifact body envelope. */
 export const ArtifactBlobReferenceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -86,11 +86,11 @@ const artifactUuid = z.string().check(z.uuid());
 /** Destination metadata stays small; file bytes use the finite-transfer chunk owner. */
 export const ArtifactBlobUploadInitV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('create'), ...uploadIdentity, artifactId: artifactUuid,
-    artifactKind: z.optional(ArtifactCoarseKindV1Schema),
+    artifactKind: z.optional(ArtifactStoredKindV1Schema),
     header: z.string(), body: z.string(), dataEncryptionKey: z.string(),
     provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())) }),
   z.strictObject({ kind: z.literal('update'), ...uploadIdentity,
-    artifactKind: z.optional(ArtifactCoarseKindV1Schema),
+    artifactKind: z.optional(ArtifactStoredKindV1Schema),
     header: z.optional(z.string()), expectedHeaderVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
     body: z.string(), expectedBodyVersion: z.number().check(z.int(), z.nonnegative()),
     provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())) }),

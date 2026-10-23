@@ -6,14 +6,13 @@ import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import { log } from '@/utils/logging/log';
 import * as privacyKit from 'privacy-kit';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 
 export type ArtifactHttpMutationResult = Awaited<ReturnType<typeof createArtifactHttpMutation | typeof updateArtifactHttpMutation>>;
-export type ArtifactCreateHttpInput = Readonly<{ id: string; kind?: ArtifactCoarseKindV1; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
-export type ArtifactUpdateHttpInput = Readonly<{ kind?: ArtifactCoarseKindV1; header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null; memoryDecisionSource?: CoordinationMessageRefV1 }>;
+export type ArtifactCreateHttpInput = Readonly<{ id: string; kind?: string; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
+export type ArtifactUpdateHttpInput = Readonly<{ kind?: string; header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null; memoryDecisionSource?: CoordinationMessageRefV1 }>;
 
 function memoryDecisionHttpFailure(error: string) {
     if (error === 'memory_decision_source_unavailable') return { statusCode: 404 as const, body: { error: 'memory_decision_source_unavailable' as const } };
@@ -77,6 +76,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
             return { statusCode: 200 as const, body: {
                 id: artifact.id,
                 kind: artifact.kind,
+                ...(artifact.kindHint === undefined ? {} : { kindHint: artifact.kindHint }),
                 ownerAccountId: artifact.ownerAccountId,
                 access: artifact.access,
                 encryptionMode: artifact.encryptionMode,
@@ -159,7 +159,7 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
                             currentHeaderVersion: result.current.headerVersion,
                             currentHeader: Buffer.from(result.current.header).toString('base64'),
                         }),
-                        ...(bodyParam && result.current && {
+                        ...(bodyParam && result.current?.body !== undefined && {
                             currentBodyVersion: result.current.bodyVersion,
                             currentBody: Buffer.from(result.current.body).toString('base64'),
                         }),

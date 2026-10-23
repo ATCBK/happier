@@ -1,6 +1,7 @@
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
 import { registerArtifactUploadRoutes } from './registerArtifactUploadRoutes';
-import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
+    ArtifactKindWriteBatchResponseV1Schema, type ArtifactKindWriteBatchResponseV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { registerArtifactEditProposalRoutes } from './artifactEditProposalRoutes';
 import { readArtifactAccountEncryptionMigrationInventoryInTx } from '@/app/artifacts/artifactAccountEncryptionMigrationInventory';
 import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
@@ -44,6 +45,7 @@ const DEFAULT_ARTIFACT_LIST_LIMIT = 500;
 
 const artifactListItemSchema = z.object({
     id: z.string(), kind: z.nullable(ArtifactCoarseKindV1Schema), header: z.string(), headerVersion: z.number(),
+    kindHint: z.optional(z.nullable(z.string())),
     body: z.optional(z.string()), bodyVersion: z.number(), provenance: z.optional(z.nullable(z.string())),
     provenanceDataEncryptionKey: z.optional(z.nullable(z.string())), dataEncryptionKey: z.string(), seq: z.number(),
     createdAt: z.number(), updatedAt: z.number(), ownerAccountId: z.string(), access: ArtifactCallerAccessV1Schema,
@@ -53,7 +55,7 @@ const artifactListItemSchema = z.object({
 
 function projectArtifactListItem(artifact: ArtifactListItemForCaller) {
     return {
-        id: artifact.id, kind: artifact.kind, ownerAccountId: artifact.ownerAccountId, access: artifact.access,
+        id: artifact.id, kind: artifact.kind, ...(artifact.kindHint === undefined ? {} : { kindHint: artifact.kindHint }), ownerAccountId: artifact.ownerAccountId, access: artifact.access,
         publicAudience: artifact.publicAudience,
         encryptionMode: artifact.encryptionMode, header: privacyKit.encodeBase64(artifact.header), headerVersion: artifact.headerVersion,
         ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }), bodyVersion: artifact.bodyVersion,
@@ -67,7 +69,7 @@ function projectArtifactListItem(artifact: ArtifactListItemForCaller) {
 /** Both read transports project the same caller-authorized bytes and exposure facts. */
 function projectArtifactHttpRead(artifact: ArtifactForCaller & { publicAudience: 'retained' | 'none' }) {
     return {
-        id: artifact.id, kind: artifact.kind, ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: artifact.encryptionMode,
+        id: artifact.id, kind: artifact.kind, ...(artifact.kindHint === undefined ? {} : { kindHint: artifact.kindHint }), ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: artifact.encryptionMode,
         header: privacyKit.encodeBase64(artifact.header), headerVersion: artifact.headerVersion,
         body: privacyKit.encodeBase64(artifact.body), bodyVersion: artifact.bodyVersion, publicAudience: artifact.publicAudience,
         provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
@@ -191,7 +193,7 @@ export function artifactsRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: z.object({ id: z.string(), bodyVersion: z.coerce.number().check(z.int(), z.minimum(1)) }),
-            body: z.strictObject({ header: z.string(), body: z.optional(z.string()), kind: z.optional(ArtifactCoarseKindV1Schema),
+            body: z.strictObject({ header: z.string(), body: z.optional(z.string()), kind: z.optional(ArtifactStoredKindV1Schema),
                 provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
                 expectedHeaderVersion: z.number().check(z.int(), z.minimum(1)), expectedBodyVersion: z.number().check(z.int(), z.minimum(1)) }),
             response: {
@@ -219,7 +221,7 @@ export function artifactsRoutes(app: Fastify) {
             if (result.error === 'quota_exceeded') return reply.code(413).send({ error: result.error, budget: result.budget, limitBytes: result.limitBytes, usedBytes: result.usedBytes });
             if (result.error === 'not-found') return reply.code(404).send({ error: 'Artifact not found' });
             if (result.error === 'invalid-params') return reply.code(400).send({ error: 'Invalid parameters' });
-            if (result.error === 'version-mismatch' && result.current) return reply.send({ success: false as const,
+            if (result.error === 'version-mismatch' && result.current?.body !== undefined) return reply.send({ success: false as const,
                 error: 'version-mismatch' as const, currentHeaderVersion: result.current.headerVersion, currentBodyVersion: result.current.bodyVersion,
                 currentHeader: privacyKit.encodeBase64(new Uint8Array(result.current.header)), currentBody: privacyKit.encodeBase64(new Uint8Array(result.current.body)) });
             return reply.code(500).send({ error: 'Failed to restore artifact' });
@@ -247,6 +249,8 @@ export function artifactsRoutes(app: Fastify) {
                 cursor: z.optional(z.string().check(z.minLength(1))),
                 includeBody: z.optional(z.literal('true')),
                 kind: z.optional(ArtifactCoarseKindV1Schema),
+                kinds: z.optional(z.string()),
+                unclassified: z.optional(z.enum(['true', 'coarse'])),
             }),
             response: {
                 200: z.union([z.array(artifactListItemSchema), z.object({ items: z.array(artifactListItemSchema), hasUnclassified: z.boolean() })]),
@@ -255,17 +259,45 @@ export function artifactsRoutes(app: Fastify) {
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true'; kind?: ArtifactCoarseKindV1 };
+        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true'; kind?: ArtifactCoarseKindV1; kinds?: string; unclassified?: 'true' | 'coarse' };
         const listLimit = typeof query.limit === "number" ? query.limit : DEFAULT_ARTIFACT_LIST_LIMIT;
         const cursor = parseArtifactListCursor(query.cursor);
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
+        if ([query.kind !== undefined, query.kinds !== undefined, query.unclassified !== undefined].filter(Boolean).length > 1
+            || (query.unclassified !== undefined && query.includeBody === 'true')) return reply.code(400).send({ error: 'Failed to get artifacts' });
+        let kinds: string[] | undefined;
+        if (query.kinds !== undefined) {
+            try {
+                const parsed = z.array(z.string().check(z.minLength(1))).safeParse(JSON.parse(query.kinds));
+                if (!parsed.success) return reply.code(400).send({ error: 'Failed to get artifacts' });
+                kinds = parsed.data;
+            } catch { return reply.code(400).send({ error: 'Failed to get artifacts' }); }
+        }
 
         const page = await listArtifactHeaderPageForCaller({ actorAccountId: userId, limit: listLimit, cursor,
-            includeBody: query.includeBody === 'true', kind: query.kind });
+            includeBody: query.includeBody === 'true', kind: query.kind, kinds,
+            unclassified: query.unclassified === 'coarse' ? 'coarse' : query.unclassified === 'true' });
 
         const projected = page.items.map(projectArtifactListItem);
-        if (query.kind === undefined) return reply.send(projected);
+        if (query.kind === undefined && kinds === undefined && query.unclassified === undefined) return reply.send(projected);
         return reply.send({ items: projected, hasUnclassified: page.hasUnclassified });
+    });
+
+    // A transport batch reuses independent canonical CAS transactions and publication.
+    app.post('/v1/artifacts/query-hints/batch', {
+        preHandler: app.authenticate,
+        schema: { body: ArtifactKindWriteBatchInputV1Schema, response: { 200: ArtifactKindWriteBatchResponseV1Schema } },
+    }, async (request, reply) => {
+        const items: ArtifactKindWriteBatchResponseV1['items'] = [];
+        for (const item of request.body.items) {
+            const result = await updateArtifactHttpMutation(request.userId, item.artifactId,
+                { kind: item.kind, expectedHeaderVersion: item.expectedHeaderVersion });
+            items.push('success' in result.body && result.body.success
+                ? { artifactId: item.artifactId, success: true }
+                : { artifactId: item.artifactId, success: false, error: 'error' in result.body
+                    ? result.body.error : 'Failed to update artifact' });
+        }
+        return reply.send({ items });
     });
 
     // Selected details and current recipient facts share a read-only capture.
@@ -397,7 +429,7 @@ export function artifactsRoutes(app: Fastify) {
         schema: {
             body: z.strictObject({
                 id: z.string().check(z.uuid()),
-                kind: z.optional(ArtifactCoarseKindV1Schema),
+                kind: z.optional(ArtifactStoredKindV1Schema),
                 header: z.string(),
                 body: z.string(),
                 dataEncryptionKey: z.string(),
@@ -410,6 +442,7 @@ export function artifactsRoutes(app: Fastify) {
                 200: z.object({
                     id: z.string(),
                     kind: z.nullable(ArtifactCoarseKindV1Schema),
+                    kindHint: z.optional(z.nullable(z.string())),
                     header: z.string(),
                     headerVersion: z.number(),
                     body: z.string(),
@@ -456,7 +489,7 @@ export function artifactsRoutes(app: Fastify) {
             }),
             body: z.strictObject({
                 header: z.optional(z.string()),
-                kind: z.optional(ArtifactCoarseKindV1Schema),
+                kind: z.optional(ArtifactStoredKindV1Schema),
                 expectedHeaderVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
                 body: z.optional(z.string()),
                 expectedBodyVersion: z.optional(z.number().check(z.int(), z.minimum(0))),

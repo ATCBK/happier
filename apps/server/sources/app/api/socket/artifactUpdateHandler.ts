@@ -8,7 +8,7 @@ import * as privacyKit from "privacy-kit";
 import { createArtifact, deleteArtifact, updateArtifact } from "@/app/artifacts/artifactWriteService";
 import { readArtifactForCallerInTx } from "@/app/artifacts/artifactAccessService";
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
-import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactStoredKindV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
 
 /**
  * Refuses a socket operation whose credential is no longer current and closes
@@ -59,6 +59,8 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                 result: 'success',
                 artifact: {
                     id: artifact.id,
+                    kind: artifact.kind,
+                    ...(artifact.kindHint === undefined ? {} : { kindHint: artifact.kindHint }),
                     ownerAccountId: artifact.ownerAccountId,
                     access: artifact.access,
                     encryptionMode: artifact.encryptionMode,
@@ -85,7 +87,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
     // Update artifact with optimistic concurrency control
     socket.on('artifact-update', async (data: {
         artifactId: string;
-        kind?: ArtifactCoarseKindV1;
+        kind?: string;
         expectedHeaderVersion?: number;
         header?: {
             data: string;
@@ -103,7 +105,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
 
             const { artifactId, header, body } = data;
 
-            if (data.kind !== undefined && !ArtifactCoarseKindV1Schema.safeParse(data.kind).success) {
+            if (data.kind !== undefined && !ArtifactStoredKindV1Schema.safeParse(data.kind).success) {
                 callback?.({ result: 'error', message: 'Invalid parameters' });
                 return;
             }
@@ -192,7 +194,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                             currentData: Buffer.from(result.current.header).toString('base64'),
                         };
                     }
-                    if (body && result.current) {
+                    if (body && result.current?.body !== undefined) {
                         response.body = {
                             currentVersion: result.current.bodyVersion,
                             currentData: Buffer.from(result.current.body).toString('base64'),
@@ -240,7 +242,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
     // Create new artifact
     socket.on('artifact-create', async (data: {
         id: string;
-        kind?: ArtifactCoarseKindV1;
+        kind?: string;
         header: string;
         body: string;
         dataEncryptionKey: string;
@@ -252,7 +254,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
 
             const { id, header, body, dataEncryptionKey } = data;
 
-            if (data.kind !== undefined && !ArtifactCoarseKindV1Schema.safeParse(data.kind).success) {
+            if (data.kind !== undefined && !ArtifactStoredKindV1Schema.safeParse(data.kind).success) {
                 callback?.({ result: 'error', message: 'Invalid parameters' });
                 return;
             }

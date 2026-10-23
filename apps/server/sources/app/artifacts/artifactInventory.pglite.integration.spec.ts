@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import { db, initDbPostgres, shutdownDbClient } from '@/storage/db';
 import { applyEnvValues, restoreEnv, snapshotEnv } from '@/testkit/env';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { artifactsRoutes } from '@/app/api/routes/artifacts/artifactsRoutes';
+import type { Tx } from '@/storage/inTx';
 
 describe('Artifact inventory through PostgreSQL wire protocol', () => {
     const originalEnv = snapshotEnv();
@@ -40,6 +41,91 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
             restoreEnv(originalEnv);
             if (root) await rm(root, { recursive: true, force: true });
         }
+    });
+
+    it('selects exact kinds before paging and classifies only headers through PostgreSQL SQL', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const data = { accountId: owner.id,
+            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'account_notice.v1' })),
+            body: new Uint8Array([0xff]), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            headerVersion: 1, bodyVersion: 1 };
+        const selected = await db.artifact.create({ data: { ...data, id: randomUUID(), kind: 'v1:other:account_notice.v1' } });
+        for (const [count, kind] of [[500, 'v1:other:account_notice.v1'], [2500, 'v1:other:unrelated.v1']] as const) {
+            // The existing PG-wire fixture clones bytea in SQL to avoid the PGlite multi-row bytea adapter trap.
+            await db.$executeRawUnsafe(`INSERT INTO "Artifact" ("id", "accountId", "kind", "header", "headerVersion", "body", "bodyVersion",
+                "dataEncryptionKey", "seq", "createdAt", "updatedAt")
+                SELECT $1 || n::text, "accountId", $2, "header", "headerVersion", "body", "bodyVersion",
+                    "dataEncryptionKey", "seq", "createdAt", "updatedAt"
+                FROM generate_series(1, $3::integer) n CROSS JOIN "Artifact" WHERE "Artifact"."id" = $4`,
+            `${randomUUID()}-`, kind, count, selected.id);
+        }
+        const legacy = await db.artifact.create({ data: { ...data, id: randomUUID(), kind: 'other' } });
+        await db.publicSessionShare.create({ data: { artifactId: selected.id, createdByUserId: owner.id,
+            keyDerivation: 'fragment_v1', tokenHash: randomBytes(32) } });
+        const selectedIds = new Set((await db.artifact.findMany({ where: { accountId: owner.id, kind: 'v1:other:account_notice.v1' },
+            select: { id: true } })).map(row => row.id));
+        const headerIds: string[] = [];
+        let bodyReads = 0;
+        const transaction = db.$transaction;
+        // Observe genuine Prisma/PG-wire acquisitions; all internal admission and SQL remain real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== 'artifact') {
+                    const value = Reflect.get(inner, property, innerReceiver);
+                    return typeof value === 'function' ? value.bind(inner) : value;
+                }
+                return new Proxy(inner.artifact, { get(delegate, operation, delegateReceiver) {
+                    const value = Reflect.get(delegate, operation, delegateReceiver);
+                    if (operation !== 'findMany' && operation !== 'findFirst' && operation !== 'findUnique') return value;
+                    return async (...queryArgs: Parameters<typeof inner.artifact.findMany>) => {
+                        const rows = await Reflect.apply(value, delegate, queryArgs);
+                        const identities = (Array.isArray(rows) ? rows : rows ? [rows] : []).map(row => row.id);
+                        if (queryArgs[0]?.select?.body) bodyReads += identities.length;
+                        if (queryArgs[0]?.select?.header) headerIds.push(...identities);
+                        return rows;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(artifactsRoutes, async app => {
+                const headers = { 'x-test-user-id': owner.id,
+                    'x-happier-account-stored-content-protocol': String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+                const kinds = encodeURIComponent(JSON.stringify(['account_notice.v1',
+                    ...Array.from({ length: 130 }, (_, index) => `absent.${index}.v1`)]));
+                const first = await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=${kinds}&limit=500`, headers });
+                expect(first.statusCode, first.body).toBe(200);
+                expect(first.json().items).toHaveLength(500);
+                expect(first.json().hasUnclassified).toBe(true);
+                const last = first.json().items[499];
+                const cursor = Buffer.from(JSON.stringify({ updatedAt: last.updatedAt, id: last.id })).toString('base64url');
+                const second = await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=${kinds}&limit=500&cursor=${cursor}`, headers });
+                expect(second.statusCode, second.body).toBe(200);
+                expect(second.json().items).toHaveLength(1);
+                const items = [...first.json().items, ...second.json().items];
+                expect(new Set(items.map(row => row.id))).toEqual(selectedIds);
+                expect(items.find(row => row.id === selected.id)).toMatchObject({ kind: 'other', kindHint: 'account_notice.v1', publicAudience: 'retained' });
+                expect(new Set(headerIds)).toEqual(selectedIds);
+                headerIds.length = 0;
+                const repaired = await app.inject({ method: 'POST', url: `/v1/artifacts/${legacy.id}`, headers,
+                    payload: { kind: 'v1:other:account_notice.v1', expectedHeaderVersion: 1 } });
+                expect(repaired.statusCode, repaired.body).toBe(200);
+                expect(repaired.json()).toEqual({ success: true });
+                expect(new Set(headerIds)).toEqual(new Set([legacy.id]));
+                expect(await db.artifact.findUniqueOrThrow({ where: { id: legacy.id } })).toMatchObject({
+                    kind: 'v1:other:account_notice.v1', headerVersion: 1, bodyVersion: 1, body: data.body });
+                headerIds.length = 0;
+                // A zero-demand exact set is complete even while another legacy row exists.
+                await db.artifact.update({ where: { id: legacy.id }, data: { kind: 'other' } });
+                const empty = await app.inject({ method: 'GET', url: '/v1/artifacts?kinds=%5B%5D&includeBody=true', headers });
+                expect(empty.statusCode, empty.body).toBe(200);
+                expect(empty.json()).toEqual({ items: [], hasUnclassified: false });
+                expect(headerIds).toEqual([]);
+                expect(bodyReads).toBe(0);
+            });
+        } finally { db.$transaction = transaction; }
     });
 
     it('pages beyond the bind boundary and projects current public audience without foreign rows', async () => {

@@ -1815,6 +1815,89 @@ server persistence layer.
   - WebSocket `update-metadata` / `update-state`
   - `update-session` events
 
+#### Non-content query hints and Artifact kinds (development)
+
+The approved disclosure permits the server to see non-content type/kind,
+lifecycle/state, ids and relationships, timestamps and counters needed for
+queries, including on E2EE Accounts. It does not permit content, titles, names,
+prompts, paths, user text or secrets. These are server-visible hints, not public
+unauthenticated reads, and never replace access, Account-mode, custody or private
+content admission.
+
+The Artifact list/query owner is implementing the first consumed extraction:
+`{ kind: <existing coarse family>, kindHint: <exact header.kind or null> }`.
+The family still comes from Protocol's existing classifier, including the skill
+bundle discriminator; the exact hint is the private header's type discriminator,
+not its title or other fields. Notice selectors use `account_notice.v1` and
+`usage_notice.v1`; Role and prompt/skill readers consume the same owner.
+
+This reuses nullable `Artifact.kind` and its existing Account/kind index. The
+canonical stored form is `v1:<coarse family>:<exact kind>`, with an empty final
+component for a classified row without an exact kind. Null and the old coarse
+values mean unclassified, not absence. There is no second kind enum, metadata
+table, index family or schema migration. The wire's coarse projection stays
+coarse; exact selection is an additive `kinds` set at the same list owner and
+occurs before pagination. A hint is only a candidate selector: opened headers
+and bodies still establish the actual domain type and current facts.
+
+UI and CLI writers share the Protocol extraction. Their existing metadata-only
+update checks the observed header version and changes neither header/body bytes,
+their content versions, nor Artifact recency/row sequence. Required Account
+change notifications still make newly available classification discoverable.
+Repeated equal hints are no-ops. Needed labels use the same writer through
+`POST /v1/artifacts/query-hints/batch`, with ordered per-id results and no private
+payloads; HTTP-byte framing reuses the existing request budget. Each item retains
+the canonical update's transaction, authorization and CAS, rather than creating
+a cross-Artifact transaction. **Inventory and selective reads never write
+classification.** An unknown-membership witness means explicitly incomplete
+results, not permission for the UI to open or relabel the Account inventory.
+There is no full-inventory fallback. Exact kinds use `unclassified=true`
+(null/legacy coarse rows); coarse-only classification discovery uses
+`unclassified=coarse` (null rows only).
+
+The owning daemon, not a UI reader, labels its existing notices, and only the
+notice kinds with a current consumer. New writes carry their hints at create.
+The previous automatic read-side repair proposal was withdrawn after its
+inventory-sized write burst reproduced a live regression. The bounded daemon
+backfill operation and typed terminal refusal state are being revised before
+re-landing; they must not retry on every inventory fetch. Opaque predecessor
+writes remain accepted and unknown rows remain honestly incomplete until their
+owner labels them. Implementation and loaded-runtime verification remain
+tracked in the performance program.
+
+Later state/id/time selectors use the same allowlisted extraction and mutation
+authority principle at their actual resource owner; this kind-only vertical does
+not add dormant generic metadata storage or indexes for speculative consumers.
+
+#### Bot roster selector disclosure (development, pending implementation)
+
+The approved non-content disclosure is the **current reversible Bot-kind fact**:
+`metadata.bot.kind === 'bot'`, read through the canonical Session Bot schema and
+written through `display.bot`. It identifies current roster membership, not
+execution intent. The immutable `createdAsBot` birth fact cannot answer that
+question because Sessions may be promoted or demoted later. Titles, names,
+prompts and other user-authored content are not part of this disclosure.
+
+This selector is not yet persisted or indexed outside the encrypted metadata.
+Its physical mapping consumes the same nullable string kind-hint representation
+in a generic `Session.kind`, with the same Account/kind index pattern, not an
+`isBot` column, Bot enum/index family or Artifact mirror. The current coarse
+family is `other`: an opened current Bot is `v1:other:bot`, an authenticated
+non-Bot is explicitly `v1:other:`, and missing/unopenable metadata stays unknown.
+The tagged codec remains one Protocol implementation; Artifact family derivation
+and Session Bot-schema projection retain their own domain authorities. The
+Session metadata owner supplies creation, promotion, demotion and undo hints
+alongside the existing metadata CAS. Its producer must preserve metadata mutation
+authority and CAS, update promotion/demotion/undo coherently, and automatically
+classify retained rows on the authorized client. Unavailable encrypted metadata
+is unknown, not proof of an ordinary Session. The completed transition must query
+the disclosed selector before pagination, without a permanent full-inventory
+scan. SRVQ owns the additional generic Session-column/index migration and the
+retained development-database reconciliation required by Stack instructions;
+PUB's Artifact column reuse does not claim that migration has happened. The
+Session implementation and transition remain pending; current clients still
+apply Bot membership after authorized metadata opening.
+
 ### Session System Records in the UI
 
 Current development source opens System Records according to the persisted

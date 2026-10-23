@@ -46,6 +46,182 @@ describe("Artifact document grants (real SQLite)", () => {
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
 
+    it('preserves content recency while publishing a kind-only index change', async () => {
+        const owner = await plainAccount();
+        const old = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: old.id }, data: { updatedAt: new Date(0) } });
+        const newer = await plainArtifact(owner.id);
+        const before = await db.artifact.findUniqueOrThrow({ where: { id: old.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const list = () => app.inject({ method: 'GET', url: '/v1/artifacts?limit=2', headers });
+            expect((await list()).json().map((row: { id: string }) => row.id)).toEqual([newer.id, old.id]);
+            const repaired = await app.inject({ method: 'POST', url: `/v1/artifacts/${old.id}`, headers,
+                payload: { kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 1 } });
+            expect(repaired.statusCode, repaired.body).toBe(200);
+            expect((await list()).json().map((row: { id: string }) => row.id)).toEqual([newer.id, old.id]);
+        });
+        expect(await db.artifact.findUniqueOrThrow({ where: { id: old.id } })).toMatchObject({
+            updatedAt: before.updatedAt, seq: before.seq, headerVersion: before.headerVersion, bodyVersion: before.bodyVersion,
+            header: before.header, body: before.body });
+        expect(await db.accountChange.count({ where: { artifactId: old.id, accountId: owner.id } })).toBe(1);
+    });
+
+    it('classifies metadata in ordered batches with per-item CAS and current authorization', async () => {
+        const owner = await plainAccount();
+        const editor = await plainAccount();
+        const viewer = await plainAccount();
+        const foreign = await plainAccount();
+        const selected = await plainArtifact(owner.id);
+        const stale = await plainArtifact(owner.id);
+        const hidden = await plainArtifact(foreign.id);
+        await db.artifactAccountGrant.createMany({ data: [
+            { artifactId: selected.id, accountId: editor.id, accessLevel: 'edit', createdByAccountId: owner.id },
+            { artifactId: selected.id, accountId: viewer.id, accessLevel: 'view', createdByAccountId: owner.id },
+        ] });
+        await db.artifact.update({ where: { id: selected.id }, data: { updatedAt: new Date(0), body: new Uint8Array([0xff]) } });
+        const before = await db.artifact.findUniqueOrThrow({ where: { id: selected.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const items = [
+                { artifactId: selected.id, kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 1 },
+                { artifactId: stale.id, kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 0 },
+                { artifactId: hidden.id, kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 1 },
+            ];
+            const result = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers, payload: { items } });
+            expect(result.statusCode, result.body).toBe(200);
+            expect(result.json()).toEqual({ items: [
+                { artifactId: selected.id, success: true },
+                { artifactId: stale.id, success: false, error: 'version-mismatch' },
+                { artifactId: hidden.id, success: false, error: 'Artifact not found' },
+            ] });
+            expect((await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers,
+                payload: { items: [items[0]] } })).json()).toEqual({ items: [{ artifactId: selected.id, success: true }] });
+            expect((await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers, payload: { items: [] } })).json())
+                .toEqual({ items: [] });
+            await db.artifact.create({ data: { id: 'kinds', accountId: owner.id, header: before.header, body: stale.body,
+                dataEncryptionKey: before.dataEncryptionKey, headerVersion: 1, bodyVersion: 1 } });
+            const retainedId = await app.inject({ method: 'POST', url: '/v1/artifacts/kinds', headers,
+                payload: { kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 1 } });
+            expect(retainedId.statusCode, retainedId.body).toBe(200);
+        });
+        expect(await db.artifact.findUniqueOrThrow({ where: { id: selected.id } })).toMatchObject({
+            kind: 'v1:other:workflow-definition.v1', updatedAt: before.updatedAt, seq: before.seq,
+            headerVersion: before.headerVersion, bodyVersion: before.bodyVersion, header: before.header, body: before.body });
+        expect((await db.accountChange.findMany({ where: { artifactId: selected.id } })).map(row => row.accountId).sort())
+            .toEqual([owner.id, editor.id, viewer.id].sort());
+        expect(await db.accountChange.count({ where: { artifactId: { in: [stale.id, hidden.id] } } })).toBe(0);
+    });
+
+    it('classifies an opened header with CAS without loading a body at the write owner', async () => {
+        const owner = await plainAccount();
+        const editor = await plainAccount();
+        const viewer = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: artifact.id }, data: { body: new Uint8Array([0xff]) } });
+        await db.artifactAccountGrant.createMany({ data: [
+            { artifactId: artifact.id, accountId: editor.id, accessLevel: 'edit', createdByAccountId: owner.id },
+            { artifactId: artifact.id, accountId: viewer.id, accessLevel: 'view', createdByAccountId: owner.id },
+        ] });
+        let bodies = 0;
+        const classify = (actorUserId: string, expectedHeaderVersion: number) => inTx(tx => {
+            const observed = new Proxy(tx, { get(target, property, receiver) {
+                const value = Reflect.get(target, property, receiver);
+                if (property !== 'artifact') return typeof value === 'function' ? value.bind(target) : value;
+                return new Proxy(tx.artifact, { get(delegate, operation, delegateReceiver) {
+                    const query = Reflect.get(delegate, operation, delegateReceiver);
+                    if (typeof query !== 'function') return query;
+                    return async (...args: unknown[]) => {
+                        const selection = args[0];
+                        if (typeof operation === 'string' && operation.startsWith('find') && selection && typeof selection === 'object'
+                            && 'select' in selection && selection.select && typeof selection.select === 'object'
+                            && 'body' in selection.select && selection.select.body === true) bodies++;
+                        return Reflect.apply(query, delegate, args);
+                    };
+                } });
+            } });
+            return updateArtifactTx(observed, { actorUserId, artifactId: artifact.id,
+                kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion });
+        });
+        expect(await classify(viewer.id, 1)).toMatchObject({ ok: false, error: 'not-found' });
+        const stale = await classify(owner.id, 0);
+        expect(stale).toMatchObject({ ok: false, error: 'version-mismatch', current: { headerVersion: 1 } });
+        if (!stale.ok && 'current' in stale) expect(stale.current).not.toHaveProperty('body');
+        expect(await classify(editor.id, 1)).toMatchObject({ ok: true });
+        expect(bodies).toBe(0);
+        const after = await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } });
+        expect(after).toMatchObject({ kind: 'v1:other:workflow-definition.v1', headerVersion: 1, bodyVersion: 1,
+            header: artifact.header, body: new Uint8Array([0xff]), seq: artifact.seq });
+        expect(await classify(owner.id, 1)).toEqual({ ok: true, recipientUpdates: [] });
+        expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toEqual(after);
+        await db.artifact.update({ where: { id: artifact.id }, data: {
+            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'x'.repeat(183) })), headerVersion: 2 } });
+        const oversized = await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } });
+        expect(await classify(owner.id, 2)).toMatchObject({ ok: false, error: 'invalid-params' });
+        expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toEqual(oversized);
+        expect(bodies).toBe(0);
+    });
+
+    it('selects exact kinds before paging and repairs only owner legacy headers without selecting bodies', async () => {
+        const owner = await plainAccount();
+        const foreign = await plainAccount();
+        const ownLegacy = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: ownLegacy.id }, data: { kind: 'other' } });
+        const sharedLegacy = await plainArtifact(foreign.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: sharedLegacy.id, accountId: owner.id,
+            accessLevel: 'edit', createdByAccountId: foreign.id } });
+        const template = { accountId: owner.id, header: ownLegacy.header, body: new Uint8Array([0xff]),
+            dataEncryptionKey: ownLegacy.dataEncryptionKey, headerVersion: 1, bodyVersion: 1 };
+        await db.artifact.createMany({ data: Array.from({ length: 1100 }, () => ({ ...template,
+            id: crypto.randomUUID(), kind: 'v1:other:unrelated.v1' })) });
+        await db.artifact.create({ data: { ...template, id: crypto.randomUUID(), kind: 'v1:other:ACCOUNT_NOTICE.v1' } });
+        const notice = await db.artifact.create({ data: { ...template, id: crypto.randomUUID(),
+            kind: 'v1:other:account_notice.v1', updatedAt: new Date(0) } });
+        const bundle = await db.artifact.create({ data: { ...template, id: crypto.randomUUID(),
+            kind: 'v1:skill:prompt_bundle.v2', updatedAt: new Date(0) } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
+            const reads: string[] = [];
+            let bodies = 0;
+            const original = delegate.findMany.bind(delegate);
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: async (...args: Parameters<typeof original>) => {
+                const rows = await original(...args);
+                if (args[0]?.select?.header) reads.push(...rows.map(row => row.id));
+                if (args[0]?.select?.body) bodies += rows.length;
+                return rows;
+            } });
+            try {
+                // Eight coarse families per exact kind crosses SQLite's portable bind boundary.
+                const query = encodeURIComponent(JSON.stringify(['account_notice.v1', 'prompt_bundle.v2',
+                    ...Array.from({ length: 130 }, (_, index) => `absent.${index}.v1`)]));
+                const selected = await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=${query}&limit=2`, headers });
+                expect(selected.statusCode, selected.body).toBe(200);
+                expect(selected.json()).toMatchObject({ items: [
+                    { kindHint: expect.any(String) }, { kindHint: expect.any(String) }], hasUnclassified: true });
+                expect(selected.json().items.map((row: { id: string }) => row.id).sort()).toEqual([notice.id, bundle.id].sort());
+                expect(new Set(reads)).toEqual(new Set([notice.id, bundle.id]));
+                reads.length = 0;
+                const legacy = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=true&limit=1', headers });
+                expect(legacy.statusCode, legacy.body).toBe(200);
+                expect(legacy.json()).toMatchObject({ items: [{ id: ownLegacy.id }], hasUnclassified: true });
+                expect(new Set(reads)).toEqual(new Set([ownLegacy.id]));
+                expect(bodies).toBe(0);
+                reads.length = 0;
+                const coarseLegacy = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=coarse', headers });
+                expect(coarseLegacy.json()).toEqual({ items: [], hasUnclassified: true });
+                expect(reads).toEqual([]);
+                const coarse = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=other&limit=1', headers });
+                expect(coarse.json().hasUnclassified).toBe(true); // the authorized shared null row remains unknown
+                for (const suffix of [`kind=other&kinds=${query}`, `unclassified=true&kinds=${query}`, 'unclassified=true&includeBody=true']) {
+                    expect((await app.inject({ method: 'GET', url: `/v1/artifacts?${suffix}`, headers })).statusCode).toBe(400);
+                }
+            } finally {
+                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
     it('projects selected headers with current audience and per-id revocation without opening bodies', async () => {
         const owner = await plainAccount();
         const reader = await plainAccount();
@@ -68,6 +244,11 @@ describe("Artifact document grants (real SQLite)", () => {
             ] });
             expect(response.json().items[0].artifact).not.toHaveProperty('body');
             expect(response.json().items[0]).not.toHaveProperty('recipientCensus');
+            const full = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': reader.id, ...protocolHeaders }, payload: { artifactIds: [granted.id] } });
+            expect(full.statusCode, full.body).toBe(200);
+            expect(full.json().items).toEqual([{ artifactId: granted.id, ok: false,
+                error: 'artifact_content_unavailable', status: 409, retryable: false }]);
             await db.artifactAccountGrant.deleteMany({ where: { artifactId: granted.id } });
             expect((await read()).json().items[0]).toMatchObject({ artifactId: granted.id, ok: false, error: 'artifact_not_found' });
         });
@@ -240,9 +421,9 @@ describe("Artifact document grants (real SQLite)", () => {
             expect(set.statusCode, set.body).toBe(200);
             expect(set.json()).toEqual({ success: true });
             const stored = await db.artifact.findUniqueOrThrow({ where: { id: unknown.id } });
-            expect(stored).toMatchObject({ kind: 'other', headerVersion: unknown.headerVersion, bodyVersion: unknown.bodyVersion,
+            expect(stored).toMatchObject({ kind: 'v1:other:workflow-definition.v1', headerVersion: unknown.headerVersion, bodyVersion: unknown.bodyVersion,
                 header: unknown.header, body: unknown.body, dataEncryptionKey: unknown.dataEncryptionKey });
-            expect(stored.seq).toBe(unknown.seq + 1);
+            expect(stored.seq).toBe(unknown.seq);
             expect((await db.accountChange.findMany({ where: { artifactId: unknown.id } })).map(row => row.accountId).sort())
                 .toEqual([owner.id, editor.id, viewer.id].sort());
             const changedAccount = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
@@ -283,7 +464,7 @@ describe("Artifact document grants (real SQLite)", () => {
             Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
                 value: async (...args: Parameters<typeof original>) => {
                     const rows = await original(...args);
-                    if (!paused && args[0]?.where?.kind === 'skill') { paused = true; enter(); await release; }
+                    if (!paused && args[0]?.where?.OR?.some(predicate => predicate.kind === 'skill')) { paused = true; enter(); await release; }
                     return rows;
                 } });
             const response = app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill', headers });

@@ -56,6 +56,94 @@ describe('device-persisted Artifact inventory through the real writer and store'
         vi.resetModules(); // A new app process retains only device storage.
     }
 
+    it('retains the admitted persistence carrier across unchanged hydration and projects only changed headers', async () => {
+        const persistence = await import('@/sync/domains/state/warmCachePersistence');
+        // Observe the real producer's outputs; the writer, schemas and MMKV remain real.
+        const saves = vi.spyOn(persistence, 'saveArtifactInventoryWarmCache');
+        const rows = Array.from({ length: 2000 }, (_, index) => ({ ...head(`closed-${index}`), kindHint: 'prompt_doc.v2' }));
+        let offset = 0;
+        const first = await load(async path => {
+            if (path === '/v2/cursor') return currentCursor(10);
+            const limit = Number(new URL(path, 'https://inventory.test').searchParams.get('limit'));
+            const page = rows.slice(offset, offset + limit);
+            offset += page.length;
+            return json(page);
+        });
+        await first.completion;
+        const initial = saves.mock.calls.at(-1)![2];
+        const retained = persistence.loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, initial.binding)!;
+        saves.mockClear();
+        const stringify = vi.spyOn(JSON, 'stringify');
+        const encodedScopes = () => stringify.mock.calls.filter(([value]) => value !== null && typeof value === 'object'
+            && 'binding' in value && 'artifacts' in value);
+        try {
+            for (let arrival = 0; arrival < 20; arrival++) {
+                const next = await load(async path => {
+                    expect(path).toBe('/v2/cursor');
+                    return currentCursor(10);
+                }, { store: first.store });
+                await next.completion;
+            }
+            expect(new Set(saves.mock.calls.map(([, , entry]) => entry)).size).toBe(1);
+            expect(saves.mock.calls.every(([, , entry]) => entry === retained)).toBe(true);
+            expect(encodedScopes()).toHaveLength(0);
+
+            const cursorOnly = await load(async path => path === '/v2/cursor' ? currentCursor(11)
+                : json(ChangesResponseSchema.parse({ changes: [
+                    { kind: 'machine', entityId: 'busy-machine', cursor: 11, changedAt: 1 },
+                ], nextCursor: 11 })), { store: first.store });
+            await cursorOnly.completion;
+            const advanced = saves.mock.calls.at(-1)![2];
+            expect(advanced.cursor).toBe('11');
+            expect(advanced.artifacts).toBe(retained.artifacts);
+            expect(encodedScopes()).toHaveLength(1);
+            const admittedAdvanced = persistence.loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, initial.binding)!;
+
+            const changed = { ...head('closed-173', 2), kindHint: 'prompt_doc.v2' };
+            const next = await load(async path => {
+                if (path === '/v2/cursor') return currentCursor(12);
+                if (path.startsWith('/v2/changes?')) return json(ChangesResponseSchema.parse({ changes: [
+                    { kind: 'artifact', entityId: changed.id, cursor: 12, changedAt: 2 },
+                ], nextCursor: 12 }));
+                expect(path).toBe('/v1/artifacts/read');
+                return json({ projection: 'headers', items: [{ artifactId: changed.id, ok: true, artifact: changed }] });
+            }, { store: first.store });
+            await next.completion;
+            const updated = saves.mock.calls.at(-1)![2];
+            expect(updated.artifacts).toHaveLength(rows.length);
+            expect(updated.artifacts.filter((row, index) => row !== admittedAdvanced.artifacts[index]).map(row => row.id))
+                .toEqual([changed.id]);
+            expect(updated.artifacts.find(row => row.id === changed.id)?.headerVersion).toBe(2);
+            expect(encodedScopes()).toHaveLength(2);
+            expect(persistence.loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, initial.binding)).toEqual(updated);
+
+            // A retained checkpoint is also the retry input when device storage rejected it.
+            const { MMKV } = await import('react-native-mmkv');
+            const write = vi.spyOn(MMKV.prototype, 'set');
+            write.mockImplementationOnce(() => { throw new Error('device temporarily unavailable'); });
+            try {
+                const rejected = await load(async path => path === '/v2/cursor' ? currentCursor(13)
+                    : json(ChangesResponseSchema.parse({ changes: [
+                        { kind: 'machine', entityId: 'busy-machine', cursor: 13, changedAt: 1 },
+                    ], nextCursor: 13 })), { store: first.store });
+                await rejected.completion;
+                const latest = persistence.loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, initial.binding)!;
+                expect(latest.cursor).toBe('13');
+                const retry = await load(async path => {
+                    expect(path).toBe('/v2/cursor');
+                    return currentCursor(13);
+                }, { store: first.store });
+                await retry.completion;
+                expect(saves.mock.calls.at(-1)![2]).toBe(latest);
+                expect(write.mock.calls.filter(([key]) => key === 'artifact-inventory-warm-cache-v1:inventory-home:inventory-person'))
+                    .toHaveLength(2);
+            } finally { write.mockRestore(); }
+        } finally {
+            stringify.mockRestore();
+            saves.mockRestore();
+        }
+    });
+
     it('refreshes one changed header among 35000 retained documents with one exact header set read', async () => {
         const rows = Array.from({ length: 35000 }, (_, index) => head(`closed-${index}`));
         let offset = 0;
@@ -368,14 +456,16 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(afters).toEqual(['10', '10']);
     });
 
-    it('preserves demanded body and custody identity during an unchanged warm refresh', async () => {
+    it('preserves demanded body and custody while checkpointing current header access at an unchanged cursor', async () => {
         const first = await load(async path => path === '/v2/cursor' ? currentCursor(10) : json([head('retained')]));
         await first.completion;
         const retained = first.store.getState().artifacts.retained;
         if (!retained?.isDecrypted) throw new Error('Expected an opened inventory header');
-        const opened = { ...retained, body: 'demanded body',
+        const opened = { ...retained, access: 'view' as const, body: 'demanded body',
             storageIdentity: { contentKeyEnvelope: 'test-only-envelope', provenanceKeyEnvelope: null } };
         first.store.getState().updateArtifact(opened);
+        const persistence = await import('@/sync/domains/state/warmCachePersistence');
+        const saves = vi.spyOn(persistence, 'saveArtifactInventoryWarmCache');
         const next = await load(async path => {
             if (path === '/v2/cursor') return currentCursor(10);
             expect(path).toMatch(/^\/v2\/changes\?after=10&/);
@@ -383,6 +473,14 @@ describe('device-persisted Artifact inventory through the real writer and store'
         }, { store: first.store });
         await next.completion;
         expect(next.store.getState().artifacts.retained).toBe(opened);
+        try {
+            const checkpoint = saves.mock.calls.at(-1)![2];
+            expect(checkpoint.artifacts.find(row => row.id === opened.id)?.access).toBe('view');
+            expect(persistence.loadArtifactInventoryWarmCache(scope.serverId, scope.accountId, checkpoint.binding))
+                .toEqual(checkpoint);
+            expect(checkpoint.artifacts[0]).not.toHaveProperty('body');
+            expect(checkpoint.artifacts[0]).not.toHaveProperty('storageIdentity');
+        } finally { saves.mockRestore(); }
     });
 
     it('removes the Home inventory on the real credential-removal path', async () => {

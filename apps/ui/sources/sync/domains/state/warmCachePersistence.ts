@@ -267,6 +267,7 @@ const ArtifactInventoryWarmCacheSchema = z.object({
     artifacts: z.array(z.object({
         id: z.string().check(z.minLength(1)),
         kind: z.optional(z.nullable(ArtifactCoarseKindV1Schema)),
+        kindHint: z.optional(z.nullable(z.string())),
         rawHeader: z.nullable(z.record(z.string(), z.unknown())),
         isDecrypted: z.boolean(),
         lockedReason: z.optional(z.enum(['encryption_material_unavailable', 'decryption_failed', 'invalid_stored_content'])),
@@ -289,7 +290,11 @@ export function loadArtifactInventoryWarmCache(serverId: string, accountId: stri
 }
 
 export function saveArtifactInventoryWarmCache(serverId: string, accountId: string, entry: ArtifactInventoryWarmCache): void {
-    saveScopedRecord(buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId), ArtifactInventoryWarmCacheSchema.parse(entry));
+    const key = buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId);
+    // The inventory producer can return this owner's already-admitted checkpoint.
+    // New carriers still cross schema admission; a failed write still reaches persistence to retry.
+    const admitted = peekScopedRecord<ArtifactInventoryWarmCache>(key);
+    saveScopedRecord(key, entry === admitted ? entry : ArtifactInventoryWarmCacheSchema.parse(entry));
 }
 
 subscribeHomeCredentialMutations(event => {

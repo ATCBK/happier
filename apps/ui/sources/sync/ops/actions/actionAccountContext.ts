@@ -32,7 +32,7 @@ import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals'
 import { parseToken } from '@/utils/auth/parseToken';
 import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, fetchArtifactsWithBodiesFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
-import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import { listArtifactHeadersV1, type ArtifactListPageOptionsV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import { HappyError } from '@/utils/errors/errors';
 import type { Artifact, ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -411,7 +411,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 ownerAccountId: artifact.ownerAccountId, access: artifact.access,
                 publicAudience: opened?.publicAudience,
             });
-        const listArtifacts = async (options: Parameters<WorkflowDefinitionArtifactOperations['list']>[0]) => {
+        const listArtifacts = async (options: ArtifactListPageOptionsV1) => {
                 // Only the background inventory yields to the routed Session.
                 // Exact reads and user writes (including Approve) have their
                 // own captured Account and must not wait for that acquisition.
@@ -435,7 +435,12 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     const opened = openedArtifacts[index] ?? null;
                     // Unopened headers cannot be classified; body failures keep
                     // their readable header for the owning document's typed result.
-                    if (!opened?.isDecrypted || !opened.rawHeader) coverage = 'partial';
+                    if (!opened?.isDecrypted || !opened.rawHeader) {
+                        coverage = 'partial';
+                        // A failed header remains a structural row in ordinary
+                        // lists, but cannot supply a classification repair.
+                        if (options.unclassified) continue;
+                    }
                     items.push(projectArtifactListItem(artifact, opened, options.includeBody));
                 }
                 const last = artifacts.at(-1);
@@ -521,7 +526,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor,
                     // Exact-kind selection opens only matching headers. Ordinary structural
                     // lists retain their existing page/body coverage contract.
-                    ...((options.kind || options.headerFilter) && options.includeBody ? { readBodies: async (items: readonly ReturnType<typeof projectArtifactListItem>[]) => {
+                    ...((options.kind || options.kinds || options.headerFilter) && options.includeBody ? { readBodies: async (items: readonly ReturnType<typeof projectArtifactListItem>[]) => {
                         const results = await withArtifactReadSignal(options.signal, async borrowerSignal =>
                             fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds: items.map(item => item.artifactId), signal: borrowerSignal }));
                         assertCurrent();

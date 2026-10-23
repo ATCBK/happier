@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { deriveArtifactCoarseKindV1 } from './artifactKindV1.js';
+import { deriveArtifactCoarseKindV1, deriveArtifactKindV1, deriveArtifactStoredKindV1, decodeArtifactKindV1, ArtifactStoredKindV1Schema,
+  frameArtifactKindWriteBatchesV1, ArtifactKindWriteBatchInputV1Schema, ArtifactKindWriteBatchResponseV1Schema } from './artifactKindV1.js';
 
 describe('Artifact coarse kind', () => {
   it('indexes library families without disclosing private header fields', () => {
@@ -18,5 +19,38 @@ describe('Artifact coarse kind', () => {
 
   it('retains malformed skill identity for the content reader to refuse truthfully', () => {
     expect(deriveArtifactCoarseKindV1({ kind: 'broken', bundleSchemaId: 'skills.skill_md_v1' })).toBe('skill');
+  });
+});
+describe('Artifact exact kind hints', () => {
+  it('frames real inventory demand in one byte-budgeted batch without changing retained identities or ordered outcomes', () => {
+    const items = Array.from({ length: 35000 }, (_, index) => ({ artifactId: `retained/${index}`,
+      kind: 'v1:other:account_notice.v1', expectedHeaderVersion: 1 }));
+    const framed = frameArtifactKindWriteBatchesV1(items);
+    expect(framed).toHaveLength(1);
+    expect(ArtifactKindWriteBatchInputV1Schema.parse(framed[0]).items).toEqual(items);
+    expect(frameArtifactKindWriteBatchesV1([])).toEqual([]);
+    expect(ArtifactKindWriteBatchResponseV1Schema.parse({ items: [
+      { artifactId: 'retained/1', success: true },
+      { artifactId: 'retained/2', success: false, error: 'version-mismatch' },
+    ] }).items.map(item => item.artifactId)).toEqual(['retained/1', 'retained/2']);
+    expect(ArtifactKindWriteBatchResponseV1Schema.safeParse({ items: [
+      { artifactId: 'retained/2', success: false, error: 'version-mismatch', currentHeader: 'private' },
+    ] }).success).toBe(false);
+  });
+  it('keeps exact header kinds independent of coarse bundle priority and admits legacy writes', () => {
+    expect(deriveArtifactKindV1({ kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1', title: 'Private' }))
+      .toEqual({ kind: 'skill', kindHint: 'prompt_bundle.v2' });
+    expect(deriveArtifactStoredKindV1({ kind: 'account_notice.v1' })).toBe('v1:other:account_notice.v1');
+    expect(decodeArtifactKindV1('v1:other:account_notice.v1')).toEqual({ kind: 'other', kindHint: 'account_notice.v1', classified: true });
+    expect(decodeArtifactKindV1('v1:other:')).toEqual({ kind: 'other', kindHint: null, classified: true });
+    expect(decodeArtifactKindV1('other')).toEqual({ kind: 'other', kindHint: null, classified: false });
+    expect(decodeArtifactKindV1(null)).toEqual({ kind: null, kindHint: null, classified: false });
+    expect(ArtifactStoredKindV1Schema.safeParse('v1:unknown:role.v1').success).toBe(false);
+    expect(ArtifactStoredKindV1Schema.safeParse('other').success).toBe(true);
+    expect(decodeArtifactKindV1('v1:other:vendor:role.v1').kindHint).toBe('vendor:role.v1');
+    expect(deriveArtifactStoredKindV1({ kind: 'x'.repeat(182) })).toHaveLength(191);
+    expect(() => deriveArtifactStoredKindV1({ kind: 'x'.repeat(183) })).toThrow(RangeError);
+    expect(ArtifactStoredKindV1Schema.safeParse(`v1:other:${'x'.repeat(183)}`).success).toBe(false);
+    expect(ArtifactStoredKindV1Schema.safeParse(deriveArtifactStoredKindV1({ kind: '💡'.repeat(182) })).success).toBe(true);
   });
 });

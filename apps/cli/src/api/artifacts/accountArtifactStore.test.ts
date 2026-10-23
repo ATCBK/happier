@@ -424,6 +424,7 @@ describe('createAccountArtifactStore', () => {
     let afterBatch: (() => void) | undefined;
     const rows = Array.from({ length: 502 }, (_, index) => ({ id: `artifact-${index}`, ownerAccountId: 'owner',
       access: 'owner' as const, encryptionMode: 'plain' as const, publicAudience: 'none' as const,
+      kind: 'other' as const, kindHint: index >= 500 ? 'role.v1' : 'memory_doc.v1',
       header: encodePlainArtifactStoredContent(index >= 500 ? { kind: 'role.v1', name: 'Custom role' } : { kind: 'memory_doc.v1', title: 'Unrelated' }),
       body: encodePlainArtifactStoredContent({ body: index >= 500 ? JSON.stringify(BUILT_IN_ROLES_V1.builder) : 'Unrelated private body' }),
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 2, bodyVersion: 3,
@@ -444,13 +445,17 @@ describe('createAccountArtifactStore', () => {
       } else if (request.method === 'GET' && url.pathname === '/v1/artifacts') {
         request.resume();
         listUrls.push(url);
+        const selectedKinds: unknown = url.searchParams.has('kinds') ? JSON.parse(url.searchParams.get('kinds')!) : undefined;
+        const candidates = url.searchParams.has('unclassified') ? []
+          : Array.isArray(selectedKinds) ? rows.filter(row => selectedKinds.includes(row.kindHint)) : rows;
         const cursor = url.searchParams.get('cursor');
         const lastId = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')).id : undefined;
-        const start = lastId === undefined ? 0 : rows.findIndex(row => row.id === lastId) + 1;
-        const items = listAudience === 'empty' ? [] : rows.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
+        const start = lastId === undefined ? 0 : candidates.findIndex(row => row.id === lastId) + 1;
+        const items = listAudience === 'empty' ? [] : candidates.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
           ({ ...row, ...(listAudience === 'shared' ? { ownerAccountId: 'foreign-owner', access: 'view' } : {}),
             ...(url.searchParams.get('includeBody') ? { body } : {}) }));
-        result = url.searchParams.has('kind') ? { items, hasUnclassified: false } : items;
+        result = url.searchParams.has('kind') || url.searchParams.has('kinds') || url.searchParams.has('unclassified')
+          ? { items, hasUnclassified: false } : items;
       } else if (request.method === 'POST' && url.pathname === '/v1/artifacts/read') {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -504,7 +509,7 @@ describe('createAccountArtifactStore', () => {
         expect(inventory.entries.filter(entry => entry.roleId.startsWith('artifact-'))).toEqual(
           ['artifact-500', 'artifact-501'].map(roleId => ({ roleId, role: BUILT_IN_ROLES_V1.builder,
             revision: { headerVersion: 2, bodyVersion: 3 }, shared: false, viewOnly: false, migratedFromV0_2: false })));
-        expect(listUrls).toHaveLength(10);
+        expect(listUrls).toHaveLength(5);
         expect(listUrls.every(url => !url.searchParams.has('includeBody'))).toBe(true);
         expect(batches).toEqual(Array.from({ length: 5 }, () => ['artifact-500', 'artifact-501']));
         expect(samples.map(sample => sample.modeReads)).toEqual(Array.from({ length: 5 }, () => observation === 'cold' ? 2 : 1));
@@ -1533,12 +1538,15 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       getAccountEncryptionMode: async () => 'plain' });
     const row = (id: string, title: string, kind: string, updatedAt: number) => ({
       id, header: encodePlainArtifactStoredContent({ title, kind }),
+      kind: 'other', kindHint: kind,
       headerVersion: 1, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 1, createdAt: updatedAt, updatedAt,
       ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
     });
-    const first = Array.from({ length: 500 }, (_, i) => row(`other-${i}`, 'Other', 'other.v1', 1000 - i));
+    const first = Array.from({ length: 500 }, (_, i) => row(`other-${i}`, 'Other', 'published.v1', 1000 - i));
     const second = [row('z', 'Private zebra', 'published.v1', 2), row('a', 'Private alpha', 'published.v1', 1)];
-    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: new URL(url).searchParams.has('cursor') ? second : first }));
+    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: {
+      items: new URL(url).searchParams.has('cursor') ? second : first, hasUnclassified: false,
+    } }));
     const options = { search: 'PRIVATE', kind: 'published.v1', sort: 'title_asc' as const, limit: 1 };
     const page = await store.list(options);
     expect(page.items.map((item) => item.artifactId)).toEqual(['a']);
@@ -1549,6 +1557,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     for (const [url] of mockGet.mock.calls) {
       expect(new URL(url).searchParams.has('search')).toBe(false);
       expect(new URL(url).searchParams.has('kind')).toBe(false);
+      expect(JSON.parse(new URL(url).searchParams.get('kinds')!)).toEqual(['published.v1']);
       expect(new URL(url).searchParams.has('sort')).toBe(false);
     }
   });
@@ -1592,6 +1601,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       mockGet.mockImplementation(async (rawUrl: string) => {
         const url = new URL(rawUrl);
         expect(url.pathname).toBe('/v1/artifacts');
+        if (url.searchParams.has('unclassified')) return { status: 200, data: { items: [], hasUnclassified: false } };
         expect(url.searchParams.get('kind')).toBe('other');
         expect(url.searchParams.has('includeBody')).toBe(false);
         if (competingWork === 'cancellation' && !pendingCancellation) {
@@ -1711,7 +1721,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       .resolves.toEqual({ ok: true, revision: { headerVersion: 4, bodyVersion: 5 } });
     expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/shared/revisions/2/restore'),
       { expectedHeaderVersion: 3, expectedBodyVersion: 4,
-        kind: 'other',
+        kind: 'v1:other:',
         header: encodePlainArtifactStoredContent({ title: 'Shared', ...(typeof priorBody === 'string' ? { excerpt: priorBody } : {}) }) }, expect.any(Object));
   });
 

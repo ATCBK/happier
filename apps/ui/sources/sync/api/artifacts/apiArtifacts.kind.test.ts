@@ -8,6 +8,20 @@ const row = { id: 'skill', ownerAccountId: 'account', access: 'owner', encryptio
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 0, createdAt: 1, updatedAt: 1 } as const;
 
 describe('Artifact coarse-kind transport', () => {
+    it('selects exact kind sets and owner repair headers without losing the classification witness', async () => {
+        const paths: string[] = [];
+        const request = async (path: string) => {
+            paths.push(path);
+            return Response.json({ items: [{ ...row, kind: 'other', kindHint: null }], hasUnclassified: false });
+        };
+        const selected = await fetchArtifactListPage({ token: 't' }, { request, retry: 'none', kinds: ['role.v1', 'account_notice.v1'] });
+        await fetchArtifactListPage({ token: 't' }, { request, retry: 'none', unclassified: true, limit: 500 });
+        await fetchArtifactListPage({ token: 't' }, { request, retry: 'none', unclassified: 'coarse', limit: 500 });
+        expect(new URL(paths[0]!, 'http://localhost').searchParams.get('kinds')).toBe('["role.v1","account_notice.v1"]');
+        expect(paths[1]).toBe('/v1/artifacts?limit=500&unclassified=true');
+        expect(paths[2]).toBe('/v1/artifacts?limit=500&unclassified=coarse');
+        expect(selected).toMatchObject({ items: [{ kindHint: null }], hasUnclassified: false });
+    });
     it.each(['widget_area_layout', 'widget_definition', 'widget_layout_fragment'] as const)('reads only %s headers through the existing filtered endpoint', async coarseKind => {
         const paths: string[] = [];
         const page = await fetchArtifactListPage({ token: 't' }, { coarseKind, limit: 500, retry: 'none',
