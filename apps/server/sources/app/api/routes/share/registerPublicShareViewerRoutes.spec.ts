@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from '../../testkit/dbMocks';
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from '../../testkit/dbMocks';
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 // Only the database transport is replaced; shell admission and HTTP routing stay real.
 const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique'], homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'] } as const);
-const transactions = createDbTransactionMock(() => mocks.db);
+const transactions = createDbTransactionMock(() => ({ ...mocks.db, ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock }));
 installDbModuleMock(() => ({ db: transactions.wrapDb(mocks.db) }));
 // Home configuration now reads through the SQLite snapshot transport as well.
 vi.doMock('@/storage/prisma', async importOriginal => ({

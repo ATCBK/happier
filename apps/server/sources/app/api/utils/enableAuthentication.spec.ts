@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDbTransactionMock, inTxPostgresControlStatementMock } from '../testkit/dbMocks';
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 const verifyToken = vi.fn();
 const verifyTokenDisposition = vi.fn(async (token: string) => {
@@ -16,6 +17,7 @@ const log = vi.fn();
 vi.mock('@/storage/db', () => {
     const tables = {
         ...inTxPostgresControlStatementMock,
+        ...homeConfigSnapshotPostgresQueryMock,
         homeSettings: { findUnique: async () => null },
         homeGovernancePolicy: { findUnique: async () => null },
     };

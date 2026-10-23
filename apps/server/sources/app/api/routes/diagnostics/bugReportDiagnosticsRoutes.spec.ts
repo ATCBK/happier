@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 
 import { createEnvReset } from "../../testkit/env";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
-import { createDbTransactionMock } from '../../testkit/dbMocks';
+import { createDbTransactionMock, inTxPostgresControlStatementMock } from '../../testkit/dbMocks';
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 const resetEnv = createEnvReset();
 
@@ -17,6 +18,8 @@ const resetEnv = createEnvReset();
 const accountFindUnique = vi.hoisted(() => vi.fn());
 vi.mock("@/storage/db", () => {
     const tables = {
+        ...inTxPostgresControlStatementMock,
+        ...homeConfigSnapshotPostgresQueryMock,
         account: { findUnique: accountFindUnique },
         homeSettings: { findUnique: async () => null },
         homeGovernancePolicy: { findUnique: async () => null },

@@ -6,11 +6,12 @@ import { encodeSessionSystemRecordRevision } from '@/app/session/systemRecords/s
 import * as privacyKit from 'privacy-kit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealSessionDataKeyBundleV0, sealPublicShareDataKeyV1 } from '@happier-dev/protocol';
 import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from '../../testkit/dbMocks';
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 // Database transport is the only substitute. Route parsing, transaction handling,
 // Account mode, stored-content opening, kind policy and publication owner are real.
 const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique', 'create', 'update'], session: ['findUnique'], sessionMessage: ['findFirst'], sessionSystemRecord: ['findFirst'], homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'] } as const);
-const transactions = createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...mocks.db }));
+const transactions = createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock, ...mocks.db }));
 installDbModuleMock(() => ({ db: transactions.wrapDb(mocks.db) }));
 const { withAuthenticatedTestApp } = await import('../../testkit/sqliteFastify');
 const { registerStoredContentPublicShareRoutes } = await import('./registerStoredContentPublicShareRoutes');

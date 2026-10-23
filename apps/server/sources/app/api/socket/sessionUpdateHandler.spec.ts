@@ -102,9 +102,11 @@ vi.mock("@/app/session/pending/pendingMessageService", () => ({
     settlePendingInputAdmission,
     readSessionPendingState,
 }));
-vi.mock("@/storage/db", () => {
+vi.mock("@/storage/db", async () => {
+    const { homeConfigSnapshotPostgresQueryMock } = await import('@/app/home/settings/homeConfigSnapshot.testkit');
     const tables = {
         ...inTxPostgresControlStatementMock,
+        ...homeConfigSnapshotPostgresQueryMock,
         homeSettings: { findUnique: vi.fn(async () => null) },
         homeGovernancePolicy: { findUnique: vi.fn(async () => null) },
         session: {

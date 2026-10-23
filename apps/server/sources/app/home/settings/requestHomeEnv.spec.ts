@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as privacyKit from 'privacy-kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDbTransactionMock, inTxPostgresControlStatementMock } from '@/app/api/testkit/dbMocks';
+import { homeConfigSnapshotPostgresQueryMock } from './homeConfigSnapshot.testkit';
 
 const boundary = vi.hoisted(() => ({ settings: vi.fn(), policy: vi.fn() }));
 
@@ -11,6 +12,7 @@ const boundary = vi.hoisted(() => ({ settings: vi.fn(), policy: vi.fn() }));
 vi.mock('@/storage/db', () => {
     const tables = {
         ...inTxPostgresControlStatementMock,
+        ...homeConfigSnapshotPostgresQueryMock,
         homeSettings: { findUnique: boundary.settings },
         homeGovernancePolicy: { findUnique: boundary.policy },
     };

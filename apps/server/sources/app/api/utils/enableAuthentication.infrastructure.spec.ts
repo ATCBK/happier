@@ -9,6 +9,7 @@ import { SESSION_PUBLISHER_AUTHORITY_CHECK_EVENT } from "@happier-dev/protocol/s
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 const boundary = vi.hoisted(() => ({
     account: { findUnique: vi.fn() },
@@ -18,7 +19,7 @@ const boundary = vi.hoisted(() => ({
 vi.mock("@/storage/db", async () => {
     const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
     // Replace database IO only; token crypto, transactions and HTTP error handling remain real.
-    return { db: createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...boundary })).wrapDb(boundary) };
+    return { db: createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock, ...boundary })).wrapDb(boundary) };
 });
 
 describe("authentication infrastructure failures", () => {

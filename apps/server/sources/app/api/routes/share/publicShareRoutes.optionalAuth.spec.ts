@@ -5,6 +5,7 @@ import { createDbMocks, createDbTransactionMock, installDbModuleMock, matchesDbM
 import { isPrismaErrorCode } from '@/storage/prismaErrors';
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 let auth: typeof import("@/app/auth/auth").auth;
 
@@ -37,7 +38,9 @@ const dbTransaction = createDbTransactionMock(() => ({
     sessionMessage: txDbMocks.db.sessionMessage,
     publicShareAccessLog: txDbMocks.db.publicShareAccessLog,
     accountApiToken: dbMocks.db.accountApiToken,
-    $queryRawUnsafe: async (_query: string, accountId: string) => [{ id: accountId }],
+    $queryRawUnsafe: async (query: string, accountId: string) => query.includes('FROM (SELECT 1) AS singleton')
+        ? homeConfigSnapshotPostgresQueryMock.$queryRawUnsafe.call(dbMocks.db, query, accountId)
+        : [{ id: accountId }],
 }));
 
 // The storage adapter alone is substituted: issuance/verification, transaction

@@ -17,6 +17,7 @@ import { SERVER_CONFIG_REGISTRY } from "@/config/serverConfigRegistry";
 import { decryptString, encryptString } from "@/modules/encrypt";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
+import { getDbProviderFromEnv } from "@/storage/prisma";
 
 import { buildHomeConfigEnv, composeHomeConfigEnv, projectHomeSettings } from "./homeConfigOverlay";
 import { readHomeDeploymentEnv, readStartupHomeEnv, type StoredHomeSettings } from "./startupHomeEnv";
@@ -153,9 +154,30 @@ export type HomeConfigSnapshot = Readonly<{
 
 /** Capture both rows coherently without opening secrets or constructing their full env overlay. */
 export async function readHomeConfigSnapshot(base: ServerConfigEnv = process.env): Promise<HomeConfigSnapshot> {
-    const [record, policyValues] = await inReadSnapshot(tx => Promise.all([
-        readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]));
+    return inReadSnapshot(tx => readHomeConfigSnapshotInTx(tx, base));
+}
+
+async function readHomeConfigSnapshotInTx(tx: Tx, base: ServerConfigEnv): Promise<HomeConfigSnapshot> {
+    if (getDbProviderFromEnv(process.env, "postgres") === "postgres") {
+        // Neither singleton is required to exist. Seed the join so an empty Home
+        // still yields its defaults, with settings and governance from one read.
+        // Keep the owning transaction's READ ONLY/isolation/statement budget.
+        const [row] = await tx.$queryRawUnsafe<Array<{
+            revision: number | null;
+            values: unknown;
+            encryptedSecrets: Uint8Array | null;
+            authenticationPolicy: unknown;
+        }>>(`SELECT settings."revision", settings."values", settings."encryptedSecrets", policy."authenticationPolicy"
+            FROM (SELECT 1) AS singleton
+            LEFT JOIN "HomeSettings" AS settings ON settings."id" = $1
+            LEFT JOIN "HomeGovernancePolicy" AS policy ON policy."id" = $1`, HOME_SETTINGS_ID);
+        return {
+            base,
+            record: toRecord(row.revision === null ? null : { revision: row.revision, values: row.values, encryptedSecrets: row.encryptedSecrets }),
+            policyValues: homeAuthenticationPolicyConfigValues(readHomeAuthenticationPolicyV1(row.authenticationPolicy)),
+        };
+    }
+    const [record, policyValues] = await Promise.all([readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx)]);
     return { base, record, policyValues };
 }
 
@@ -174,9 +196,8 @@ export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Pr
  * connection, so code already in a transaction must not read through `db`).
  */
 export async function readHomeConfigEnvInTx(tx: Tx, base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
-    const record = await readHomeSettingsInTx(tx);
-    const policyValues = await readHomeAuthenticationPolicyValues(tx);
-    return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
+    const snapshot = await readHomeConfigSnapshotInTx(tx, base);
+    return buildHomeConfigEnvFromRecord(snapshot.base, snapshot.record, SERVER_CONFIG_REGISTRY, snapshot.policyValues);
 }
 
 type PersistedPolicyValues = Readonly<Record<string, ServerConfigValue>>;

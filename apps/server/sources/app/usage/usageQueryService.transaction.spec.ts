@@ -3,12 +3,13 @@ import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema } f
 import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from '@/app/api/testkit/dbMocks';
 import { restoreEnv, snapshotEnv } from '@/testkit/env';
 import type { ScopedUsageEventDbRow } from './query/scopedUsageEventRow';
+import { homeConfigSnapshotPostgresQueryMock } from '@/app/home/settings/homeConfigSnapshot.testkit';
 
 // Only the persistent database boundary is substituted. Transactions, retries,
 // accounting, route registration and HTTP serialization all execute real code.
 const boundary = createDbMocks({ usageEvent: ['findMany'], usageReport: ['findMany'],
     homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'], simpleCache: ['findFirst'] });
-const transactions = createDbTransactionMock(() => ({ ...boundary.db, ...inTxPostgresControlStatementMock }));
+const transactions = createDbTransactionMock(() => ({ ...boundary.db, ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock }));
 installDbModuleMock({ db: transactions.wrapDb(boundary.db) });
 const { withAuthenticatedTestApp } = await import('@/app/api/testkit/sqliteFastify');
 const { queryUsageAnalytics } = await import('./usageQueryService');
@@ -47,7 +48,7 @@ describe('Usage snapshot transaction lifetime', () => {
         } satisfies ScopedUsageEventDbRow]);
         transactions.transaction.mockImplementation(async (fn: (tx: object) => Promise<unknown>) => {
             attempt++;
-            const result = await fn({ ...boundary.db, ...inTxPostgresControlStatementMock });
+            const result = await fn({ ...boundary.db, ...inTxPostgresControlStatementMock, ...homeConfigSnapshotPostgresQueryMock });
             if (retry && attempt === 1) throw Object.assign(new Error('Commit rolled back'), { code: 'P2034' });
             committed = true;
             return result;
