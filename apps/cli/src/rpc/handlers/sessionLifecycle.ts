@@ -330,7 +330,8 @@ async function resolveProductionSessionSpawnNewActionExecutor(params: Readonly<{
         machineId: requester.attribution.machineId,
         readCredentials: async () => await requester.isCurrent() ? requester.credentials : null,
         actionsSettingsProvider: {
-            getActionsSettings: () => normalizeActionsSettingsV1(requester.savedSecretOperationContext.readSnapshot()?.settings.actionsSettingsV1),
+            getActionsSettings: () => requester.savedSecretOperationContext.readSnapshot()?.settings.actionsSettingsV1
+                ?? normalizeActionsSettingsV1(undefined),
             getAccountSettings: () => requester.savedSecretOperationContext.readSnapshot()?.settings ?? null,
             getAccountRoleOverrides: () => {
                 const snapshot = requester.savedSecretOperationContext.readSnapshot();

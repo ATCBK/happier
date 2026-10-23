@@ -3,7 +3,7 @@ import type { AccountSettings, ActionsSettingsV1 } from '@happier-dev/protocol';
 import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, readActiveAccountRoleOverrides } from './accountSettings/activeAccountSettingsSnapshot';
-import { resolveActionsSettingsWithEnvironmentOverride } from './actionsSettings';
+import { readActionsSettingsOverrideFromEnv } from './actionsSettings';
 
 /** Narrow host-reviewed policy accepted by ordinary and restricted runtime constructors. */
 export type RuntimeActionSettingsProvider = Readonly<{
@@ -73,9 +73,11 @@ export function createActionSettingsProvider(params: Readonly<{
     },
     getActionsSettings: () => {
       const accountSettings = getAccountSettings();
-      return scopeKey || params.allowEnvironmentOverride === false
-        ? normalizeActionsSettingsV1(accountSettings?.actionsSettingsV1)
-        : resolveActionsSettingsWithEnvironmentOverride(accountSettings ?? {});
+      // AccountSettings was admitted by the Account source. Re-read its current
+      // projection without re-parsing and rebuilding the whole policy per check.
+      const override = !scopeKey && params.allowEnvironmentOverride !== false
+        ? readActionsSettingsOverrideFromEnv() : null;
+      return override ?? accountSettings?.actionsSettingsV1 ?? normalizeActionsSettingsV1(undefined);
     },
   };
 }
