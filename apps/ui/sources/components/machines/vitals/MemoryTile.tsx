@@ -175,6 +175,13 @@ export const MemoryTile = React.memo(function MemoryTile(
       thresholdValue: props.warnAbovePct === undefined || total <= 0 ? null : (props.warnAbovePct / 100) * total,
     };
   }, [language, accent, levelInk, memoryTotalBytes, pressured, props.timeline, props.warnAbovePct, theme.dark]);
+  const thresholdValue = chart?.thresholdValue ?? null;
+  const warnAbovePct = props.warnAbovePct;
+  const threshold = React.useMemo(() => thresholdValue === null || warnAbovePct === undefined ? undefined : {
+    value: thresholdValue,
+    tone: 'warning' as const,
+    label: t('machines.widgets.body.metric.warnAbove', { value: `${formatVitalsPercent(warnAbovePct)}%` }),
+  }, [language, thresholdValue, warnAbovePct]);
 
   if (!memory) {
     return (
@@ -285,10 +292,7 @@ export const MemoryTile = React.memo(function MemoryTile(
           format={chart.format}
           freshness={props.freshness}
           live={props.live}
-          {...(chart.thresholdValue !== null && props.warnAbovePct !== undefined
-            ? { threshold: { value: chart.thresholdValue, tone: 'warning' as const,
-                label: t('machines.widgets.body.metric.warnAbove', { value: `${formatVitalsPercent(props.warnAbovePct)}%` }) } }
-            : {})}
+          {...(threshold ? { threshold } : {})}
         />
       ) : null}
       <MemoryComposition memory={memory} />

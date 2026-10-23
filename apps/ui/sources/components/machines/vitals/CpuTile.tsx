@@ -93,6 +93,12 @@ export const CpuTile = React.memo(function CpuTile(
     [language, accent, props.timeline, theme.dark],
   );
   const cores = props.host ? resolveMachineCoreCount(props.host) : null;
+  const warnAbovePct = props.warnAbovePct;
+  const threshold = React.useMemo(() => warnAbovePct === undefined ? undefined : {
+    value: warnAbovePct,
+    tone: 'warning' as const,
+    label: t('machines.widgets.body.metric.warnAbove', { value: formatVitalsPercentLabel(warnAbovePct) }),
+  }, [language, warnAbovePct]);
   const [open, setOpen] = React.useState(false);
   return (
     <VitalsTile
@@ -144,10 +150,7 @@ export const CpuTile = React.memo(function CpuTile(
           format={formatVitalsPercentLabel}
           freshness={props.freshness}
           live={props.live}
-          {...(props.warnAbovePct !== undefined
-            ? { threshold: { value: props.warnAbovePct, tone: 'warning' as const,
-                label: t('machines.widgets.body.metric.warnAbove', { value: formatVitalsPercentLabel(props.warnAbovePct) }) } }
-            : {})}
+          {...(threshold ? { threshold } : {})}
         />
       ) : null}
       {cpu ? (

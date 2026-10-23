@@ -199,7 +199,7 @@ export const NetworkTile = React.memo(function NetworkTile(
           domain={chart.domain}
           scaleTicks={chart.ticks}
           axis={props.axis}
-          format={(rate) => formatVitalsRate(Math.abs(rate))}
+          format={formatNetworkChartRate}
           freshness={props.freshness}
           live={props.live}
         />
@@ -207,6 +207,10 @@ export const NetworkTile = React.memo(function NetworkTile(
     </VitalsTile>
   );
 });
+
+function formatNetworkChartRate(rate: number): string {
+  return formatVitalsRate(Math.abs(rate));
+}
 
 const styles = StyleSheet.create(() => ({
   arrow: {

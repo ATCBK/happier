@@ -144,6 +144,59 @@ describe('a Metric widget’s “Warn above” on the Overview tiles (plan 60 rw
 });
 
 describe('retained vitals readings', () => {
+  it.each(['cpu', 'memory'] as const)('publishes zero unchanged %s chart inputs with a custom warning for ten live readings', async metric => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });
+    const axis = ['then', 'now'] as const;
+    let update = (_value: MachineVitalsSampleV1) => { throw new Error('Metric tile not mounted'); };
+    let updateWarning = (_value: number) => { throw new Error('Metric tile not mounted'); };
+    function Reading() {
+      const [value, setValue] = React.useState(sample(at));
+      const [warning, setWarning] = React.useState(70);
+      update = setValue;
+      updateWarning = setWarning;
+      return metric === 'cpu'
+        ? <CpuTile sample={value} host={null} timeline={timeline} axis={axis} freshness="live" live={false} warnAbovePct={warning} />
+        : <MemoryTile sample={value} attention={null} timeline={timeline} axis={axis} freshness="live" live={false} nowMs={at} warnAbovePct={warning} />;
+    }
+    const screen = await renderScreen(<Reading />);
+    let publications = 0;
+    for (let arrival = 1; arrival <= 10; arrival++) {
+      const previous = screen.findByType(VitalsHistoryChart).props;
+      act(() => update(sample(at + arrival * 2_000)));
+      const current = screen.findByType(VitalsHistoryChart).props;
+      if (Object.keys(current).some(key => current[key] !== previous[key])) publications++;
+    }
+    expect(publications).toBe(0);
+    act(() => updateWarning(80));
+    expect(screen.findByType(VitalsHistoryChart).props.threshold.value).toBe(metric === 'cpu' ? 80 : 80 * GB);
+  });
+
+  it('publishes zero unchanged network chart inputs for ten live readings', async () => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });
+    const axis = ['then', 'now'] as const;
+    let update = (_value: MachineVitalsSampleV1) => { throw new Error('Network tile not mounted'); };
+    function Reading() {
+      const [value, setValue] = React.useState(sample(at));
+      update = setValue;
+      return <NetworkTile sample={value} today={null} timeline={timeline} axis={axis} freshness="live" live={false} />;
+    }
+    const screen = await renderScreen(<Reading />);
+    let publications = 0;
+    for (let arrival = 1; arrival <= 10; arrival++) {
+      const previous = screen.findByType(VitalsHistoryChart).props;
+      const next = sample(at + arrival * 2_000);
+      act(() => update({ ...next, network: { reported: true, rxBps: 12 + arrival, txBps: 3 + arrival } }));
+      const current = screen.findByType(VitalsHistoryChart).props;
+      if (Object.keys(current).some(key => current[key] !== previous[key])) publications++;
+    }
+    expect(publications).toBe(0);
+    // The mirrored upload formatter still says its magnitude, never a negative transfer rate.
+    const format = screen.findByType(VitalsHistoryChart).props.format;
+    expect(format(-1200)).toBe(format(1200));
+  });
+
   it('rebuilds zero historical memory series for ten live readings with unchanged chart inputs', async () => {
     const at = Date.now();
     const timeline = buildMachineVitalsTimeline({ range: '24h', samples: [], history: {
