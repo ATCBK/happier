@@ -80,7 +80,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
     const accountLifetime = useWorkflowAccountLifetime();
     const addressedMachines = useMachineListForServer(accountLifetime?.scope.serverId ?? '');
     const machines = accountLifetime === undefined ? focusedMachines : addressedMachines ?? [];
-    const { recentMachinePaths } = useWorkflowEditorAccountMemory(accountLifetime);
+    const { recentMachinePaths } = useWorkflowEditorAccountMemory(accountLifetime, { workspaceRefs: false });
     const [focusedLifetime] = React.useState(captureActiveServerAccountScopeLifetime);
     const lifetime = accountLifetime === undefined ? focusedLifetime : accountLifetime;
     const [target, setTarget] = React.useState<WorkflowAuthoringTarget | null>(() => resolveContextualWorkflowProjectTarget({ machines, recentMachinePaths,

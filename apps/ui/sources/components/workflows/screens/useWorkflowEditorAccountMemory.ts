@@ -13,7 +13,9 @@ import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 const EMPTY_WORKSPACES: readonly WorkspaceRefV1[] = Object.freeze([]);
 
 /** Local display projection; the existing memory domain owns reads, encryption and CAS writes. */
-export function useWorkflowEditorAccountMemory(accountLifetime?: ServerAccountScopeLifetime | null) {
+export function useWorkflowEditorAccountMemory(accountLifetime?: ServerAccountScopeLifetime | null,
+    demand?: Readonly<{ workspaceRefs: boolean }>) {
+    const readWorkspaces = demand?.workspaceRefs !== false;
     accountLifetime = useWorkflowAccountLifetime(accountLifetime);
     const activeRecent = useAuthoringMemoryField('recentMachinePaths');
     const activeProjects = useAuthoringMemoryField('workflowProjectTargetsByDefinitionId');
@@ -38,7 +40,7 @@ export function useWorkflowEditorAccountMemory(accountLifetime?: ServerAccountSc
                 account.dispose(); return;
             }
             const isCurrent = () => !disposed && accountLifetime.isCurrent() && account?.accountLifetime.isCurrent() === true;
-            void createUiProjectAccountRowsClient(account).read(controller.signal).then(snapshot => {
+            if (readWorkspaces) void createUiProjectAccountRowsClient(account).read(controller.signal).then(snapshot => {
                 if (isCurrent()) setWorkspaces({ lifetime: accountLifetime, refs: snapshot.workspaceRefs });
             }).catch(() => { /* An unavailable census cannot contribute another Account's checkouts. */ });
             const memory = await createAuthoringMemorySyncInContext(account, {
@@ -50,7 +52,7 @@ export function useWorkflowEditorAccountMemory(accountLifetime?: ServerAccountSc
             if (isCurrent()) setOwner({ lifetime: accountLifetime, memory });
         })().catch(() => { /* A failed memory read never borrows the focused Account's placement. */ });
         return () => { disposed = true; controller.abort(); retirement.dispose(); account?.dispose(); };
-    }, [accountLifetime]);
+    }, [accountLifetime, readWorkspaces]);
     const apply = React.useCallback(async (delta: AuthoringMemoryDelta) => {
         if (accountLifetime === undefined) return applyActive(delta);
         if (!accountLifetime?.isCurrent() || owner?.lifetime !== accountLifetime) throw new Error('authoring_memory_unavailable');
@@ -58,7 +60,7 @@ export function useWorkflowEditorAccountMemory(accountLifetime?: ServerAccountSc
     }, [accountLifetime, applyActive, owner]);
     const memory = state.lifetime === accountLifetime ? state.memory : authoringMemoryDefaults;
     return accountLifetime === undefined
-        ? { recentMachinePaths: activeRecent, workflowProjectTargetsByDefinitionId: activeProjects, workspaceRefs: activeWorkspaceRefs, apply }
+        ? { recentMachinePaths: activeRecent, workflowProjectTargetsByDefinitionId: activeProjects, workspaceRefs: readWorkspaces ? activeWorkspaceRefs : EMPTY_WORKSPACES, apply }
         : { recentMachinePaths: memory.recentMachinePaths, workflowProjectTargetsByDefinitionId: memory.workflowProjectTargetsByDefinitionId,
-            workspaceRefs: workspaces?.lifetime === accountLifetime ? workspaces.refs : EMPTY_WORKSPACES, apply };
+            workspaceRefs: readWorkspaces && workspaces?.lifetime === accountLifetime ? workspaces.refs : EMPTY_WORKSPACES, apply };
 }

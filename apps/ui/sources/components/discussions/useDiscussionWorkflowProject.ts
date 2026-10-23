@@ -32,7 +32,7 @@ export function useDiscussionWorkflowProject(
   const machines =
     useMachineListForServer(accountLifetime.scope.serverId) ?? NO_MACHINES;
   const { recentMachinePaths } =
-    useWorkflowEditorAccountMemory(accountLifetime);
+    useWorkflowEditorAccountMemory(accountLifetime, { workspaceRefs: false });
   const [chosen, setChosen] = React.useState<WorkflowAuthoringTarget | null>(
     null,
   );
