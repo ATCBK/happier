@@ -16,7 +16,8 @@ import { admitDiscussionDocSourceInTx, readDiscussionDocSourceAuthorityAccountId
 import { admitDiscussionSecondOpinionSourceInTx } from './secondOpinion';
 import { validateInitialDiscussionGrantsInTx, applyInitialDiscussionGrantsInTx, inviteDiscussionParticipantInTx } from './accessService';
 import { markDiscussionReadersChangedInTx, scheduleDiscussionBadgeRefreshInTx } from './changes';
-import { detachDiscussionFollowSourceInTx, attachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx } from '@/app/session/follow/sessionFollowEdgeService';
+import { detachDiscussionFollowSourceInTx, attachDiscussionFollowSourceInTx } from '@/app/session/follow/sessionFollowEdgeService';
+import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
 import { withdrawDiscussionInputRepliesInTx } from '@/app/session/messages/sessionMessageReply';
 import { DISCUSSION_MESSAGE_SELECT, projectDiscussionAccountActorsInTx, projectDiscussionMessageV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionMessageRow } from './projection';
 import { projectDiscussionForViewerInTx, readDiscussionRowInTx } from './queries';
@@ -502,7 +503,9 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
     const at = new Date();
     const allocated = await tx.discussion.update({ where: { id: discussion.id }, data: { messageSeq: { increment: 1 }, lastMessageAt: at }, select: { messageSeq: true } });
     const message = await insertMessageInTx(tx, { discussionId: discussion.id, actorAccountId: input.actorAccountId, seq: allocated.messageSeq, intent, producer, at, ...addressed.value });
-    if (addressed.value.addressedSessionIds.length) await invalidateDiscussionFollowDestinationsInTx(tx, discussion.id);
+    // C3 already admitted the destinations whose executable Follow facts changed,
+    // including watchers. Other attachments consume no new fact from this post.
+    if (addressed.value.addressedSessionIds.length) await invalidateSessionRelationProjectionsInTx(tx, addressed.value.addressedSessionIds);
     if (returned?.success && producer?.kind === 'agent' && !await settleSessionInputDiscussionReplyReturnInTx(tx, {
         accountId: input.actorAccountId, sessionId: producer.sessionId, requestLocalId: returned.data.requestLocalId,
         acceptedTurnId: returned.data.acceptedTurnId, localId: intent.localId,

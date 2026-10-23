@@ -75,7 +75,7 @@ import { readOtherPersonalFollowerCensusInTx, readSessionPersonalFollowerCensusI
 import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { resolveWorkflowRunFollowEventV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
 import { workflowRunAttentionWhere } from '@/app/workflows/workflowRunAttention';
-export { attachDiscussionFollowSourceInTx, detachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx,
+export { attachDiscussionFollowSourceInTx, detachDiscussionFollowSourceInTx,
     admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx } from './discussionFollowSource';
 import {
     invalidateSessionRelationProjectionsInTx as invalidateSessionFollowDestinationsInTx,

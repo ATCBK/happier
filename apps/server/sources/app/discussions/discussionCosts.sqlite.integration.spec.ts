@@ -21,6 +21,7 @@ import { listDiscussions } from './queries';
 import { encodeDiscussionListCursorV1 } from './pagination';
 import { setDiscussionReadCursor } from './readState';
 import type { DiscussionDocSource } from './docPassages';
+import { discussionFollowPublicationCostContracts } from './discussionFollowCosts.testkit';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 const body = (text: string) => ({ t: 'plain', v: { v: 1, parts: [{ t: 'text', text }] } } satisfies StrictSessionStoredMessageContentEnvelope);
@@ -31,6 +32,8 @@ describe('Discussion owner cost contracts (SQLite; not PostgreSQL lock evidence)
         harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-discussion-costs-', initAuth: false, initEncrypt: true });
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    discussionFollowPublicationCostContracts();
 
     it('measures physical append/read-marker SQL and suppresses publications on retries and equal or older reads', async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });

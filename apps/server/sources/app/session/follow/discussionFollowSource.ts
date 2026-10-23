@@ -84,12 +84,6 @@ export async function detachDiscussionFollowSourceInTx(tx: Tx, input: Readonly<{
     if (edges.length) await invalidateSessionRelationProjectionsInTx(tx, edges.map(edge => edge.destinationSessionId));
 }
 
-/** The existing content-free Follow invalidation reaches the admitted destination runtime after commit. */
-export async function invalidateDiscussionFollowDestinationsInTx(tx: Tx, discussionId: string): Promise<void> {
-    const edges = await tx.sessionFollowEdge.findMany({ where: { sourceDiscussionId: discussionId }, select: { destinationSessionId: true } });
-    if (edges.length) await invalidateSessionRelationProjectionsInTx(tx, edges.map(edge => edge.destinationSessionId));
-}
-
 function receiptHasAddressing(value: unknown, addressing: DiscussionAddressingV1): boolean {
     const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(value);
     return receipt.success && receipt.data.issuer === 'authenticatedMachine'
