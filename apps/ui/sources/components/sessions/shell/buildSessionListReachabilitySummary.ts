@@ -206,6 +206,7 @@ function buildSessionDisplayRows(input: Readonly<{
     }
     let rows: SessionDisplayRow[] | readonly SessionDisplayRow[] = cache.previousRows;
     const itemsByKey = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
+    const invalidatedByMachine = structuralChange ? new Set(dirty) : dirty;
     if (structuralChange) {
         rows = [];
         dirty.clear(); cache.machineKeyCounts.clear(); cache.headerMachineIds.clear();
@@ -236,7 +237,14 @@ function buildSessionDisplayRows(input: Readonly<{
         if (!item) continue;
         const sessionId = item.sessionId.trim();
         const renderable = input.renderablesByKey ? input.renderablesByKey.get(rowCacheKey) ?? null : input.resolveSessionRenderable(item);
-        const nextRow = buildSessionDisplayRow({ ...input, item, sessionId, renderable });
+        // Layout/order changes consume existing displays; they do not change
+        // target, label or workspace inputs. Keep simultaneous Machine edits dirty.
+        const nextRow = cached && !invalidatedByMachine.has(rowCacheKey)
+            && cached.renderable === renderable
+            && cached.workspaceRefs === input.workspaceRefs
+            && cached.workspacePathDisplayModeV1 === input.workspacePathDisplayModeV1
+            ? cached.row
+            : buildSessionDisplayRow({ ...input, item, sessionId, renderable });
         const previous = cached?.row;
         const row = previous && previous.machineKey === nextRow.machineKey
             && previous.display.machineId === nextRow.display.machineId

@@ -10,7 +10,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { removeServerProfile, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import { getSessionAvatarId, getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
 import { buildSessionListViewData } from '@/sync/domains/session/listing/sessionListViewData';
@@ -28,6 +28,45 @@ describe('buildSessionListReachabilitySummary', () => {
         vi.restoreAllMocks();
         storage.setState(previousState, true);
         projectManager.clear();
+    });
+
+    it('reorders 1000 existing displays without resolving their targets again and still sees a simultaneous Machine edit', async () => {
+        const profile = await upsertServerProfile({ serverUrl: 'https://display-reorder-cost.example.test', name: 'Display reorder cost' });
+        const machines = Array.from({ length: 10 }, (_, index) => createMachineFixture({ id: `reorder-machine-${index}` }));
+        const rows = Array.from({ length: 1_000 }, (_, index) => buildSessionListRenderableFromSession(createSessionFixture({
+            id: `reorder-session-${index}`, serverId: profile.id,
+            metadata: { machineId: machines[index % machines.length]!.id, path: `/repo-${index}`, host: `host-${index % machines.length}` },
+        })));
+        const byId = Object.fromEntries(rows.map(session => [session.id, session]));
+        const input = {
+            cache: createSessionListReachabilitySummaryCache(),
+            listItems: rows.map(session => ({ type: 'session' as const, serverId: profile.id, sessionId: session.id })),
+            machinesById: new Map(machines.map(machine => [machine.id, machine])),
+            workspaceRefs: [],
+            resolveSessionRenderable: (item: { sessionId: string }) => byId[item.sessionId] ?? null,
+        };
+        try {
+            storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+                sessionListRowsByServerId: { [profile.id]: byId } });
+            const initial = buildSessionListReachabilitySummary(input);
+            const derive = vi.spyOn(workspaceDisplay, 'resolveSessionWorkspaceDisplayPresentation');
+            input.listItems = [...input.listItems].reverse().map(item => ({ ...item }));
+            const reordered = buildSessionListReachabilitySummary(input);
+            expect([...reordered.displayById.keys()]).toEqual([...rows].reverse().map(session => session.id));
+            expect(reordered.displayById.get(rows[0]!.id)).toBe(initial.displayById.get(rows[0]!.id));
+            expect(derive).toHaveBeenCalledTimes(0);
+
+            const changed = { ...machines[0]!, metadata: { ...machines[0]!.metadata!, displayName: 'Renamed during reorder' } };
+            input.machinesById.set(changed.id, changed);
+            storage.setState(state => ({ machines: { ...state.machines, [changed.id]: changed } }));
+            input.listItems = [...input.listItems].reverse().map(item => ({ ...item }));
+            const renamed = buildSessionListReachabilitySummary(input);
+            expect(renamed.displayById.get(rows[0]!.id)?.machineLabel).toBe('Renamed during reorder');
+            expect(renamed.displayById.get(rows[1]!.id)).toBe(initial.displayById.get(rows[1]!.id));
+            expect(derive).toHaveBeenCalledTimes(100);
+        } finally {
+            await removeServerProfile(profile.id);
+        }
     });
 
     it('derives only the dependent Session rows for one changed Machine', () => {
