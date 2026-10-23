@@ -45,8 +45,8 @@ export type TriageDetailSurfaceInputBuildInputV1 = Readonly<{
   observation: TriageDetailSurfaceInputV1['observation'];
   /** `[]` means no links; it is never an "unknown" placeholder. */
   linkedSessions: TriageDetailSurfaceInputV1['linkedSessions'];
-  /** Whether the Collection has another page beyond this bounded projection. */
-  linkedSessionsHasMore: boolean;
+  /** Whether another page exists; absence is complete, as in the published detail input. */
+  linkedSessionsHasMore?: boolean;
   /** Include the actual panel before fitting the physical mount's launch input. */
   panel?: string;
 }>;

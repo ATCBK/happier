@@ -266,17 +266,31 @@ export function useTriageEntryDetail(
   /** Cursors already spent by this selection's mount-local linked-session walk. */
   const spentLinkedSessionCursors = useRef(new Set<string>());
   const [retryGeneration, setRetryGeneration] = useState(0);
-  const lastSettledRetryGeneration = useRef(0);
+  const replaceLoadedLinkedSessionPages = useRef(false);
+  const readPending = useRef(false);
+  const refreshAfterRead = useRef(false);
+  const readObservation = useRef<Readonly<{ observedAtMs: number; sourceUpdatedAtMs?: number }> | undefined>(undefined);
 
-  const entryRef = source?.selection.entryRef;
+  const selectedEntryRef = source?.selection.entryRef;
+  const retainedEntryRef = useRef(selectedEntryRef);
+  if (selectedEntryRef === undefined || retainedEntryRef.current === undefined
+    || !sameTriageEntryRefV1(retainedEntryRef.current, selectedEntryRef)) {
+    retainedEntryRef.current = selectedEntryRef;
+  }
+  const entryRef = retainedEntryRef.current;
   const sourceInstanceId = source?.selection.sourceInstanceId;
   const observation = source?.observation;
+  const currentObservation = useRef(observation);
+  currentObservation.current = observation;
+  const sourceUpdatedAtMs = observation?.sourceUpdatedAtMs;
+  const observedAtMs = observation?.observedAtMs;
 
   const publish = useCallback((next: TriageEntryDetailStateV1 | null): void => {
     stateRef.current = next;
     setState(next);
   }, []);
   const retry = useCallback((): void => {
+    replaceLoadedLinkedSessionPages.current = true;
     setRetryGeneration((generation) => generation + 1);
   }, []);
 
@@ -376,6 +390,9 @@ export function useTriageEntryDetail(
   }, [entryRef, observation, publish, sourceInstanceId, transport]);
 
   useEffect(() => {
+    readPending.current = false;
+    refreshAfterRead.current = false;
+    readObservation.current = observation;
     if (entryRef === undefined || sourceInstanceId === undefined || observation === undefined) {
       generation.current += 1;
       linkedSessionsController.current?.abort();
@@ -396,36 +413,67 @@ export function useTriageEntryDetail(
         : READING
     );
     if (readiness.pending) return () => controller.abort();
+    readPending.current = true;
     void (async () => {
       const next = await readTriageEntryDetailStateThrough(
         transport,
-        { selection: { entryRef, sourceInstanceId }, observation },
+        { selection: { entryRef, sourceInstanceId },
+          // Observation is local presentation, not an Account read input.
+          // Compose the latest one when this acquisition actually settles.
+          get observation() { return currentObservation.current ?? observation; } },
         { signal: controller.signal },
       );
       if (controller.signal.aborted || current !== generation.current) return;
+      readPending.current = false;
       // Ordinary source refresh retains already-loaded pages. An explicit relationship reread
       // must replace them: appending old rows would resurrect the link the user just removed.
       if (next.kind === 'unreachable' && stateRef.current?.kind === 'ready') {
         publish(Object.freeze({ ...stateRef.current, linkedSessionsPageState: 'failed' }));
-        return;
+      } else {
+        publish(replaceLoadedLinkedSessionPages.current
+          ? next
+          : keepLoadedLinkedSessionPagesV1(stateRef.current, next));
       }
-      publish(lastSettledRetryGeneration.current === retryGeneration
-        ? keepLoadedLinkedSessionPagesV1(stateRef.current, next)
-        : next);
-      if (next.kind === 'ready') lastSettledRetryGeneration.current = retryGeneration;
+      if (next.kind === 'ready') replaceLoadedLinkedSessionPages.current = false;
+      if (refreshAfterRead.current) {
+        refreshAfterRead.current = false;
+        setRetryGeneration((generation) => generation + 1);
+      }
     })();
     return () => {
       controller.abort();
+      readPending.current = false;
       linkedSessionsController.current?.abort();
     };
-  }, [entryRef, observation, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.revision]);
+  }, [entryRef, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.revision]);
 
-  return useMemo(() => (
-    readiness.pending && state?.kind !== 'ready' ? READING
-      : state?.kind === 'ready'
-      ? Object.freeze({ ...state, loadMoreLinkedSessions, refreshLinkedSessions: retry })
-      : state?.kind === 'unreachable'
-        ? Object.freeze({ ...state, retry })
-        : state
-  ), [loadMoreLinkedSessions, retry, state, readiness.pending]);
+  useEffect(() => {
+    if (observation === undefined || readiness.pending
+      || (readObservation.current?.observedAtMs === observedAtMs
+        && readObservation.current?.sourceUpdatedAtMs === sourceUpdatedAtMs)) return;
+    // A fresh observation also admits same-id connection metadata refreshes.
+    // Finish the current Account read before acquiring that newer projection.
+    if (readPending.current) refreshAfterRead.current = true;
+    else setRetryGeneration((generation) => generation + 1);
+  }, [observedAtMs, sourceUpdatedAtMs, readiness.pending]);
+
+  return useMemo(() => {
+    if (entryRef === undefined || sourceInstanceId === undefined || observation === undefined) return null;
+    if (readiness.pending && state?.kind !== 'ready') return READING;
+    if (state?.kind === 'ready') {
+      if (!sameTriageEntryRefV1(state.input.observation.entryRef, entryRef)
+        || state.input.instance.instance.sourceInstanceId !== sourceInstanceId) return READING;
+      const built = buildTriageDetailSurfaceInputV1({
+        selection: { entryRef, sourceInstanceId },
+        instance: state.input.instance,
+        observation,
+        linkedSessions: state.input.linkedSessions,
+        linkedSessionsHasMore: state.input.linkedSessionsHasMore,
+      });
+      return built.kind === 'admitted'
+        ? Object.freeze({ ...state, input: built.input, loadMoreLinkedSessions, refreshLinkedSessions: retry })
+        : Object.freeze({ kind: 'refused' as const, reason: built.reason });
+    }
+    return state?.kind === 'unreachable' ? Object.freeze({ ...state, retry }) : state;
+  }, [entryRef, observation, sourceInstanceId, loadMoreLinkedSessions, retry, state, readiness.pending]);
 }

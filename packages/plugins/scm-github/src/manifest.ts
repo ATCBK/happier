@@ -100,15 +100,6 @@ import {
   GithubTimelineResultV1Schema,
 } from './triage/detail/contracts.js';
 import {
-  readGithubCapabilities,
-  readGithubOverview,
-  listGithubChangedFiles,
-  listGithubTimeline,
-  readGithubFeedback,
-  readGithubChecks,
-  readGithubPullRequestStatus,
-} from './triage/detailOperations.js';
-import {
   GithubIssueAssigneeAddInputV1Schema,
   GithubIssueAssigneeRemoveInputV1Schema,
   GithubIssueCloseInputV1Schema,
@@ -139,37 +130,6 @@ import {
   GithubPullRequestUpdateBranchInputV1Schema,
   GithubPullRequestUpdateBranchResultV1Schema,
 } from './triage/mutations/contracts.js';
-import {
-  addGithubIssueAssigneesAction,
-  addGithubIssueLabelsAction,
-  addGithubPullRequestReviewersAction,
-  closeGithubIssueAction,
-  closeGithubPullRequestAction,
-  createGithubIssueCommentAction,
-  createGithubIssueAction,
-  editGithubIssueAction,
-  transitionGithubIssueAction,
-  createGithubPullRequestReviewCommentAction,
-  markGithubPullRequestReadyAction,
-  mergeGithubPullRequestAction,
-  publishGithubPullRequestReviewAction,
-  removeGithubIssueAssigneesAction,
-  removeGithubIssueLabelAction,
-  removeGithubPullRequestReviewersAction,
-  reopenGithubIssueAction,
-  reopenGithubPullRequestAction,
-  replyToGithubPullRequestThreadAction,
-  setGithubPullRequestThreadResolutionAction,
-  updateGithubPullRequestBranchAction,
-} from './triage/mutationOperations.js';
-import {
-  getGithubTriageEntry,
-  listGithubTriageInstancesOperation,
-  listGithubTriageScopeUnits,
-  prepareGithubTriageReviewWorkspace,
-  scanGithubTriageSource,
-  verifyGithubTriageReviewWorkspace,
-} from './triage/operations.js';
 import { githubHostingProviderAdapter } from './adapter.js';
 import { githubPullRequestAdapter } from './pullRequests/authChain.js';
 import { githubRepositoryProvisioningAdapter } from './repositoryProvisioning/createRepositoryWithAuthFallback.js';
@@ -529,6 +489,8 @@ function createGithubPlugin() {
       { locale: 'de', messages: { ...GITHUB_RENDER_UI_TRANSLATIONS["de"], ...GITHUB_ADDITIONAL_UI_TRANSLATIONS["de"], 'plugins.github.settings.group': 'GitHub', 'plugins.github.settings.sources': 'PRs und Issues', 'plugins.github.settings.sources.subtitle': 'Wählen Sie aus, welche GitHub-Konten und -Repositorys unter PRs und Issues angezeigt werden.', 'github.automation.historyGapReset.confirmation.title': 'Neue Ausgangsbasis erstellen', 'github.automation.historyGapReset.confirmation.body': 'Ereignisse aus der Verlaufslücke werden nicht erneut abgespielt.' } },
     ]),
   },
+  // The Event observer activates this plugin independently of Triage use. Keep
+  // Action contracts available here, but initialize Triage execution on invocation.
   actions: {
     [GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits]: {
       title: 'List GitHub repositories',
@@ -539,7 +501,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.listScopeUnits.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: [{ path: 'draft.binding.account', nativeServicePath: 'draft.binding.service', purpose: GITHUB_CONNECTED_ACCOUNT_PURPOSE }],
-      run: listGithubTriageScopeUnits,
+      run: async (input, context) => (await import('./triage/operations.js')).listGithubTriageScopeUnits(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.listInstances]: {
       title: 'Discover GitHub accounts',
@@ -554,7 +516,7 @@ function createGithubPlugin() {
       inputSchema: sources.operations.listInstances.declaration.input.schema.jsonSchema,
       resultSchema: sources.operations.listInstances.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
-      run: listGithubTriageInstancesOperation,
+      run: async (input, context) => (await import('./triage/operations.js')).listGithubTriageInstancesOperation(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.scan]: {
       title: 'Scan GitHub pull requests and issues',
@@ -565,7 +527,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.scan.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: scanGithubTriageSource,
+      run: async (input, context) => (await import('./triage/operations.js')).scanGithubTriageSource(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.get]: {
       title: 'Read one GitHub pull request or issue',
@@ -581,7 +543,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.get.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: getGithubTriageEntry,
+      run: async (input, context) => (await import('./triage/operations.js')).getGithubTriageEntry(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.readPullRequestStatus]: {
       title: 'Read GitHub pull-request status',
@@ -593,7 +555,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.readPullRequestStatus.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: readGithubPullRequestStatus,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).readGithubPullRequestStatus(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.prepareReviewWorkspace]: {
       title: 'Prepare a GitHub pull-request review workspace',
@@ -604,7 +566,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.prepareReviewWorkspace.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: prepareGithubTriageReviewWorkspace,
+      run: async (input, context) => (await import('./triage/operations.js')).prepareGithubTriageReviewWorkspace(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.verifyReviewWorkspace]: {
       title: 'Verify a GitHub pull-request review workspace',
@@ -615,7 +577,7 @@ function createGithubPlugin() {
       resultSchema: sources.operations.verifyReviewWorkspace.declaration.resultSchema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: verifyGithubTriageReviewWorkspace,
+      run: async (input, context) => (await import('./triage/operations.js')).verifyGithubTriageReviewWorkspace(input, context),
     },
     // Native provider reads are available to the mounted UI and agent-facing
     // Actions without adding a generic host PR-management owner.
@@ -628,7 +590,7 @@ function createGithubPlugin() {
       resultSchema: GithubCapabilitiesResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: readGithubCapabilities,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).readGithubCapabilities(input, context),
     },
     [GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readOverview]: {
       title: 'Refresh the GitHub overview',
@@ -639,7 +601,7 @@ function createGithubPlugin() {
       resultSchema: GithubOverviewResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: readGithubOverview,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).readGithubOverview(input, context),
     },
     [GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listTimeline]: {
       title: 'Read a GitHub timeline page',
@@ -650,7 +612,7 @@ function createGithubPlugin() {
       resultSchema: GithubTimelineResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: listGithubTimeline,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).listGithubTimeline(input, context),
     },
     [GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles]: {
       title: 'Read a GitHub changed-file page',
@@ -662,7 +624,7 @@ function createGithubPlugin() {
       resultSchema: GithubChangedFilesResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: listGithubChangedFiles,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).listGithubChangedFiles(input, context),
     },
     [GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readFeedback]: {
       title: 'Read one GitHub feedback connection',
@@ -674,7 +636,7 @@ function createGithubPlugin() {
       resultSchema: GithubFeedbackResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: readGithubFeedback,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).readGithubFeedback(input, context),
     },
     [GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readChecks]: {
       title: 'Read the GitHub checks of a pull request',
@@ -686,7 +648,7 @@ function createGithubPlugin() {
       resultSchema: GithubChecksResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: readGithubChecks,
+      run: async (input, context) => (await import('./triage/detailOperations.js')).readGithubChecks(input, context),
     },
     // PR and issue writes retain provider-native danger levels and confirmations.
     // The shared Action policy requires approval by default on agent/MCP/CLI.
@@ -716,7 +678,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestMergeResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: mergeGithubPullRequestAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).mergeGithubPullRequestAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestClose]: {
       title: 'Close this pull request',
@@ -743,7 +705,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestStateResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: closeGithubPullRequestAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).closeGithubPullRequestAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestReopen]: {
       title: 'Reopen this pull request',
@@ -769,7 +731,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestStateResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: reopenGithubPullRequestAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).reopenGithubPullRequestAction(input, context),
     },
     // Draft → ready and a reviewer request are `externalSideEffect` rather than
     // `writesRemote` because the effect a person feels is the NOTIFICATION
@@ -801,7 +763,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestMarkReadyResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: markGithubPullRequestReadyAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).markGithubPullRequestReadyAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestSubmitReview]: {
       title: 'Submit this pull request review',
@@ -827,7 +789,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestReviewPublicationResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: publishGithubPullRequestReviewAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).publishGithubPullRequestReviewAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestReviewCommentCreate]: {
       title: 'Publish this pull request review comment',
@@ -844,7 +806,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestReviewCommentCreateResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: createGithubPullRequestReviewCommentAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).createGithubPullRequestReviewCommentAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestThreadReply]: {
       title: 'Reply to this pull request review thread',
@@ -861,7 +823,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestThreadReplyResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: replyToGithubPullRequestThreadAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).replyToGithubPullRequestThreadAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueComment]: {
       title: 'Comment on this GitHub issue',
@@ -878,7 +840,7 @@ function createGithubPlugin() {
       resultSchema: GithubIssueCommentResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: createGithubIssueCommentAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).createGithubIssueCommentAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestUpdateBranch]: {
       title: 'Update this branch',
@@ -907,7 +869,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestUpdateBranchResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: updateGithubPullRequestBranchAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).updateGithubPullRequestBranchAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestAddReviewers]: {
       title: 'Request review from people',
@@ -935,7 +897,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestReviewersResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: addGithubPullRequestReviewersAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).addGithubPullRequestReviewersAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestRemoveReviewers]: {
       title: 'Withdraw review requests',
@@ -963,7 +925,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestReviewersResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: removeGithubPullRequestReviewersAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).removeGithubPullRequestReviewersAction(input, context),
     },
     // Review-thread resolution is `writesRemote`, not `externalSideEffect`: it
     // moves state everyone watching the pull request can see and summons nobody.
@@ -1004,7 +966,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestThreadResolutionResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: setGithubPullRequestThreadResolutionAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).setGithubPullRequestThreadResolutionAction(input, context),
     },
     // The issue writes. Each is `writesRemote`: it moves remote state, summons
     // nobody, and is reversible through the Action that undoes it. Every one of
@@ -1025,7 +987,7 @@ function createGithubPlugin() {
       resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: createGithubIssueAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).createGithubIssueAction(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.edit]: {
       title: 'Edit a GitHub issue',
@@ -1042,7 +1004,7 @@ function createGithubPlugin() {
       resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: editGithubIssueAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).editGithubIssueAction(input, context),
     },
     [GITHUB_TRIAGE_ACTION_IDS_V1.transition]: {
       title: 'Change GitHub issue status',
@@ -1059,7 +1021,7 @@ function createGithubPlugin() {
       resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: transitionGithubIssueAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).transitionGithubIssueAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueClose]: {
       title: 'Close this issue',
@@ -1085,7 +1047,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestStateResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: closeGithubIssueAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).closeGithubIssueAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueReopen]: {
       title: 'Reopen this issue',
@@ -1111,7 +1073,7 @@ function createGithubPlugin() {
       resultSchema: GithubPullRequestStateResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: reopenGithubIssueAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).reopenGithubIssueAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueAssigneeAdd]: {
       title: 'Assign people to this issue',
@@ -1137,7 +1099,7 @@ function createGithubPlugin() {
       resultSchema: GithubIssueDeltaResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: addGithubIssueAssigneesAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).addGithubIssueAssigneesAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueAssigneeRemove]: {
       title: 'Unassign people from this issue',
@@ -1163,7 +1125,7 @@ function createGithubPlugin() {
       resultSchema: GithubIssueDeltaResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: removeGithubIssueAssigneesAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).removeGithubIssueAssigneesAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueLabelAdd]: {
       title: 'Add labels to this issue',
@@ -1189,7 +1151,7 @@ function createGithubPlugin() {
       resultSchema: GithubIssueDeltaResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: addGithubIssueLabelsAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).addGithubIssueLabelsAction(input, context),
     },
     [GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueLabelRemove]: {
       title: 'Remove a label from this issue',
@@ -1215,7 +1177,7 @@ function createGithubPlugin() {
       resultSchema: GithubIssueDeltaResultV1Schema.jsonSchema,
       hostAccess: TRIAGE_READ_HOST_ACCESS,
       connectedAccountPurposeBindings: TRIAGE_INSTANCE_ACCOUNT_BINDINGS,
-      run: removeGithubIssueLabelAction,
+      run: async (input, context) => (await import('./triage/mutationOperations.js')).removeGithubIssueLabelAction(input, context),
     },
     [GITHUB_AUTOMATION_REPOSITORY_SOURCE_ATTEMPT_ACTION_ID]: {
       title: 'Run GitHub repository Event source attempt',

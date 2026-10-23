@@ -30,7 +30,7 @@ import {
     resolvePullRequestBaseBranch,
 } from './pullRequestStatusProjection.js';
 
-type PullRequestReadRegistry = Pick<ResolvedScmHostingProviderRegistry, 'getPullRequests' | 'buildCompareUrl'>;
+type PullRequestReadRegistry = Pick<ResolvedScmHostingProviderRegistry, 'getPullRequests' | 'buildCompareUrl' | 'detectRemote'>;
 
 export type GitPullRequestReadOperations = Readonly<{
     list(input: Readonly<{
@@ -120,11 +120,6 @@ export function createGitPullRequestReadOperations(
         if (deps?.registry) return {};
         throw new Error('Git SCM pull request operations require host-injected SCM hosting provider runtime services.');
     }
-    const readSnapshot = deps?.readSnapshot ?? (async ({ context }) => {
-        const response = await getGitSnapshot({ context });
-        return response.success ? response.snapshot ?? null : null;
-    });
-
     async function readRegistry(): Promise<PullRequestReadRegistry> {
         return deps?.registry ?? await resolveDefaultPullRequestStatusProjectionRegistry();
     }
@@ -138,7 +133,18 @@ export function createGitPullRequestReadOperations(
         registry: PullRequestReadRegistry;
         adapter: HostingProviderPullRequestsCapability | null;
     }> | { error: ScmPullRequestListResponse & ScmPullRequestGetResponse & ScmPullRequestOpenComposeResponse }> {
-        const snapshot = await readSnapshot({ context: input.context });
+        let registry: PullRequestReadRegistry | undefined;
+        let snapshot: ScmWorkingSnapshot | null;
+        if (deps?.readSnapshot) {
+            snapshot = await deps.readSnapshot({ context: input.context });
+        } else {
+            // Snapshot detection and this operation consume one hosting observation.
+            const response = await getGitSnapshot({
+                context: input.context,
+                resolveHostingProviderRegistry: async () => registry = await readRegistry(),
+            });
+            snapshot = response.success ? response.snapshot ?? null : null;
+        }
         if (!snapshot) {
             return { error: errorResponse('SCM status snapshot is unavailable', SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE) };
         }
@@ -146,7 +152,7 @@ export function createGitPullRequestReadOperations(
         if (!provider) {
             return { error: errorResponse('No supported SCM hosting provider detected for this repository', SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED) };
         }
-        const registry = await readRegistry();
+        registry ??= await readRegistry();
         return {
             snapshot,
             provider,

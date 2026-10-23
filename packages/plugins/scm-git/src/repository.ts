@@ -19,7 +19,7 @@ import { readGitBranchOperationState } from './operations/branchOperationState.j
 import { parseGitStatusPorcelainV2Z } from './statusParser.js';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser.js';
 import { inspectGitOrphanWorktree, readGitRetentionFacts, resolveGitRetainedWorktreeRepository } from './operations/worktreeRetentionFacts.js';
-import { projectPullRequestStatus, resolveDefaultPullRequestStatusProjectionRegistry } from './operations/pullRequestStatusProjection.js';
+import { projectPullRequestStatus, resolveDefaultPullRequestStatusProjectionRegistry, type PullRequestStatusProjectionRegistry } from './operations/pullRequestStatusProjection.js';
 
 function resolveMainWorktreePathFromCheckoutIdentity(
     checkoutIdentity: Awaited<ReturnType<typeof inspectGitCheckoutIdentity>>,
@@ -123,6 +123,7 @@ export async function detectGitRepo(input: { cwd: string; includeRetainedWorktre
 export async function getGitSnapshot(input: {
     context: ScmBackendContext;
     request?: Pick<ScmStatusSnapshotRequest, 'includeWorktreeStatus' | 'operationStateVersion'>;
+    resolveHostingProviderRegistry?: () => Promise<PullRequestStatusProjectionRegistry>;
 }): Promise<ScmStatusSnapshotResponse> {
     const { context, request } = input;
     const repoRoot = context.detection.rootPath ?? context.cwd;
@@ -205,7 +206,7 @@ export async function getGitSnapshot(input: {
     const snapshot = projectPullRequestStatus({
         snapshot: baseSnapshot,
         ...(baseSnapshot.repo.remotes.length > 0
-            ? { registry: await resolveDefaultPullRequestStatusProjectionRegistry() }
+            ? { registry: await (input.resolveHostingProviderRegistry ?? resolveDefaultPullRequestStatusProjectionRegistry)() }
             : {}),
     });
 

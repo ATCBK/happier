@@ -215,6 +215,7 @@ describe('GitHub SCM manifest', () => {
     if (!scan || !get || !listInstances) {
       throw new Error('The three Triage reads must be declared before their bindings can be judged.');
     }
+    const scanIndex = (PLUGIN_MANIFEST.contributes.actions ?? []).findIndex((action) => action.id === scan.id);
 
     const ingestWithScan = (replacement: typeof scan) => ingestPluginManifestV2({
       ...PLUGIN_MANIFEST,
@@ -241,7 +242,7 @@ describe('GitHub SCM manifest', () => {
       ok: false,
       diagnostics: expect.arrayContaining([expect.objectContaining({
         code: 'plugin_manifest_invalid',
-        path: ['contributes', 'actions', 1, 'connectedAccountPurposeBindings', 0, 'path'],
+        path: ['contributes', 'actions', scanIndex, 'connectedAccountPurposeBindings', 0, 'path'],
       })]),
     });
 
@@ -255,7 +256,7 @@ describe('GitHub SCM manifest', () => {
       ok: false,
       diagnostics: expect.arrayContaining([expect.objectContaining({
         code: 'plugin_manifest_invalid',
-        path: ['contributes', 'actions', 1, 'connectedAccountPurposeBindings', 0, 'path'],
+        path: ['contributes', 'actions', scanIndex, 'connectedAccountPurposeBindings', 0, 'path'],
       })]),
     });
   });

@@ -229,9 +229,10 @@ describe('Triage detail surface input', () => {
     expect(built.kind === 'admitted' && built.input.linkedSessionsHasMore).toBe(true);
   });
 
-  it('carries an empty linked-Session projection as the explicit "no links" fact', () => {
-    const built = build({ linkedSessions: [] });
+  it.each([undefined, false, true])('preserves empty linked-Session completeness (%s)', (linkedSessionsHasMore) => {
+    const built = build({ linkedSessions: [], linkedSessionsHasMore });
 
     expect(built.kind === 'admitted' && built.input.linkedSessions).toEqual([]);
+    expect(built.kind === 'admitted' && built.input.linkedSessionsHasMore).toBe(linkedSessionsHasMore === true);
   });
 });

@@ -1,4 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +19,7 @@ import type { ScmBackendContext } from '../types.js';
 import { createPrStatusCache } from '../hostingProviders/prStatusCache.js';
 import { createGitPullRequestReadOperations } from './pullRequestReadOperations.js';
 import { createGithubRestAdapter } from '../../../scm-github/src/pullRequests/restAdapter.js';
+import { createRealGitScmBackendRuntimeServices, runWithGitScmCommandRunner } from '../testkit/scmRuntime.test-support.js';
 
 const provider: ScmHostingProviderRef = {
     id: 'scm.github',
@@ -116,6 +121,7 @@ function createRegistry(adapter: Partial<HostingProviderPullRequestsCapability>,
             ...adapter,
         };
     return {
+        detectRemote: () => ({ kind: 'resolved' as const, providerId: provider.id, provider }),
         getPullRequests(id: string) {
             return id === provider.id ? capability : undefined;
         },
@@ -129,6 +135,19 @@ function createRegistry(adapter: Partial<HostingProviderPullRequestsCapability>,
 }
 
 describe('git pull request read operations', () => {
+    it('returns unsupported for a local repository without remotes even when hosting inventory is unavailable', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-compose-local-'));
+        try {
+            execFileSync('git', ['init', '--quiet'], { cwd: root });
+            const localContext = { ...context, cwd: root, detection: { ...context.detection, rootPath: root } };
+            // Install only the OS/Git boundary. No hosting service exists for this local-only repository.
+            await expect(runWithGitScmCommandRunner(createRealGitScmBackendRuntimeServices().runCommand,
+                () => createGitPullRequestReadOperations().openCompose({ context: localContext,
+                    request: { base: 'main', head: 'feature/local' } })))
+                .resolves.toMatchObject({ success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED });
+        } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
     it('retains the real forge throttle and retry instant through list and get', async () => {
         const adapter = createGithubRestAdapter({
             resolveToken: async () => ({ kind: 'available', token: 'fixture-token', profileKey: 'bound' }),

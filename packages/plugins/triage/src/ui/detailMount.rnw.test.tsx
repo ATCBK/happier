@@ -1064,6 +1064,202 @@ describe('opening a row into the source detail', () => {
         await vi.waitFor(() => { expect(document.body.textContent).toBe('Replace the duplicated normalizer'); });
     });
 
+    it('keeps a same-entry detail acquisition while re-observation updates its current input', async () => {
+        const harness = createHarness();
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const initial = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000, sourceUpdatedAtMs: 3_000,
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: 'Initial observation' }), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        let updateSource: ((source: TriageEntryDetailInputSourceV1 | null) => void) | undefined;
+        let currentObservation: TriageEntryDetailInputSourceV1['observation'] | undefined;
+        let currentInstance: TriageConfiguredSourceInstanceV1 | undefined;
+        let firstReadCaptured = false;
+        let releaseRead!: () => void;
+        const pendingRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+        let releaseWithdrawnRead!: () => void;
+        const withdrawnRead = new Promise<void>((resolve) => { releaseWithdrawnRead = resolve; });
+        const readSignals: AbortSignal[] = [];
+        const surface = defineUiSurface(() => {
+            const [source, setSource] = React.useState<TriageEntryDetailInputSourceV1 | null>(initial);
+            updateSource = setSource;
+            const detail = useTriageEntryDetail(source);
+            currentObservation = detail?.kind === 'ready' ? detail.input.observation : undefined;
+            currentInstance = detail?.kind === 'ready' ? detail.input.instance : undefined;
+            return <Text value={detail?.kind === 'ready' ? detail.input.observation.snapshot.title : detail?.kind ?? 'none'} />;
+        });
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'stable-detail-read', mountNonce: 'stable-detail-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface, surfaceContext: surfaceContext(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: async ({ action, input, signal }) => {
+                if (action !== TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1) throw new Error('Unexpected detail Action');
+                readSignals.push(signal);
+                const result = await harness.executeAction({ action, input });
+                if (readSignals.length === 1) {
+                    firstReadCaptured = true;
+                    await pendingRead;
+                }
+                if (readSignals.length === 5) await withdrawnRead;
+                return result;
+            } },
+        });
+        mounted.push(shell);
+        try {
+            await vi.waitFor(() => expect(firstReadCaptured).toBe(true));
+            const row = instanceRow();
+            const stored = await harness.collections.sourceInstances.get(row.instanceTag);
+            if (!stored) throw new Error('Expected the configured source row');
+            await harness.collections.sourceInstances.batch([{ kind: 'put', expectedRevision: stored.revision,
+                value: toCorpusStoredValue({ ...row,
+                    configured: { ...row.configured, configuration: { v: 1, token: 'replacement-routing-token' } },
+                }),
+            }]);
+            const reobserved = { ...initial, selection: { ...initial.selection, entryRef: { ...entryRef, source: { ...SOURCE } } },
+                observation: { ...initial.observation, observedAtMs: 5_000, snapshot: testkitSnapshot({ title: 'Current observation' }) } };
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource(reobserved);
+            });
+            expect(readSignals[0]?.aborted).toBe(false);
+            expect(readSignals).toHaveLength(1);
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource({ ...reobserved, observation: { ...reobserved.observation, sourceUpdatedAtMs: 3_500 } });
+            });
+            expect(readSignals[0]?.aborted).toBe(false);
+            expect(readSignals).toHaveLength(1);
+
+            await act(async () => { releaseRead(); await pendingRead; });
+            await vi.waitFor(() => expect(document.body.textContent).toBe('Current observation'));
+            expect(currentObservation?.observedAtMs).toBe(5_000);
+            expect(currentObservation?.sourceUpdatedAtMs).toBe(3_500);
+            await vi.waitFor(() => expect(currentInstance?.configuration).toEqual({ v: 1, token: 'replacement-routing-token' }));
+            expect(readSignals).toHaveLength(2);
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource({ ...reobserved, observation: { ...reobserved.observation, sourceUpdatedAtMs: 3_500 } });
+            });
+            expect(readSignals).toHaveLength(2);
+
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource({ ...reobserved, observation: { ...reobserved.observation, observedAtMs: 6_000 } });
+            });
+            expect(currentObservation?.observedAtMs).toBe(6_000);
+            await vi.waitFor(() => expect(readSignals).toHaveLength(3));
+
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource({ ...reobserved, observation: { ...reobserved.observation, sourceUpdatedAtMs: 7_000 } });
+            });
+            await vi.waitFor(() => expect(readSignals).toHaveLength(4));
+            await vi.waitFor(() => expect(currentObservation?.sourceUpdatedAtMs).toBe(7_000));
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource({ ...reobserved, observation: { ...reobserved.observation, sourceUpdatedAtMs: 8_000 } });
+            });
+            await vi.waitFor(() => expect(readSignals).toHaveLength(5));
+            await act(async () => {
+                if (!updateSource) throw new Error('Detail source setter was not mounted');
+                updateSource(null);
+            });
+            expect(readSignals[4]?.aborted).toBe(true);
+            expect(document.body.textContent).toBe('none');
+            await act(async () => { releaseWithdrawnRead(); await withdrawnRead; });
+            expect(document.body.textContent).toBe('none');
+            expect(readSignals).toHaveLength(5);
+        } finally {
+            releaseRead();
+            releaseWithdrawnRead();
+        }
+    });
+
+    it('refreshes in-place connection configuration when the same entry is re-observed', async () => {
+        const harness = createHarness();
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const initial = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000, sourceUpdatedAtMs: 3_000,
+            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        let reobserve: (() => void) | undefined;
+        let currentInstance: TriageConfiguredSourceInstanceV1 | undefined;
+        const surface = defineUiSurface(() => {
+            const [source, setSource] = React.useState<TriageEntryDetailInputSourceV1>(initial);
+            reobserve = () => setSource({ ...initial, observation: { ...initial.observation, observedAtMs: 5_000 } });
+            const detail = useTriageEntryDetail(source);
+            currentInstance = detail?.kind === 'ready' ? detail.input.instance : undefined;
+            return <Text value={detail?.kind ?? 'none'} />;
+        });
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'reconfigured-detail-read', mountNonce: 'reconfigured-detail-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface, surfaceContext: surfaceContext(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: request => harness.executeAction(request) },
+        });
+        mounted.push(shell);
+        await vi.waitFor(() => expect(currentInstance?.configuration).toEqual({ v: 1, token: 'routing-token' }));
+        const row = instanceRow();
+        const stored = await harness.collections.sourceInstances.get(row.instanceTag);
+        if (!stored) throw new Error('Expected the configured source row');
+        await harness.collections.sourceInstances.batch([{ kind: 'put', expectedRevision: stored.revision,
+            value: toCorpusStoredValue({ ...row,
+                configured: { ...row.configured, configuration: { v: 1, token: 'replacement-routing-token' } },
+            }),
+        }]);
+        await act(async () => {
+            if (!reobserve) throw new Error('Detail source was not mounted');
+            reobserve();
+        });
+        await vi.waitFor(() => expect(currentInstance?.configuration).toEqual({ v: 1, token: 'replacement-routing-token' }));
+    });
+
+    it('replaces loaded relationship pages after a failed explicit reread and a subsequent observation refresh', async () => {
+        const harness = createHarness();
+        await harness.seedLinkedSessions(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1);
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const initial = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000, sourceUpdatedAtMs: 3_000,
+            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        const detail: { current: ReturnType<typeof useTriageEntryDetail> } = { current: null };
+        let reobserve: (() => void) | undefined;
+        const ready = () => {
+            const current = detail.current;
+            if (current?.kind !== 'ready') throw new Error('Expected ready detail');
+            return current;
+        };
+        const surface = defineUiSurface(() => {
+            const [source, setSource] = React.useState<TriageEntryDetailInputSourceV1>(initial);
+            reobserve = () => setSource({ ...initial, observation: { ...initial.observation, observedAtMs: 5_000 } });
+            detail.current = useTriageEntryDetail(source);
+            return <Text value={detail.current?.kind ?? 'none'} />;
+        });
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'relationship-detail-read', mountNonce: 'relationship-detail-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface, surfaceContext: surfaceContext(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: request => harness.executeAction(request) },
+        });
+        mounted.push(shell);
+        await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1));
+        await act(async () => { ready().loadMoreLinkedSessions(); });
+        await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1));
+        const removed = ready().linkedSessions.at(-1);
+        if (!removed) throw new Error('Expected the additional linked Session');
+        await harness.executeAction({ action: 'sessions/unlink-entry-v1', input: { v: 1, entryRef, sessionId: removed.sessionId } });
+        harness.setDetailReadsUnavailable(true);
+        await act(async () => { ready().refreshLinkedSessions(); });
+        await vi.waitFor(() => expect(ready().linkedSessionsPageState).toBe('failed'));
+        expect(ready().linkedSessions).toContainEqual(removed);
+
+        harness.setDetailReadsUnavailable(false);
+        await act(async () => {
+            if (!reobserve) throw new Error('Detail source was not mounted');
+            reobserve();
+        });
+        await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1));
+        expect(ready().linkedSessions).not.toContainEqual(removed);
+        expect(ready().linkedSessionsPageState).toBe('idle');
+    });
+
     it.each([false, true])('follows the declared detail transport readiness without gating direct Account reads (source-owned links: %s)', async (sourceOwned) => {
         const harness = createHarness();
         const protocol = PROTOCOL;
@@ -1871,7 +2067,7 @@ describe('opening a row into the source detail', () => {
         expect(currentHarness?.readDetailInstanceIds).toContain(INSTANCE);
     });
 
-    it('says an identity-only link names no reachable entry once every continuation is exhausted', async () => {
+    it.each(['', 'missing-entry-532'])('says an identity-only link names no reachable entry after continuation exhaustion (query: %s)', async (query) => {
         // `core/SURFACE.md` §3.1: a location naming an entry NO window holds,
         // with nothing left to continue, used to render the bare list — the link
         // looked like it did nothing. The terminal state says what happened,
@@ -1879,6 +2075,7 @@ describe('opening a row into the source detail', () => {
         // invents a connection or issues a detail read for an entry no row held.
         const subPath = buildTriageRouteSubPathV1({
             ...TRIAGE_ROUTE_DEFAULT_LENS_V1,
+            query,
             selection: {
                 source: SOURCE,
                 kindId: 'pull-request',
@@ -1886,17 +2083,21 @@ describe('opening a row into the source detail', () => {
                 entryId: '532',
             },
         });
-        const shell = await mountShell({ subPath, activeSurface: true });
-        await act(async () => { await Promise.resolve(); });
-        await act(async () => { await Promise.resolve(); });
+        const shell = await mountShell({ subPath, deferLinkedEntry: true, activeSurface: true });
+        await act(async () => {
+            await vi.waitFor(async () => {
+                await expect(shell.getByText('That entry could not be found')).resolves.toBeDefined();
+            });
+        });
 
         await expect(shell.getByText('That entry could not be found')).resolves.toBeDefined();
         await expect(shell.getByText(
             'None of the entries this page lists is example/repository · 532. It may have been removed, or belong to a connection that is not set up here.',
         )).resolves.toBeDefined();
         await expect(shell.getByRole('button', { name: 'Check again' })).resolves.toBeDefined();
-        // The list itself is untouched, and nothing was read for the absent ref.
-        await expect(shell.getByText('Replace the duplicated normalizer')).resolves.toBeDefined();
+        // Continuation reached its terminal page even when local search hides all rows.
+        if (query === '') await expect(shell.getByText('Replace the duplicated normalizer')).resolves.toBeDefined();
+        else await expect(shell.queryByText('Replace the duplicated normalizer')).resolves.toBeUndefined();
         expect(currentHarness?.readDetailInstanceIds).toEqual([]);
         // The requested ref stays the page's location: nothing was rewritten.
         expect(lastPageLocation).toBeNull();

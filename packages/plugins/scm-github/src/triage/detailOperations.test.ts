@@ -5,7 +5,11 @@ import {
 } from '@happier-dev/plugin-sdk/actions';
 import { MAX_TRIAGE_TEXT_UTF8_BYTES_V1, type TriageConfiguredSourceInstanceV1 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { describe, expect, it, vi } from 'vitest';
+
+import { activate } from '../activate.js';
+import { GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1, PLUGIN_MANIFEST } from '../manifest.js';
 
 import {
   GITHUB_CONNECTED_ACCOUNT_PURPOSE,
@@ -124,7 +128,7 @@ function jsonResponse(body: unknown, headers: Readonly<Record<string, string>> =
 }
 
 describe('GitHub capability plane', () => {
-  it('projects repository facts from the admission read without a duplicate fetch', async () => {
+  it('projects repository facts through the registered Action without a duplicate fetch', async () => {
     const repositoryBody = {
       id: 4210,
       archived: false,
@@ -140,21 +144,26 @@ describe('GitHub capability plane', () => {
         ? jsonResponse(repositoryBody)
         : undefined,
     });
-    const result = GithubCapabilitiesResultV1Schema.parse(await readGithubCapabilities({
-      v: 1,
-      instance: configuredInstance(),
-      localRef: PULL_REQUEST_REF,
-      routingToken: REPOSITORY_KEY,
-    }, stub.context));
-    expect(result.kind).toBe('capabilities');
-    if (result.kind !== 'capabilities') return;
-    expect(result.mergeMethods.squash).toEqual({ kind: 'unavailable', code: 'repository_unsupported' });
-    expect(result.operations.pullRequestSubmitReview).toEqual({ kind: 'available' });
-    expect(result.operations.pullRequestReviewCommentCreate).toEqual({ kind: 'available' });
-    expect(result.operations.pullRequestMerge).toEqual({ kind: 'available' });
-    expect(stub.requests.filter((request) =>
-      new URL(request.url).pathname === `/repos/${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`))
-      .toHaveLength(1);
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: stub.context.services.http, connectedAccounts: stub.context.services.connectedAccounts,
+    } });
+    try {
+      const result = GithubCapabilitiesResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readCapabilities, {
+        v: 1,
+        instance: configuredInstance(),
+        localRef: PULL_REQUEST_REF,
+        routingToken: REPOSITORY_KEY,
+      }));
+      expect(result.kind).toBe('capabilities');
+      if (result.kind !== 'capabilities') return;
+      expect(result.mergeMethods.squash).toEqual({ kind: 'unavailable', code: 'repository_unsupported' });
+      expect(result.operations.pullRequestSubmitReview).toEqual({ kind: 'available' });
+      expect(result.operations.pullRequestReviewCommentCreate).toEqual({ kind: 'available' });
+      expect(result.operations.pullRequestMerge).toEqual({ kind: 'available' });
+      expect(stub.requests.filter((request) =>
+        new URL(request.url).pathname === `/repos/${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`))
+        .toHaveLength(1);
+    } finally { await plugin.dispose(); }
   });
 });
 
