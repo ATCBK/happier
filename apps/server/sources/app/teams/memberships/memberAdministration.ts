@@ -292,7 +292,7 @@ async function projectMemberInTx(
         row,
         actor: actorFacts(input.context),
         teamArchivedAt: input.context.team.archivedAt,
-        activeOwnerCount: await countActiveTeamOwnersInTx(tx, { teamId: input.context.team.id }),
+        activeOwnerCount: input.context.activeOwnerCount,
         managementTransferTargets: await readManagementTransferTargetsInTx(tx, {
             teamId: input.context.team.id,
             accountIds: [row.accountId],
@@ -434,7 +434,6 @@ export async function listTeamMembersForActorInTx(
     });
 
     const page = rows.slice(0, limit);
-    const activeOwnerCount = await countActiveTeamOwnersInTx(tx, { teamId: input.teamId });
     const managementTransferTargets = await readManagementTransferTargetsInTx(tx, {
         teamId: input.teamId,
         accountIds: page.map((row) => row.accountId),
@@ -449,7 +448,7 @@ export async function listTeamMembersForActorInTx(
                 row,
                 actor,
                 teamArchivedAt: context.team.archivedAt,
-                activeOwnerCount,
+                activeOwnerCount: context.activeOwnerCount,
                 managementTransferTargets,
             })),
             nextCursor: last
