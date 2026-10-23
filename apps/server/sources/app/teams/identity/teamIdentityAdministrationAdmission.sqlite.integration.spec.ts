@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { listHomeManagedIdentityProviders } from "@/app/home/governance/homeManagedIdentityProviders";
 import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { observeSqliteRequests } from "@/testkit/observeSqliteRequests";
 import { listExternalGroupBindingsForActor } from "../directory/externalGroupBindingAdministration";
 import { preflightTeamIdentityConnectionRemovalForActor } from "./teamIdentityConnectionAdministration";
+import { authorizeTeamIdentityAdministrationInTx } from "./teamIdentityAdministrationAuthority";
 
 describe("Team identity administration admission", () => {
     let harness: LightSqliteHarness;
@@ -125,6 +127,20 @@ describe("Team identity administration admission", () => {
             v: 1, teamId: f.team.id, actorAccountId: f.owner.id, ...wrongCredential,
             ownerKind: "identity_connection", teamIdentityConnectionId: f.connection.id,
         })).resolves.toEqual({ ok: false, error: "team_authentication_required" });
+    });
+
+    it("preserves legacy Home credential refusal through Team-owned provider administration", async () => {
+        const f = await fixture();
+        const authentication = {
+            authenticationAuthority: "present_user",
+            legacyHomeCredential: true,
+        } as const;
+        await expect(inTx(tx => authorizeTeamIdentityAdministrationInTx(tx, {
+            actorAccountId: f.owner.id, teamId: f.team.id, ...authentication,
+        }, "view"))).resolves.toEqual({ ok: false, error: "team_authentication_unavailable" });
+        await expect(listHomeManagedIdentityProviders({
+            actorAccountId: f.owner.id, owner: { kind: "team", teamId: f.team.id }, ...authentication,
+        })).resolves.toEqual({ status: "team_authentication_unavailable" });
     });
 
     it("keeps Home removal preview owner-only even though Home admins may view connections", async () => {

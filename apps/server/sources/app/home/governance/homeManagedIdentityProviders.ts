@@ -119,6 +119,7 @@ async function resolveProviderOwnerAuthorizationInTx(
         env: input.env,
         authenticationEvidence: input.authenticationEvidence,
         authenticationAuthority: input.authenticationAuthority,
+        legacyHomeCredential: input.legacyHomeCredential,
     }, operation);
     if (!authority.ok) {
         return {
