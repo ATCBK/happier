@@ -8,7 +8,7 @@ import { createWorkBoardV1, normalizeSessionListFilterV1, WorkflowRunListRequest
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
-import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createWorkflowDefinitionFixture, createWorkflowRunListStorageFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -168,6 +168,61 @@ function runFixture(overrides: Parameters<typeof createWorkflowRunSummaryFixture
 }
 
 describe('the mounted unified list feed', () => {
+    it('pages full private Runs for the mounted Session list across the Machines journey', async () => {
+        const { Dimensions } = await import('react-native');
+        // The OS viewport fits ten of the canonical smallest (34px) Session rows.
+        vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1200, height: 340, scale: 1, fontScale: 1 });
+        const runs = Array.from({ length: 37 }, (_, index) => runFixture({
+            id: `viewport-run-${String(index).padStart(2, '0')}`,
+            createdAt: new Date(Date.UTC(2026, 8, 8) - index * 1000).toISOString(),
+        }));
+        const corpus = await createWorkflowRunListStorageFixture({ runs,
+            definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                document: { text: 'Accepted private context. '.repeat(8000), references: [], attachments: [] } }] }),
+            metadata: { title: 'Private accepted title' },
+        });
+        const bodyFor = (page: readonly WorkflowRunSummaryV1[], nextCursor?: string) => ({
+            runs: page, acceptedEnvelopesByRunId: Object.fromEntries(page.map(run => [run.id, corpus.acceptedEnvelopesByRunId[run.id]])),
+            keyCensusByRunId: Object.fromEntries(page.map(run => [run.id, corpus.keyCensusByRunId[run.id]])),
+            ...(nextCursor ? { nextCursor } : {}),
+        });
+        const transfers: { rows: number; bytes: number }[] = [];
+        // Only the HTTP boundary is scripted. Real Account admission, Actions,
+        // private-envelope opening, list projection and the shared store run beneath it.
+        home.answer(serverId, route, { select: input => {
+            if (!input || typeof input !== 'object' || !('operation' in input) || input.operation !== 'list' || !('request' in input)) {
+                throw new Error('Unexpected Workflow storage operation');
+            }
+            const request = WorkflowRunListRequestV1Schema.parse(input.request);
+            const start = request.cursor ? runs.findIndex(run => run.id === request.cursor) + 1 : 0;
+            const page = runs.slice(start, start + (request.limit ?? runs.length));
+            const body = bodyFor(page, start + page.length < runs.length ? page.at(-1)!.id : undefined);
+            transfers.push({ rows: page.length, bytes: Buffer.byteLength(JSON.stringify(body)) });
+            return { body };
+        } });
+        const hook = await renderHook(({ pathname }: { pathname: string }) =>
+            useVisibleSessionListPaneState('all', { pathname, workFilter: filter('both') }),
+        { initialProps: { pathname: '/' } });
+        await flushHookEffects();
+        expect(transfers.map(page => page.rows)).toEqual([10]);
+        expect(hook.getCurrent().workflowRunWindow?.rows).toHaveLength(10);
+        for (const pathname of ['/machines', '/machines/all', '/machines/machine-1']) {
+            await hook.rerender({ pathname });
+        }
+        expect(transfers).toHaveLength(1);
+        for (let page = 1; hook.getCurrent().workflowRunWindow?.hasMore && page <= runs.length; page++) {
+            await act(async () => { hook.getCurrent().workflowRunWindow?.loadMore(); });
+            await flushHookEffects();
+        }
+        const window = hook.getCurrent().workflowRunWindow;
+        expect(window?.hasMore).toBe(false);
+        expect(window?.runIds).toEqual(runs.map(run => run.id));
+        expect(transfers.map(page => page.rows)).toEqual([10, 10, 10, 7]);
+        expect(window?.rows.every(row => row.metadata?.kind === 'available'
+            && row.metadata.value.title === 'Private accepted title'
+            && row.summary?.where?.directory === '/repo' && row.callerAccess?.canEdit === true)).toBe(true);
+    });
+
     it('retains the Sessions pane projection when a row age advances the shared clock', async () => {
         vi.useFakeTimers();
         const row = createSessionListRenderableSessionFixture({ id: 'quiet-session', active: false,
