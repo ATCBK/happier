@@ -108,6 +108,7 @@ import {
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
+  type ConversationProviderFailureV1,
   type ConversationThreadRouterBindingTargetV1,
   type ConversationBindingReadResultV1,
   type ConversationConnectionCreateInputV1,
@@ -3557,6 +3558,7 @@ type BindingCreateFeedback =
   | 'resolverUnavailable'
   | 'resolverStale'
   | 'resolverNotReady'
+  | 'resolverRefused'
   | 'sessionUnavailable'
   | 'automationUnavailable'
   | 'newSessionUnavailable'
@@ -3568,6 +3570,37 @@ type BindingCreateFeedback =
   | 'pairingProofMismatch'
   | 'pairingProofUnavailable'
   | 'created';
+
+/** What a provider's not-ready resolver answer means for the person searching. */
+type ResolverRefusal = Readonly<{ reason: ConversationProviderFailureV1['reason']; diagnostic?: string }>;
+
+/**
+ * Only an unreachable or rate-limited provider is worth waiting for. Every other not-ready reason is the
+ * provider refusing this search (an address it can't look up, a setup it rejects), so the page says why,
+ * in the provider's own words when it gave them, instead of asking the person to wait.
+ */
+function resolverRefusalOf(failure: ConversationProviderFailureV1): ResolverRefusal | undefined {
+  if (failure.reason === 'network' || failure.reason === 'rateLimited') return undefined;
+  return failure.diagnostic === undefined
+    ? { reason: failure.reason }
+    : { reason: failure.reason, diagnostic: failure.diagnostic };
+}
+
+function resolverRefusalCopy(refusal: ResolverRefusal, t: Translate): readonly [string, string] {
+  if (refusal.reason === 'unsupported') {
+    return [
+      t('plugins.channels.surface.resolverUnsupportedTitle', 'Search for it another way'),
+      refusal.diagnostic ?? t(
+        'plugins.channels.surface.resolverUnsupportedDescription',
+        'The provider can’t look up this kind of address. Enter it the way the provider names it.',
+      ),
+    ];
+  }
+  return [
+    t('plugins.channels.surface.resolverRefusedTitle', 'The provider refused this search'),
+    refusal.diagnostic ?? providerFailureReasonDescription(refusal.reason, t),
+  ];
+}
 
 /** The pairing writer's typed refusals each name their own repair. */
 function pairingCreateRefusalFeedback(code: string | undefined): BindingCreateFeedback {
@@ -3603,6 +3636,7 @@ type BindingEditorFeedback =
   | 'resolverUnavailable'
   | 'resolverStale'
   | 'resolverNotReady'
+  | 'resolverRefused'
   | 'sessionUnavailable'
   | 'automationUnavailable'
   | 'newSessionUnavailable'
@@ -5694,6 +5728,12 @@ function BindingCreateJourney(props: Readonly<{
   const [linkPreviewPolicy, setLinkPreviewPolicy] = React.useState('suppress');
   const [senderFeedback, setSenderFeedback] = React.useState('off');
   const [feedback, setFeedback] = React.useState<BindingCreateFeedback | undefined>();
+  const [resolverRefusal, setResolverRefusal] = React.useState<ResolverRefusal | undefined>();
+  const showResolverNotReady = React.useCallback((failure: ConversationProviderFailureV1) => {
+    const refusal = resolverRefusalOf(failure);
+    setResolverRefusal(refusal);
+    setFeedback(refusal === undefined ? 'resolverNotReady' : 'resolverRefused');
+  }, []);
   const mountedRef = React.useRef(true);
   const restoreOpenerFocusRef = React.useRef(false);
   const availableConnections = React.useMemo(
@@ -5985,11 +6025,11 @@ function BindingCreateJourney(props: Readonly<{
     } else if (result.data.kind === 'stale') {
       setFeedback('resolverStale');
     } else if (result.data.kind === 'notReady') {
-      setFeedback('resolverNotReady');
+      showResolverNotReady(result.data);
     } else {
       setFeedback('resolverUnavailable');
     }
-  }, [actionLocked, currentConnection, endpointQuery, props.signal, resolveAction]);
+  }, [actionLocked, currentConnection, endpointQuery, props.signal, resolveAction, showResolverNotReady]);
 
   const searchPrincipals = React.useCallback(async () => {
     if (currentConnection === undefined
@@ -6031,11 +6071,11 @@ function BindingCreateJourney(props: Readonly<{
     } else if (result.data.kind === 'stale') {
       setFeedback('resolverStale');
     } else if (result.data.kind === 'notReady') {
-      setFeedback('resolverNotReady');
+      showResolverNotReady(result.data);
     } else {
       setFeedback('resolverUnavailable');
     }
-  }, [actionLocked, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction]);
+  }, [actionLocked, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction, showResolverNotReady]);
 
   /**
    * A shared router parent may accept the pairing code in one of its own
@@ -6080,11 +6120,11 @@ function BindingCreateJourney(props: Readonly<{
     } else if (result.data.kind === 'stale') {
       setFeedback('resolverStale');
     } else if (result.data.kind === 'notReady') {
-      setFeedback('resolverNotReady');
+      showResolverNotReady(result.data);
     } else {
       setFeedback('resolverUnavailable');
     }
-  }, [actionLocked, currentConnection, endpointSelection, proofThreadQuery, props.signal, resolveAction]);
+  }, [actionLocked, currentConnection, endpointSelection, proofThreadQuery, props.signal, resolveAction, showResolverNotReady]);
 
   const loadAutomationTargets = React.useCallback(async (cursor?: string) => {
     if (actionLocked || props.signal.aborted) return;
@@ -6340,7 +6380,12 @@ function BindingCreateJourney(props: Readonly<{
       );
     }
     if (feedback === undefined) return null;
-    const copy: Readonly<Record<Exclude<BindingCreateFeedback, 'created'>, readonly [string, string]>> = {
+    if (feedback === 'resolverRefused') {
+      if (resolverRefusal === undefined) return null;
+      const [refusedTitle, refusedDescription] = resolverRefusalCopy(resolverRefusal, props.t);
+      return <Banner tone="warning" title={refusedTitle} description={refusedDescription} />;
+    }
+    const copy: Readonly<Record<Exclude<BindingCreateFeedback, 'created' | 'resolverRefused'>, readonly [string, string]>> = {
       resolverUnavailable: [
         props.t('plugins.channels.surface.bindingCreateUnavailableTitle', 'Binding setup is unavailable'),
         props.t('plugins.channels.surface.bindingCreateUnavailableDescription', 'Refresh connection details and try this selection again.'),
@@ -7433,6 +7478,12 @@ function BindingEditJourney(props: Readonly<{
   const [stage, setStage] = React.useState<BindingEditorStage>('policies');
   const [detailPending, setDetailPending] = React.useState(true);
   const [feedback, setFeedback] = React.useState<BindingEditorFeedback | undefined>();
+  const [resolverRefusal, setResolverRefusal] = React.useState<ResolverRefusal | undefined>();
+  const showResolverNotReady = React.useCallback((failure: ConversationProviderFailureV1) => {
+    const refusal = resolverRefusalOf(failure);
+    setResolverRefusal(refusal);
+    setFeedback(refusal === undefined ? 'resolverNotReady' : 'resolverRefused');
+  }, []);
   const [outcomeUnknown, setOutcomeUnknown] = React.useState(false);
   const [requiresReresolution, setRequiresReresolution] = React.useState(false);
   const [readConnectionRevision, setReadConnectionRevision] = React.useState<number | undefined>();
@@ -7702,7 +7753,7 @@ function BindingEditJourney(props: Readonly<{
       return;
     }
     if (result.data.kind === 'notReady') {
-      setFeedback('resolverNotReady');
+      showResolverNotReady(result.data);
       return;
     }
     if (result.data.kind !== 'endpointCandidates') {
@@ -7711,7 +7762,7 @@ function BindingEditJourney(props: Readonly<{
     }
     setEndpointCandidates(result.data.candidates);
     setAudienceResolution('endpoint');
-  }, [actionLocked, currentConnection, endpointQuery, props.signal, resolveAction]);
+  }, [actionLocked, currentConnection, endpointQuery, props.signal, resolveAction, showResolverNotReady]);
 
   const searchPrincipals = React.useCallback(async () => {
     if (currentConnection === undefined
@@ -7753,7 +7804,7 @@ function BindingEditJourney(props: Readonly<{
       return;
     }
     if (result.data.kind === 'notReady') {
-      setFeedback('resolverNotReady');
+      showResolverNotReady(result.data);
       return;
     }
     if (result.data.kind !== 'principalCandidates') {
@@ -7762,7 +7813,7 @@ function BindingEditJourney(props: Readonly<{
     }
     setPrincipalCandidates(result.data.candidates);
     setAudienceResolution('principal');
-  }, [actionLocked, audienceResolution, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction]);
+  }, [actionLocked, audienceResolution, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction, showResolverNotReady]);
 
   const applyAudienceSelection = React.useCallback(() => {
     const query = selectedPrincipals[0]?.query;
@@ -7958,7 +8009,12 @@ function BindingEditJourney(props: Readonly<{
         />
       );
     }
-    const copy: Readonly<Record<Exclude<BindingEditorFeedback, 'updated' | 'quotaIncompatible' | 'resolverStale'>, readonly [string, string]>> = {
+    if (feedback === 'resolverRefused') {
+      if (resolverRefusal === undefined) return null;
+      const [refusedTitle, refusedDescription] = resolverRefusalCopy(resolverRefusal, props.t);
+      return <Banner tone="warning" title={refusedTitle} description={refusedDescription} />;
+    }
+    const copy: Readonly<Record<Exclude<BindingEditorFeedback, 'updated' | 'quotaIncompatible' | 'resolverStale' | 'resolverRefused'>, readonly [string, string]>> = {
       readUnavailable: [
         props.t('plugins.channels.surface.bindingEditReadUnavailableTitle', 'Binding detail is unavailable'),
         props.t('plugins.channels.surface.bindingEditReadUnavailableDescription', 'Reload to read the current private binding policy before editing it.'),

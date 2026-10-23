@@ -17,6 +17,9 @@ type ChannelsUiLocale = 'en' | 'de' | 'ru' | 'pl' | 'es' | 'fr' | 'it' | 'pt' | 
 // Annotated: the inferred literal type of every message exceeds what the compiler will serialize.
 export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonly<Record<string, string>>>> = Object.freeze({
   "en": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Search for it another way",
+    "plugins.channels.surface.resolverUnsupportedDescription": "The provider can’t look up this kind of address. Enter it the way the provider names it.",
+    "plugins.channels.surface.resolverRefusedTitle": "The provider refused this search",
     "plugins.channels.surface.deliveryResolutionRowName": "Delivery sent {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Sent {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "A conversation not listed here",
@@ -843,6 +846,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "A private message",
   }),
   "de": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Auf andere Weise suchen",
+    "plugins.channels.surface.resolverUnsupportedDescription": "Der Anbieter kann diese Art von Adresse nicht nachschlagen. Gib sie so ein, wie der Anbieter sie benennt.",
+    "plugins.channels.surface.resolverRefusedTitle": "Der Anbieter hat diese Suche abgelehnt",
     "plugins.channels.surface.deliveryResolutionRowName": "Zustellung gesendet {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Gesendet {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Eine hier nicht aufgeführte Unterhaltung",
@@ -1669,6 +1675,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Eine private Nachricht",
   }),
   "ru": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Найдите иначе",
+    "plugins.channels.surface.resolverUnsupportedDescription": "Провайдер не умеет искать такой адрес. Введите его так, как его называет провайдер.",
+    "plugins.channels.surface.resolverRefusedTitle": "Провайдер отклонил этот поиск",
     "plugins.channels.surface.deliveryResolutionRowName": "Доставка отправлена {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Отправлено {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Разговор, которого нет в этом списке",
@@ -2495,6 +2504,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Личное сообщение",
   }),
   "pl": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Wyszukaj inaczej",
+    "plugins.channels.surface.resolverUnsupportedDescription": "Dostawca nie potrafi wyszukać takiego adresu. Wpisz go tak, jak nazywa go dostawca.",
+    "plugins.channels.surface.resolverRefusedTitle": "Dostawca odrzucił to wyszukiwanie",
     "plugins.channels.surface.deliveryResolutionRowName": "Dostarczenie wysłane {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Wysłano {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Rozmowa spoza tej listy",
@@ -3321,6 +3333,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Prywatna wiadomość",
   }),
   "es": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Búscalo de otra forma",
+    "plugins.channels.surface.resolverUnsupportedDescription": "El proveedor no puede buscar este tipo de dirección. Escríbela como la nombra el proveedor.",
+    "plugins.channels.surface.resolverRefusedTitle": "El proveedor rechazó esta búsqueda",
     "plugins.channels.surface.deliveryResolutionRowName": "Entrega enviada {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Enviada {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Una conversación que no aparece aquí",
@@ -4147,6 +4162,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Un mensaje privado",
   }),
   "fr": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Cherchez autrement",
+    "plugins.channels.surface.resolverUnsupportedDescription": "Le fournisseur ne peut pas rechercher ce type d’adresse. Saisissez-la comme le fournisseur la nomme.",
+    "plugins.channels.surface.resolverRefusedTitle": "Le fournisseur a refusé cette recherche",
     "plugins.channels.surface.deliveryResolutionRowName": "Envoi parti {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Envoyé {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Une conversation absente de cette liste",
@@ -4973,6 +4991,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Un message privé",
   }),
   "it": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Cercalo in un altro modo",
+    "plugins.channels.surface.resolverUnsupportedDescription": "Il provider non può cercare questo tipo di indirizzo. Inseriscilo come lo chiama il provider.",
+    "plugins.channels.surface.resolverRefusedTitle": "Il provider ha rifiutato questa ricerca",
     "plugins.channels.surface.deliveryResolutionRowName": "Consegna inviata {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Inviata {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Una conversazione non elencata qui",
@@ -5799,6 +5820,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Un messaggio privato",
   }),
   "pt": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Pesquise de outra forma",
+    "plugins.channels.surface.resolverUnsupportedDescription": "O provedor não consegue pesquisar este tipo de endereço. Digite-o como o provedor o nomeia.",
+    "plugins.channels.surface.resolverRefusedTitle": "O provedor recusou esta pesquisa",
     "plugins.channels.surface.deliveryResolutionRowName": "Entrega enviada {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Enviada {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Uma conversa que não está listada aqui",
@@ -6625,6 +6649,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Uma mensagem privada",
   }),
   "ca": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "Cerca-ho d’una altra manera",
+    "plugins.channels.surface.resolverUnsupportedDescription": "El proveïdor no pot cercar aquest tipus d’adreça. Escriu-la com l’anomena el proveïdor.",
+    "plugins.channels.surface.resolverRefusedTitle": "El proveïdor ha rebutjat aquesta cerca",
     "plugins.channels.surface.deliveryResolutionRowName": "Lliurament enviat {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "Enviat {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "Una conversa que no és en aquesta llista",
@@ -7451,6 +7478,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "Un missatge privat",
   }),
   "zh-Hans": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "换一种方式查找",
+    "plugins.channels.surface.resolverUnsupportedDescription": "提供方无法查找这类地址。请按提供方的命名方式输入。",
+    "plugins.channels.surface.resolverRefusedTitle": "提供方拒绝了这次搜索",
     "plugins.channels.surface.deliveryResolutionRowName": "投递发送于 {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "发送于 {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "未在此列出的会话",
@@ -8277,6 +8307,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "私信",
   }),
   "zh-Hant": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "換一種方式尋找",
+    "plugins.channels.surface.resolverUnsupportedDescription": "提供者無法查詢這類位址。請依提供者的命名方式輸入。",
+    "plugins.channels.surface.resolverRefusedTitle": "提供者拒絕了這次搜尋",
     "plugins.channels.surface.deliveryResolutionRowName": "傳送於 {time}",
     "plugins.channels.surface.deliveryResolutionSentAt": "送出於 {time}",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "未列在此處的對話",
@@ -9103,6 +9136,9 @@ export const CHANNELS_UI_TRANSLATIONS: Readonly<Record<ChannelsUiLocale, Readonl
     "plugins.channels.surface.bindingCreatePairingSentInPrivate": "私人訊息",
   }),
   "ja": Object.freeze({
+    "plugins.channels.surface.resolverUnsupportedTitle": "別の方法で検索",
+    "plugins.channels.surface.resolverUnsupportedDescription": "プロバイダーはこの種類のアドレスを検索できません。プロバイダーでの名前どおりに入力してください。",
+    "plugins.channels.surface.resolverRefusedTitle": "プロバイダーがこの検索を拒否しました",
     "plugins.channels.surface.deliveryResolutionRowName": "{time} に送信した配信",
     "plugins.channels.surface.deliveryResolutionSentAt": "{time} に送信",
     "plugins.channels.surface.deliveryResolutionGroupUnlisted": "ここに表示されていない会話",

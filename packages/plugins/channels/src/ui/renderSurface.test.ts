@@ -4266,6 +4266,60 @@ describe('Channels mounted binding creation', () => {
     }
   });
 
+  it('says why an endpoint search was refused and keeps the waiting copy for transient provider states', async () => {
+    const diagnostic = 'Telegram cannot search chats by name. Enter a numeric chat ID, a public @username, or chatId:topicId for a topic.';
+    const settlements = [
+      {
+        result: { kind: 'notReady', reason: 'unsupported', diagnostic } as const,
+        expected: [diagnostic],
+        absent: 'Wait for the provider to become ready',
+      },
+      {
+        result: { kind: 'notReady', reason: 'invalidConfiguration' } as const,
+        expected: ['The provider reports that its remote configuration is not valid for this connection.'],
+        absent: 'Wait for the provider to become ready',
+      },
+      {
+        result: { kind: 'notReady', reason: 'network' } as const,
+        expected: ['Wait for the provider to become ready, then search again.'],
+        absent: 'cannot search chats by name',
+      },
+    ] as const;
+
+    for (const [index, settlement] of settlements.entries()) {
+      const executeAction = vi.fn(async ({ action }: PluginUiTestkitExecuteActionInput) => {
+        if (action !== CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
+          throw new Error(`Unexpected mounted Action: ${String(action)}`);
+        }
+        return settlement.result;
+      });
+      const fixture = await createPluginUiTestkit({
+        identity: { instanceId: `fixture-instance-93r-${index}`, mountNonce: `fixture-mount-93r-${index}` },
+        authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+        surface: renderSurface,
+        surfaceContext: createChannelsSurfaceContext(),
+        adapter: createChannelsSemanticAdapter(),
+        handlers: {
+          selectActionInput: async () => ({ kind: 'cancelled' as const }),
+          executeAction,
+          readResource: bindingResourceReader(),
+        },
+      });
+
+      try {
+        await fixture.press(await fixture.getByRole('button', { name: 'Add binding' }));
+        await enterTextByTestId('channels-binding-create-endpoint-query', 'Project room');
+        await fixture.press(await fixture.getByRole('button', { name: 'Search endpoints' }));
+        await vi.waitFor(() => {
+          for (const text of settlement.expected) expect(document.body.textContent).toContain(text);
+        });
+        expect(document.body.textContent).not.toContain(settlement.absent);
+      } finally {
+        await fixture.dispose();
+      }
+    }
+  });
+
   it('uses only the no-invoke new-Session selector and leaves cancellation without a create', async () => {
     const selectActionInput = vi.fn(async (_input: PluginUiTestkitSelectActionInputInput) => ({ kind: 'cancelled' as const }));
     const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
