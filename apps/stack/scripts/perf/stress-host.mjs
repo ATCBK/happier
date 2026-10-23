@@ -27,8 +27,15 @@ export async function createStressHostObserver({ context, inspect, sqlStatements
       container.Id !== context.containers[index].id || container.Config?.Labels?.['com.docker.compose.project'] !== context.composeProjectName || container.State?.Running !== true)) {
       throw new Error('Stress container ownership or running identity changed');
     }
-    const statements = await readStatements();
-    const sql = typeof statements === 'number' ? { calls: statements, statsReset: null, dealloc: null } : statements;
+    let sql;
+    try {
+      const statements = await readStatements();
+      sql = typeof statements === 'number' ? { calls: statements, statsReset: null, dealloc: null } : statements;
+    } catch {
+      // SQL is informational. Keep observation/identity failures fatal, but
+      // never substitute zero or expose a database diagnostic for this sensor.
+      sql = { calls: null, statsReset: null, dealloc: null };
+    }
     const serverIdentity = loaded.map(container => container.Image).join(',');
     const selected = context.containers.map(container => container.image).join(',');
     if (context.containers.some(container => typeof container.image !== 'string' || !container.image)) throw new Error('Selected stress image identity is missing');
@@ -43,9 +50,11 @@ export async function createStressHostObserver({ context, inspect, sqlStatements
         roles: { server: { selected, loaded: serverIdentity },
           ...(daemon ? { daemon: { selected: String(context.daemonPid), loaded: String(daemon.pid) } } : {}) } },
       server: { containerIds: loaded.map(container => container.Id), cpuSeconds: null, rssBytes: null }, daemon,
-      sqlStatements: sql.calls, sqlStatistics: { statsReset: sql.statsReset, dealloc: sql.dealloc },
+      sqlStatements: sql.calls, sqlStatistics: sql.calls === null ? null : { statsReset: sql.statsReset, dealloc: sql.dealloc },
       logs: { files: [], records: [] },
-      unavailable: ['Container CPU/RSS and request diagnostic spans are not collected by this adapter', ...(daemon ? [] : ['No daemon was started for this journey'])],
+      unavailable: ['Container CPU/RSS and request diagnostic spans are not collected by this adapter',
+        ...(sql.calls === null ? ['Physical SQL statement counter unavailable'] : []),
+        ...(daemon ? [] : ['No daemon was started for this journey'])],
     };
   };
   const initial = await sample();

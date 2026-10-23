@@ -194,7 +194,6 @@ async function journey(id, options, runtime = {}) {
     phase = 'host-after'; requireIdentity(hostAfter);
     if (JSON.stringify(hostBefore.identity) !== JSON.stringify(hostAfter.identity)) throw new Error('Runtime identity changed during capture');
     for (const role of ['server', 'daemon']) if (hostBefore[role]?.pid !== hostAfter[role]?.pid) throw new Error(`${role} process changed during capture`);
-    if (JSON.stringify(hostBefore.sqlStatistics) !== JSON.stringify(hostAfter.sqlStatistics)) throw new Error('Physical SQL statistics were reset or evicted during capture');
     const server = summarizeLogs(hostAfter.logs.records, browserResult);
     const storeTelemetry = summarizeSyncPerformanceSummaries(browserResult.telemetry);
     const telemetryMeasured = storeTelemetry.events.some(event => event.name === 'sync.performance.scenario.perf-capture-end');
@@ -231,7 +230,11 @@ async function journey(id, options, runtime = {}) {
       trace: { ...browserResult.profiling?.trace?.summary, dataLossOccurred: browserResult.profiling?.trace?.dataLossOccurred },
       diagnostics: browserResult.react.diagnostics, durationMs: browserResult.durationMs,
     }, definition.assertions.settledHome) : undefined;
+    // Only the measured endpoints establish this optional counter. A failed
+    // outer probe or an in-window reset must not discard other capture data.
+    const sqlStatisticsUnchanged = JSON.stringify(windowHostStart.sqlStatistics) === JSON.stringify(windowHostEnd.sqlStatistics);
     counts.sqlStatements = Number.isSafeInteger(windowHostStart.sqlStatements) && Number.isSafeInteger(windowHostEnd.sqlStatements)
+      && windowHostEnd.sqlStatements >= windowHostStart.sqlStatements && sqlStatisticsUnchanged
       ? windowHostEnd.sqlStatements - windowHostStart.sqlStatements : null;
     const gaps = [];
     if (backendProfileRoles.length && backendProfiles?.status !== 'CAPTURED') gaps.push('Requested backend CPU/event-loop capture incomplete; see backend-profiles.json');
