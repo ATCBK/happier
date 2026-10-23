@@ -6,7 +6,7 @@ import { SessionFollowObserveInactiveRequestV1Schema, SessionFollowObserveInacti
     SessionFollowSourceOccurrenceRoutesRequestV1Schema, SessionFollowSourceOccurrenceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { z } from "zod/mini";
 import { FollowListActionOutputV1Schema } from '@happier-dev/protocol/sessions/follow/actions';
-import { FollowListPageQueryV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
+import { FollowListPageQueryV1Schema, FollowListQueryV1Schema, parseFollowListQueryV1, type FollowListRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
@@ -288,19 +288,21 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false } },
         schema: {
             params: destinationParamsSchema,
-            querystring: FollowListPageQueryV1Schema,
+            querystring: FollowListQueryV1Schema,
             response: { 200: ListSessionFollowSourcesResponseSchema, ...errorResponses },
         },
     }, async (request, reply) => {
         const params = destinationParamsSchema.safeParse(request.params);
-        const query = FollowListPageQueryV1Schema.safeParse(request.query);
-        if (!params.success || !query.success) return reply.code(400).send({ error: "invalid_parameters" });
+        let query: FollowListRequestV1;
+        try { query = parseFollowListQueryV1(request.query); }
+        catch { return reply.code(400).send({ error: 'invalid_parameters' }); }
+        if (!params.success) return reply.code(400).send({ error: "invalid_parameters" });
 
         const result = await listSessionFollowSources({
             accountId: request.userId,
             destinationSessionId: params.data.destinationSessionId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
-            ...query.data,
+            ...query,
         });
         if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
         return reply.send(ListSessionFollowSourcesResponseSchema.parse(result.value));

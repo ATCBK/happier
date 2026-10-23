@@ -42,7 +42,7 @@ async function buildApp(accountId: string, sessionRuntimePrincipal?: VerifiedEph
 describe('Account Session Follow HTTP resource', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => {
-        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-account-follow-', initAuth: true,
+        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-account-follow-', initAuth: true, initEncrypt: true,
             env: { HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true' } });
     }, 180_000);
     afterEach(async () => {
@@ -52,6 +52,25 @@ describe('Account Session Follow HTTP resource', () => {
         await db.account.deleteMany();
     });
     afterAll(async () => { await harness?.close(); });
+
+    it('selects source-Session Follows through the canonical generated transport and real list route', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const ids = [randomUUID(), randomUUID()];
+        await db.session.createMany({ data: ids.map(id => ({ id, accountId: owner.id, tag: id, metadata: '{}', encryptionMode: 'plain' })) });
+        await db.accountSessionFollow.createMany({ data: ids.map(sessionId => ({ accountId: owner.id, sessionId })) });
+        const source = { kind: 'session' as const, sessionId: ids[0]! };
+        const request = { direction: 'following' as const, receiver: { kind: 'account' as const }, source, limit: 1 };
+        const app = await buildApp(owner.id);
+        try {
+            const response = await app.inject({ method: 'GET', url: resolveSessionFollowActionRequest('follow.list', request).path });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toMatchObject({ follows: [expect.objectContaining({ sessionId: source.sessionId })] });
+            expect(response.json().follows).toHaveLength(1);
+            const malformed = new URL('/v2/account/session-follows', 'https://home.test');
+            malformed.searchParams.set('source', JSON.stringify({ ...source, accountId: owner.id }));
+            expect((await app.inject({ method: 'GET', url: malformed.pathname + malformed.search })).statusCode).toBe(400);
+        } finally { await app.close(); }
+    });
 
     it('keeps a Discussion personal Follow on the Account Follow owner', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });

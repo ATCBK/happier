@@ -94,7 +94,7 @@ async function createDiscussion(params: Readonly<{
 }
 describe('Account Follow service', () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-follow-service-',
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-follow-service-', initEncrypt: true,
         env: {
             HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true',
             HAPPIER_FEATURE_SHARING_SESSION__ENABLED: 'true',

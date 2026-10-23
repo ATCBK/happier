@@ -1,4 +1,5 @@
 import { z } from 'zod/mini';
+import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
 
 /** No implicit truncation: callers may choose a page size, otherwise all admitted rows are returned. */
 export const FollowListPageRequestV1Schema = z.strictObject({
@@ -10,11 +11,37 @@ export const FollowListPageQueryV1Schema = z.strictObject({
   limit: z.optional(z.coerce.number().check(z.int(), z.positive())),
 });
 export type FollowListPageRequestV1 = z.infer<typeof FollowListPageRequestV1Schema>;
+/** Session selection includes that Session's execution Runs; other refs are exact. Rules have their private reader. */
+export const FollowListRequestV1Schema = z.strictObject({
+  ...FollowListPageRequestV1Schema.shape,
+  source: z.optional(FollowSourceRefV1Schema.check(z.refine(source => source.kind !== 'rule'))),
+});
+export type FollowListRequestV1 = z.infer<typeof FollowListRequestV1Schema>;
+/** Keep the encoded query stable through Fastify's validator and handler validation. */
+export const FollowListQueryV1Schema = z.strictObject({
+  ...FollowListPageQueryV1Schema.shape,
+  source: z.optional(z.string().check(z.minLength(1))),
+});
+export function parseFollowListQueryV1(input: unknown): FollowListRequestV1 {
+  const { source, ...page } = FollowListQueryV1Schema.parse(input);
+  return FollowListRequestV1Schema.parse({ ...page, ...(source === undefined ? {} : { source: JSON.parse(source) }) });
+}
 export const FollowListPageResultFieldsV1 = {
   continuation: z.optional(z.string().check(z.minLength(1))),
 } as const;
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string(), after: z.string() });
+
+export function readFollowListCursorV1(scope: string, cursor?: string): string | undefined {
+  if (cursor === undefined) return undefined;
+  const parsed = cursorSchema.parse(JSON.parse(cursor));
+  if (parsed.scope !== scope) throw new Error('follow_list_cursor_scope_mismatch');
+  return parsed.after;
+}
+
+export function encodeFollowListCursorV1(scope: string, after: string): string {
+  return JSON.stringify({ v: 1, scope, after });
+}
 
 /** Source owners page their authorized corpus; a cursor never grants access or freezes membership. */
 export function pageFollowListV1<T>(input: FollowListPageRequestV1 & Readonly<{
@@ -23,24 +50,20 @@ export function pageFollowListV1<T>(input: FollowListPageRequestV1 & Readonly<{
   key: (row: T) => string;
 }>): Readonly<{ rows: T[]; continuation?: string }> {
   const request = FollowListPageRequestV1Schema.parse({ cursor: input.cursor, limit: input.limit });
-  let after: string | undefined;
-  if (request.cursor !== undefined) {
-    const cursor = cursorSchema.parse(JSON.parse(request.cursor));
-    if (cursor.scope !== input.scope) throw new Error('follow_list_cursor_scope_mismatch');
-    after = cursor.after;
-  }
+  const after = readFollowListCursorV1(input.scope, request.cursor);
   const ordered = input.rows.map(row => ({ row, key: input.key(row) }))
     .filter(entry => after === undefined || entry.key > after)
     .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
   const selected = request.limit === undefined ? ordered : ordered.slice(0, request.limit);
   const last = selected.at(-1);
   return { rows: selected.map(entry => entry.row), ...(last && selected.length < ordered.length
-    ? { continuation: JSON.stringify({ v: 1, scope: input.scope, after: last.key }) } : {}) };
+    ? { continuation: encodeFollowListCursorV1(input.scope, last.key) } : {}) };
 }
 
-export function appendFollowListPageQueryV1(path: string, request: FollowListPageRequestV1): string {
+export function appendFollowListPageQueryV1(path: string, request: FollowListRequestV1): string {
   const query = new URLSearchParams();
   if (request.cursor !== undefined) query.set('cursor', request.cursor);
   if (request.limit !== undefined) query.set('limit', String(request.limit));
+  if (request.source !== undefined) query.set('source', JSON.stringify(FollowListRequestV1Schema.parse(request).source));
   return query.size ? `${path}?${query}` : path;
 }

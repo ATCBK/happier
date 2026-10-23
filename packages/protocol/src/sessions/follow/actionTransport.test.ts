@@ -6,6 +6,23 @@ import { sealSessionFollowRuleContentV1 } from './sessionFollowRuleContentCodecV
 import { pageFollowListV1 } from './sessionFollowListV1.js';
 
 describe('signed Follow HTTP purposes', () => {
+  it('carries a closed source selection on following pages and binds the signed HTTP purpose', () => {
+    const source = { kind: 'session' as const, sessionId: 'selected-session' };
+    for (const receiver of [{ kind: 'account' }, { kind: 'session', sessionId: 'receiver' }] as const) {
+      const input = { direction: 'following' as const, receiver, source, limit: 1 };
+      const request = resolveSessionFollowActionRequest('follow.list', input);
+      const encoded = Object.fromEntries(new URL(request.path, 'https://home.test').searchParams);
+      const query = { ...encoded, limit: 1 };
+      expect(JSON.parse(encoded.source!)).toEqual(source);
+      const wire = { ...request, routeInput: { ...query,
+        ...(receiver.kind === 'session' ? { destinationSessionId: receiver.sessionId } : {}) },
+        ...(receiver.kind === 'session' ? { sessionRouteSessionId: receiver.sessionId } : {}) };
+      expect(isSessionFollowActionHttpRequestV1('follow.list', wire)).toBe(true);
+      expect(isSessionFollowActionHttpRequestV1('follow.list', { ...wire,
+        routeInput: { ...wire.routeInput, source: JSON.stringify({ ...source, sessionId: 'other' }) } })).toBe(false);
+      expect(() => resolveSessionFollowActionRequest('follow.list', { ...input, source: { ...source, accountId: 'other' } })).toThrow();
+    }
+  });
   it('binds long exact Run source queries for both receivers and reverse inspection', () => {
     const source = { kind: 'execution_run' as const, sessionId: 'cmvjujoae0070m2opuposiddv',
       runId: "run_a29bce41-d16c-4af6-a586-6f96d8773e2d/%?+'" };

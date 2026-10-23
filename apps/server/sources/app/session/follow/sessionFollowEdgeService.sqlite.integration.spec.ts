@@ -124,6 +124,7 @@ describe('SessionFollowEdge service', () => {
     beforeAll(async () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: 'happier-session-follow-edge-',
+            initEncrypt: true,
         });
     }, 180_000);
 

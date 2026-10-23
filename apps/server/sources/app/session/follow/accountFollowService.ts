@@ -2,7 +2,7 @@ import { AccountSessionFollowV1Schema, OtherAccountFollowV1Schema, EXPLICIT_SESS
 import { SetSessionFollowRequestSchema, ReplaceSessionVoiceInclusionsRequestSchema, type SetSessionFollowRequest, type GetSessionFollowResponse } from '@happier-dev/protocol/sessions/follow/api';
 import { compareSessionFollowFrontierProgressV1, encodePersistedSessionFollowFrontierV1, isSessionFollowConsumptionWithinCurrentV1, isSessionFollowFrontierEqualV1, isSessionFollowTurnEqualV1, parsePersistedSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
-import { pageFollowListV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
+import { pageFollowListV1, readFollowListCursorV1, FollowListRequestV1Schema, type FollowListRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
 
 import { resolveEffectiveSessionAccess, resolveStructuralSessionAccessForAccountsInTx } from "@/app/session/access/sessionAccess";
@@ -29,6 +29,7 @@ import { editFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/follow
 import { isDeliveryMutedInTx, readDeliveryMuteScopesInTx } from './sessionDeliveryMuteService';
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { readAccountFollowCreationPreferencesInTx, updateAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
+import { openSessionFollowListCursor, sealSessionFollowListCursor } from './sessionFollowListCursor';
 
 export type CurrentAccountVoiceExecutionRunAuthority = Readonly<{
     executionRunId: string;
@@ -260,13 +261,37 @@ export async function readOtherPersonalFollowerCensusInTx(tx: Tx, input: Readonl
 }
 
 /** Lists the caller's explicit active choices, filtering sources through current read admission. */
-export async function listAccountSessionFollows(input: Readonly<{ accountId: string; authentication: SessionAccessAuthentication; cursor?: string; limit?: number }>): Promise<AccountFollowResult<{ follows: AccountFollowRelationV1[]; continuation?: string }>> {
+export async function listAccountSessionFollows(input: Readonly<{ accountId: string; authentication: SessionAccessAuthentication }> & FollowListRequestV1): Promise<AccountFollowResult<{ follows: AccountFollowRelationV1[]; continuation?: string }>> {
+    let selection: FollowListRequestV1, scope: string, after: string | undefined;
+    try {
+        selection = FollowListRequestV1Schema.parse({ cursor: input.cursor, limit: input.limit, source: input.source });
+        scope = JSON.stringify([input.accountId, 'following', ...(selection.source ? [selection.source] : [])]);
+        selection = { ...selection, cursor: openSessionFollowListCursor(scope, selection.cursor) };
+        after = readFollowListCursorV1(scope, selection.cursor);
+    } catch { return { ok: false, error: 'invalid_parameters' }; }
+    const source = selection.source;
+    if (source?.kind === 'rule') return { ok: false, error: 'invalid_parameters' };
+    const sourceWhere = !source ? {} : source.kind === 'session'
+        ? { OR: [{ sessionId: source.sessionId }, { sourceExecutionRunSessionId: source.sessionId }] }
+        : { sourceKey: sourceKeyForSessionFollowSourceV1(source) };
     return readSnapshotWithCurrentAdmission<AccountFollowResult<{ follows: AccountFollowRelationV1[]; continuation?: string }>>(async tx => {
         if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
-        const rows = await tx.accountSessionFollow.findMany({ where: { accountId: input.accountId, following: true }, select: FOLLOW_SELECT,
-            orderBy: [{ sourceKey: 'asc' }, { sessionId: 'asc' }] });
+        const where = { accountId: input.accountId, following: true, ...sourceWhere };
+        // Session-only retained rows may have a null key. Page both disjoint SQL
+        // partitions before admission, then merge by the same canonical cursor key.
+        const take: { take?: number } = selection.limit === undefined ? {} : { take: selection.limit + 1 };
+        const keyed = await tx.accountSessionFollow.findMany({ where: { AND: [where,
+            { sourceKey: after === undefined ? { not: null } : { gt: after } }] }, select: FOLLOW_SELECT,
+            orderBy: { sourceKey: 'asc' }, ...take });
+        const includeUnkeyed = after === undefined || after < 'session:' || after.startsWith('session:');
+        const unkeyed = includeUnkeyed ? await tx.accountSessionFollow.findMany({ where: { AND: [where,
+            { sourceKey: null, sessionId: after?.startsWith('session:') ? { gt: after.slice('session:'.length) } : { not: null } }] },
+            select: FOLLOW_SELECT, orderBy: { sessionId: 'asc' }, ...take }) : [];
+        const page = pageFollowListV1({ scope, rows: [...keyed, ...unkeyed],
+            key: row => row.sourceKey ?? sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: row.sessionId! }),
+            cursor: selection.cursor, limit: selection.limit });
         const follows: AccountFollowRelationV1[] = [];
-        for (const row of rows) {
+        for (const row of page.rows) {
             if (row.sessionId) {
                 if (await readableSession(tx, { ...input, sessionId: row.sessionId })) follows.push(projectAccountSessionFollow(row));
             } else {
@@ -276,7 +301,7 @@ export async function listAccountSessionFollows(input: Readonly<{ accountId: str
                 if (projected) follows.push(projected);
             }
         }
-        return { ok: true as const, value: { follows } };
+        return { ok: true as const, value: { follows, ...(page.continuation ? { continuation: page.continuation } : {}) } };
     }, async (tx, captured) => {
         if (!captured.ok) return captured;
         if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
@@ -286,16 +311,8 @@ export async function listAccountSessionFollows(input: Readonly<{ accountId: str
                 if (await readableSession(tx, { ...input, sessionId: row.sessionId })) follows.push(row);
             } else if (row.source.kind !== 'rule' && await canReadFollowSourceInTx(tx, { ...input, source: row.source })) follows.push(row);
         }
-        try {
-            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'following']), rows: follows,
-                key: row => 'sessionId' in row
-                    ? sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: row.sessionId })
-                    : sourceKeyForSessionFollowSourceV1(row.source as OtherAccountSource),
-                cursor: input.cursor, limit: input.limit });
-            return { ok: true as const, value: { follows: page.rows, ...(page.continuation ? { continuation: page.continuation } : {}) } };
-        } catch {
-            return { ok: false as const, error: 'invalid_parameters' as const };
-        }
+        return { ok: true as const, value: { follows, ...(captured.value.continuation
+            ? { continuation: sealSessionFollowListCursor(scope, captured.value.continuation) } : {}) } };
     });
 }
 

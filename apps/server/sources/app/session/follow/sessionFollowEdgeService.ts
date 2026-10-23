@@ -58,7 +58,8 @@ import { resolveWorkflowRunAccessInTx } from '@/app/workflows/workflowRunAccess'
 import { isPublicSessionShareActive } from '@/app/share/publicSessionSharePublication';
 import { canReadFollowSourceInTx } from './followSourceAdmission';
 import { isExecutionRunFollowFrontierWitnessCurrentInTx, type ExecutionRunFollowFrontierWitness } from './executionRunFollowSource';
-import { pageFollowListV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
+import { pageFollowListV1, readFollowListCursorV1, FollowListRequestV1Schema, type FollowListRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
+import { openSessionFollowListCursor, sealSessionFollowListCursor } from './sessionFollowListCursor';
 import { readCurrentCommittedSessionInputMachineTargetInTx, readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 import { readAdmittedSessionFollowInputInTx, readSessionFollowOriginalOccurrenceFrontiersInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, type SessionFollowInputRelation } from './sessionFollowRuleProgress';
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx,
@@ -572,9 +573,19 @@ export async function listSessionFollowSources(input: Readonly<{
     accountId: string;
     destinationSessionId: string;
     authentication: SessionAccessAuthentication;
-    cursor?: string;
-    limit?: number;
-}>): Promise<SessionFollowSourceResult<Readonly<{ sources: readonly FollowSourceRelationV1[]; continuation?: string }>>> {
+}> & FollowListRequestV1): Promise<SessionFollowSourceResult<Readonly<{ sources: readonly FollowSourceRelationV1[]; continuation?: string }>>> {
+    let selection: FollowListRequestV1, scope: string, after: string | undefined;
+    try {
+        selection = FollowListRequestV1Schema.parse({ cursor: input.cursor, limit: input.limit, source: input.source });
+        scope = JSON.stringify([input.accountId, 'following', input.destinationSessionId, ...(selection.source ? [selection.source] : [])]);
+        selection = { ...selection, cursor: openSessionFollowListCursor(scope, selection.cursor) };
+        after = readFollowListCursorV1(scope, selection.cursor);
+    } catch { return { ok: false, error: 'invalid_parameters' }; }
+    const source = selection.source;
+    if (source?.kind === 'rule') return { ok: false, error: 'invalid_parameters' };
+    const sourceWhere = !source ? {} : source.kind === 'session'
+        ? { OR: [{ sourceSessionId: source.sessionId }, { sourceExecutionRunSessionId: source.sessionId }] }
+        : { sourceKey: sourceKeyForSessionFollowSourceV1(source) };
     return await readSnapshotWithCurrentAdmission<SessionFollowSourceResult<Readonly<{ sources: readonly FollowSourceRelationV1[]; continuation?: string }>>>(async (tx) => {
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const destination = await loadSession(tx, input.destinationSessionId);
@@ -582,12 +593,15 @@ export async function listSessionFollowSources(input: Readonly<{
             return { ok: false, error: "session_not_found" };
         }
         const edges = await tx.sessionFollowEdge.findMany({
-            where: { destinationSessionId: input.destinationSessionId, relation: 'follower' },
+            where: { destinationSessionId: input.destinationSessionId, relation: 'follower',
+                AND: [sourceWhere, ...(after === undefined ? [] : [{ sourceKey: { gt: after } }])] },
             select: EDGE_SELECT,
             orderBy: { sourceKey: "asc" },
+            ...(selection.limit === undefined ? {} : { take: selection.limit + 1 }),
         });
+        const page = pageFollowListV1({ scope, rows: edges, key: row => row.sourceKey, cursor: selection.cursor, limit: selection.limit });
         const visible: FollowSourceRelationV1[] = [];
-        for (const row of edges) {
+        for (const row of page.rows) {
             const edge = readSessionEdge(row);
             if (edge) {
                 if (!await canReadSession(tx, input.accountId, edge.sourceSessionId, input.authentication)) continue;
@@ -602,7 +616,7 @@ export async function listSessionFollowSources(input: Readonly<{
                 if (projected) visible.push(projected);
             }
         }
-        return { ok: true, value: { sources: visible } };
+        return { ok: true, value: { sources: visible, ...(page.continuation ? { continuation: page.continuation } : {}) } };
     }, async (tx, captured) => {
         if (!captured.ok) return captured;
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
@@ -615,14 +629,8 @@ export async function listSessionFollowSources(input: Readonly<{
                     authentication: input.authentication });
             if (permitted) visible.push(source);
         }
-        try {
-            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'following', input.destinationSessionId]),
-                rows: visible, key: row => 'sourceSessionId' in row
-                    ? sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: row.sourceSessionId })
-                    : sourceKeyForSessionFollowSourceV1(row.source as OtherFollowSource),
-                cursor: input.cursor, limit: input.limit });
-            return { ok: true, value: { sources: page.rows, ...(page.continuation ? { continuation: page.continuation } : {}) } };
-        } catch { return { ok: false, error: 'invalid_parameters' }; }
+        return { ok: true, value: { sources: visible, ...(captured.value.continuation
+            ? { continuation: sealSessionFollowListCursor(scope, captured.value.continuation) } : {}) } };
     });
 }
 

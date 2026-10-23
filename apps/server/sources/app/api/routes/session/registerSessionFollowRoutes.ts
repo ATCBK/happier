@@ -29,7 +29,7 @@ import { SESSION_FOLLOW_RULES_ROUTE_V1, SessionFollowRuleIdV1Schema, SessionFoll
 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { getAccountFollowRule, listAccountFollowRules, setAccountFollowRule, removeAccountFollowRule } from '@/app/session/follow/accountFollowRuleService';
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
-import { FollowListPageQueryV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
+import { FollowListQueryV1Schema, parseFollowListQueryV1, type FollowListRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 import { listAccountSessionFollows } from '@/app/session/follow/accountFollowService';
 import { SESSION_FOLLOW_PERSONAL_PROGRESS_ROUTE_V1, SessionFollowPersonalProgressRequestV1Schema,
     SessionFollowPersonalProgressResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
@@ -122,11 +122,12 @@ export function registerSessionFollowRoutes(app: Fastify) {
         return result.ok ? reply.send(result.value) : reply.code(ruleFailureStatus[result.error]).send({ error: result.error });
     });
     app.get('/v2/account/session-follows', { preHandler: [app.authenticate, ruleFeature], config: { ...ruleConfig, apiTokenSessionAction: 'follow.list' },
-        schema: { querystring: FollowListPageQueryV1Schema, response: { 200: ListAccountSessionFollowsResponseV1Schema, ...errorResponses } },
+        schema: { querystring: FollowListQueryV1Schema, response: { 200: ListAccountSessionFollowsResponseV1Schema, ...errorResponses } },
     }, async (request, reply) => {
-        const query = FollowListPageQueryV1Schema.safeParse(request.query);
-        if (!query.success) return reply.code(400).send({ error: 'invalid_parameters' });
-        const result = await listAccountSessionFollows({ accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
+        let query: FollowListRequestV1;
+        try { query = parseFollowListQueryV1(request.query); }
+        catch { return reply.code(400).send({ error: 'invalid_parameters' }); }
+        const result = await listAccountSessionFollows({ accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), ...query });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
     });
     app.get(SESSION_FOLLOW_RULES_ROUTE_V1, { preHandler: [app.authenticate, ruleFeature], config: { ...ruleConfig, apiTokenSessionAction: 'follow.list' },

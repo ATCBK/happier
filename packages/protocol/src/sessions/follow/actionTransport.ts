@@ -7,7 +7,7 @@ import { DELIVERY_MUTE_HTTP_PATHS_V1, FollowReceiverRefV1Schema, FollowSourceRef
 import { SESSION_FOLLOW_HTTP_PATHS_V1 } from './api.js';
 import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1, ListSessionFollowSourcesResponseSchema } from './sessionFollowSourcesApi.js';
 import { SESSION_FOLLOW_RULES_ROUTE_V1, SessionFollowRuleIdV1Schema, SetSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleRequestV1Schema, equalFollowRuleReceiverV1, type SessionFollowRuleContentV1 } from './sessionFollowRuleV1.js';
-import { appendFollowListPageQueryV1, FollowListPageQueryV1Schema, FollowListPageRequestV1Schema } from './sessionFollowListV1.js';
+import { appendFollowListPageQueryV1, FollowListPageQueryV1Schema, FollowListPageRequestV1Schema, FollowListRequestV1Schema, parseFollowListQueryV1 } from './sessionFollowListV1.js';
 import { appendFollowSourceRefQueryV1, parseOtherFollowSourceRefV1 } from './followSourceRefTransportV1.js';
 
 const sameSourceRef = (row: Readonly<Record<string, unknown>>, source: Readonly<Record<string, unknown>>) =>
@@ -59,6 +59,16 @@ export function isSessionFollowActionHttpRequestV1(actionId: SessionFollowAction
     const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {};
     const page = FollowListPageQueryV1Schema.parse({ ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       ...(input.limit === undefined ? {} : { limit: input.limit }) });
+    if (input.source !== undefined) {
+      if (actionId !== 'follow.list' || input.sourceRef !== undefined || input.sourceSessionId !== undefined) return false;
+      const selection = parseFollowListQueryV1({ ...page, source: input.source });
+      const destinationSessionId = input.destinationSessionId;
+      if (destinationSessionId !== undefined && (typeof destinationSessionId !== 'string' || request.sessionRouteSessionId !== destinationSessionId)
+        || destinationSessionId === undefined && request.sessionRouteSessionId !== undefined) return false;
+      const receiver = typeof destinationSessionId === 'string' ? { kind: 'session', sessionId: destinationSessionId } : { kind: 'account' };
+      return matches(resolveSessionFollowActionRequest('follow.list', { direction: 'following', receiver, ...selection }),
+        { ...page, source: input.source, ...(destinationSessionId === undefined ? {} : { destinationSessionId }) });
+    }
     if (input.sourceRef !== undefined) {
       if (typeof input.sourceRef !== 'string') return false;
       const source = parseOtherFollowSourceRefV1(input.sourceRef);
@@ -181,7 +191,8 @@ export function resolveSessionFollowActionRequest(actionId: SessionFollowActionI
     }
     const receiver = FollowReceiverRefV1Schema.parse(data.receiver);
     return { method: 'GET', path: appendFollowListPageQueryV1(receiver.kind === 'account' ? '/v2/account/session-follows'
-      : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(receiver.sessionId)), page) };
+      : SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(receiver.sessionId)),
+      FollowListRequestV1Schema.parse({ ...page, source: data.source })) };
   }
   if (actionId === 'follow.get' || actionId === 'follow.set' || actionId === 'follow.remove') {
     const receiver = FollowReceiverRefV1Schema.parse(data.receiver);

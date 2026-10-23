@@ -12,7 +12,7 @@ import { FollowSourceRelationV1Schema } from './sessionFollowSourcesApi.js';
 import { SessionListFilterV1Schema } from '../listFilter/sessionListFilterV1.js';
 import { FollowRulePreviewResultV1Schema } from './sessionFollowRulePreviewV1.js';
 import { SessionTargetV1Schema } from '../../actions/sessionTargetV1.js';
-import { FollowListPageRequestV1Schema, FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
+import { FollowListPageRequestV1Schema, FollowListRequestV1Schema, FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
 
 export type SessionFollowActionIdV1 = typeof ACTION_ID_FAMILIES_V1.session_follow[number];
 /** Operational receiver intent resolves once at Actions; stored/wire refs remain exact. */
@@ -68,7 +68,7 @@ export const FollowRemoveActionInputV1Schema = z.union([
   FollowRuleRemoveActionInputV1Schema, z.strictObject(ordinaryPair),
 ]);
 export const FollowListActionInputV1Schema = z.union([
-  z.strictObject({ direction: z.literal('following'), receiver: FollowActionReceiverV1Schema, ...FollowListPageRequestV1Schema.shape }),
+  z.strictObject({ direction: z.literal('following'), receiver: FollowActionReceiverV1Schema, ...FollowListRequestV1Schema.shape }),
   z.strictObject({ direction: z.literal('followers'), source: FollowSourceRefV1Schema, ...FollowListPageRequestV1Schema.shape }),
 ]);
 export const FollowListActionOutputV1Schema = lazyZodSchema(() => z.strictObject({
