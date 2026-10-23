@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { Socket } from 'socket.io';
 import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from 'privacy-kit';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, computeContentPublicKeyFingerprint, sealEncryptedDataKeyEnvelopeV1, encodePlainMachineStoredContent } from '@happier-dev/protocol';
@@ -10,6 +11,12 @@ import { observePrismaReads } from '@/testkit/observePrismaReads';
 import * as access from './machineAccess';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { rpcHandler } from '@/app/api/socket/rpcHandler';
+import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
+import { evaluateAccountStoredContentCompatibility } from '@/app/clientCompatibility/accountStoredContentCompatibility';
+import { CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 
 describe('Machine current access (real SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -80,6 +87,26 @@ describe('Machine current access (real SQLite)', () => {
             .toEqual({ kind: 'denied', code: 'access_denied' });
     });
 
+    it('admits Provider reads through their actual RPC policy without lending private mutation authority', async () => {
+        const f = await fixture();
+        const requester = await account();
+        await grant(f.owner.id, f.machine.id, requester.id);
+        const actor = { actorAccountId: requester.id, machineId: f.machine.id };
+        for (const actionId of ['providers.models.projection', 'providers.models.refresh']) {
+            expect(await access.resolveMachineAdmission({ ...actor, actionId }), actionId).toMatchObject({
+                kind: 'admitted', actorAccountId: requester.id, custodianAccountId: f.owner.id, role: 'use',
+            });
+        }
+        for (const actionId of ['providers.connections.describe', 'providers.connections.start_local', 'providers.connections.secrets.bind']) {
+            expect(await access.resolveMachineAdmission({ ...actor, actionId }), actionId)
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+        }
+        await inTx(tx => access.removeMachineAccessGrantInTx(tx, { actorAccountId: f.owner.id, machineId: f.machine.id,
+            principal: { kind: 'account', accountId: requester.id } }));
+        expect(await access.resolveMachineAdmission({ ...actor, actionId: 'providers.models.projection' }))
+            .toEqual({ kind: 'denied', code: 'access_denied' });
+    });
+
     it('excludes revoked owned Machines from discovery while retaining explicit historical candidates', async () => {
         const f = await fixture();
         const offline = await db.machine.create({ data: { ...f.machine, id: crypto.randomUUID() } });
@@ -87,6 +114,66 @@ describe('Machine current access (real SQLite)', () => {
         expect(await inTx(tx => access.listMachineCandidatesInTx(tx, f.owner.id))).toEqual([offline.id]);
         expect(await inTx(tx => access.listMachineCandidatesInTx(tx, f.owner.id, { includeRevokedOwned: true })))
             .toEqual([f.machine.id, offline.id].sort());
+    });
+
+    it.each([
+        ['providers.legacy.prepare', RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREPARE_SOURCE],
+        ['providers.models.list', RPC_METHODS.DAEMON_PROVIDERS_MODELS],
+        ['providers.probe', RPC_METHODS.DAEMON_PROVIDERS_PROBE],
+        ['providers.binding.status', RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS],
+        ['providers.models.load', RPC_METHODS.DAEMON_PROVIDERS_MODEL_LOAD],
+        ['providers.models.experimental.confirm', RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE],
+    ])('keeps private Provider %s with its custodian for both Use and Manage grants', async (actionId, rpcMethod) => {
+        const f = await fixture();
+        const requester = await account();
+        for (const level of ['admin', 'view'] as const) {
+            await grant(f.owner.id, f.machine.id, requester.id, level);
+            const actor = { actorAccountId: requester.id, machineId: f.machine.id };
+            expect(await access.resolveMachineAdmission({ ...actor, actionId }))
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+            expect(await access.resolveMachineAdmission({ ...actor, rpcMethod }))
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+        }
+        const owner = { actorAccountId: f.owner.id, machineId: f.machine.id };
+        expect(await access.resolveMachineAdmission({ ...owner, actionId }))
+            .toMatchObject({ kind: 'admitted', role: 'manage' });
+        expect(await access.resolveMachineAdmission({ ...owner, rpcMethod }))
+            .toMatchObject({ kind: 'admitted', role: 'manage' });
+    });
+
+    it.each([
+        RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT,
+        RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_RESOURCE_TEST_CANDIDATE,
+        RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY,
+        RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME,
+    ])('refuses raw private Provider and connected-service operations to Use and Manage grantees: %s', async rpcMethod => {
+        const f = await fixture();
+        const requester = await account();
+        await db.machine.update({ where: { id: f.machine.id }, data: { active: true } });
+        const accountStoredContentCompatibility = evaluateAccountStoredContentCompatibility({ status: 'valid',
+            declaration: CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION });
+        const emitWithAck = vi.fn(async () => ({ status: 'source-result' }));
+        const target = { id: 'source-daemon',
+            data: { clientType: 'machine-scoped', machineId: f.machine.id, verifiedMachineInstallationId: 'install', accountStoredContentCompatibility },
+            timeout: () => ({ emitWithAck }) };
+        const io = createSocketRoomDiscoveryHarness(async room => room === `rpc:${f.owner.id}:${f.machine.id}:${rpcMethod}` || room === target.id ? [target] : []);
+        const call = async (actorAccountId: string) => {
+            const socket = createAuthenticatedFakeSocket({ data: { accountStoredContentCompatibility } });
+            rpcHandler(actorAccountId, socket as unknown as Socket, { io });
+            const reply = vi.fn();
+            await getSocketHandler(socket, SOCKET_RPC_EVENTS.CALL)({ method: `${f.machine.id}:${rpcMethod}`, params: {} }, reply);
+            return reply;
+        };
+        for (const level of ['view', 'admin'] as const) {
+            await grant(f.owner.id, f.machine.id, requester.id, level);
+            expect(await call(requester.id)).toHaveBeenCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN }));
+            expect(emitWithAck).not.toHaveBeenCalled();
+            expect(await access.resolveMachineAdmission({ actorAccountId: requester.id, machineId: f.machine.id, rpcMethod }))
+                .toEqual({ kind: 'denied', code: 'unsupported_operation' });
+        }
+        expect(await access.resolveMachineAdmission({ actorAccountId: f.owner.id, machineId: f.machine.id, rpcMethod }))
+            .toMatchObject({ kind: 'admitted', role: 'manage', custodianAccountId: f.owner.id });
+        expect(await call(f.owner.id)).toHaveBeenCalledWith({ ok: true, result: { status: 'source-result' } });
     });
 
     it('admits requester-scoped operation reads and cancellation for current Machine Use and Manage', async () => {
