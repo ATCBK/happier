@@ -127,9 +127,10 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '.tsbuildinfo.build.*',
   '*.tsbuildinfo',
   '.cxx',
-  // Expo prebuild owns native identity, pod locks and project files on each target.
-  // Source replication must preserve that complete generated tree during a native build.
-  'apps/ui/ios',
+  // Expo prebuild owns native identity, locks and project files on each target.
+  // Preserve complete generated projects in root and nested source checkouts.
+  '**/apps/ui/ios',
+  '**/apps/ui/android',
   // Desktop preparation owns these generated sidecars and their JS runtime companions.
   // Replicating a local build would replace the target-native executable after Cargo builds it.
   'apps/ui/src-tauri/binaries',
@@ -142,9 +143,6 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   'packages/iroh-native/native-test',
   'packages/*/ios/vendor',
   'packages/iroh-native/release-evidence',
-  'apps/ui/android/app/build',
-  'apps/ui/android/build',
-  'apps/ui/android/.gradle',
   'packages/*/android/build',
   // CLI runs write target-local logs. Ignoring only *.log leaves the parent
   // directory visible to Mutagen, causing a deletion conflict on replicas.

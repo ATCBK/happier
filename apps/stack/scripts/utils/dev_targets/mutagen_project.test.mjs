@@ -144,8 +144,9 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '.tsbuildinfo.build.*',
     '*.tsbuildinfo',
     '.cxx',
-    // Expo owns the whole generated native tree, including Podfile.lock and Info.plist.
-    'apps/ui/ios',
+    // Expo owns complete generated native projects at every checkout depth.
+    '**/apps/ui/ios',
+    '**/apps/ui/android',
     'apps/ui/src-tauri/binaries',
     'apps/ui/src-tauri/systemTasks',
     'apps/ui/src-tauri/ssh',
@@ -153,9 +154,6 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     'packages/iroh-native/native',
     'packages/iroh-native/native-test',
     'packages/*/ios/vendor',
-    'apps/ui/android/app/build',
-    'apps/ui/android/build',
-    'apps/ui/android/.gradle',
     'packages/*/android/build',
     'apps/cli/logs',
     'apps/cli/tmp',
@@ -259,6 +257,18 @@ test('renderMutagenProject preserves default exclusions inside re-included proje
   const included = ['.project/README.md', 'packages/triage-qa/src/coverage/source.ts',
     'packages/protocol/src/browser/target/source.ts',
     'apps/cli/src/plugins/testkit/fixtures/packed-external-voice-provider/dist/index.js'];
+  const excludeGeneratedNativeProjects = (ui) => {
+    for (const platform of ['android', 'ios']) {
+      excluded.push(`${ui}/${platform}`, `${ui}/${platform}/project.properties`,
+        `${ui}/${platform}/build/generated/output`);
+    }
+    included.push(`${ui}/modules/local-module/android/src/main/Module.kt`,
+      `${ui}/modules/local-module/ios/Module.swift`);
+  };
+  // Expo generates complete native projects on each target, including in nested
+  // checkouts. Module implementation sources beside them must still synchronize.
+  excludeGeneratedNativeProjects('apps/ui');
+  excludeGeneratedNativeProjects('nested-checkout/apps/ui');
   for (const tree of ['plans', 'tasks', 'scripts']) {
     const root = `.project/${tree}/qa/plugin`;
     included.push(`${root}/src/index.ts`, `${root}/README.md`);
@@ -274,6 +284,7 @@ test('renderMutagenProject preserves default exclusions inside re-included proje
     await mkdir(fixture.path(scratch), { recursive: true });
     await symlink(fixture.root, fixture.path(scratch, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     excluded.push(`${scratch}/node_modules`);
+    excludeGeneratedNativeProjects(scratch);
     included.push(`${scratch}/package.json`);
   }
   excluded.push('.project/reviews/report.md', '.project/plans/qa/browser-diagnostics.json',
