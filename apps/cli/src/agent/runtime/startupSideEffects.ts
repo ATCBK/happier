@@ -41,6 +41,15 @@ type InFlightDaemonSessionReport = {
 
 const inFlightDaemonSessionReports = new Map<string, InFlightDaemonSessionReport>();
 
+export class DaemonSessionReadinessError extends Error {
+    readonly code = 'native_agent_privileged_effect_outcome_unknown' as const;
+
+    constructor(message: string) {
+        super(`Daemon session readiness was not acknowledged: ${message || 'unknown daemon report failure'}`);
+        this.name = 'DaemonSessionReadinessError';
+    }
+}
+
 function hasSameSessionCreationOutcome(
     left: SessionCreationOutcome,
     right: SessionCreationOutcome,
@@ -331,7 +340,7 @@ async function runDaemonSessionReport(
         if (!isTransientDaemonReportError(message) || timedOut) {
             logger.debug('[START] Failed to report to daemon (may not be running):', failure);
             if (state.requireDaemonAck) {
-                throw new Error(`Daemon session readiness was not acknowledged: ${message || 'unknown daemon report failure'}`);
+                throw new DaemonSessionReadinessError(message);
             }
             return;
         }
