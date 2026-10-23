@@ -608,6 +608,7 @@ function PublicProfileReviewModal(
       endToEndEncrypted={props.endToEndEncrypted}
       indexable={props.indexable}
       confirming={confirming}
+      setChrome={props.setChrome}
       onCancel={() => { props.cancel(); props.onClose(); }}
       onConfirm={() => {
         setConfirming(true);

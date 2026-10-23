@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { Text } from '@/components/ui/text/Text';
+import type { CustomModalInjectedProps } from '@/modal';
+import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
 
 export type PublicProfileReviewProps = Readonly<{
@@ -35,6 +37,8 @@ export type PublicProfileReviewProps = Readonly<{
   confirming: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** The hosting card: the review scrolls inside it while Cancel and Publish stay in its footer. */
+  setChrome?: CustomModalInjectedProps['setChrome'];
 }>;
 
 /**
@@ -69,6 +73,35 @@ export function PublicProfileReview(
     () => (showData ? preparationNotice ?? JSON.stringify(props.disclosure, null, 2) : ''),
     [showData, preparationNotice, props.disclosure],
   );
+  const { confirming, kind, onCancel, onConfirm } = props;
+  const actions = React.useMemo(() => (
+    <View style={styles.actions}>
+      <RoundButton
+        testID="public-profile-review-cancel"
+        size="normal"
+        display="secondary"
+        title={t('publicIdentity.review.cancel')}
+        disabled={confirming}
+        onPress={onCancel}
+      />
+      <RoundButton
+        testID="public-profile-review-confirm"
+        size="normal"
+        title={
+          kind === 'publish'
+            ? t('publicIdentity.review.confirmPublish')
+            : t('publicIdentity.review.confirmApply')
+        }
+        loading={confirming}
+        disabled={confirming}
+        onPress={onConfirm}
+      />
+    </View>
+  ), [confirming, kind, onCancel, onConfirm]);
+  // However short the window, the disclosures scroll between the title band and the pinned actions.
+  useModalCardChrome(props.setChrome, React.useMemo(() => (
+    { kind: 'card' as const, scrollHost: 'bounded' as const, bodyScroll: 'auto' as const, footer: actions }
+  ), [actions]));
   return (
     <View style={styles.body} testID="public-profile-review">
       {props.pageUrl ? (
@@ -80,10 +113,10 @@ export function PublicProfileReview(
         </Text>
       ) : null}
       <View style={styles.section}>
-        <Text variant="label" emphasis="semiBold">
+        <Text variant="label" emphasis="semiBold" style={styles.primary}>
           {t('publicIdentity.review.intro', { service: props.service })}
         </Text>
-        <Text variant="body" testID="public-profile-review-items">
+        <Text variant="body" style={styles.primary} testID="public-profile-review-items">
           {props.sharedFields.length > 0
             ? names(props.sharedFields)
             : t('publicIdentity.review.none')}
@@ -91,7 +124,7 @@ export function PublicProfileReview(
       </View>
       {hidden.length > 0 ? (
         <View style={styles.section}>
-          <Text variant="label" emphasis="semiBold">
+          <Text variant="label" emphasis="semiBold" style={styles.primary}>
             {t('publicIdentity.review.hidden')}
           </Text>
           <Text
@@ -111,11 +144,14 @@ export function PublicProfileReview(
           </Text>
         </View>
       ) : null}
-      {consequences.map((line) => (
-        <Text key={line} variant="meta" style={styles.secondary}>
-          {line}
-        </Text>
-      ))}
+      {/* One note of consequences, not four more sections. */}
+      <View style={styles.notes}>
+        {consequences.map((line) => (
+          <Text key={line} variant="meta" style={styles.secondary}>
+            {line}
+          </Text>
+        ))}
+      </View>
       <ExpandableItem
         expanded={showData}
         onExpandedChange={setShowData}
@@ -140,28 +176,8 @@ export function PublicProfileReview(
           />
         ) : null}
       </ExpandableItem>
-      <View style={styles.actions}>
-        <RoundButton
-          testID="public-profile-review-cancel"
-          size="small"
-          display="secondary"
-          title={t('publicIdentity.review.cancel')}
-          disabled={props.confirming}
-          onPress={props.onCancel}
-        />
-        <RoundButton
-          testID="public-profile-review-confirm"
-          size="small"
-          title={
-            props.kind === 'publish'
-              ? t('publicIdentity.review.confirmPublish')
-              : t('publicIdentity.review.confirmApply')
-          }
-          loading={props.confirming}
-          disabled={props.confirming}
-          onPress={props.onConfirm}
-        />
-      </View>
+      {/* Without card chrome (an embedding host), the actions end the body. */}
+      {props.setChrome ? null : actions}
     </View>
   );
 }
@@ -170,6 +186,8 @@ const styles = StyleSheet.create((theme) => ({
   // The card chrome insets only its title band and footer; the review stands on that same edge.
   body: { gap: theme.space.s12, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s16 },
   section: { gap: theme.space.s4 },
+  notes: { gap: theme.space.s8 },
+  primary: { color: theme.colors.text.primary },
   secondary: { color: theme.colors.text.secondary },
   picture: {
     overflow: 'hidden',
