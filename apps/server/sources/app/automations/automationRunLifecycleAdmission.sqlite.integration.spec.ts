@@ -183,7 +183,8 @@ describe('Run lifecycle source admission (retained SQLite owners)', () => {
     const f = await fixture();
     const replacement = await db.machine.create({ data: { id: randomUUID(), accountId: f.accountId, metadata: '{}' } });
     await inTx(tx => applyMachineReplacement({ tx, accountId: f.accountId, oldMachineId: f.machineId,
-      replacementMachineId: replacement.id, reason: 'retained target repair', source: 'manual', actorUserId: f.accountId }));
+      replacementMachineId: replacement.id, reason: 'retained target repair', source: 'manual', actorUserId: f.accountId,
+      confirmActiveOldMachine: true }));
     const run = await db.automationRun.create({ data: { accountId: f.accountId, originKind: 'direct', causeKind: null,
       state: 'cancelled', scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: 'pending',
       workflowAcceptedSnapshotEnvelope: '{}', revision: 2 } });

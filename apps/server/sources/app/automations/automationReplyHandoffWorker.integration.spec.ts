@@ -233,6 +233,7 @@ describe("Automation reply handoff worker", () => {
                     occurredAt: NOW.getTime(),
                 },
                 accountCurrentness: claimedCurrentness,
+                recipeKind: "legacy",
                 resultEnvelope: RESULT_ENVELOPE,
                 replyContextEnvelope: REPLY_CONTEXT_ENVELOPE,
             },

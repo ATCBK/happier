@@ -1185,9 +1185,8 @@ describe("automation trigger-set CRUD", () => {
                 data: {
                     automationId: automation.id,
                     accountId: account.id,
-                    // Workflow Runs share the physical table, but their
-                    // additional lifecycle states are not Automation API
-                    // states and must only advance the raw history cursor.
+                    // The retained Automation projection maps an interrupted
+                    // Workflow Run to running and preserves the raw cursor.
                     state: "interrupted",
                     causeKind: "manual",
                     causeOccurredAt: new Date(base + 2),
@@ -1202,10 +1201,11 @@ describe("automation trigger-set CRUD", () => {
         const first = await listAutomationRuns({
             accountId: account.id, automationId: automation.id, limit: 1,
         });
-        expect(first).toEqual({ runs: [], nextCursor: currentOnly.id });
+        const expectedFirst = { runs: [expect.objectContaining({ id: currentOnly.id, state: "running" })], nextCursor: currentOnly.id };
+        expect(first).toEqual(expectedFirst);
         await expect(listAutomationRuns({
             accountId: account.id, automationId: automation.id, limit: 1,
-        })).resolves.toEqual({ runs: [], nextCursor: currentOnly.id });
+        })).resolves.toEqual(expectedFirst);
         const second = await listAutomationRuns({
             accountId: account.id, automationId: automation.id, limit: 1,
             cursor: first!.nextCursor,

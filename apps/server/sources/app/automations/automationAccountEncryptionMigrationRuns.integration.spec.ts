@@ -3,6 +3,7 @@ import {
     ACCOUNT_ENCRYPTION_MIGRATE_AUTOMATIONS_MAX_ITEMS,
     AccountEncryptionMigrateAutomationsDirectiveSchema,
     AutomationOccurrenceEvidenceEqualityTagV1Schema,
+    AutomationRunPluginEventTriggerEvidenceV1Schema,
     AutomationTriggerIdSchema,
     deriveAutomationOccurrenceKeyV1,
     AutomationSourceSelectorIdV1Schema,
@@ -172,16 +173,28 @@ function strictRunTarget() {
 function buildStrictPlainExecutionInput(params: Readonly<{
     templateVersion: number;
     prompt: string;
-    evidence: unknown | null;
+    evidence:
+        | ReturnType<typeof buildPlainEventEvidence>
+        | ReturnType<typeof buildPlainConversationEvidence>
+        | null;
     assignmentMachineIds?: readonly string[];
 }>): string {
+    const evidence = params.evidence?.kind === "pluginEvent"
+        ? AutomationRunPluginEventTriggerEvidenceV1Schema.parse({
+            ...params.evidence,
+            sourceInstanceId: "migration-repository",
+            sourceContractVersion: 1,
+            observationReceivedAt: params.evidence.occurredAt,
+            filter: { version: null, result: "matched" },
+        })
+        : params.evidence;
     return buildStrictExecutionInput({
         v: 1,
         templateVersion: params.templateVersion,
         template: { t: "plain", v: { v: 1, prompt: params.prompt } },
-        triggerEvidence: params.evidence === null
+        triggerEvidence: evidence === null
             ? null
-            : { t: "plain", v: params.evidence },
+            : { t: "plain", v: evidence },
         target: strictRunTarget(),
         assignmentMachineIds: [...(params.assignmentMachineIds ?? [])],
     });

@@ -258,7 +258,7 @@ function buildExecutionInputEnvelope(mode: "plain" | "e2ee"): string {
                     serverId: "server-pep1-measurement",
                     machineId: "machine-pep1-measurement",
                 },
-                directory: "/tmp/pep1-measurement",
+                directory: { kind: "path", path: "/tmp/pep1-measurement" },
                 agentTarget: {
                     kind: "agent",
                     identity: {

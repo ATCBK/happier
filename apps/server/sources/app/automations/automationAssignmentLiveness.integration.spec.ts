@@ -38,7 +38,7 @@ function storedRecipe(templateVersion: number): string {
             kind: "newSession",
             spawn: {
                 executionTarget: { serverId: "server", machineId: "machine" },
-                directory: "/tmp/automation-assignment-liveness",
+                directory: { kind: "path", path: "/tmp/automation-assignment-liveness" },
                 agentTarget: {
                     kind: "agent",
                     identity: { pluginId: "happier.agent.codex", localId: "codex" },
