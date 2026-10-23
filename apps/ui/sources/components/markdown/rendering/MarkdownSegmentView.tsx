@@ -140,10 +140,11 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     const testID = `markdown-source-range-trigger:${props.segment.sourceRange.startLine}-${props.segment.sourceRange.endLine}`;
     // One element type, always. Review-comment mode flips `onPressSourceRange` for every segment of
     // the open file at once; swapping `Pressable` for `View` on that flip would remount all of them.
-    // A disabled `Pressable` claims no touch responder, so the non-review pass behaves like the
-    // plain container it replaces and selection and link presses inside still reach the content.
+    // An inactive range passes pointer handling to its descendants. Disabling the wrapper would
+    // also mark loaded image/link controls inside it disabled for assistive technologies.
     const pressable = props.onPressSourceRange !== undefined && (props.sourceRangePressable?.(sourceAction) ?? true);
     const requestSelection = marked && selectionActions?.length === 1;
+    const interactive = pressable || Boolean(requestSelection);
     return (
         <View style={styles.sourceRangeContainer}
             onLayout={props.sourceRangeLayoutObserver
@@ -153,7 +154,10 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
             <Pressable
                 testID={testID}
                 accessibilityRole={pressable ? 'button' : undefined}
-                disabled={!pressable && !requestSelection}
+                pointerEvents={interactive ? 'auto' : 'box-none'}
+                accessible={interactive}
+                focusable={interactive}
+                tabIndex={interactive ? undefined : -1}
                 onPress={pressable ? () => props.onPressSourceRange?.(sourceAction) : undefined}
                 onLongPress={requestSelection ? () => selectionActions[0]!.onPress(sourceAction) : undefined}
                 style={[styles.sourceRangeTrigger, highlighted ? styles.highlight : null]}
