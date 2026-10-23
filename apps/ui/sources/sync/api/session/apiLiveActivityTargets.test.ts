@@ -239,6 +239,8 @@ describe('apiLiveActivityTargets', () => {
             expect.objectContaining({ method: 'DELETE' }),
             expect.any(Object),
         );
+        // Bodiless DELETE: a JSON content type makes Fastify reject it (FST_ERR_CTP_EMPTY_JSON_BODY).
+        expect(new Headers(mocks.serverFetch.mock.calls[0]?.[1]?.headers).has('content-type')).toBe(false);
     });
 
     it.each([404, 410])('keeps non-canonical HTTP %s delete failures retryable', async (status) => {
