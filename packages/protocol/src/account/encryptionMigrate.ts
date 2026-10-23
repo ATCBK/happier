@@ -1959,7 +1959,36 @@ export function createAccountEncryptionMigrateTransitionAuthorizationProofSignin
   );
 }
 
-export const AccountEncryptionMigrateSuccessResponseSchema = lazyZodSchema(() => z.strictObject({
+// Declarations name each part: the fully inferred response exceeds the
+// compiler's serialization limit (TS7056) as its row schemas grow.
+export interface AccountEncryptionMigrateSuccessResponse {
+  success: true;
+  mode: z.output<typeof AccountEncryptionMigrateToModeSchema>;
+  accountVersion: number;
+  settingsVersion: number;
+  authoringMemory?: { rows: z.output<typeof AuthoringMemoryRowV1Schema>[] } | undefined;
+  promptLibrary?: z.output<typeof AccountEncryptionMigratePromptLibraryResultV1Schema> | undefined;
+  sessionFollowRules?: z.output<typeof AccountEncryptionMigrateSessionFollowRulesResultV1Schema> | undefined;
+  remoteHosts?: z.output<typeof AccountEncryptionMigrateRemoteHostsResultV1Schema> | undefined;
+  notificationChannels?: z.output<typeof AccountEncryptionMigrateNotificationChannelsResultV1Schema> | undefined;
+  connectedPresentation?: z.output<typeof AccountEncryptionMigrateConnectedPresentationResultV1Schema> | undefined;
+  connectedAcknowledgements?: z.output<typeof AccountEncryptionMigrateConnectedAcknowledgementsResultV1Schema> | undefined;
+  providerConnections?: z.output<typeof AccountEncryptionMigrateProviderConnectionsResultV1Schema> | undefined;
+  mcpServerCatalog?: z.output<typeof AccountEncryptionMigrateMcpServerCatalogResultV1Schema> | undefined;
+  acpCatalog?: z.output<typeof AccountEncryptionMigrateAcpCatalogResultV1Schema> | undefined;
+  connectedConfigurations?: z.output<typeof AccountEncryptionMigrateConnectedConfigurationsResultV1Schema> | undefined;
+  connectedPurposes?: z.output<typeof AccountEncryptionMigrateConnectedPurposesResultV1Schema> | undefined;
+  profileRows?: z.output<typeof AccountEncryptionMigrateProfileRowsResultSchema> | undefined;
+  workspaceExecutionConfig?: { rows: z.output<typeof WorkspaceExecutionConfigRowV1Schema>[] } | undefined;
+  projectRows?: { rows: z.output<typeof ProjectAccountRowV1Schema>[] } | undefined;
+  projectTrust?: { rows: z.output<typeof ProjectTrustRowV1Schema>[] } | undefined;
+  sessionDrafts?:
+    | { records: z.output<typeof SessionDraftRecordV1Schema>[] }
+    | { v: 2; records: z.output<typeof SessionDraftRecordV2Schema>[] }
+    | undefined;
+}
+
+export const AccountEncryptionMigrateSuccessResponseSchema: z.ZodMiniType<AccountEncryptionMigrateSuccessResponse> = lazyZodSchema(() => z.strictObject({
     success: z.literal(true),
     mode: AccountEncryptionMigrateToModeSchema,
     accountVersion: NonNegativeSafeIntegerSchema,
@@ -1990,9 +2019,6 @@ export const AccountEncryptionMigrateSuccessResponseSchema = lazyZodSchema(() =>
       }),
     ])),
   }));
-export type AccountEncryptionMigrateSuccessResponse = z.infer<
-  typeof AccountEncryptionMigrateSuccessResponseSchema
->;
 
 export const AccountEncryptionMigrateInvalidParamsReasonSchema = lazyZodSchema(() => z.enum([
   'restore_required',
