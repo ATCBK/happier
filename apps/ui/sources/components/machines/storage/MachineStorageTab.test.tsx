@@ -1037,7 +1037,7 @@ describe('MachineStorageTab', () => {
 
     it('after a move to Trash, says what comes back when the Trash empties instead of what can go (lab RD)', async () => {
         const moved = { ...SUMMARY, trash: { count: 6, allocatedBytes: 34.5 * GB, emptiesNextAt: Date.UTC(2026, 9, 17, 12) },
-            volumes: SUMMARY.volumes.map((volume, index) => index === 0 ? { ...volume, trashBytes: 34.5 * GB } : volume) };
+            volumes: SUMMARY.volumes.map((volume, index) => index === 0 ? { ...volume, trashBytes: 34.5 * GB, trashFreesBytes: 34.5 * GB } : volume) };
         const { screen } = await mount({ id: 'storage' }, {}, (rpc) => rpc.method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET ? moved : undefined);
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-sentence')).not.toBeNull()); });
         expect(screen.getTextContent()).toContain('34.5 GB more comes back when the Trash empties on');

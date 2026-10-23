@@ -147,6 +147,8 @@ export function createStorageService(deps: StorageServiceDeps) {
             happierBytes: previous.get(volume.id)?.happierBytes ?? 0,
             pileBytes: previous.get(volume.id)?.pileBytes ?? 0,
             trashBytes: previous.get(volume.id)?.trashBytes ?? 0,
+            ...(previous.get(volume.id)?.pileFreesBytes === undefined ? {} : { pileFreesBytes: previous.get(volume.id)!.pileFreesBytes }),
+            ...(previous.get(volume.id)?.trashFreesBytes === undefined ? {} : { trashFreesBytes: previous.get(volume.id)!.trashFreesBytes }),
             ...(previous.get(volume.id)?.canGoBytes === undefined ? {} : { canGoBytes: previous.get(volume.id)!.canGoBytes }),
         }));
         if (JSON.stringify(volumes) === JSON.stringify(cached.volumes)) return;
@@ -318,7 +320,10 @@ export function createStorageService(deps: StorageServiceDeps) {
                 totalBytes: volume.totalBytes, freeBytes: volume.availableBytes, happierBytes: byVolume.get(volume.id) ?? 0,
                 ...(volume.availableIncludingPurgeableBytes === undefined ? {} : { availableIncludingPurgeableBytes: volume.availableIncludingPurgeableBytes }),
                 canGoBytes: unionById.get(`volume:${volume.id}`)?.totalExclusiveBytes ?? 0,
-                pileBytes: 0, trashBytes: nextItems.filter(item => item.categoryId === 'trash' && volumeFor(item.path)?.id === volume.id)
+                pileBytes: 0, pileFreesBytes: 0,
+                trashFreesBytes: nextItems.filter(item => item.categoryId === 'trash' && volumeFor(item.path)?.id === volume.id)
+                    .reduce((sum, item) => sum + item.size.freesBytes, 0),
+                trashBytes: nextItems.filter(item => item.categoryId === 'trash' && volumeFor(item.path)?.id === volume.id)
                     .reduce((sum, item) => sum + item.size.allocatedBytes, 0) })),
             categories, suggestionsTop,
             pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] },

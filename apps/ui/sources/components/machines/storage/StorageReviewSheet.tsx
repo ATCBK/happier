@@ -167,7 +167,7 @@ function StorageReviewBody(props: ReviewProps) {
     && resolveMachineDiskAttentionKindV1({ totalBytes: volume.totalBytes, availableBytes: volume.freeBytes }, props.nearlyFullThreshold) !== null) ?? null;
   const headline = lowSpaceVolume ?? selectStorageHeadlineVolume(props.summary);
   const ghostVolume =
-    headline && plan ? { ...headline, pileBytes: plan.freesBytes } : headline;
+    headline && plan ? { ...headline, pileBytes: plan.freesBytes, pileFreesBytes: plan.freesBytes } : headline;
   const toggle = (itemId: string) =>
     setSelected((current) => {
       const next = new Set(current);

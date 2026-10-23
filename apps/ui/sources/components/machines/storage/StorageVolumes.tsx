@@ -89,13 +89,13 @@ export const StorageVolumeRow = React.memo(function StorageVolumeRow(props: Read
                 <Text testID={`machine-storage-volume-${volume.volume.volumeId}-after`} style={styles.after}>
                     {`${t(props.after === 'trashEmpties' ? 'machineStorage.volumes.afterTrashEmpties' : 'machineStorage.volumes.afterCleanup')} `}
                     <Text style={styles.afterStrong}>{t('machineStorage.volumes.afterCleanupFree', { free: formatMachineBytes(parts.afterCleanupFree, 'storage') })}</Text>
-                    {` ${t('machineStorage.volumes.afterCleanupGain', { amount: formatMachineBytes(parts.pile, 'storage') })}`}
+                    {` ${t('machineStorage.volumes.afterCleanupGain', { amount: formatMachineBytes(parts.afterCleanupFree - parts.free, 'storage') })}`}
                 </Text>
             ) : parts.afterTrashFree !== null ? (
                 <Text testID={`machine-storage-volume-${volume.volume.volumeId}-after`} style={styles.after}>
                     {`${t('machineStorage.volumes.afterTrashEmpties')} `}
                     <Text style={styles.afterStrong}>{t('machineStorage.volumes.afterCleanupFree', { free: formatMachineBytes(parts.afterTrashFree, 'storage') })}</Text>
-                    {` ${t('machineStorage.volumes.afterCleanupGain', { amount: formatMachineBytes(parts.trash, 'storage') })}`}
+                    {` ${t('machineStorage.volumes.afterCleanupGain', { amount: formatMachineBytes(parts.afterTrashFree - parts.free, 'storage') })}`}
                 </Text>
             ) : null}
         </SectionContentRow>

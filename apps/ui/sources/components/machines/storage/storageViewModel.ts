@@ -89,7 +89,7 @@ export function describeStorageSentence(summary: StorageSummary, options: Readon
         happierBytes: readHappierStorageBytes(summary),
         where: !headline ? { kind: 'none' } : holding > 1 ? { kind: 'across', count: holding } : { kind: 'volume', label: storageVolumeName(headline) },
         canGoBytes: options.recipient ? null : readStorageCanGoBytes(summary),
-        trashBytes: options.recipient ? 0 : summary.trash.allocatedBytes,
+        trashBytes: options.recipient ? 0 : summary.volumes.reduce((total, volume) => total + (volume.trashFreesBytes ?? 0), 0),
         trashEmptiesAt: options.recipient ? null : summary.trash.emptiesNextAt ?? null,
     };
 }
@@ -150,8 +150,10 @@ export function resolveStorageVolumeParts(volume: StorageVolume): StorageVolumeP
         trash,
         free,
         purgeable,
-        afterCleanupFree: pile > 0 ? free + pile : null,
-        afterTrashFree: trash > 0 ? free + trash : null,
+        afterCleanupFree: pile > 0 && volume.pileFreesBytes !== undefined
+            ? free + Math.min(pile, Math.max(0, volume.pileFreesBytes)) : null,
+        afterTrashFree: trash > 0 && volume.trashFreesBytes !== undefined
+            ? free + Math.min(trash, Math.max(0, volume.trashFreesBytes)) : null,
     };
 }
 

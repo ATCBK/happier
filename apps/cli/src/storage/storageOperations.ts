@@ -189,7 +189,7 @@ export function createStorageOperations(input: Readonly<{
             },
         };
     }
-    async function pileProjection(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
+    async function pileProjection(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>, includeVolumeFrees = false) {
         const state = await pile.get(actor.accountId, () => assertEffectActor(actor));
         if (state.droppedSinceLastView.length) input.invalidate();
         const snapshot = readSnapshot ?? (state.items.length
@@ -205,7 +205,27 @@ export function createStorageOperations(input: Readonly<{
                 if (!(error !== null && typeof error === 'object' && 'code' in error && error.code === 'unauthorized')) throw error;
             }
         }
-        const review = visible.length ? await reviewPile(visible, await reviewDeps(actor, snapshot)) : null;
+        const volumeFrees = new Map<string, number>();
+        const dependencies = visible.length ? await reviewDeps(actor, snapshot) : undefined;
+        const review = dependencies ? await reviewPile(visible, { ...dependencies, measure: async request => {
+            if (!includeVolumeFrees) return dependencies.measure(request);
+            // Reuse review's physical walk for each volume's selected union. Per-item
+            // exclusivity omits links shared by two selected roots on the same disk.
+            const volumes = [...deps.readVolumes()].sort((left, right) => right.mount.length - left.mount.length);
+            const paths = new Map<string, string[]>();
+            for (const path of request.paths) {
+                const volume = volumes.find(volume => contains(volume.mount, path));
+                if (!volume) continue;
+                const members = paths.get(volume.id) ?? []; members.push(path); paths.set(volume.id, members);
+            }
+            const measured = await dependencies.measure({ ...request, unions: [...(request.unions ?? []),
+                ...[...paths].map(([id, paths]) => ({ id: `pile:${id}`, paths }))] });
+            for (const id of paths.keys()) {
+                const union = measured.unions?.find(union => union.id === `pile:${id}`);
+                if (union) volumeFrees.set(id, union.totalExclusiveBytes);
+            }
+            return measured;
+        } }) : null;
         await assertActor(actor);
         // Native review can await OS/SCM facts while current Session custody changes.
         // Never disclose the earlier projection after its private scope proof expired.
@@ -216,7 +236,7 @@ export function createStorageOperations(input: Readonly<{
             summary: { count: visible.length, freesBytes: review?.totalFreesBytes ?? 0,
                 // Missing refs have no current Session scope proof; their paths stay custodian-only.
                 droppedSinceLastView: actor.sessionIds === undefined ? state.droppedSinceLastView : [] } };
-        return { result, review };
+        return { result, review, volumeFrees };
     }
     async function pileResult(actor: StorageOperationActor, snapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
         return (await pileProjection(actor, snapshot)).result;
@@ -458,7 +478,7 @@ export function createStorageOperations(input: Readonly<{
             candidates: readonly SizedItem[]): Promise<HappierStorageSummaryV1> {
             await assertActor(actor);
             const snapshot = current.suggestionsTop.length ? await protectionSnapshot([], candidates) : undefined;
-            const projection = await timeWebLatencyPhase('storage.summary.pile-projection', () => pileProjection(actor, snapshot));
+            const projection = await timeWebLatencyPhase('storage.summary.pile-projection', () => pileProjection(actor, snapshot, true));
             const volumes = deps.readVolumes();
             const byVolume = new Map<string, number>();
             for (const item of projection.review?.items ?? []) {
@@ -481,7 +501,8 @@ export function createStorageOperations(input: Readonly<{
                 volumes: current.volumes.map(volume => {
                     const { canGoBytes, ...sharedVolume } = volume;
                     return { ...sharedVolume, ...(actor.sessionIds === undefined && canGoBytes !== undefined ? { canGoBytes } : {}),
-                        pileBytes: byVolume.get(volume.volume.volumeId) ?? 0 };
+                        pileBytes: byVolume.get(volume.volume.volumeId) ?? 0,
+                        pileFreesBytes: projection.volumeFrees.get(volume.volume.volumeId) ?? 0 };
                 }) };
         },
         dispose() { disposed = true; lifecycle.abort(); unsubscribeTrash?.(); },

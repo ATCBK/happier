@@ -14,12 +14,23 @@ afterEach(() => {
     setPreferredLanguageFromSettings('en');
 });
 
+it('renders exclusive cleanup and Trash gains while keeping allocated bytes in the legend', async () => {
+    const volume = { volume: { volumeId: 'disk', mountPath: '/', label: 'Disk' }, totalBytes: 1_000_000,
+        freeBytes: 500_000, happierBytes: 40_960, pileBytes: 20_480, trashBytes: 0, pileFreesBytes: 4_096, trashFreesBytes: 0 };
+    const screen = await renderScreen(<StorageVolumeRow volume={volume} compact={false} />);
+    expect(screen.getTextContent()).toContain(t('machineStorage.volumes.afterCleanupGain', { amount: '4.1 KB' }));
+    expect(screen.getTextContent()).toContain('20.5 KB');
+    await screen.update(<StorageVolumeRow volume={{ ...volume, pileBytes: 0, pileFreesBytes: 0, trashBytes: 20_480, trashFreesBytes: 4_096 }} compact={false} />);
+    expect(screen.getTextContent()).toContain(t('machineStorage.volumes.afterTrashEmpties'));
+    expect(screen.getTextContent()).toContain(t('machineStorage.volumes.afterCleanupGain', { amount: '4.1 KB' }));
+});
+
 it('updates mounted capacity legends on a committed language change with unchanged volume data', async () => {
     setPreferredLanguageFromSettings('en');
     const volume: StorageVolume = {
         volume: { volumeId: 'disk', mountPath: '/', label: '/' },
         totalBytes: 1_000_000_000, freeBytes: 400_000_000, happierBytes: 100_000_000,
-        pileBytes: 20_000_000, trashBytes: 0,
+        pileBytes: 20_000_000, pileFreesBytes: 20_000_000, trashBytes: 0,
     };
     const emptyVolume: StorageVolume = { ...volume, volume: { volumeId: 'empty', mountPath: '/mnt/empty', label: 'Empty' }, happierBytes: 0, pileBytes: 0 };
     const screen = await renderScreen(<>
@@ -44,7 +55,7 @@ it('updates mounted capacity legends on a committed language change with unchang
 it('shows sampled reclaimable capacity quietly in the bar, preserving the free-now and cleanup figures', async () => {
     const volume: StorageVolume = {
         volume: { volumeId: 'disk', mountPath: '/', label: 'Macintosh HD' }, totalBytes: 1000, freeBytes: 100,
-        availableIncludingPurgeableBytes: 350, happierBytes: 200, pileBytes: 20, trashBytes: 0,
+        availableIncludingPurgeableBytes: 350, happierBytes: 200, pileBytes: 20, pileFreesBytes: 20, trashBytes: 0,
     };
     const screen = await renderScreen(<StorageVolumeRow volume={volume} compact={false} />);
     // The React renderer erases props; this exact component query supplies its public prop contract.

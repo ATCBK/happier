@@ -58,6 +58,17 @@ describe('the Storage tab state (STO-24)', () => {
 });
 
 describe('the sentence and the disks (STO-1)', () => {
+    it('keeps allocated ghosts separate from exclusive cleanup gains and never forecasts unreported frees', () => {
+        const volume = { ...summary().volumes[0]!, pileBytes: 20_480, pileFreesBytes: 4_096, trashBytes: 20_480, trashFreesBytes: 0 };
+        expect(resolveStorageVolumeParts(volume)).toMatchObject({ pile: 20_480, trash: 20_480,
+            afterCleanupFree: volume.freeBytes + 4_096, afterTrashFree: volume.freeBytes });
+        const moved = { ...volume, pileBytes: 0, pileFreesBytes: 0, trashFreesBytes: 4_096 };
+        expect(resolveStorageVolumeParts(moved)).toMatchObject({ afterCleanupFree: null, afterTrashFree: volume.freeBytes + 4_096 });
+        const retained = summary({ volumes: [moved], categories: [category('trash', 20_480, 4_096)], trash: { count: 1, allocatedBytes: 20_480 } });
+        expect(describeStorageSentence(retained, { recipient: false }).trashBytes).toBe(4_096);
+        expect(resolveStorageVolumeParts({ ...summary().volumes[0]!, pileBytes: 20_480, trashBytes: 20_480 }))
+            .toMatchObject({ afterCleanupFree: null, afterTrashFree: null });
+    });
     it('speaks of the disk holding Happier, and of what can go only to the person who manages the machine', () => {
         expect(describeStorageSentence(summary(), { recipient: false })).toEqual({
             freeBytes: 412 * GB, happierBytes: 96 * GB, where: { kind: 'volume', label: 'Macintosh HD' }, canGoBytes: 46 * GB,
@@ -78,7 +89,7 @@ describe('the sentence and the disks (STO-1)', () => {
     });
 
     it('draws the pile as a ghost carved from Happier’s share and says the free space after cleanup', () => {
-        const volume = { ...summary().volumes[0]!, pileBytes: 37.9 * GB };
+        const volume = { ...summary().volumes[0]!, pileBytes: 37.9 * GB, pileFreesBytes: 37.9 * GB };
         expect(resolveStorageVolumeParts(volume)).toEqual({
             everythingElse: 486 * GB, happier: 96 * GB - 37.9 * GB, pile: 37.9 * GB, trash: 0, free: 412 * GB, purgeable: null, afterCleanupFree: 412 * GB + 37.9 * GB,
             afterTrashFree: null,
@@ -90,7 +101,7 @@ describe('the sentence and the disks (STO-1)', () => {
     });
 
     it('after a move to Trash, draws what is in the Trash as its own ghost and says what comes back when it empties (lab RD)', () => {
-        const volume = { ...summary().volumes[0]!, trashBytes: 34.5 * GB };
+        const volume = { ...summary().volumes[0]!, trashBytes: 34.5 * GB, trashFreesBytes: 34.5 * GB };
         expect(resolveStorageVolumeParts(volume)).toMatchObject({ happier: 96 * GB - 34.5 * GB, pile: 0, trash: 34.5 * GB,
             afterCleanupFree: null, afterTrashFree: 412 * GB + 34.5 * GB });
         const moved = summary({ volumes: [volume, summary().volumes[1]!], trash: { count: 6, allocatedBytes: 34.5 * GB, emptiesNextAt: 9_000 } });
@@ -100,7 +111,7 @@ describe('the sentence and the disks (STO-1)', () => {
     });
 
     it('carves reclaimable capacity from everything else while free-now and cleanup gains stay exact', () => {
-        const volume = { ...summary().volumes[0]!, pileBytes: 20 * GB, availableIncludingPurgeableBytes: 462 * GB };
+        const volume = { ...summary().volumes[0]!, pileBytes: 20 * GB, pileFreesBytes: 20 * GB, availableIncludingPurgeableBytes: 462 * GB };
         const parts = resolveStorageVolumeParts(volume);
         expect(parts).toMatchObject({ purgeable: 50 * GB, everythingElse: 436 * GB, free: 412 * GB, afterCleanupFree: 432 * GB });
         if (parts.purgeable === null) throw new Error('The sampled reclaimable capacity must stay reported');

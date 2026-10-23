@@ -166,6 +166,9 @@ export const HappierStorageSummaryV1Schema = lazyZodSchema(() => z.object({
   // Daemon-qualified folder entry points, consumed by the ordinary scanner.
   scanShortcuts: z.optional(z.array(z.strictObject({ kind: z.enum(['downloads', 'cache']), path: z.string().check(z.minLength(1)) }))),
   volumes: z.array(z.object({ volume: StorageVolumeRefV1Schema, totalBytes: bytes(), freeBytes: bytes(), happierBytes: bytes(), pileBytes: bytes(), trashBytes: bytes(),
+    // Allocated pile/Trash bytes describe occupancy; only measured exclusive bytes
+    // may forecast returned space. Absence means an older producer did not report it.
+    pileFreesBytes: z.optional(bytes()), trashFreesBytes: z.optional(bytes()),
     // Sampled by the vitals capacity owner; presentation only, never free-now or cleanup budget.
     availableIncludingPurgeableBytes: z.optional(bytes()),
     // A measured verified-Safe union; absence is unreported, not measured zero.
