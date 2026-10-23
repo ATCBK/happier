@@ -37,7 +37,7 @@ describe('WorkspaceDetailsPanel preview opening', () => {
                 return Response.json(LocalServicePreviewServerAccessV1Schema.parse({ v: 1, kind: 'server_preview',
                     previewId: 'project-preview', machineId: 'm1', accessUrl, expiresAt: Date.now() + 60_000 }));
             }
-            return createEmptyAccountBootstrapHttpResponse(request.path, { method: request.method });
+            return createEmptyAccountBootstrapHttpResponse(request.path, { method: request.method }) ?? undefined;
         } });
         try {
             let pane: AppPaneScopeApi | undefined;
