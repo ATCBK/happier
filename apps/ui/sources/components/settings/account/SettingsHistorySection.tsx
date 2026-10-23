@@ -1,12 +1,13 @@
 import React from 'react';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import type { Encryption } from '@/sync/encryption/encryption';
 import { fetchAccountSettingsHistory } from '@/sync/api/account/apiAccountSettingsHistory';
 import {
-    AccountSettingsHistoryRestoreInvalidError,
-    AccountSettingsHistoryRestoreUnavailableError,
-    restoreAccountSettingsFromHistorySnapshot,
+    AccountSettingsHistoryRestoreResultSchema,
 } from '@/sync/engine/settings/accountSettingsHistoryRestore';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ACCOUNT_SETTINGS } from './accountSettings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
@@ -39,7 +40,6 @@ function formatRecordedAt(value: string): string {
  */
 export const SettingsHistorySection = React.memo(function SettingsHistorySection(params: Readonly<{
     credentials: AuthCredentials | null;
-    encryption: Encryption | null;
     /** Injected by the enclosing `ItemGroup`: this section is one disclosure row of it. */
     showDivider?: boolean;
 }>) {
@@ -52,6 +52,7 @@ export const SettingsHistorySection = React.memo(function SettingsHistorySection
     )>({ owner: null, scope: null, status: 'loading' });
     const [restoringVersion, setRestoringVersion] = React.useState<number | null>(null);
     const settingsScope = useAccountSettingsScope();
+    const action = useMountedActionExecution(settingsScope, { openOnRequest: true });
     const mountedRef = React.useRef(true);
     const credentialsRef = React.useRef(params.credentials);
     credentialsRef.current = params.credentials;
@@ -114,27 +115,28 @@ export const SettingsHistorySection = React.memo(function SettingsHistorySection
             const credentials = params.credentials;
             const expectedSettingsScope = settingsScope;
             if (!credentials || !expectedSettingsScope) return;
-            const confirmed = await Modal.confirm(
-                t('settingsAccount.history.restoreConfirmTitle'),
-                t('settingsAccount.history.restoreConfirmBody'),
-                { confirmText: t('settingsAccount.history.restoreConfirmAction'), destructive: true },
-            );
-            if (
-                !confirmed
-                || !isCurrent(credentials, expectedSettingsScope)
-            ) return;
+            if (!isCurrent(credentials, expectedSettingsScope)) return;
             // Read at press time: the version being replaced is the current one.
             const expectedSettingsVersion = storage.getState().settingsVersion ?? 0;
             setRestoringVersion(historyVersion);
             try {
-                const result = await restoreAccountSettingsFromHistorySnapshot({
-                    credentials,
-                    encryption: params.encryption,
-                    settingsScope: expectedSettingsScope,
-                    historyVersion,
-                    expectedSettingsVersion,
+                const invocation = await action.execute('settings.invoke', {
+                    anchor: ACCOUNT_SETTINGS.settings.settingsHistory.anchor,
+                    input: { kind: 'account_settings_history_restore', historyVersion, expectedSettingsVersion },
                 });
                 if (!isCurrent(credentials, expectedSettingsScope)) return;
+                if (!invocation.ok) {
+                    if (isActionApprovalDeclinedErrorCode(invocation.errorCode)) return;
+                    throw new Error(invocation.errorCode);
+                }
+                const outcome = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(invocation.result);
+                if (outcome.status === 'cancelled') return;
+                if (outcome.status === 'unavailable') {
+                    await Modal.alert(t('common.error'), t(outcome.reason === 'history_invalid'
+                        ? 'settingsAccount.history.invalidBody' : 'settingsAccount.history.unavailableBody'));
+                    return;
+                }
+                const result = AccountSettingsHistoryRestoreResultSchema.parse(outcome.value);
                 if (result.status === 'conflict') {
                     await Modal.alert(
                         t('settingsAccount.history.conflictTitle'),
@@ -155,22 +157,8 @@ export const SettingsHistorySection = React.memo(function SettingsHistorySection
                         ? 'settingsAccount.history.unchangedBody'
                         : 'settingsAccount.history.restoredBody'),
                 );
-            } catch (error) {
+            } catch {
                 if (!isCurrent(credentials, expectedSettingsScope)) return;
-                if (error instanceof AccountSettingsHistoryRestoreInvalidError) {
-                    await Modal.alert(
-                        t('common.error'),
-                        t('settingsAccount.history.invalidBody'),
-                    );
-                    return;
-                }
-                if (error instanceof AccountSettingsHistoryRestoreUnavailableError) {
-                    await Modal.alert(
-                        t('common.error'),
-                        t('settingsAccount.history.unavailableBody'),
-                    );
-                    return;
-                }
                 await Modal.alert(t('common.error'), t('settingsAccount.history.unavailableBody'));
             } finally {
                 if (isCurrent(credentials, expectedSettingsScope)) {

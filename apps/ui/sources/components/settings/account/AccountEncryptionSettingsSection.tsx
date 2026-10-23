@@ -1,67 +1,26 @@
 import React, { useMemo, useState } from 'react';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useAuth } from '@/auth/context/AuthContext';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { useProfile, useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { SettingRow } from '@/components/settings/shell/SettingRow';
 import { ACCOUNT_SETTINGS } from './accountSettings';
-import { sync } from '@/sync/sync';
 import { Switch } from '@/components/ui/forms/Switch';
 import { HappyError } from '@/utils/errors/errors';
 import { isLegacyAuthCredentials, isTokenOnlyAuthCredentials } from '@/auth/storage/tokenStorage';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { fetchAccountEncryptionCurrentness, fetchAccountEncryptionMode, getAccountEncryptionModeScopeKey } from '@/sync/api/account/apiAccountEncryptionMode';
-import { migrateAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMigrate';
+import { fetchAccountEncryptionMode, getAccountEncryptionModeScopeKey } from '@/sync/api/account/apiAccountEncryptionMode';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { buildAccountEncryptionMigrateToPlainRequest } from '@/sync/ops/account/buildAccountEncryptionMigrateToPlainRequest';
-import { getConnectedServiceCredentialSealed } from '@/sync/api/account/apiConnectedServicesV2';
-import { buildAccountEncryptionMigrateToE2eeRequest } from '@/sync/ops/account/buildAccountEncryptionMigrateToE2eeRequest';
-import { getConnectedServiceCredentialPlain } from '@/sync/api/account/apiConnectedServicesV3';
-import { getQualifiedConnectedAccountConfigurationV4, getQualifiedConnectedAccountCredentialV4 } from '@/sync/api/account/apiQualifiedConnectedAccountsV4';
-import { AccountEncryptionMigrateInvalidParamsReasonSchema, AccountEncryptionMigrateRequestSchema, createAccountEncryptionMigrateRequestBindingDigestV1, type AccountEncryptionMigrateRequest } from '@happier-dev/protocol/account/encryptionMigrate';
-import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
-import { fetchMachineRows } from '@/sync/engine/machines/syncMachines';
-import { fetchAccountEncryptionMigrationKvInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationKvInventory';
-import { createArtifactAccessApi, fetchArtifactBlob,
-    stageArtifactBlobAccountEncryptionConversion, cancelArtifactBlobAccountEncryptionConversion } from '@/sync/api/artifacts/apiArtifacts';
-import { createServerFetchAtEndpoint } from '@/sync/http/client';
-import { buildAccountEncryptionMigrationStorageDirectives } from '@/sync/ops/account/buildAccountEncryptionMigrationStorageDirectives';
-import { fetchAccountEncryptionMigrationSessionInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationSessionInventory';
-import { fetchAccountEncryptionMigrationArtifactInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationArtifactInventory';
-import { fetchAccountEncryptionMigrationDiscussionInventory } from '@/sync/ops/account/buildAccountEncryptionDiscussionsDirective';
-import { fetchAccountEncryptionMigrationAutomationsInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationAutomationsInventory';
-import { fetchReviewCommentAccountEncryptionMigrationInventory } from '@/sync/domains/reviews/comments/accountEncryptionMigrationApi';
-import { fetchSessionOrganizationAccountEncryptionMigrationInventory } from '@/sync/ops/account/fetchSessionOrganizationAccountEncryptionMigrationInventory';
-import { prepareAccountEncryptionMigrateToE2eeKey } from '@/sync/ops/account/prepareAccountEncryptionMigrateToE2eeKey';
-import { openAccountEncryptionFirstKeyExternalAuthUrl, requestAccountEncryptionFirstKeyPasswordProof, retryPendingAccountEncryptionFirstKeyExternalAuth, resumeAccountEncryptionFirstKeyExternalAuth, startAccountEncryptionFirstKeyExternalAuth,
-    shouldRetainAccountEncryptionMigrationArtifactUploads } from '@/sync/ops/account/accountEncryptionFirstKeyExternalAuth';
+import { AccountEncryptionMigrateInvalidParamsReasonSchema } from '@happier-dev/protocol/account/encryptionMigrate';
+import { retryPendingAccountEncryptionFirstKeyExternalAuth } from '@/sync/ops/account/accountEncryptionFirstKeyExternalAuth';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { acknowledgeNewSessionDraftEncryptionMigration, listNewSessionDraftEncryptionMigrationCandidates } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { fetchAccountEncryptionWorkspaceExecutionConfigMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionWorkspaceExecutionConfigMigrationCandidates';
-import { fetchAccountEncryptionProjectTrustMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionProjectTrustMigrationCandidates';
-import { runAccountEncryptionModeMigration } from '@/sync/ops/account/runAccountEncryptionModeMigration';
-import { fetchAccountEncryptionSessionFollowRulesMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionSessionFollowRulesMigrationCandidates';
-import { fetchAccountEncryptionAuthoringMemoryMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionAuthoringMemoryMigrationCandidates';
-import { fetchAccountEncryptionProjectRowsMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionProjectRowsMigrationCandidates';
-import { readProfileCatalog } from '@/sync/api/account/apiProfileCatalog';
-import { readPromptLibraryCatalogProjection } from '@/sync/api/account/apiPromptLibraryCatalog';
-import { readProviderCatalog } from '@/sync/api/account/apiProviderCatalog';
-import { fetchAccountEncryptionProviderConnectionsMigrationCandidate } from '@/sync/ops/account/fetchAccountEncryptionProviderConnectionsMigrationCandidate';
-import { fetchAccountEncryptionAcpCatalogMigrationCandidate } from '@/sync/ops/account/fetchAccountEncryptionAcpCatalogMigrationCandidate';
-import { fetchAccountEncryptionMcpServerCatalogMigrationCandidate } from '@/sync/ops/account/fetchAccountEncryptionMcpServerCatalogMigrationCandidate';
-import { fetchAccountEncryptionConnectedAccountCatalogMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionConnectedAccountCatalogMigrationCandidates';
-import { fetchAccountEncryptionEntityCatalogMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionEntityCatalogMigrationCandidates';
-import { prepareAccountEncryptionModePasswordCredential } from '@/sync/api/auth/accountSecurity';
-import { decodeBase64 } from '@/encryption/base64';
-import { createAccountSecurityActionClient } from './accountSecurityActionClient';
-import { captureAccountSettingsRequest } from '@/sync/api/account/accountSettingsRequest';
-import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSettingsBaseline';
-import { settingsParse } from '@/sync/domains/settings/settings';
-import { resolveHomeKeyChallengeExpectedAudience } from '@/auth/flows/resolveHomeAuthenticationTarget';
 import { resolveUiClientEncryptionRequirement } from '@/sync/domains/settings/clientEncryptionRequirement';
 import { Icon } from '@/components/ui/icons/Icon';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
@@ -75,23 +34,14 @@ type AccountEncryptionModePresentation = Readonly<{
     recoveryRequired: boolean;
 }>;
 
-class AccountEncryptionScopeChangedError extends Error {
-    constructor() {
-        super('Account encryption scope changed');
-        this.name = 'AccountEncryptionScopeChangedError';
-    }
-}
-
 export const AccountEncryptionSettingsSection = React.memo(function AccountEncryptionSettingsSection() {
     const auth = useAuth();
     const executeAction = useMemo(() => createFrontDoorActionExecute(), []);
     const router = useRouter();
-    const profile = useProfile();
     const clientEncryptionRequirement = useSetting('clientEncryptionRequirementV1');
     const clientEncryptionRequirementLocal = useSetting('clientEncryptionRequirementLocalV1');
     const { setSetting } = useSettingActionFeedback();
     const encryptionAccountOptOutEnabled = useFeatureEnabled('encryption.accountOptOut');
-    const sessionDraftSyncEnabled = useFeatureEnabled('sessions.drafts');
     const activeServer = useActiveServerSnapshot();
     const accountEncryptionScope = auth.credentials
         ? getAccountEncryptionModeScopeKey(auth.credentials, activeServer)
@@ -312,9 +262,9 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                             }
                             showChevron={false}
                         />
-                        <Item
+                        <SettingRow
                             testID="settings-account-encryption-mode"
-                            title={t('terminal.endToEndEncrypted')}
+                            setting={ACCOUNT_SETTINGS.settings.encryptionMode}
                             // While the mode is read the switch waits disabled; no "Loading…" value.
                             detail={accountEncryptionModeSaving ? t('identityAdministration.saving') : undefined}
                             loading={accountEncryptionModeSaving}
@@ -337,539 +287,43 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                     onValueChange={async (enabled) => {
                                         if (!auth.credentials) return;
                                         if (accountEncryptionMode == null) return;
-                                        const credentials = auth.credentials;
                                         const presentationScope =
                                             accountEncryptionScope;
                                         const nextMode = enabled ? 'e2ee' : 'plain';
-                                        const sourceEncryption = sync.encryption;
-
+                                        const settingsScope = getActiveServerAccountScope();
+                                        if (!settingsScope) return;
+                                        const isCurrent = () => areAccountSettingsScopesEqual(settingsScope, getActiveServerAccountScope());
                                         setAccountEncryptionModeSaving(true);
                                         announceAccessibilityMessage(t('identityAdministration.saving'));
-                                        let capturedRequest: Awaited<ReturnType<typeof captureAccountSettingsRequest>> = null;
-                                        const stagedArtifactUploads: string[] = [];
-                                        let retainStagedArtifactUploads = false;
-                                        let firstKeyArtifactCustody: Parameters<typeof shouldRetainAccountEncryptionMigrationArtifactUploads>[0]['firstKey'];
-                                        let cancelStagedArtifactUploads: (() => Promise<void>) | null = null;
                                         try {
-                                            const settingsScope = getActiveServerAccountScope();
-                                            if (!settingsScope) return;
-                                            capturedRequest = await captureAccountSettingsRequest({
-                                                credentials,
-                                                settingsScope,
-                                            });
-                                            if (!capturedRequest) return;
-                                            const accountId = capturedRequest.scope.accountId;
-                                            const requireCurrentScope = (): void => {
-                                                if (!capturedRequest?.isCurrent()) {
-                                                    throw new AccountEncryptionScopeChangedError();
+                                            const invocation = await executeAction('settings.invoke', {
+                                                anchor: ACCOUNT_SETTINGS.settings.encryptionMode.anchor,
+                                                input: { kind: 'account_encryption_mode_convert', toMode: nextMode },
+                                            }, { surface: 'ui', serverId: settingsScope.serverId, expectedAccountId: settingsScope.accountId });
+                                            if (!isCurrent()) return;
+                                            if (!invocation.ok) {
+                                                if (isActionApprovalDeclinedErrorCode(invocation.errorCode)) return;
+                                                throw new HappyError(invocation.error, false, { code: invocation.errorCode });
+                                            }
+                                            const outcome = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(invocation.result);
+                                            if (outcome.status === 'cancelled' || outcome.status === 'interaction_opened') return;
+                                            const value = outcome.value;
+                                            if (outcome.status === 'unavailable') {
+                                                const detail = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+                                                if (detail?.mode === 'plain' || detail?.mode === 'e2ee') {
+                                                    publishAccountEncryptionPresentation(presentationScope, detail.mode);
                                                 }
-                                            };
-                                            const homeRequest = capturedRequest.request;
-                                            const target = capturedRequest.target;
-                                            // Terminal cleanup remains bound to the old Home/Account even after its active scope retires.
-                                            const cleanupRequest = createServerFetchAtEndpoint({ endpointUrl: target.serverUrl,
-                                                serverId: target.serverId, credentials,
-                                                ...(target.runtimeOrigin ? { runtimeOrigin: target.runtimeOrigin } : {}),
-                                                ...(target.homeCarrier ? { homeCarrier: target.homeCarrier } : {}),
-                                            });
-                                            cancelStagedArtifactUploads = async () => {
-                                                await Promise.allSettled(stagedArtifactUploads.map(uploadId =>
-                                                    cancelArtifactBlobAccountEncryptionConversion(credentials, uploadId, { request: cleanupRequest })));
-                                            };
-                                            const accountSecurityClient = createAccountSecurityActionClient({
-                                                resolveServerId: () => capturedRequest?.scope.serverId ?? target.serverId,
-                                            });
-                                            if (!capturedRequest.isCurrent()) return;
-                                            if (
-                                                nextMode === 'e2ee'
-                                                && isTokenOnlyAuthCredentials(
-                                                    credentials,
-                                                )
-                                            ) {
-                                                const replayed =
-                                                    await retryPendingAccountEncryptionFirstKeyExternalAuth({
-                                                        currentCredentials: credentials,
-                                                        persistCredentials: auth.loginWithCredentials,
-                                                        target,
-                                                        scopeGuard: capturedRequest,
-                                                    });
-                                                if (replayed) {
-                                                    requireCurrentScope();
-                                                    publishAccountEncryptionPresentation(
-                                                        presentationScope,
-                                                        replayed.mode,
-                                                    );
-                                                    announceAccessibilityMessage(t('common.success'));
-                                                    return;
-                                                }
-                                            }
-                                            if (nextMode === 'plain' && !sourceEncryption) {
-                                                throw new Error(
-                                                    'Account encryption material is unavailable for the E2EE-to-plaintext migration',
-                                                );
-                                            }
-                                            const currentness =
-                                                await fetchAccountEncryptionCurrentness(
-                                                    credentials,
-                                                    { request: homeRequest },
-                                                );
-                                            if (!capturedRequest.isCurrent()) return;
-                                            requireCurrentScope();
-                                            if (
-                                                currentness.mode
-                                                !== accountEncryptionMode
-                                            ) {
-                                                requireCurrentScope();
-                                                publishAccountEncryptionPresentation(
-                                                    presentationScope,
-                                                    currentness.mode,
-                                                );
-                                                throw new Error(
-                                                    'Account encryption mode changed while preparing the migration',
-                                                );
-                                            }
-                                            const connectedServiceProfiles = profile.connectedServicesV2.flatMap((svc) =>
-                                                svc.profiles.map((p) => ({
-                                                    serviceId: svc.serviceId as any,
-                                                    profileId: p.profileId,
-                                                })),
-                                            );
-                                            const preparedE2eeKey =
-                                                nextMode === 'e2ee'
-                                                    ? await prepareAccountEncryptionMigrateToE2eeKey({
-                                                        credentials,
-                                                        expectedSigningKeyFingerprint:
-                                                            currentness
-                                                                .signingKeyFingerprint,
-                                                        expectedContentKeyFingerprint:
-                                                            currentness
-                                                                .contentKeyFingerprint,
-                                                    })
-                                                    : null;
-                                            requireCurrentScope();
-                                            const accountSecurity = await accountSecurityClient.read();
-                                            requireCurrentScope();
-                                            const transitionPassword = accountSecurity.password.status === 'enrolled'
-                                                ? await Modal.prompt(
-                                                    t('settingsAccount.nativePassword.password'),
-                                                    t('settingsAccount.nativePassword.passwordRequirements'),
-                                                    { inputType: 'secure-text' },
-                                                )
-                                                : null;
-                                            requireCurrentScope();
-                                            if (accountSecurity.password.status === 'enrolled' && transitionPassword === null) return;
-                                            const transitionCredentialRevision = accountSecurity.password.status === 'enrolled'
-                                                ? accountSecurity.password.revision
-                                                : null;
-                                            const transitionChallengeAudience = accountSecurity.password.status === 'enrolled'
-                                                ? resolveHomeKeyChallengeExpectedAudience({
-                                                    kind: 'saved_profile',
-                                                    profileRef: target.serverId,
-                                                })
-                                                : null;
-                                            if (accountSecurity.password.status === 'enrolled' && transitionCredentialRevision === null) {
-                                                throw new Error('Account password credential revision is unavailable');
-                                            }
-                                            if (accountSecurity.password.status === 'enrolled' && !transitionChallengeAudience) {
-                                                throw new Error('Account password challenge audience is unavailable');
-                                            }
-                                            const transitionSecret = accountSecurity.password.status === 'enrolled'
-                                                ? preparedE2eeKey?.seed ?? (() => {
-                                                    if (!isLegacyAuthCredentials(credentials)) {
-                                                        throw new Error('Account recovery material is unavailable for the password transition');
-                                                    }
-                                                    const decoded = decodeBase64(credentials.secret, 'base64url');
-                                                    if (decoded.length !== 32) throw new Error('Account recovery material is invalid');
-                                                    return decoded;
-                                                })()
-                                                : null;
-                                            const targetE2eePasswordCredential = transitionPassword !== null && transitionSecret && nextMode === 'e2ee'
-                                                ? await prepareAccountEncryptionModePasswordCredential(homeRequest, {
-                                                    fromMode: 'plain', toMode: 'e2ee', password: transitionPassword,
-                                                    accountId,
-                                                    expectedCredentialRevision: transitionCredentialRevision!,
-                                                    normalizedNativeEmail: accountSecurity.nativeEmail,
-                                                    secret: transitionSecret,
-                                                    expectedAudience: transitionChallengeAudience!,
-                                                    scope: capturedRequest,
-                                                })
-                                                    : null;
-                                            requireCurrentScope();
-                                            const targetEncryption =
-                                                nextMode === 'e2ee'
-                                                    ? await createEncryptionFromAuthCredentials(
-                                                        preparedE2eeKey!
-                                                            .credentials,
-                                                    )
-                                                    : null;
-                                            requireCurrentScope();
-                                            const sessionModes = new Map<string, Readonly<{ sessionId: string; encryptionMode: 'plain' | 'e2ee' }>>();
-                                            const [
-                                                machineRows,
-                                                todoRows,
-                                                workspaceRows,
-                                                artifactRows,
-                                                sessionRows,
-                                                reviewCommentsInventory,
-                                                sessionOrganizationInventory,
-                                                automationsInventory,
-                                                discussionsInventory,
-                                            ] = await Promise.all([
-                                                fetchMachineRows({
-                                                    credentials,
-                                                    request: homeRequest,
-                                                    fresh: true,
-                                                }),
-                                                fetchAccountEncryptionMigrationKvInventory({ namespace: 'todo', credentials, request: homeRequest, scope: capturedRequest }),
-                                                fetchAccountEncryptionMigrationKvInventory({ namespace: 'workspace', credentials, request: homeRequest, scope: capturedRequest }),
-                                                fetchAccountEncryptionMigrationArtifactInventory({ credentials, request: homeRequest,
-                                                    scope: capturedRequest, encryptionMode: currentness.mode }),
-                                                fetchAccountEncryptionMigrationSessionInventory({
-                                                    token: credentials.token,
-                                                    request: homeRequest,
-                                                    scope: capturedRequest,
-                                                    onSession: session => sessionModes.set(session.sessionId, session),
-                                                }),
-                                                fetchReviewCommentAccountEncryptionMigrationInventory({ request: homeRequest }),
-                                                fetchSessionOrganizationAccountEncryptionMigrationInventory({ request: homeRequest }),
-                                                fetchAccountEncryptionMigrationAutomationsInventory({ request: homeRequest }),
-                                                fetchAccountEncryptionMigrationDiscussionInventory({ request: homeRequest, token: credentials.token, scope: capturedRequest }),
-                                            ]);
-                                            requireCurrentScope();
-                                            const automations = automationsInventory.templates.map(row => ({
-                                                id: row.automationId, templateVersion: row.expectedTemplateVersion,
-                                                templateCiphertext: row.templateCiphertext,
-                                            }));
-                                            const storageDirectives =
-                                                await buildAccountEncryptionMigrationStorageDirectives({
-                                                    fromMode:
-                                                        currentness.mode,
-                                                    toMode: nextMode,
-                                                    sourceEncryption:
-                                                        nextMode === 'plain'
-                                                            ? sourceEncryption
-                                                            : null,
-                                                    targetEncryption,
-                                                    machines: machineRows,
-                                                    todos: todoRows,
-                                                    workspace: workspaceRows,
-                                                    artifacts: artifactRows,
-                                                    discussionsInventory,
-                                                    readArtifactRecipients: createArtifactAccessApi(credentials, { request: homeRequest }).readRecipients,
-                                                    readArtifactBlob: (artifactId, blobId) => fetchArtifactBlob(credentials, artifactId, blobId, currentness.mode, { request: homeRequest }),
-                                                    stageArtifactBlob: async (artifactId, blobId, content) => {
-                                                        requireCurrentScope();
-                                                        const staged = await stageArtifactBlobAccountEncryptionConversion(credentials, artifactId, blobId, content, { request: homeRequest });
-                                                        stagedArtifactUploads.push(staged.uploadId);
-                                                        requireCurrentScope();
-                                                        return staged;
-                                                    },
-                                                    sessions: sessionRows,
-                                                    reviewCommentsInventory,
-                                                    sessionOrganizationInventory,
-                                                    automationsInventory,
-                                                    resolveSession: async sessionId => sessionModes.get(sessionId) ?? null,
-                                                    sessionSourceCredentials:
-                                                        credentials,
-                                                    sessionTargetCredentials:
-                                                        preparedE2eeKey
-                                                            ?.credentials
-                                                        ?? null,
-                                                    scope: capturedRequest,
+                                                throw new HappyError(typeof detail?.message === 'string' ? detail.message : t('settingsAccount.encryptionUpdateFailed'), false, {
+                                                    code: outcome.reason, ...(typeof detail?.status === 'number' ? { status: detail.status } : {}),
                                                 });
-                                            const sessionDraftScope = sessionDraftSyncEnabled
-                                                ? settingsScope
-                                                : null;
-                                            const sessionDrafts = sessionDraftScope
-                                                ? listNewSessionDraftEncryptionMigrationCandidates(
-                                                    sessionDraftScope,
-                                                )
-                                                : [];
-                                            const authoringMemory = await fetchAccountEncryptionAuthoringMemoryMigrationCandidates({
-                                                credentials, mode: currentness.mode, request: homeRequest,
-                                            });
-                                            const sessionFollowRules = await fetchAccountEncryptionSessionFollowRulesMigrationCandidates({
-                                                credentials, mode: currentness.mode, request: homeRequest, assertCurrent: requireCurrentScope,
-                                            });
-                                            const projectRows = await fetchAccountEncryptionProjectRowsMigrationCandidates({
-                                                credentials, mode: currentness.mode, request: homeRequest,
-                                            });
-                                            const workspaceExecutionConfig = await fetchAccountEncryptionWorkspaceExecutionConfigMigrationCandidates({
-                                                credentials, mode: currentness.mode, request: homeRequest,
-                                            });
-                                            const profileRows = await readProfileCatalog(capturedRequest.scope);
-                                            const promptLibraryProjection = await readPromptLibraryCatalogProjection(capturedRequest.scope);
-                                            requireCurrentScope();
-                                            if (promptLibraryProjection.catalog.status !== 'ready') {
-                                                throw new Error('Prompt library migration census is unavailable');
                                             }
-                                            const promptLibrary = promptLibraryProjection.catalog.rows;
-                                            const acpCatalog = await fetchAccountEncryptionAcpCatalogMigrationCandidate({
-                                                credentials, mode: currentness.mode, request: homeRequest, assertCurrent: requireCurrentScope,
-                                            });
-                                            const mcpServerCatalog = await fetchAccountEncryptionMcpServerCatalogMigrationCandidate({
-                                                credentials, mode: currentness.mode, request: homeRequest, assertCurrent: requireCurrentScope,
-                                            });
-                                            const providerCatalog = await readProviderCatalog(capturedRequest.scope, undefined, requireCurrentScope);
-                                            requireCurrentScope();
-                                            if (providerCatalog.status !== 'ready') {
-                                                throw new Error('Provider catalog migration census is unavailable');
+                                            if (!value || typeof value !== 'object' || Array.isArray(value) || (value.mode !== 'e2ee' && value.mode !== 'plain')) {
+                                                throw new Error('Invalid Account conversion Action result');
                                             }
-                                            const providerConnections = await fetchAccountEncryptionProviderConnectionsMigrationCandidate({
-                                                credentials, mode: currentness.mode, request: homeRequest,
-                                            });
-                                            requireCurrentScope();
-                                            const connectedCatalogs = await fetchAccountEncryptionConnectedAccountCatalogMigrationCandidates({
-                                                credentials, mode: currentness.mode, request: homeRequest, assertCurrent: requireCurrentScope,
-                                            });
-                                            requireCurrentScope();
-                                            const projectTrust = await fetchAccountEncryptionProjectTrustMigrationCandidates({ credentials, mode: currentness.mode, request: homeRequest });
-                                            requireCurrentScope();
-                                            const entityCatalogs = await fetchAccountEncryptionEntityCatalogMigrationCandidates({
-                                                credentials, mode: currentness.mode, capturedRequest,
-                                            });
-                                            requireCurrentScope();
-                                            // Catalog admission can atomically transfer retained roots and
-                                            // advance Settings; capture its conversion revision only afterward.
-                                            const settingsBaseline = await readAccountSettingsBaseline({
-                                                credentials, encryption: sourceEncryption, accountMode: currentness.mode,
-                                                request: homeRequest,
-                                            });
-                                            requireCurrentScope();
-                                            const rawSettings = settingsBaseline.raw ?? {};
-                                            const settings = settingsParse(rawSettings);
-                                            const expectedSettingsVersion = settingsBaseline.version;
-                                            let request: AccountEncryptionMigrateRequest = nextMode === 'plain'
-                                                ? await buildAccountEncryptionMigrateToPlainRequest({
-                                                    credentials,
-                                                    expectedAccountVersion:
-                                                        currentness.version,
-                                                    expectedSigningKeyFingerprint:
-                                                        currentness
-                                                            .signingKeyFingerprint,
-                                                    expectedContentKeyFingerprint:
-                                                        currentness
-                                                            .contentKeyFingerprint,
-                                                    storageDirectives,
-                                                    expectedSettingsVersion,
-                                                    settings,
-                                                    rawSettings,
-                                                    connectedServiceProfiles,
-                                                    qualifiedConnectedAccounts:
-                                                        profile.connectedAccountsV4,
-                                                    automations,
-                                                    sessionDrafts,
-                                                    authoringMemory,
-                                                    sessionFollowRules,
-                                                    projectRows,
-                                                    workspaceExecutionConfig,
-                                                    profileRows,
-                                                    promptLibrary,
-                                                    acpCatalog,
-                                                    mcpServerCatalog,
-                                                    providerConnections,
-                                                    ...entityCatalogs,
-                                                    ...connectedCatalogs,
-                                                    projectTrust,
-                                                    fetchConnectedServiceCredentialSealed: async ({ serviceId, profileId }) =>
-                                                        await getConnectedServiceCredentialSealed(credentials, { serviceId, profileId }, { request: homeRequest }),
-                                                    fetchQualifiedConnectedAccountCredential: async (ref) =>
-                                                        await getQualifiedConnectedAccountCredentialV4(credentials, ref, { request: homeRequest }),
-                                                    fetchQualifiedConnectedAccountConfiguration: async (ref) =>
-                                                        await getQualifiedConnectedAccountConfigurationV4(credentials, ref, { request: homeRequest }),
-                                                    decryptAutomationTemplateRaw: async (payloadCiphertext: string) =>
-                                                        await sourceEncryption!.decryptAutomationTemplateRaw(payloadCiphertext),
-                                                    resolveSession: async sessionId => sessionModes.get(sessionId) ?? null,
-                                                })
-                                                : await buildAccountEncryptionMigrateToE2eeRequest({
-                                                    credentials:
-                                                        preparedE2eeKey!
-                                                            .credentials,
-                                                    accountId,
-                                                    expectedAccountVersion:
-                                                        currentness.version,
-                                                    expectedSigningKeyFingerprint:
-                                                        currentness
-                                                            .signingKeyFingerprint,
-                                                    expectedContentKeyFingerprint:
-                                                        currentness
-                                                            .contentKeyFingerprint,
-                                                    storageDirectives,
-                                                    expectedSettingsVersion,
-                                                    settings,
-                                                    rawSettings,
-                                                    connectedServiceProfiles,
-                                                    qualifiedConnectedAccounts:
-                                                        profile.connectedAccountsV4,
-                                                    automations,
-                                                    sessionDrafts,
-                                                    authoringMemory,
-                                                    sessionFollowRules,
-                                                    projectRows,
-                                                    workspaceExecutionConfig,
-                                                    profileRows,
-                                                    promptLibrary,
-                                                    acpCatalog,
-                                                    mcpServerCatalog,
-                                                    providerConnections,
-                                                    ...entityCatalogs,
-                                                    ...connectedCatalogs,
-                                                    projectTrust,
-                                                    keyProof:
-                                                        preparedE2eeKey!
-                                                            .keyProof,
-                                                    ...(targetE2eePasswordCredential
-                                                        ? { passwordCredential: targetE2eePasswordCredential }
-                                                        : {}),
-                                                    fetchConnectedServiceCredentialPlain: async ({ serviceId, profileId }) =>
-                                                        await getConnectedServiceCredentialPlain(credentials, { serviceId, profileId }, { request: homeRequest }),
-                                                    fetchQualifiedConnectedAccountCredential: async (ref) =>
-                                                        await getQualifiedConnectedAccountCredentialV4(credentials, ref, { request: homeRequest }),
-                                                    fetchQualifiedConnectedAccountConfiguration: async (ref) =>
-                                                        await getQualifiedConnectedAccountConfigurationV4(credentials, ref, { request: homeRequest }),
-                                                });
-                                            requireCurrentScope();
-                                            if (transitionPassword !== null && transitionSecret && nextMode === 'plain') {
-                                                const passwordCredential = await prepareAccountEncryptionModePasswordCredential(homeRequest, {
-                                                    fromMode: 'e2ee', toMode: 'plain', password: transitionPassword,
-                                                    accountId,
-                                                    expectedCredentialRevision: transitionCredentialRevision!,
-                                                    normalizedNativeEmail: accountSecurity.nativeEmail,
-                                                    secret: transitionSecret,
-                                                    expectedAudience: transitionChallengeAudience!,
-                                                    baseRequest: request,
-                                                    scope: capturedRequest,
-                                                });
-                                                requireCurrentScope();
-                                                request = AccountEncryptionMigrateRequestSchema.parse({ ...request, passwordCredential });
-                                            }
-                                            // A retained-key Plain Account with a password proves the
-                                            // current password for this exact request (L02-R22); the
-                                            // keyless first-key journey below obtains the same proof.
-                                            if (transitionPassword !== null && nextMode === 'e2ee'
-                                                && !preparedE2eeKey!.requiresExternalAuthProof) {
-                                                const externalAuthProof = await requestAccountEncryptionFirstKeyPasswordProof({
-                                                    request: homeRequest,
-                                                    token: credentials.token,
-                                                    password: transitionPassword,
-                                                    requestDigest: createAccountEncryptionMigrateRequestBindingDigestV1({
-                                                        request,
-                                                        accountId,
-                                                        sourceMode: 'plain',
-                                                    }),
-                                                });
-                                                requireCurrentScope();
-                                                request = AccountEncryptionMigrateRequestSchema.parse({ ...request, externalAuthProof });
-                                            }
-
-                                            const result =
-                                                nextMode === 'e2ee'
-                                                && preparedE2eeKey!
-                                                    .requiresExternalAuthProof
-                                                    ? await (async () => {
-                                                        firstKeyArtifactCustody = { accountId, request, target };
-                                                        const externalAuth =
-                                                            await startAccountEncryptionFirstKeyExternalAuth({
-                                                                accountId:
-                                                                    accountId,
-                                                                currentCredentials:
-                                                                    credentials,
-                                                                proposedCredentials:
-                                                                    preparedE2eeKey!
-                                                                        .credentials,
-                                                                request,
-                                                                linkedProviderIds:
-                                                                    (
-                                                                        profile
-                                                                            .linkedProviders
-                                                                        ?? []
-                                                                    ).map(
-                                                                        (
-                                                                            provider,
-                                                                        ) =>
-                                                                            provider.id,
-                                                                    ),
-                                                                returnTo:
-                                                                    '/settings/account/security',
-                                                                target,
-                                                                ...(transitionPassword !== null
-                                                                    ? { nativePassword: transitionPassword }
-                                                                    : {}),
-                                                            });
-                                                        if (
-                                                            externalAuth.kind
-                                                            === 'oauth'
-                                                        ) {
-                                                            requireCurrentScope();
-                                                            await openAccountEncryptionFirstKeyExternalAuthUrl(
-                                                                externalAuth.url,
-                                                            );
-                                                            return null;
-                                                        }
-                                                        const resumed =
-                                                            await resumeAccountEncryptionFirstKeyExternalAuth({
-                                                                provider: externalAuth.externalAuthProof.provider,
-                                                                pending: externalAuth.externalAuthProof.pending,
-                                                                currentCredentials: credentials,
-                                                                persistCredentials: auth.loginWithCredentials,
-                                                                target,
-                                                                scopeGuard: capturedRequest,
-                                                            });
-                                                        requireCurrentScope();
-                                                        return resumed.migration;
-                                                    })()
-                                                    : await runAccountEncryptionModeMigration({
-                                                        request,
-                                                        migrate: async (migrationRequest) =>
-                                                            await migrateAccountEncryptionMode(
-                                                                credentials,
-                                                                migrationRequest,
-                                                                { request: (path, init, options) => homeRequest(path, init, {
-                                                                    ...options, onIssued: () => { retainStagedArtifactUploads = true; },
-                                                                }), target },
-                                                            ),
-                                                        isCurrent: capturedRequest.isCurrent,
-                                                        activateTargetMode: () => {
-                                                            if (!capturedRequest?.isCurrent()) return;
-                                                            sync.reconfigureAuthoringMemoryForAccountMode(
-                                                                nextMode === 'e2ee' ? preparedE2eeKey!.credentials : credentials,
-                                                                nextMode,
-                                                            );
-                                                            sync.reconfigureSessionDraftRepositoryForAccountMode(
-                                                                nextMode === 'e2ee'
-                                                                    ? preparedE2eeKey!.credentials
-                                                                    : credentials,
-                                                                nextMode,
-                                                            );
-                                                        },
-                                                        acknowledgeSessionDrafts: async (records) => {
-                                                            if (!capturedRequest?.isCurrent()) return;
-                                                            if (!sessionDraftScope) {
-                                                                throw new Error(
-                                                                    'Session draft repository scope is unavailable',
-                                                                );
-                                                            }
-                                                            await acknowledgeNewSessionDraftEncryptionMigration(
-                                                                sessionDraftScope,
-                                                                records,
-                                                            );
-                                                        },
-                                                    });
-                                            if (!result) return;
-                                            if (!capturedRequest.isCurrent()) return;
-                                            publishAccountEncryptionPresentation(
-                                                presentationScope,
-                                                result.mode,
-                                            );
+                                            publishAccountEncryptionPresentation(presentationScope, value.mode);
                                             announceAccessibilityMessage(t('common.success'));
-
                                         } catch (e) {
-                                            retainStagedArtifactUploads = await shouldRetainAccountEncryptionMigrationArtifactUploads({
-                                                error: e, migrationIssued: retainStagedArtifactUploads, firstKey: firstKeyArtifactCustody,
-                                            });
-                                            if (!retainStagedArtifactUploads) await cancelStagedArtifactUploads?.();
-                                            if (e instanceof AccountEncryptionScopeChangedError) return;
-                                            if (capturedRequest && !capturedRequest.isCurrent()) return;
+                                            if (!isCurrent()) return;
                                             if (e instanceof HappyError) {
                                                 if (nextMode === 'e2ee' && e.status === 400) {
                                                     if (
@@ -903,10 +357,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                             await Modal.alertAsync(t('common.error'), t('settingsAccount.encryptionUpdateFailed'));
                                             announceAccessibilityMessage(t('common.error'));
                                             return;
-                                        } finally {
-                                            capturedRequest?.dispose();
-                                            setAccountEncryptionModeSaving(false);
-                                        }
+                                        } finally { setAccountEncryptionModeSaving(false); }
                                     }}
                                 />
                             }

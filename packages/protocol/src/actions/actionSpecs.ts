@@ -210,7 +210,7 @@ import { SessionAuthoringOpenV1Schema, SessionAuthoringOpenResultV1Schema } from
 import { COMPOSER_INGRESS_ACTION_SPECS } from './composerIngressAction.js';
 import { SETTINGS_DECLARATION_ACTION_IDS_V1, SettingsDeclarationActionInputSchemasV1, SettingsDeclarationActionOutputSchemasV1, type SettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { ACTION_POLICY_ACTION_IDS, ActionPolicyInputSchemas, ActionPolicyOutputSchemas, type ActionPolicyActionId } from './actionPolicyActionFamily.js';
-import { describeSettingsDeclarationApprovalSummaryV1, projectSettingsDeclarationApprovalInputV1, readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
+import { describeSettingsDeclarationApprovalSummaryV1, projectSettingsDeclarationApprovalInputV1, readBuiltInSettingDeclarationV1, readBuiltInSettingsOperationApprovalPolicyV1 } from './settings/settingsDeclarations.js';
 import { APP_SHELL_ACTION_IDS, APP_SHELL_ACTION_SPECS } from './appShellActionFamily.js';
 import { NOTIFICATION_CONFIGURATION_ACTION_IDS, NOTIFICATION_CONFIGURATION_ACTION_SPECS, NotificationConfigurationActionInputSchemas, NotificationConfigurationActionOutputSchemas, type NotificationConfigurationActionId } from './notificationConfigurationActionFamily.js';
 import { APP_UPDATE_ACTION_IDS, APP_UPDATE_ACTION_SPECS, AppUpdateActionInputSchemas, AppUpdateActionOutputSchemas, type AppUpdateActionId } from './appUpdateActionFamily.js';
@@ -5431,6 +5431,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
       : {}),
     // A present user's own Settings change applies directly; agent and automation callers keep the danger default.
     ...(id === 'settings.set' || id === 'settings.reset' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
+    ...(id === 'settings.invoke' ? { approvalPolicy: {
+      uiConfirmation: 'direct' as const,
+      uiConfirmationForInput: (input: unknown) => readBuiltInSettingsOperationApprovalPolicyV1(input).uiConfirmationRequired,
+    }, safetyForInput: (input: unknown): 'danger' | 'safe' => readBuiltInSettingsOperationApprovalPolicyV1(input).requiresApproval ? 'danger' : 'safe' } : {}),
     title: id === 'settings.list' ? 'List settings' : id === 'settings.get' ? 'Read a setting' : id === 'settings.reset' ? 'Reset a setting' : id === 'settings.invoke' ? 'Run a settings operation' : 'Change a setting',
     description: 'Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.',
     safety: id === 'settings.set' || id === 'settings.reset' ? 'danger' : 'safe',

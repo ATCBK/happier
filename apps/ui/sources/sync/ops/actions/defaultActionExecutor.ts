@@ -37,6 +37,13 @@ import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { setModelFavoriteV1 } from '@happier-dev/protocol/providers/modelFavoritesV1';
 import { getCurrentAuth } from '@/auth/context/currentAuth';
 import { forgetHistoricalEncryptionKey } from '@/sync/ops/account/forgetHistoricalEncryptionKey';
+import { AccountEncryptionModeChangedError, convertAccountEncryptionMode } from '@/sync/ops/account/convertAccountEncryptionMode';
+import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { isTokenOnlyAuthCredentials } from '@/auth/storage/tokenStorage';
+import { assertUiAccountEncryptionModeAllowed } from '@/sync/domains/settings/clientEncryptionRequirement';
+import { AccountSettingsHistoryRestoreInvalidError, restoreAccountSettingsFromHistorySnapshot } from '@/sync/engine/settings/accountSettingsHistoryRestore';
+import type { SettingOperationResult } from '@/components/settings/catalog/settingDeclarations';
+import type { SettingsDeclarationOperationInputV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { recoverHistoricalAutomationTemplates } from '@/sync/ops/account/recoverHistoricalAutomationTemplates';
 import { startAgentSignInRpc, checkAgentSignInRpc } from '@/agents/machineAgents/signIn/api';
 import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
@@ -218,7 +225,7 @@ import { computeSessionConfigOptionControls } from '@/sync/domains/sessionContro
 import { computeSessionModelConfigOptionControls } from '@/sync/domains/models/modelOptions';
 import { resolveSessionPermissionBehavior } from '@/sync/ops/sessionPermissionAnswers';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { createSettingsDeclarationAction, isBuiltInLocalSettingMutation, resolveSettingsDeclarationOperationApprovalRequired } from './settingsDeclarationAction';
+import { createSettingsDeclarationAction, isBuiltInLocalSettingMutation, resolveSettingsDeclarationOperationApprovalPolicy } from './settingsDeclarationAction';
 import { createAtmosphereSettingServices } from './atmosphereSettingServices';
 import { createSettingsOwnerActionExecutor } from './settingsOwnerActionExecutor';
 import { getAutomationSettings, updateAutomationSettings } from '@/sync/api/automations/apiAutomations';
@@ -1280,6 +1287,58 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             } },
           }), 'danger');
         } } : {}),
+        ...(accountContext ? {
+          restoreAccountSettingsHistory: async (input: Extract<SettingsDeclarationOperationInputV1, { kind: 'account_settings_history_restore' }>, signal?: AbortSignal): Promise<SettingOperationResult> => {
+            throwIfAborted(signal); accountContext.assertCurrent();
+            try {
+              return await accountContext.runPrepared(async (): Promise<SettingOperationResult> => {
+                // Plain Accounts may still hold genuine material for an encrypted historical snapshot.
+                const encryption = isTokenOnlyAuthCredentials(accountContext.credentials) ? null
+                  : await createEncryptionFromAuthCredentials(accountContext.credentials);
+                const result = await restoreAccountSettingsFromHistorySnapshot({
+                  credentials: accountContext.credentials, encryption, settingsScope: accountContext.accountLifetime.scope,
+                  historyVersion: input.historyVersion, expectedSettingsVersion: input.expectedSettingsVersion, signal,
+                });
+                return { status: 'completed', value: result };
+              }, 'danger');
+            } catch (error) {
+              return { status: 'unavailable', reason: error instanceof AccountSettingsHistoryRestoreInvalidError
+                ? 'history_invalid' : 'history_unavailable' };
+            }
+          },
+          convertAccountEncryptionMode: async (toMode: 'plain' | 'e2ee', signal?: AbortSignal): Promise<SettingOperationResult> => {
+            throwIfAborted(signal); accountContext.assertCurrent();
+            if (accountContext.readLiveSettings() === null) return { status: 'unavailable', reason: 'account_scope_unavailable' };
+            try {
+              return await accountContext.runPrepared(async (): Promise<SettingOperationResult> => {
+                const settings = await accountContext.readSettings();
+                assertUiAccountEncryptionModeAllowed({ mode: toMode, syncedSettings: settings, localSettings: settings });
+                const accountMode = await accountContext.resolveAccountMode();
+                const sourceEncryption = accountMode === 'e2ee' && !isTokenOnlyAuthCredentials(accountContext.credentials)
+                  ? await createEncryptionFromAuthCredentials(accountContext.credentials) : null;
+                const snapshot = await getServerFeaturesSnapshot({ serverId: accountContext.serverId });
+                accountContext.assertCurrent();
+                const result = await convertAccountEncryptionMode({ credentials: accountContext.credentials,
+                  sourceEncryption, profile: storage.getState().profile, settingsScope: accountContext.accountLifetime.scope,
+                  accountEncryptionMode: accountMode, toMode, signal,
+                  sessionDraftSyncEnabled: resolveRuntimeFeatureDecisionFromSnapshot({ featureId: 'sessions.drafts', settings, snapshot })?.state === 'enabled',
+                  persistCredentials: (...args) => {
+                    const auth = getCurrentAuth();
+                    if (!auth || auth.credentials?.token !== accountContext.credentials.token) throw new Error('Account credential owner changed');
+                    return auth.loginWithCredentials(...args);
+                  },
+                });
+                return result === 'interaction_opened' ? { status: 'interaction_opened' }
+                  : result ? { status: 'completed', value: result } : { status: 'cancelled' };
+              }, 'danger');
+            } catch (error) {
+              return { status: 'unavailable', reason: error instanceof HappyError ? error.code ?? 'encryption_conversion_unavailable' : 'encryption_conversion_unavailable',
+                value: { message: error instanceof Error ? error.message : 'Account conversion is unavailable',
+                  ...(error instanceof AccountEncryptionModeChangedError ? { mode: error.mode } : {}),
+                  ...(error instanceof HappyError && error.status !== undefined ? { status: error.status } : {}) } };
+            }
+          },
+        } : {}),
       },
       isFeatureEnabled: async (featureId) => {
         const snapshot = await getServerFeaturesSnapshot({ serverId: accountContext?.serverId });
@@ -1646,15 +1705,14 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     isActionApprovalRequired: (actionId, ctx, input, defaultUiConfirmation?: boolean) => {
       const operationSettings = actionId === 'settings.invoke' ? accountContext?.readLiveSettings() : null;
       const anchor = input && typeof input === 'object' && 'anchor' in input && typeof input.anchor === 'string' ? input.anchor : '';
-      const operationSafety = actionId === 'settings.invoke'
-        ? operationSettings && !resolveSettingsDeclarationOperationApprovalRequired(anchor, operationSettings) ? 'safe' : 'danger'
-        : undefined;
+      const operationPolicy = operationSettings ? resolveSettingsDeclarationOperationApprovalPolicy(anchor, operationSettings) : undefined;
+      const operationSafety = actionId === 'settings.invoke' ? operationPolicy?.requiresApproval === false ? 'safe' : 'danger' : undefined;
       return isActionApprovalRequiredByAccountSettings(actionId, readAccountSettingsSnapshot(), {
         surface: ctx.surface ?? null,
         authority: ctx.authority,
         actionCaller: ctx.actionCaller,
         presentUserConfirmation: ctx.presentUserConfirmation,
-      }, { defaultSafety: operationSafety, defaultUiConfirmation, input });
+      }, { defaultSafety: operationSafety, defaultUiConfirmation: defaultUiConfirmation ?? operationPolicy?.uiConfirmationRequired, input });
     },
     ...createUiExecutionRunActionDeps(accountContext?.accountLifetime.scope, accountContext),
     resolveSessionSpawnAgentInventorySelection: args => resolveSessionSpawnAgentInventorySelectionForActions({ ...args,

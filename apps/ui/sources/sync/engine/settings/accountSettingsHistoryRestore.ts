@@ -11,6 +11,7 @@ import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol
 import { SettingsDeclarationOperationInputV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import tweetnacl from 'tweetnacl';
+import { z } from 'zod/mini';
 
 import { areCredentialsEqual, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Encryption } from '@/sync/encryption/encryption';
@@ -44,11 +45,14 @@ import { syncSettings } from './syncSettings';
  * a version move is a typed conflict rather than a rewritten history.
  */
 
-export type AccountSettingsHistoryRestoreResult =
-    | Readonly<{ status: 'applied'; settingsVersion: number }>
-    | Readonly<{ status: 'unchanged'; settingsVersion: number }>
-    | Readonly<{ status: 'conflict'; currentSettingsVersion: number }>
-    | Readonly<{ status: 'outcomeUnknown'; lastKnownSettingsVersion: number }>;
+const SettingsVersionSchema = z.number().check(z.int(), z.nonnegative());
+export const AccountSettingsHistoryRestoreResultSchema = z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('applied'), settingsVersion: SettingsVersionSchema }),
+    z.strictObject({ status: z.literal('unchanged'), settingsVersion: SettingsVersionSchema }),
+    z.strictObject({ status: z.literal('conflict'), currentSettingsVersion: SettingsVersionSchema }),
+    z.strictObject({ status: z.literal('outcomeUnknown'), lastKnownSettingsVersion: SettingsVersionSchema }),
+]);
+export type AccountSettingsHistoryRestoreResult = Readonly<z.infer<typeof AccountSettingsHistoryRestoreResultSchema>>;
 
 /** The historical snapshot exists but cannot serve a valid restore. */
 export class AccountSettingsHistoryRestoreUnavailableError extends Error {
@@ -269,6 +273,7 @@ export type RestoreAccountSettingsFromHistorySnapshotParams = Readonly<{
     settingsScope: AccountSettingsScope;
     settingsSecretsKey?: Uint8Array | null;
     settingsSecretsReadKeys?: ReadonlyArray<Uint8Array | null | undefined>;
+    signal?: AbortSignal;
 }>;
 
 export async function restoreAccountSettingsFromHistorySnapshot(

@@ -37,14 +37,32 @@ export type PortableSettingDeclarationV1 = Readonly<{
   sensitive: boolean;
   presentUserOnly: boolean;
   surfaces?: Readonly<{ agent: boolean; mcp: boolean }>;
-  operation?: Readonly<{ kind: 'interaction' | 'invoke'; requiresHumanInteraction: boolean; requiresApproval?: boolean; owner?: string; options?: readonly string[] }>;
+  operation?: Readonly<{ kind: 'interaction' | 'invoke'; requiresHumanInteraction: boolean; requiresApproval?: boolean; uiConfirmation?: 'direct' | 'policy'; owner?: string; options?: readonly string[] }>;
 }>;
 
-/** Portable declaration discovery does not depend on an active app or an Account read. */
-export const BUILT_IN_SETTINGS_DECLARATIONS_V1: readonly PortableSettingDeclarationV1[] = BUILT_IN_SETTINGS_METADATA_V1;
-const declarationsByAnchor = new Map(BUILT_IN_SETTINGS_DECLARATIONS_V1.map(declaration => [declaration.anchor, declaration]));
+const builtInSettingsDeclarations: readonly PortableSettingDeclarationV1[] = BUILT_IN_SETTINGS_METADATA_V1;
+/** Portable discovery excludes the mounted editor's private, null-only binding. */
+export const BUILT_IN_SETTINGS_DECLARATIONS_V1: readonly PortableSettingDeclarationV1[] = builtInSettingsDeclarations.filter(
+  declaration => declaration.storage?.owner !== 'voiceSettingsEditBinding',
+);
+// Approval and host-intent admission still resolve the canonical private declaration.
+const declarationsByAnchor = new Map(builtInSettingsDeclarations.map(declaration => [declaration.anchor, declaration]));
 export function readBuiltInSettingDeclarationV1(anchor: unknown): PortableSettingDeclarationV1 | null {
   return typeof anchor === 'string' ? declarationsByAnchor.get(anchor) ?? null : null;
+}
+
+/** One declaration-owned default for static and activation-owned Settings operations. */
+export function resolveSettingsDeclarationOperationApprovalPolicyV1(operation: Readonly<{
+  kind: 'interaction' | 'invoke'; requiresApproval?: boolean; uiConfirmation?: 'direct' | 'policy';
+}> | undefined): Readonly<{ requiresApproval: boolean; uiConfirmationRequired: boolean }> {
+  const requiresApproval = operation?.kind !== 'invoke' || operation.requiresApproval !== false;
+  return { requiresApproval, uiConfirmationRequired: requiresApproval && operation?.uiConfirmation !== 'direct' };
+}
+
+/** Unknown operations fail closed; Action inputs never declare their own confirmation policy. */
+export function readBuiltInSettingsOperationApprovalPolicyV1(input: unknown): ReturnType<typeof resolveSettingsDeclarationOperationApprovalPolicyV1> {
+  const anchor = input !== null && typeof input === 'object' && 'anchor' in input ? input.anchor : undefined;
+  return resolveSettingsDeclarationOperationApprovalPolicyV1(readBuiltInSettingDeclarationV1(anchor)?.operation);
 }
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
@@ -83,6 +101,8 @@ function describeThemeModeValue(value: unknown): string | null {
  * reads as the choice it makes. Declarations whose value is already a short scalar need no description.
  */
 export function describeSettingsDeclarationValueV1(declaration: PortableSettingDeclarationV1, value: unknown): string | null {
+  // This host-private compound edit has no public replacement value to review.
+  if (declaration.storage?.owner === 'voiceSettingsEditBinding' && value === null) return `Change “${declaration.title}”`;
   return declaration.storage?.owner === 'themeModeStorageBinding' ? describeThemeModeValue(value) : null;
 }
 

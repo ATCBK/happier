@@ -10,6 +10,16 @@ export const ACCOUNT_SETTINGS = defineSettingsPage({
             titleKey: 'terminal.encryption',
             featureId: 'encryption.accountOptOut',
             settings: {
+                encryptionMode: {
+                    operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: true,
+                        async invoke(context) {
+                            if (context.input?.kind !== 'account_encryption_mode_convert') return { status: 'unavailable', reason: 'invalid_encryption_operation' };
+                            const convert = context.services?.convertAccountEncryptionMode;
+                            if (!convert || !context.isCurrent()) return { status: 'unavailable', reason: 'encryption_transport_unavailable' };
+                            return convert(context.input.toMode, context.signal);
+                        },
+                    },
+                },
                 requireE2ee: {
                     storage: { scope: 'account', kind: 'owner', access: 'read_write',
                         read: settings => combineClientEncryptionRequirements(settings.clientEncryptionRequirementV1,
@@ -49,6 +59,11 @@ export const ACCOUNT_SETTINGS = defineSettingsPage({
                 settingsHistory: {
                     operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: true,
                         async invoke(context) {
+                            if (context.input?.kind === 'account_settings_history_restore') {
+                                const restore = context.services?.restoreAccountSettingsHistory;
+                                if (!restore || !context.isCurrent()) return { status: 'unavailable', reason: 'history_transport_unavailable' };
+                                return restore(context.input, context.signal);
+                            }
                             if (context.input?.kind !== 'account_settings_history_purge') return { status: 'unavailable', reason: 'invalid_history_operation' };
                             const purge = context.services?.purgeAccountSettingsHistory;
                             if (!purge || !context.isCurrent()) return { status: 'unavailable', reason: 'history_transport_unavailable' };

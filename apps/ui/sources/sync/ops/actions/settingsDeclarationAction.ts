@@ -38,7 +38,7 @@ import { MachineInstallablePolicyKeySchema, MachineInstallablePolicyChangeSchema
 import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
     readMachineOfflineAlertSetting, buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
 import { machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
-import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1, resolveSettingsDeclarationOperationApprovalPolicyV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { normalizeProjectAtmosphere, readAtmospherePresentationSetting, editAtmospherePresentationSetting } from '@/components/atmosphere/atmosphereSettings';
@@ -86,10 +86,10 @@ type SettingsDeclarationActionResult = z.output<(typeof SettingsDeclarationActio
 class ConditionalSettingConflict extends Error {}
 
 /** The declaration is the operation's safety owner; unknown operations fail closed. */
-export function resolveSettingsDeclarationOperationApprovalRequired(anchor: string, settings: Settings): boolean {
+export function resolveSettingsDeclarationOperationApprovalPolicy(anchor: string, settings: Settings): ReturnType<typeof resolveSettingsDeclarationOperationApprovalPolicyV1> {
     const ref = getSettingsPageDeclarations(undefined, settings).flatMap(page => Object.values(page.settings))
         .find(candidate => candidate.anchor === anchor);
-    return ref?.operation?.kind !== 'invoke' || ref.operation.requiresApproval !== false;
+    return resolveSettingsDeclarationOperationApprovalPolicyV1(ref?.operation);
 }
 
 /** Only existing writable built-in device preferences admit a local UI interaction without an Account. */
@@ -397,7 +397,8 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         if (actionId !== 'settings.invoke' && (ref.storage?.scope === 'team' || ref.storage?.scope === 'project') && !target) return { ...refuse('setting_target_required'), details: { targetKinds } };
         const access = await descriptor(pageId, ref, context, readHome);
         const draft = target?.kind === 'public_profile_draft' ? owner.mutationServices?.publicProfileAtmosphereDraft : undefined;
-        const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && (!ref.contribution || owner.canUseRuntimeContributions?.() === true)
+        const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && context?.isPluginSettingsIntentCurrent?.() !== false
+            && (!ref.contribution || owner.canUseRuntimeContributions?.() === true)
             && (target?.kind !== 'public_profile_draft' || Boolean(draft && draft.serverId === target.serverId && draft.isCurrent()));
         throwIfAborted(context?.signal);
         if (!isCurrent()) return refuse('setting_not_bound');

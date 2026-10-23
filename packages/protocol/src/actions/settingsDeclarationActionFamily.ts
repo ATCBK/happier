@@ -1,6 +1,8 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../connect/connectedAccountPurposeBindings.js';
+import { PluginCredentialAccessSlotIdSchema } from '../plugins/permissions/grants.js';
 
 export const SETTINGS_DECLARATION_ACTION_IDS_V1 = ['settings.list', 'settings.get', 'settings.set', 'settings.reset', 'settings.invoke'] as const;
 export type SettingsDeclarationActionIdV1 = typeof SETTINGS_DECLARATION_ACTION_IDS_V1[number];
@@ -36,8 +38,21 @@ export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.d
   ]) }),
   z.strictObject({ kind: z.literal('atmosphere_picture_remove'), localId: OperationIdSchema }),
   z.strictObject({ kind: z.literal('account_settings_history_purge'), versions: z.array(z.number().check(z.int(), z.nonnegative(), z.int())).check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('account_settings_history_restore'), historyVersion: z.number().check(z.int(), z.nonnegative()),
+    expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('account_encryption_mode_convert'), toMode: z.enum(['plain', 'e2ee']) }),
   z.strictObject({ kind: z.literal('model_pack'), packId: OperationIdSchema, machineId: z.optional(OperationIdSchema) }),
   z.strictObject({ kind: z.literal('voice_preview'), voiceId: OperationIdSchema }),
+  z.strictObject({ kind: z.literal('voice_credential_source'), credentialSlotId: PluginCredentialAccessSlotIdSchema,
+    expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
+    // A displayed declaration may fence its gesture; automated callers use the declaration captured at admission.
+    expectedContractDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/))),
+    selection: z.discriminatedUnion('kind', [
+      z.strictObject({ kind: z.literal('none') }),
+      z.strictObject({ kind: z.literal('savedSecret') }),
+      z.strictObject({ kind: z.literal('connectedAccount'), target: QualifiedConnectedAccountPurposeBindingTargetV1Schema }),
+    ]),
+  }),
   z.strictObject({ kind: z.literal('diagnostics_enabled'), enabled: z.boolean() }),
   z.strictObject({ kind: z.literal('diagnostics_export'), artifactId: OperationIdSchema, machineId: z.optional(OperationIdSchema) }),
   z.strictObject({ kind: z.literal('diagnostics_session'), sessionId: OperationIdSchema, machineId: OperationIdSchema }),

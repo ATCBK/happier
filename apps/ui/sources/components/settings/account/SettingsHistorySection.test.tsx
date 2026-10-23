@@ -22,17 +22,6 @@ describe('SettingsHistorySection Action composition', () => {
 
     beforeEach(async () => {
         restoreLoader = await installRealActionExecutorModuleLoader();
-        home = await serveAccountHomes({
-            homes: [{ key: 'a', serverUrl: 'https://settings-history.test', accountId: 'account-a', currentAccount: true }],
-            route: request => {
-                if (request.path === '/v2/account/settings/history') return Response.json({ snapshots: [
-                    { version: 3, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 50 },
-                ] });
-                if (request.path === '/v2/account/settings/history/3') return Response.json({ version: 3,
-                    createdAt: '2026-01-01T00:00:00.000Z', content: { t: 'plain', v: { preferredLanguage: 'de' } } });
-                return undefined;
-            },
-        });
         vi.mocked(Modal.confirm).mockClear();
         vi.mocked(Modal.confirm).mockResolvedValue(true);
         vi.mocked(Modal.alert).mockClear();
@@ -41,15 +30,28 @@ describe('SettingsHistorySection Action composition', () => {
     afterEach(async () => {
         await screen?.unmount();
         screen = undefined;
-        await home.dispose();
+        await home?.dispose();
         restoreLoader();
         storage.setState(initial, true);
         vi.restoreAllMocks();
     });
 
-    async function open(expanded = true) {
+    async function open(expanded = true, policy?: ReturnType<typeof ActionsSettingsV1Schema.parse>) {
+        home = await serveAccountHomes({
+            homes: [{ key: 'a', serverUrl: `https://settings-history-${crypto.randomUUID()}.test`, accountId: 'account-a', currentAccount: true,
+                ...(policy ? { settings: { actionsSettingsV1: policy } } : {}) }],
+            route: request => {
+                if (request.path === '/v2/account/settings/history') return Response.json({ snapshots: [
+                    { version: 3, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 50 },
+                ] });
+                if (request.path === '/v2/account/settings/history/3') return Response.json({ version: 3,
+                    createdAt: '2026-01-01T00:00:00.000Z', content: { t: 'plain', v: { preferredLanguage: 'de' } } });
+                if (request.path === '/v1/account/entity-rows/profiles/transfer') return Response.json({ status: 'absent' });
+                return undefined;
+            },
+        });
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl);
-        screen = await renderScreen(<SettingsHistorySection credentials={credentials} encryption={null} />);
+        screen = await renderScreen(<SettingsHistorySection credentials={credentials} />);
         if (expanded) await act(async () => {
             screen!.findByTestId('settings-account-history')!.findByProps({ accessibilityRole: 'button' }).props.onPress();
         });
@@ -76,11 +78,12 @@ describe('SettingsHistorySection Action composition', () => {
     });
 
     it('cannot bypass disabled settings.invoke through the restore control', async () => {
-        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
+        const policy = ActionsSettingsV1Schema.parse({
             v: 1, actions: { 'settings.invoke': { enabled: false } },
-        }) });
-        const view = await open();
+        });
+        const view = await open(true, policy);
         await vi.waitFor(() => expect(view.findByTestId('settings-account-history-restore-3')).not.toBeNull());
+        expect(storage.getState().settings.actionsSettingsV1.actions?.['settings.invoke']?.enabled).toBe(false);
         await view.pressByTestIdAsync('settings-account-history-restore-3');
         await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalled());
         expect(home.requests.some(row => row.path === '/v2/account/settings/history/3')).toBe(false);

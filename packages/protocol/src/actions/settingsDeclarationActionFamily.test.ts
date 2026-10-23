@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { SETTINGS_DECLARATION_ACTION_IDS_V1, SettingsDeclarationActionInputSchemasV1 } from './settingsDeclarationActionFamily.js';
 import { getActionSpec } from './actionSpecs.js';
 
+describe('Voice credential source operation admission', () => {
+  it('admits exact source choices without accepting secret values or caller authority', () => {
+    const schema = SettingsDeclarationActionInputSchemasV1['settings.invoke'];
+    const input = { kind: 'voice_credential_source', credentialSlotId: 'api_key', expectedSettingsVersion: 3,
+      selection: { kind: 'connectedAccount', target: { kind: 'account', account: {
+        service: { pluginId: 'acme.voice', localId: 'account' }, accountId: 'work',
+      } } } };
+    expect(schema.safeParse({ anchor: 'voiceConversations.provider.acme.voice/realtime.credentialSource', input }).success).toBe(true);
+    for (const patch of [{ selection: { kind: 'savedSecret', value: 'secret' } }, { secret: 'secret' },
+      { confirmed: true }, { accountId: 'other' }, { expectedSettingsVersion: -1 }]) {
+      expect(schema.safeParse({ anchor: 'voiceConversations.provider.acme.voice/realtime.credentialSource', input: { ...input, ...patch } }).success).toBe(false);
+    }
+  });
+});
+
 describe('Settings history purge operation admission', () => {
   it('admits only an explicit nonempty exact-version target without credential or confirmation fields', () => {
     const schema = SettingsDeclarationActionInputSchemasV1['settings.invoke'];

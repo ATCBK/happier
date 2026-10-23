@@ -41,6 +41,27 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('keeps owner-confirmed Voice operations direct only for the present UI user while explicit Ask and Agent danger remain', () => {
+    const input = { anchor: 'voicePrivacy.forgetVoiceAgentMemory' };
+    const ui = { surface: 'ui' as const, authority: 'present_user' as const };
+    expect(isApprovalRequiredByActionsSettings('settings.invoke', EMPTY_SETTINGS, ui, undefined, undefined, input)).toBe(false);
+    expect(isApprovalRequiredByActionsSettings('settings.invoke', normalizeActionsSettingsV1({ v: 1,
+      actions: { 'settings.invoke': { approvalRequiredSurfaces: ['ui'] } },
+    }), ui, undefined, undefined, input)).toBe(true);
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      expect(isApprovalRequiredByActionsSettings('settings.invoke', EMPTY_SETTINGS,
+        { surface, authority: 'account_automation' }, undefined, undefined, input)).toBe(true);
+    }
+    expect(isApprovalRequiredByActionsSettings('settings.invoke', EMPTY_SETTINGS,
+      { surface: 'ui', authority: 'account_automation' }, undefined, undefined, input)).toBe(true);
+    for (const anchor of ['appearance.atmospherePictureRemove', 'voicePrivacy.unregisteredOperation']) {
+      expect(isApprovalRequiredByActionsSettings('settings.invoke', EMPTY_SETTINGS, ui, undefined, undefined, { anchor })).toBe(true);
+    }
+    for (const anchor of ['voiceAdvanced.removeSpeechModel', 'voiceConversations.testTts', 'voicePrivacy.diagnosticsEnabled']) {
+      expect(isApprovalRequiredByActionsSettings('settings.invoke', EMPTY_SETTINGS, ui, undefined, undefined, { anchor })).toBe(false);
+    }
+  });
+
   it('admits explicit recap delivery gestures directly while automation asks and surface overrides still govern', () => {
     const actionId = 'usage.recap.deliver';
     expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, { surface: 'ui', authority: 'present_user' })).toBe(false);
@@ -4639,6 +4660,11 @@ describe('plugin-surface approval posture (§4.1)', () => {
     }).required;
   }
 
+  function safetyForDefaultInput(actionId: ActionId) {
+    const spec = getActionSpec(actionId);
+    return spec.safetyForInput?.(undefined) ?? spec.safety;
+  }
+
   it('measures a non-empty plugin surface with a real danger population', () => {
     expect(pluginSurfacedActionIds.length).toBeGreaterThan(0);
     expect(
@@ -4656,7 +4682,7 @@ describe('plugin-surface approval posture (§4.1)', () => {
     expect(promptedOnPluginSurface).toEqual(
       pluginSurfacedActionIds.filter(
         (id) =>
-          (getActionSpec(id).safety === 'danger' ||
+          (safetyForDefaultInput(id) === 'danger' ||
             id === 'capture.view' ||
             getActionSpec(id).approvalPolicy?.requiredSurfaces?.includes(
               'plugin',
@@ -4672,7 +4698,7 @@ describe('plugin-surface approval posture (§4.1)', () => {
   it('keeps ordinary safe plugin Actions unprompted while host viewing requires consent', () => {
     const safePluginActionIds = pluginSurfacedActionIds.filter(
       (id) =>
-        getActionSpec(id).safety !== 'danger' &&
+        safetyForDefaultInput(id) !== 'danger' &&
         id !== 'capture.view' &&
         !getActionSpec(id).approvalPolicy?.requiredSurfaces?.includes(
           'plugin',

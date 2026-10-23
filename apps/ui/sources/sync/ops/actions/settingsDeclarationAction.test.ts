@@ -53,7 +53,7 @@ vi.mock('react-native-unistyles', async () => {
 import { settingsDefaults, applySettings, settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults, applyLocalSettings } from '@/sync/domains/settings/localSettings';
 import * as desktopHostBoundary from '@/utils/platform/desktopHost';
-import { createSettingsDeclarationAction, resolveSettingsDeclarationOperationApprovalRequired } from './settingsDeclarationAction';
+import { createSettingsDeclarationAction, resolveSettingsDeclarationOperationApprovalPolicy } from './settingsDeclarationAction';
 import { UI_FONT_SCALE_PRESETS } from '@/components/ui/text/uiFontScale';
 import { readSettingsPageGate } from '@/components/settings/catalog/pageCatalog';
 import { ActionsSettingsV1Schema, createActionExecutor, FeaturesResponseSchema, getModelPackCatalogEntry, isApprovalRequiredByActionsSettings, VoiceProviderContributionSchema, type ActionsSettingsV1, type AutomationV3Settings } from '@happier-dev/protocol';
@@ -218,7 +218,8 @@ import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/
 
 describe('exact Account Settings history purge declaration', () => {
     it('requires incumbent approval and refuses execution without an Account history transport', async () => {
-        expect(resolveSettingsDeclarationOperationApprovalRequired('account.settingsHistory', settingsDefaults)).toBe(true);
+        expect(resolveSettingsDeclarationOperationApprovalPolicy('account.settingsHistory', settingsDefaults))
+            .toEqual({ requiresApproval: true, uiConfirmationRequired: true });
         const { action } = createOwner();
         const listing = await action({ actionId: 'settings.list', input: { pageId: 'account' } });
         expect(listing).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({
@@ -288,8 +289,10 @@ describe('Home atmosphere settings declarations', () => {
     });
 
     it('requires approval by default for local picture removal through real Action admission', async () => {
-        expect(resolveSettingsDeclarationOperationApprovalRequired('appearance.atmospherePictureRemove', settingsDefaults)).toBe(true);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('appearance.atmospherePictureAdd', settingsDefaults)).toBe(false);
+        expect(resolveSettingsDeclarationOperationApprovalPolicy('appearance.atmospherePictureRemove', settingsDefaults))
+            .toEqual({ requiresApproval: true, uiConfirmationRequired: true });
+        expect(resolveSettingsDeclarationOperationApprovalPolicy('appearance.atmospherePictureAdd', settingsDefaults))
+            .toEqual({ requiresApproval: false, uiConfirmationRequired: false });
         const owner = createOwner();
         const executor = throughActionExecutor(owner.action, () => settingsDefaults.actionsSettingsV1);
         const result = await executor.execute('settings.invoke', { anchor: 'appearance.atmospherePictureRemove',
@@ -543,9 +546,11 @@ function throughActionExecutor(settingsDeclarationAction: ReturnType<typeof crea
     const approvalPolicy: Pick<Parameters<typeof createActionExecutor>[0], 'isActionApprovalRequired'> = readActionsSettings
         ? { isActionApprovalRequired: (actionId, context, input) => {
             const anchor = input && typeof input === 'object' && 'anchor' in input && typeof input.anchor === 'string' ? input.anchor : '';
-            const safety = actionId === 'settings.invoke'
-                ? resolveSettingsDeclarationOperationApprovalRequired(anchor, settingsDefaults) ? 'danger' : 'safe' : undefined;
-            return isApprovalRequiredByActionsSettings(actionId, readActionsSettings(), context, safety, undefined, input);
+            const operationPolicy = actionId === 'settings.invoke'
+                ? resolveSettingsDeclarationOperationApprovalPolicy(anchor, settingsDefaults) : undefined;
+            const safety = operationPolicy ? operationPolicy.requiresApproval ? 'danger' : 'safe' : undefined;
+            return isApprovalRequiredByActionsSettings(actionId, readActionsSettings(), context, safety, undefined, input,
+                operationPolicy?.uiConfirmationRequired);
         } }
         : {};
     // These unrelated outward ports must remain unused; Protocol admission and the declaration owner stay real.
@@ -1460,7 +1465,7 @@ describe('declared settings owner', () => {
         const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...settingsDefaults.voice, providerId } }, settingsDefaults));
         storage.setState({ settings: account, settingsScope: { serverId: 'test-home', accountId: 'test-account' } });
         const owner = createOwner(undefined, true, true, account);
-        const executor = throughActionExecutor(owner.action);
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
         const discovered = await owner.action({ actionId: 'settings.list', input: { pageId: 'voiceConversations' } });
         if (!('items' in discovered) || !discovered.items) throw new Error('Missing operation discovery');
         const preview = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.preview'));
@@ -1488,7 +1493,7 @@ describe('declared settings owner', () => {
         expect(preview.operation?.requiresApproval).toBe(true);
         expect(stop.operation?.requiresApproval).toBe(false);
         expect(isApprovalRequiredByActionsSettings('settings.invoke', ActionsSettingsV1Schema.parse({ v: 1 }), { surface: 'agent', authority: 'account_automation' },
-            resolveSettingsDeclarationOperationApprovalRequired(stop.anchor, account) ? 'danger' : 'safe')).toBe(false);
+            resolveSettingsDeclarationOperationApprovalPolicy(stop.anchor, account).requiresApproval ? 'danger' : 'safe')).toBe(false);
         await executor.execute('settings.invoke', { anchor: preview.anchor, input: { kind: 'voice_preview', voiceId: 'voice_a' } }, ctx);
         storage.setState({ settingsScope: { serverId: 'different-home', accountId: 'test-account' } });
         const { readRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
@@ -1509,7 +1514,7 @@ describe('declared settings owner', () => {
         // requires the matching loaded Account settings scope, as the mounted app does.
         storage.setState({ settings: account, settingsScope: storage.getState().profileScope });
         const owner = createOwner(undefined, true, true, account);
-        const executor = throughActionExecutor(owner.action);
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
         const discovered = await owner.action({ actionId: 'settings.list', input: { pageId: 'voiceConversations' } });
         if (!('items' in discovered) || !discovered.items) throw new Error('Missing settings discovery');
         const operations = ['listCatalog', 'retryCatalog'].map(operation => discovered.items!.find(item =>
@@ -1827,18 +1832,15 @@ describe('declared settings owner', () => {
         expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'voicePrivacy.forgetVoiceAgentMemory' } }))
             .toMatchObject({ status: 'cancelled' });
         expect(owner.account()).toBe(before);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('voicePrivacy.diagnosticsExport', before)).toBe(true);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('voicePrivacy.forgetVoiceAgentMemory', before)).toBe(true);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('voicePrivacy.diagnosticsLocation', before)).toBe(false);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('voicePrivacy.diagnosticsRetryShutdown', before)).toBe(false);
-        expect(resolveSettingsDeclarationOperationApprovalRequired('unknown', before)).toBe(true);
         const policy = ActionsSettingsV1Schema.parse({ v: 1 });
-        for (const [anchor, required] of [
-            ['voiceAdvanced.installSpeechModel', true], ['voiceAdvanced.removeSpeechModel', true],
-            ['voicePrivacy.diagnosticsExport', true], ['voicePrivacy.forgetVoiceAgentMemory', true],
-            ['voicePrivacy.diagnosticsLocation', false], ['voicePrivacy.diagnosticsRetryShutdown', false], ['unknown', true],
+        for (const [anchor, required, uiConfirmationRequired] of [
+            ['voiceAdvanced.installSpeechModel', true, false], ['voiceAdvanced.removeSpeechModel', true, false],
+            ['voicePrivacy.diagnosticsExport', true, false], ['voicePrivacy.forgetVoiceAgentMemory', true, false],
+            ['voicePrivacy.diagnosticsLocation', false, false], ['voicePrivacy.diagnosticsRetryShutdown', false, false], ['unknown', true, true],
         ] as const) {
-            const safety = resolveSettingsDeclarationOperationApprovalRequired(anchor, before) ? 'danger' : 'safe';
+            const operationPolicy = resolveSettingsDeclarationOperationApprovalPolicy(anchor, before);
+            expect(operationPolicy, anchor).toEqual({ requiresApproval: required, uiConfirmationRequired });
+            const safety = operationPolicy.requiresApproval ? 'danger' : 'safe';
             expect(isApprovalRequiredByActionsSettings('settings.invoke', policy, { surface: 'agent', authority: 'account_automation' }, safety), anchor).toBe(required);
         }
     });

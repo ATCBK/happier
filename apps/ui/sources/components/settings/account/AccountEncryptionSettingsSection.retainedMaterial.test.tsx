@@ -12,6 +12,7 @@ import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/pr
 import { DiscussionAccountEncryptionInventoryV1Schema } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
 import { SESSION_FOLLOW_RULES_ROUTE_V1, ListSessionFollowRulesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -113,6 +114,7 @@ async function mount(params: Readonly<{
     runs?: RunRow[];
     failInventory?: boolean; conflict?: boolean; beforeInventory?: () => Promise<void>; waitForControls?: boolean;
     initialMode?: 'plain' | 'e2ee';
+    currentnessOverride?: () => ReturnType<typeof createPlainAccountEncryptionCurrentnessFixture> | null;
     afterCommitArchivedSessions?: ReturnType<typeof retainedSession>[];
     afterCommitInventoryFails?: boolean;
     beforeRetirementCurrentness?: () => Promise<void>;
@@ -162,6 +164,8 @@ async function mount(params: Readonly<{
             }));
             if (target.pathname === '/v1/account/encryption') return json({ mode, updatedAt: 1 });
             if (target.pathname === '/v1/account/encryption/currentness') {
+                const overridden = params.currentnessOverride?.();
+                if (overridden) return json(overridden);
                 if (inventoryReads >= 2) await params.beforeRetirementCurrentness?.();
                 return json({ mode, version: 1,
                 updatedAt: 1, signingKeyFingerprint, contentKeyFingerprint,
@@ -329,6 +333,34 @@ afterEach(async () => {
     setCurrentAuth(previousAuth); await standardCleanup(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); });
 
 describe('Account encryption historical material custody', () => {
+    it('publishes the observed Account mode when conversion preparation refuses a moved mode', async () => {
+        let moved = false;
+        const h = await mount({ initialMode: 'e2ee', currentnessOverride: () => moved ? createPlainAccountEncryptionCurrentnessFixture() : null });
+        try {
+            moved = true;
+            const toggle = h.screen.findAll(node => node.props.testID === 'settings-account-encryption-mode-switch'
+                && typeof node.props.onValueChange === 'function')[0]!;
+            await act(async () => { await toggle.props.onValueChange(false); });
+            expect(h.migrations).toEqual([]);
+            expect(h.screen.findAll(node => node.props.testID === 'settings-account-encryption-mode-switch'
+                && typeof node.props.onValueChange === 'function')[0]!.props.value).toBe(false);
+        } finally { await h.screen.unmount(); await h.restored.dispose(); }
+    });
+
+    it('cannot bypass disabled settings.invoke through the whole-Account mode switch', async () => {
+        const h = await mount({ initialMode: 'e2ee' });
+        try {
+            storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
+                v: 1, actions: { 'settings.invoke': { enabled: false } },
+            }) });
+            const toggle = h.screen.findAll(node => node.props.testID === 'settings-account-encryption-mode-switch'
+                && typeof node.props.onValueChange === 'function')[0]!;
+            await act(async () => { await toggle.props.onValueChange(false); });
+            expect(h.migrations).toEqual([]);
+            expect(h.d10CatalogReads).toEqual([]);
+        } finally { await h.screen.unmount(); await h.restored.dispose(); }
+    });
+
     it.each([
         ['plain', 'live'], ['plain', 'deleted'], ['e2ee', 'live'], ['e2ee', 'deleted'],
     ] as const)('includes exact D10 singleton catalog census in the actual mode switch (%s source, %s rows)', async (initialMode, state) => {

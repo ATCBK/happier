@@ -424,7 +424,6 @@ export const WorkspaceRouteBody = React.memo(() => {
                 <SettingAnchor setting={ACCOUNT_SETTINGS.settings.settingsHistory}>
                     <SettingsHistorySection
                         credentials={auth.credentials}
-                        encryption={sync.encryption}
                     />
                 </SettingAnchor>
             </ItemGroup>

@@ -3,6 +3,8 @@ import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import {
+    ActionsSettingsV1Schema,
+    sealAccountScopedBlobCiphertext,
     encodePasswordCredentialFieldV1,
     type PlainAccountPasswordCredentialV1,
     type AccountSecurityGetResponseV1,
@@ -111,7 +113,10 @@ describe('default Account Security Action transport', () => {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({ ok: true });
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'srv_security_actions' } } }));
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+                capabilities: { serverIdentity: { serverIdentityId: 'srv_security_actions' } },
+                features: { encryption: { accountOptOut: { enabled: true }, plaintextStorage: { enabled: true } } },
+            }));
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (path === '/v1/account/security') {
                 if (securityResponseOverride) return await securityResponseOverride;
@@ -209,6 +214,95 @@ describe('default Account Security Action transport', () => {
     it('admits account UI authority on the captured Home', async () => {
         const executor = createDefaultActionExecutor();
         await expect(executor.execute('account.security.get', {}, { serverId, surface: 'ui' })).resolves.toMatchObject({ ok: true });
+    });
+
+    it.each(['plain', 'encrypted'] as const)('restores an exact Settings-history version through Action admission and the real one-shot CAS owner (%s snapshot)', async snapshotMode => {
+        let writes = 0;
+        let snapshotReads = 0;
+        let policy = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.invoke': { enabled: false } } });
+        let snapshotContent: Readonly<{ t: 'plain'; v: { preferredLanguage: string } }> | Readonly<{ t: 'encrypted'; c: string }>
+            = { t: 'plain', v: { preferredLanguage: 'de' } };
+        if (snapshotMode === 'encrypted') {
+            const credentials = { token: createAccountTokenForTests('account-a'), secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url') };
+            const { createEncryptionFromAuthCredentials } = await import('@/auth/encryption/createEncryptionFromAuthCredentials');
+            const encryption = await createEncryptionFromAuthCredentials(credentials);
+            authorityCredentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback('https://security-actions.test',
+                { serverId: resolveServerProfileScopeIdForIdentifier(serverId) }, credentials);
+            if (!authorityCredentialWrite) throw new Error('Device storage refused historical material fixture');
+            snapshotContent = { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+                material: { type: 'dataKey', machineKey: encryption.getContentPrivateKey() }, payload: { preferredLanguage: 'de' },
+                randomBytes: length => new Uint8Array(length).fill(4) }) };
+        }
+        const restoreRequest: RuntimeFetch = async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings/history/3') {
+                snapshotReads += 1;
+                return Response.json({ version: 3, createdAt: '2026-01-01T00:00:00.000Z', content: snapshotContent });
+            }
+            if (path === '/v1/account/entity-rows/profiles/transfer') return Response.json({ status: 'absent' });
+            if (path.startsWith('/v1/account/entity-rows/')) return Response.json({}, { status: 404 });
+            if (path === '/v2/account/settings' && init?.method !== 'POST') {
+                return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: policy } }, version: 1 });
+            }
+            if (path === '/v2/account/settings' && init?.method === 'POST') {
+                writes += 1;
+                expect(JSON.parse(String(init.body))).toMatchObject({ expectedVersion: 1,
+                    content: { t: 'plain', v: { preferredLanguage: 'de' } } });
+                return Response.json({ success: true, version: 2 });
+            }
+            return securityRequest(input, init);
+        };
+        const credentials = await TokenStorage.getCredentialsForServerUrl('https://security-actions.test',
+            { serverId: resolveServerProfileScopeIdForIdentifier(serverId) });
+        if (!credentials) throw new Error('Historical material fixture is unavailable');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://security-actions.test',
+            serverIdentityId: 'srv_security_actions', accountId: 'account-a', credentials, request: restoreRequest });
+        const input = { anchor: 'account.settingsHistory', input: {
+            kind: 'account_settings_history_restore', historyVersion: 3, expectedSettingsVersion: 1,
+        } };
+        const executor = createDefaultActionExecutor();
+        const context = { serverId, surface: 'agent', authority: 'account_automation' } as const;
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: policy });
+        const refused = await executor.execute('settings.invoke', input, context);
+        expect(refused).toMatchObject({ ok: false });
+        expect(writes).toBe(0);
+        expect(snapshotReads).toBe(0);
+        policy = ActionsSettingsV1Schema.parse({ v: 1 });
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: policy });
+        expect(await executor.execute('settings.invoke', input, { ...context, bypassApprovals: true }))
+            .toEqual({ ok: true, result: { anchor: 'account.settingsHistory', status: 'completed',
+                value: { status: 'applied', settingsVersion: 2 } } });
+        expect(writes).toBe(1);
+        expect(snapshotReads).toBe(1);
+    });
+
+    it('admits whole-Account mode conversion at Ask first and keeps a refused invocation effect-free', async () => {
+        let policy = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.invoke': { enabled: false } } });
+        const conversionSettings = { experiments: true, featureToggles: { 'encryption.accountOptOut': true },
+            clientEncryptionRequirementV1: 'follow_account', clientEncryptionRequirementLocalV1: 'follow_account' } as const;
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://security-actions.test',
+            serverIdentityId: 'srv_security_actions', accountId: 'account-a', request: async (input, init) => {
+                if (new URL(String(input)).pathname === '/v2/account/settings') {
+                    return Response.json({ content: { t: 'plain', v: { ...conversionSettings, actionsSettingsV1: policy } }, version: 1 });
+                }
+                return securityRequest(input, init);
+            } });
+        getStorage().getState().applySettingsLocal(conversionSettings);
+        const { resolveSettingsDeclarationOperationApprovalPolicy } = await import('./settingsDeclarationAction');
+        const executor = createDefaultActionExecutor();
+        const input = { anchor: 'account.encryptionMode', input: { kind: 'account_encryption_mode_convert', toMode: 'plain' } };
+        const context = { serverId, surface: 'agent', authority: 'account_automation' } as const;
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: policy });
+        expect(await executor.execute('settings.invoke', input, context)).toMatchObject({ ok: false });
+        expect(requests.some(row => row.path === '/v1/account/encryption/currentness')).toBe(false);
+        expect(resolveSettingsDeclarationOperationApprovalPolicy('account.encryptionMode', getStorage().getState().settings))
+            .toMatchObject({ requiresApproval: true });
+        policy = ActionsSettingsV1Schema.parse({ v: 1 });
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: policy });
+        expect(await executor.execute('settings.invoke', input, { ...context, bypassApprovals: true }))
+            .toEqual({ ok: true, result: { anchor: 'account.encryptionMode', status: 'completed', value: { mode: 'plain' } } });
+        expect(requests.some(row => row.path === '/v1/account/encryption/currentness')).toBe(true);
+        expect(requests.some(row => row.path.includes('/migrate'))).toBe(false);
     });
 
     async function openPasswordForm() {

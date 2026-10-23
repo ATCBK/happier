@@ -51,11 +51,24 @@ export type SettingOperationContext = Readonly<{
     services?: SettingsMutationServices;
 }>;
 export type SettingOperationResult = Readonly<{
-    status: 'completed' | 'cancelled' | 'unavailable';
+    status: 'completed' | 'cancelled' | 'unavailable' | 'interaction_opened';
     reason?: string;
     value?: z.infer<typeof StrictJsonValueSchema>;
 }>;
 export type SettingsMutationServices = Readonly<{
+    /** Native model transfer presentation belongs to this mounted invocation, never Action input. */
+    voiceModelPackPresentation?: Pick<import('@/voice/settings/voiceDeviceModelPackOperation').VoiceDeviceModelPackOperationInput,
+        'onDownloadStarted' | 'onProgress' | 'onUpdateChecked'> & Readonly<{
+            isCurrent(): boolean;
+            /** Keep native recovery/error presentation local without serializing installer errors. */
+            onError?(error: unknown): void;
+        }>;
+    /** Captured editor snapshots stay host-private; the public compound intent carries only null. */
+    voiceSettingsEdit?: Readonly<{
+        before: Settings['voice'];
+        next: Settings['voice'];
+        isLanguageOwnerCurrent(voice: Settings['voice']): boolean;
+    }>;
     /** Captured controller, never looked up from caller input or current focus. */
     publicProfileAtmosphereDraft?: Readonly<{
         serverId: string;
@@ -73,6 +86,8 @@ export type SettingsMutationServices = Readonly<{
     executeSettingsOwnerAction?: SettingsOwnerActionExecute;
     purgeAccountSettingsHistory?: (versions: readonly number[], signal?: AbortSignal) => Promise<
         Readonly<{ status: 'complete' }> | Readonly<{ status: 'cleanup-pending'; versions: readonly number[] }>>;
+    restoreAccountSettingsHistory?: (input: Extract<SettingsDeclarationOperationInputV1, { kind: 'account_settings_history_restore' }>, signal?: AbortSignal) => Promise<SettingOperationResult>;
+    convertAccountEncryptionMode?: (toMode: 'plain' | 'e2ee', signal?: AbortSignal) => Promise<SettingOperationResult>;
     readScmDiffSummaryCatalog?: (settings: Settings, storedValue: string) => Promise<Readonly<{
         profiles: readonly import('@/settings/scmDiffSummary/settings').ScmDiffSummaryCatalogProfile[];
         isCurrent: (settings: Settings) => boolean;
@@ -213,6 +228,8 @@ export type SettingDeclaration = Readonly<{
         requiresHumanInteraction: boolean;
         /** Consumed by the incumbent Actions approval policy, never by an operation-local gate. */
         requiresApproval?: boolean;
+        /** A direct UI gesture or owner consent dialog supplies the default interaction. Explicit Ask still applies. */
+        uiConfirmation?: 'direct' | 'policy';
         kind: 'invoke';
         invoke(input: SettingOperationContext): Promise<SettingOperationResult>;
     }>;
