@@ -25,7 +25,7 @@ import { configuration } from '@/configuration';
 import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
   removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
-import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { logger } from '@/ui/logger';
 import { createDaemonMachineIrohRuntime, type DaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
@@ -36,6 +36,9 @@ import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protoco
 import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { ProviderBrokerOpenRequestV1Schema, type ProviderBrokerOpenRequestV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { TEAM_CREDENTIAL_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
 
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
@@ -61,6 +64,57 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
   } };
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
+
+it.each(['before readiness', 'after readiness', 'replacement pid', 'replacement birth', 'wrapped runner', 'retired Account'] as const)(
+  'retires only the departed runner metadata through daemon exit tracking (%s)', async scenario => {
+    const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control);
+    const warnings = vi.spyOn(logger, 'warn');
+    const settlementFailures = () => warnings.mock.calls
+      .filter(([label]) => label === '[DAEMON RUN] Session exit evidence settlement unavailable; retaining exit custody')
+      .map(([, data]) => {
+        const error = data && typeof data === 'object' && 'error' in data ? data.error : undefined;
+        return error instanceof Error ? { name: error.name, code: Reflect.get(error, 'code'), message: error.message } : null;
+      });
+    const pid = 999_123_456;
+    h.pidToTrackedSession.clear();
+    h.tracked.pid = pid;
+    h.tracked.sessionRunnerPid = scenario === 'wrapped runner' ? pid + 1 : pid;
+    h.tracked.runnerProcessIdentity = { pid: h.tracked.sessionRunnerPid,
+      processStartTimeMs: scenario === 'wrapped runner' ? 2 : 1 };
+    h.tracked.startedBy = 'terminal';
+    h.pidToTrackedSession.set(pid, h.tracked);
+    if (scenario === 'after readiness') h.tracked.happySessionMetadataFromLocalWebhook = createTestMetadata({ machineId: 'machine' });
+    const metadata = { machineId: 'machine', hostPid: scenario === 'replacement pid' ? pid + 2 : h.tracked.sessionRunnerPid,
+      hostProcessStartTimeMs: scenario === 'replacement birth' ? 3 : scenario === 'wrapped runner' ? 2 : 1,
+      lifecycleState: 'running', lifecycleStateSince: 10, path: h.cwd };
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url, options) => String(url).endsWith(`/v2/sessions/${h.sessionId}`)
+      ? { status: 200, data: { session: createSessionRecordFixture({ id: h.sessionId, encryptionMode: 'plain',
+          metadataLayoutVersion: 0, metadataVersion: 1, metadata: JSON.stringify(metadata) }) } }
+      : get(url, options));
+    const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+      success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 },
+    } });
+    if (scenario === 'retired Account') h.f.retire();
+    await h.daemon.onChildExited(pid, { reason: 'process-exited', code: 1, signal: null });
+    if (scenario === 'replacement pid' || scenario === 'replacement birth' || scenario === 'retired Account') {
+      expect(patch).not.toHaveBeenCalled();
+      if (scenario === 'retired Account') expect(h.pidToTrackedSession.get(pid)).toBe(h.tracked);
+    } else {
+      expect(patch.mock.calls.length, JSON.stringify(settlementFailures())).toBe(1);
+      const request = SessionMetadataTuplePatchV1Schema.parse(patch.mock.calls[0]?.[1]);
+      expect(request.target.ownerMetadata).toMatchObject({ t: 'plain' });
+      if (request.target.ownerMetadata?.t !== 'plain') throw new Error('Expected owner metadata');
+      expect(request.target.ownerMetadata.v.workspace?.path).toBe(h.cwd);
+      const runtime = request.target.ownerMetadata.v.runtime ?? {};
+      expect(runtime).not.toHaveProperty('hostPid');
+      expect(runtime).not.toHaveProperty('hostProcessStartTimeMs');
+      expect(runtime).not.toHaveProperty('lifecycleState');
+      expect(runtime).not.toHaveProperty('lifecycleStateSince');
+      await h.daemon.onChildExited(pid, { reason: 'process-exited', code: 1, signal: null });
+      expect(patch).toHaveBeenCalledOnce();
+    }
+  });
 
 it.each(['ready', 'requester Home', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {

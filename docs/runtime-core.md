@@ -1015,6 +1015,13 @@ runner/attachment-fenced metadata retirement path. Startup and Resume restore
 explicit-Stop hold.
 
 Heartbeat expiry, native crashes and lost observation do not publish `stopped`.
+A confirmed unexpected runner exit clears that runner's `hostPid` and birth
+witness, and removes its stale `running` lifecycle through daemon child-exit
+tracking, before releasing the requester. The metadata CAS compares both PID
+and birth time; an older exit cannot retire a replacement. A failed readiness
+report may not have given the daemon a Session id, so startup retains its
+failure-path CAS using the same tuple-guarded projection. Explicit Stop keeps its attachment-fenced
+retirement and `stopped` publication described above.
 A generic `runtime-ended` event is insufficient: it can report unexpected native
 exit even when host cleanup exits zero. Disconnected status wording uses Stopped
 only when the viewer can read the exact terminal lifecycle value; absent,

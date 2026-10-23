@@ -24,6 +24,7 @@ import {
   DaemonSessionReadinessError,
 } from '@/agent/runtime/startupSideEffects'
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue'
+import { retireSessionRunnerMetadata } from '@/session/metadata/sessionRunnerMetadata'
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle'
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents'
 import { readSessionStartupSpawnNonceFromEnv } from '@/session/runtime/control/sessionControlEnvironment'
@@ -288,12 +289,12 @@ export async function initializeBackendRunSession(
             await createSessionTurnLifecycle({ session, agentId }).failTurn({ allocateWhenIdle: true,
               issue: classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, provider: agentId }),
             })
-            await session.updateMetadata(current => {
-              if (!matchesReportedRunner(current)) return current
-              const { hostPid: _pid, hostProcessStartTimeMs: _start,
-                lifecycleState: _state, lifecycleStateSince: _since, ...retired } = current
-              return retired
-            })
+            // A failed report may never have given the daemon this Session id.
+            // Keep startup custody until publication, using the same runner
+            // tuple projection as the daemon's observed-exit owner.
+            await session.updateMetadata(current => !matchesReportedRunner(current) ? current
+              : retireSessionRunnerMetadata(current, { pid: process.pid,
+                startTimeMs: metadata.hostProcessStartTimeMs }))
           }
         } catch {
           logger.debug('[START] Failed to settle daemon readiness failure')

@@ -1,6 +1,7 @@
 import { matchesCurrentQuotaObservationCredential } from '@/daemon/connectedServices/quotas/proof/quotaProbeFreshProof';
 import axios from 'axios';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
+import { retireSessionRunnerMetadata } from '@/session/metadata/sessionRunnerMetadata';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
@@ -10286,7 +10287,40 @@ export async function startDaemonSessionControlRuntime(
   });
   const onChildExitedBase = createOnChildExited({
     skillStore: params.skillStore,
-    observeSessionScopeExit: params.observeSessionScopeExit,
+    observeSessionScopeExit: async tracked => {
+      const sessionId = normalizeOptionalString(tracked.happySessionId);
+      const runner = resolveTrackedSessionRunnerIdentity(tracked);
+      // Explicit Stop retains the runner tuple until its attachment-fenced
+      // control retirement publishes `stopped`. Unexpected exits, including
+      // startup refusals, have no such later publisher.
+      if (sessionId && !/^PID-\d+$/.test(sessionId) && tracked.stopRequestedAtMs === undefined
+        && runner?.processStartTimeMs !== undefined) {
+        const expectedRunner = { pid: runner.pid, startTimeMs: runner.processStartTimeMs };
+        const retire = async (context: NonNullable<StopSessionOptions['metadataContext']>) => {
+          const rawSession = await fetchSessionByIdCompat({ token: context.credentials.token, sessionId });
+          if (!rawSession) return;
+          await updateSessionMetadataWithRetry({ ...context, token: context.credentials.token,
+            sessionId, rawSession, updater: metadata => {
+              return params.pidToTrackedSession.get(tracked.pid) !== tracked ? metadata
+                : retireSessionRunnerMetadata(metadata, expectedRunner);
+            } });
+        };
+        const requester = tracked.requesterSessionRuntimeContext;
+        if (requester) {
+          // Exit tracking has already marked this runner as retiring. Consume
+          // its retained Account lifetime before cleanup releases it; resolving
+          // a new live-runner requester here would correctly refuse that exit.
+          await runWithServerHttpBaseUrl(requester.bootstrap.serverHttpBaseUrl, () => retire({
+            credentials: requester.bootstrap.credentials,
+            currentness: { verifyCurrent: () => requester.isCurrent() },
+          }));
+        } else {
+          await withSessionStopMetadataContext(sessionId, retire,
+            tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1);
+        }
+      }
+      await params.observeSessionScopeExit?.(tracked);
+    },
     ownerRemainder,
     pidToTrackedSession: params.pidToTrackedSession,
     spawnResourceCleanupByPid: params.spawnResourceCleanupByPid,
