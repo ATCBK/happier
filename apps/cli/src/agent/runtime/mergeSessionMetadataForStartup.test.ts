@@ -213,16 +213,18 @@ describe('mergeSessionMetadataForStartup', () => {
         expect(merged.hostPid).toBe(2);
     });
 
-    it('drops workspace identity fields from metadata when attaching', () => {
+    it('preserves accepted project and workspace identity when attaching', () => {
         const nowMs = 1;
         const merged = mergeSessionMetadataForStartup({
             current: {
                 workspaceId: 'ws_authoritative',
+                projectId: 'project_authoritative',
                 workspaceLocationId: 'loc_authoritative',
                 workspaceCheckoutId: 'checkout_authoritative',
             } as any,
             next: {
                 workspaceId: 'ws_wrong',
+                projectId: 'project_wrong',
                 workspaceLocationId: 'loc_wrong',
                 workspaceCheckoutId: 'checkout_wrong',
                 hostPid: 2,
@@ -231,7 +233,8 @@ describe('mergeSessionMetadataForStartup', () => {
             mode: 'attach',
         });
 
-        expect((merged as Record<string, unknown>).workspaceId).toBeUndefined();
+        expect((merged as Record<string, unknown>).workspaceId).toBe('ws_authoritative');
+        expect((merged as Record<string, unknown>).projectId).toBe('project_authoritative');
         expect((merged as Record<string, unknown>).workspaceLocationId).toBeUndefined();
         expect((merged as Record<string, unknown>).workspaceCheckoutId).toBeUndefined();
         expect(merged.hostPid).toBe(2);

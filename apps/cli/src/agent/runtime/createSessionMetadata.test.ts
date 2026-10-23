@@ -12,6 +12,8 @@ import {
 } from './createSessionMetadata';
 import { HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY } from './sessionConnectedServicesBindingsEnv';
 import { createDeferredStartupMetadataPlan } from './startup/createDeferredStartupMetadataPlan';
+import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
+import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
     'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON';
@@ -28,6 +30,33 @@ function createMetadata(
 }
 
 describe('createSessionMetadata', () => {
+    it('keeps actual checkout branch private at birth and preserves detached observations on attach', () => {
+        for (const branchName of ['feature/actual', null]) {
+            const correspondence = buildSessionCreationCorrespondence({
+                identity: { callerCreationNamespace: 'test', creationKey: 'branch-birth' },
+                recipe: { execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/checkout' } },
+                    organization: { folderId: null, tagIds: [] },
+                    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                    checkout: { kind: 'git_worktree', finalDirectory: '/checkout', baseRef: 'main', branchMode: 'new', branchName } },
+            });
+            const metadata = buildCommittedLaunchMetadata({ options: { directory: '/checkout', machineId: 'machine-1', sessionCreationCorrespondence: correspondence }, directory: '/checkout' });
+            expect(metadata).toHaveProperty('branch', branchName);
+            const owner = createSessionOwnerMetadataV1({ metadata });
+            expect(owner.ok).toBe(true);
+            if (!owner.ok) throw new Error(owner.error);
+            expect(owner.ownerMetadata.workspace).toHaveProperty('branch', branchName);
+            const shared = projectSessionSharedMetadataV1({ metadata });
+            expect(shared).not.toHaveProperty('branch');
+            const opened = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: shared, ownerMetadata: owner.ownerMetadata });
+            expect(opened).toHaveProperty('branch', branchName);
+            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...opened },
+                next: { ...createTestMetadata(), branch: 'process-default' }, mode: 'attach', nowMs: 1 })).toHaveProperty('branch', branchName);
+            expect(mergeSessionMetadataForStartup({ current: { ...createTestMetadata(), ...opened },
+                next: { ...createTestMetadata(), path: '/replacement-checkout' }, mode: 'attach', nowMs: 1,
+                attachMetadataIdentityPolicy: 'replace_with_runtime_identity' })).not.toHaveProperty('branch');
+        }
+        expect(buildCommittedLaunchMetadata({ options: { directory: '/ordinary' }, directory: '/ordinary' })).not.toHaveProperty('branch');
+    });
     it('publishes the initialized Machine on attach when a retained birth has no placement and the launch environment is empty', () => {
         const plan = createDeferredStartupMetadataPlan({
             flavor: 'test-agent', initialMachineId: '', directory: '/project',

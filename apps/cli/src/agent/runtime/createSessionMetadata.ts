@@ -249,6 +249,8 @@ export function buildCommittedLaunchMetadata(input: Readonly<{
         path: input.directory, host: os.hostname(),
         ...(options.machineId ? { machineId: options.machineId } : {}),
         ...(options.sessionCreationCorrespondence ? { sessionCreationCorrespondenceV1: options.sessionCreationCorrespondence } : {}),
+        ...(options.sessionCreationCorrespondence?.recipe.checkout?.branchName !== undefined
+            ? { branch: options.sessionCreationCorrespondence.recipe.checkout.branchName } : {}),
         ...(options.placementOrigin ? { placementOrigin: options.placementOrigin } : {}),
         ...(options.runtimeDescriptorV1 ? { runtimeDescriptorV1: options.runtimeDescriptorV1 } : {}),
         ...(options.connectedServices ? { connectedServices: ConnectedServiceBindingsV2IngressSchema.parse(options.connectedServices) } : {}),

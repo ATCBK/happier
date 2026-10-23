@@ -57,6 +57,8 @@ const createSessionCreationImmutableRecipeSchema = () => z.strictObject({
     finalDirectory: z.string().check(z.trim(), z.minLength(1)),
     baseRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     branchMode: z.enum(['new', 'existing']),
+    /** Actual realization evidence, not a requested base or retry identity. */
+    branchName: z.optional(z.nullable(z.string())),
   })),
 }).check(z.superRefine((recipe, context) => refineSessionDirectoryIntentCheckoutV1(
   { directory: recipe.execution.directory, checkoutCreationDraft: recipe.checkout },
@@ -124,10 +126,12 @@ export function sessionCreationCorrespondenceMatchesV1(
 }
 
 function semanticCorrespondence(value: SessionCreationCorrespondenceV1) {
+  const { branchName: _observedBranch, ...checkout } = value.recipe.checkout ?? {};
   return {
     ...value,
     recipe: {
       ...value.recipe,
+      checkout: value.recipe.checkout ? checkout : null,
       ...normalizeSessionCreationSelectionIdentityV1(value.recipe),
     },
   };

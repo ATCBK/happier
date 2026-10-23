@@ -157,6 +157,7 @@ export async function prepareSessionCreationTarget(input: Readonly<{
       finalDirectory: canonicalFinal.path,
       baseRef: draft.baseRef ?? null,
       branchMode: draft.branchMode ?? 'new',
+      branchName: checkoutResult.branchName,
       ...(typeof checkoutResult.created === 'boolean'
         ? { created: checkoutResult.created }
         : {}),

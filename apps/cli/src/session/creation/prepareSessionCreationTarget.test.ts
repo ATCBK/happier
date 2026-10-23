@@ -103,6 +103,7 @@ describe('prepareSessionCreationTarget', () => {
       checkout: {
         kind: 'git_worktree',
         finalDirectory: '/repo/.dev/worktree/feature-session',
+        branchName: 'feature-session',
         baseRef: 'main',
         branchMode: 'existing',
       },
@@ -146,6 +147,7 @@ describe('prepareSessionCreationTarget', () => {
         kind: 'git_worktree',
         finalDirectory: '/repo/.dev/worktree/feature-session',
         baseRef: null,
+        branchName: 'feature-session',
         branchMode: 'new',
         created: true,
       },

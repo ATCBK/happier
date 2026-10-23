@@ -37,6 +37,8 @@ export const SessionCreationPreparedCheckoutV1Schema = lazyZodSchema(() => z.str
   finalDirectory: z.string().check(z.trim(), z.minLength(1)),
   baseRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   branchMode: z.enum(['new', 'existing']),
+  /** Last observed actual branch; null proves detached, omission is unavailable. */
+  branchName: z.optional(z.nullable(z.string())),
   /**
    * Target-owned materialization receipt. Only an explicit `true` proves this
    * preparation created the checkout and may authorize a compensating remove.

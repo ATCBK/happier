@@ -62,6 +62,16 @@ const retainedCorrespondence = {
 } as const;
 
 describe('SessionCreationCorrespondenceV1', () => {
+  it('retains actual checkout branch evidence without treating an observation as retry intent', () => {
+    const checkout = { kind: 'git_worktree' as const, finalDirectory: '/checkout', baseRef: 'main', branchMode: 'new' as const };
+    const observed = { ...correspondence, recipe: { ...correspondence.recipe, checkout: { ...checkout, branchName: 'feature/actual' } } };
+    expect(SessionCreationCorrespondenceV1Schema.parse(observed)).toEqual(observed);
+    expect(sessionCreationCorrespondenceMatchesV1(observed, { ...observed, recipe: { ...observed.recipe,
+      checkout: { ...checkout, branchName: null } } })).toBe(true);
+    expect(sessionCreationCorrespondenceMatchesV1(observed, { ...observed, recipe: { ...observed.recipe, checkout } })).toBe(true);
+    expect(sessionCreationCorrespondenceMatchesV1(observed, { ...observed, recipe: { ...observed.recipe,
+      checkout: { ...checkout, baseRef: 'different' } } })).toBe(false);
+  });
   it('retains Discussion slot ownership and the entire ordinary recipe in retry meaning', () => {
     const discussionParticipant = { discussionId: 'discussion-1', participantSlotId: 'slot-1' };
     const selected = { ...correspondence, recipe: { ...correspondence.recipe, discussionParticipant } };
