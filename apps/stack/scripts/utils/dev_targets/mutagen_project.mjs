@@ -175,6 +175,9 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   // them makes every source barrier race a continuously changing file.
   '/.project/plans/**/*.ndjson',
   '/.project/plans/**/*.jsonl',
+  // QA evidence trees can contain case-colliding capture directories. They
+  // are target-local output, not source for case-insensitive worker mirrors.
+  '/.project/plans/**/qa-shots',
   '/.project/plans/**/*.png',
   '/.project/plans/**/*.webm',
   '/.project/plans/**/*.pyc',

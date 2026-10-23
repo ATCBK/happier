@@ -278,6 +278,13 @@ test('renderMutagenProject preserves default exclusions inside re-included proje
   }
   excluded.push('.project/reviews/report.md', '.project/plans/qa/browser-diagnostics.json',
     '.project/plans/qa/capture.har', 'packages/fixture/.project/plans/source.ts');
+  for (const root of ['.project/plans/qa-shots', '.project/plans/audit/qa-shots']) {
+    for (const directory of ['acc1', 'ACC1', 'plat1b', 'PLAT1b']) {
+      excluded.push(`${root}/${directory}`, `${root}/${directory}/capture.json`);
+    }
+  }
+  included.push('.project/plans/audit/README.md', '.project/tasks/qa-shots/source.ts',
+    'packages/fixture/qa-shots/source.ts');
   const ignored = execFileSync('git', ['-C', fixture.root, '-c', `core.excludesFile=${fixture.path('empty-excludes')}`,
     'check-ignore', '--no-index', '--stdin', '-z'], {
     input: `${[...excluded, ...included].join('\0')}\0`, encoding: 'utf8',
