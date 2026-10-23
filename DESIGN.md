@@ -205,7 +205,7 @@ Use visual intensity intentionally:
 
 Interaction frequency determines expressive intensity. High-frequency actions should feel immediate, tactile, and nearly effortless. Occasional transitions may explain spatial change. Rare signature moments may use richer choreography. Repeated exposure must make the interface feel faster and more natural, not force people to watch the design perform.
 
-Home, new session and projects may carry the user's atmosphere; it stays decorative, behind content, never animated at rest. The onboarding cinematic stage, word-by-word narration, and demo-world machinery remain references for experience quality rather than default app chrome.
+Home, new session and projects may carry the user's atmosphere; it stays decorative, behind content, with no frame loops at rest. The only resting motion is the digits retyping every 2 s while Home is visible and focused; everything pauses when hidden. The onboarding cinematic stage, word-by-word narration, and demo-world machinery remain references for experience quality rather than default app chrome.
 
 ## Motion: fluid, physical, and purposeful
 
