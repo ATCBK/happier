@@ -78,6 +78,36 @@ only when attempted size passes half its minimum, and commits collapse on releas
 below minimum only clamps. Other pane and collection rails do not opt into collapse. Double-click
 resets through the owning column's default; geometry and persistence stay with that owner.
 
+## Shell planes, right panel position and pane headers
+
+`AppShellMaterialFrame` owns the shell's planes. The rail, title strip and navigation column stand on
+one canvas plane (`appShellColumnSurface`, colour from `appShellColumnPlaneColor`); only the page is a
+lifted, rounded sheet, with no outline and no column hairline. The page's seam shadow is an inert sibling
+of the sheet inside the page slot, so it follows the column's drawn width (drag, rubber band, spring-back,
+collapse) through ordinary layout. A peeked column floats in a body overlay right after the rail.
+Settings and Home console columns use the same plane.
+
+The device-local `rightPanelPlacement` setting (`canvas` default, `sheet`; anchor
+`appearance.rightPanelPlacement`, set from Appearance and the Look panel, agents via `settings.set`)
+chooses where a page's docked right panel and its action rail stand. `SidebarNavigator` reads it once;
+the frame resolves it (`sheet` without chrome and off the web) and publishes the tail hosts and the
+page's empty-tail width through `appShellTail.tsx`. `PaneColumnsHost` stands the docked right column and
+the rail in the tail only for the one page on screen at the trailing edge (not Editor first, not one pane
+of a split) and budgets its layout with the empty-tail width, so both placements resolve the same widths.
+`AppShellTailSlot` keeps one container per column, so changing places moves it without remounting.
+Overlay, in-main and hidden presentations and the details drawers stay in the page. On the canvas the
+column, rail and their headers and lists take the plane's paint.
+
+`PaneHeader` owns the pane header band (title, identity, facts, Back, close, an optional overline and a
+phone navigation band); `DetailsTabHeader` is the one adaptive content/fit adapter over it, used by Session
+(`SessionPaneHeader`, the data leaf), Discussion and the Details tabs. Entity headers pass
+`actionsFit="compact"`: their controls stay beside the title and read the header's one fit result,
+`DetailsTabHeaderActionsCompactContext`. Headers draw no bottom hairline; a scroll-linked shade appears
+instead. `PaneHeaderScrollScope` pairs one header with its primary body; the body's scroller reports its
+physical distance from the top (the shared transcript renderer, `ItemList`, a plugin `ScrollArea` through
+the private presentation-host hook) and the shade's opacity is that distance over 12 px. Side panes, the
+bottom pane and popovers are isolated from the main scope; outside a scope a header draws no shade.
+
 ## Openers and Actions
 
 Openers request a destination kind through the existing pane adapter. An implicit open does not
