@@ -16,6 +16,7 @@ export type PermissionRequestCoordinatorRequest = Readonly<{
 
 export type PermissionRequestCoordinatorContext = Readonly<{
     requestId: string;
+    occurrenceId?: string;
     toolName: string;
     toolInput: unknown;
     createdAt: number;
@@ -63,6 +64,7 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
         fallback?: Readonly<{ toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
         requireAck?: boolean;
+        expectedOccurrenceId?: string;
         observedCompletion?: true;
     }>): Promise<void>;
     hasOutstandingRequest(requestId: string): boolean;
@@ -193,14 +195,16 @@ export class PermissionRequestCoordinator<TResult> {
         return this.attachWaiter(entry, options?.signal);
     }
 
-    getResponseContext(requestId: string): PermissionRequestCoordinatorContext | null {
+    getResponseContext(requestId: string, expectedOccurrenceId?: string): PermissionRequestCoordinatorContext | null {
         if (this.isRequestClaimed(requestId)) return null;
+        if (expectedOccurrenceId !== undefined && this.store.readOutstandingRequest(requestId)?.occurrenceId !== expectedOccurrenceId) return null;
         this.pruneDetachedRecords();
 
         const entry = this.pendingRequests.get(requestId);
         if (entry) {
             return {
                 requestId,
+                occurrenceId: this.store.readOutstandingRequest(requestId)?.occurrenceId,
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
@@ -217,6 +221,7 @@ export class PermissionRequestCoordinator<TResult> {
 
         return {
             requestId,
+            occurrenceId: outstanding.occurrenceId,
             toolName: outstanding.toolName,
             toolInput: outstanding.toolInput,
             createdAt: outstanding.createdAt,
@@ -295,6 +300,7 @@ export class PermissionRequestCoordinator<TResult> {
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
         onAdmitted?: () => void;
+        expectedOccurrenceId?: string;
     }>): Promise<boolean> {
         return await this.completeResponseWithAck(params);
     }
@@ -303,6 +309,7 @@ export class PermissionRequestCoordinator<TResult> {
         context: PermissionRequestCoordinatorContext;
         completion: PermissionRequestCoordinatorCompletion<TResult>;
         onAdmitted?: () => void;
+        expectedOccurrenceId?: string;
     }>): Promise<boolean> {
         return await this.completeResponseWithAdmission({ ...params, requireAck: true });
     }
@@ -332,8 +339,11 @@ export class PermissionRequestCoordinator<TResult> {
         onAdmitted?: () => void;
         observedCompletion?: true;
         requireAck?: boolean;
+        expectedOccurrenceId?: string;
     }>): Promise<boolean> {
         const { context, completion } = params;
+        if (params.expectedOccurrenceId !== undefined
+            && this.store.readOutstandingRequest(context.requestId)?.occurrenceId !== params.expectedOccurrenceId) return false;
         if (this.isRequestClaimed(context.requestId)) return false;
         const entry = this.pendingRequests.get(context.requestId);
         const isLifecycleCancellation = completion.completedRequest.status === 'canceled' && params.requireAck !== true;
@@ -345,8 +355,10 @@ export class PermissionRequestCoordinator<TResult> {
         try {
             await this.store.completeRequest(entry
                 ? { ...this.buildEntryCompletion(entry, completion), requireAck: params.requireAck,
+                    expectedOccurrenceId: params.expectedOccurrenceId,
                     observedCompletion: params.observedCompletion }
                 : { requestId: context.requestId, ...completion.completedRequest, requireAck: params.requireAck,
+                    expectedOccurrenceId: params.expectedOccurrenceId,
                     observedCompletion: params.observedCompletion,
                     fallback: { toolName: context.toolName, toolInput: context.toolInput,
                         createdAt: context.createdAt, kind: context.kind, source: context.source },
@@ -355,6 +367,8 @@ export class PermissionRequestCoordinator<TResult> {
             if (entry && this.isInvalidatedDecision(context.requestId, completion.completedRequest.status)) return false;
             if (this.isRequestClaimed(context.requestId)) return false;
             const current = this.store.readOutstandingRequest(context.requestId);
+            if (current && params.expectedOccurrenceId !== undefined
+                && current.occurrenceId !== params.expectedOccurrenceId) return false;
             if (current && !isSameAgentStateRequestOccurrence({
                 tool: current.toolName, arguments: current.toolInput, createdAt: current.createdAt, source: current.source,
             }, {

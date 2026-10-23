@@ -1,4 +1,10 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
+export {
+  SessionPermissionResponseSchema,
+  SessionPermissionResponseToOccurrenceV1Schema,
+  type SessionPermissionResponse,
+  type SessionPermissionResponseToOccurrenceV1,
+} from './sessionControl/sessionPermissionResponse.js';
 export { buildRecoveryCreditConsumeIdempotencyKey } from './connect/recoveryCreditConsumeIdempotencyKey.js';
 
 export { PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT, ProviderAccountSubscriptionV1Schema, mergeProviderAccountSubscription, type ProviderAccountSubscriptionV1 } from './connect/accountSubscription.js';

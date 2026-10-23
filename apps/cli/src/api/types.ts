@@ -887,6 +887,8 @@ export type AgentState = {
           kind?: 'permission' | 'user_action' | string,
           arguments: any,
           createdAt: number
+          /** Opaque identity of this permission occurrence, safe to include in notification data. */
+          occurrenceId?: string
           /**
            * Optional provider-provided permission suggestions for this request.
            * (e.g. Claude Agent SDK `permission_suggestions`).
@@ -906,6 +908,7 @@ export type AgentState = {
         arguments: any,
         createdAt: number,
         completedAt: number,
+        occurrenceId?: string,
         status: 'canceled' | 'denied' | 'approved',
       reason?: string,
       mode?: PermissionMode,

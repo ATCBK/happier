@@ -723,6 +723,8 @@ export class ClaudeLocalPermissionBridge {
         if (!requestId) {
             return false;
         }
+        if (payload.occurrenceId !== undefined
+            && !this.permissionCoordinator.getResponseContext(requestId, payload.occurrenceId)) return false;
 
         const pending = this.pendingRequests.get(requestId);
         if (pending && this.isProviderHookExpired(pending)) {
@@ -785,6 +787,7 @@ export class ClaudeLocalPermissionBridge {
         });
         const handled = await this.permissionCoordinator.completeRpcResponse({
             context,
+            expectedOccurrenceId: payload.occurrenceId,
             completion: {
                 result: hookResponse,
                 completedRequest: {
