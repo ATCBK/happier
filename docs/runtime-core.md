@@ -2023,6 +2023,16 @@ In 0.3 development source, every represented WorkerUpdate enters durable transcr
 
 ### Usage-limit reset continuation (0.3 development)
 
+The shared Session usage-limit controller owns ordinary waits, including
+foreground CLI sessions without a daemon. It uses the common recovery scheduler
+and control router; optional native quota probes supply evidence rather than a
+second continuation owner. A reported reset time can drive continuation without
+a provider-specific probe. Missing timing uses the existing recovery backoff,
+and transient probe failures retain the authorized wait. Inactive waits are
+restored after machine-control registration and wake through fresh session
+resolution. Native quota and credential failures without a Connected Account selection do not enter
+Connected Account authentication recovery.
+
 The daemon's [runtime-auth recovery scheduler](../apps/cli/src/daemon/connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler.ts)
 owns a wait for the exact failed turn and selected Connected Account. When a
 directly selected account reaches its reported reset time, recovery admits the
