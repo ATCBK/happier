@@ -17,11 +17,11 @@ const DEFAULT_FAMILY: IconFamily = 'hugeicons';
 
 /**
  * HugeIcons draws on a 24 grid where the stroke is a real parameter, unlike Phosphor whose weights
- * are baked per glyph. At the sizes this app uses most (14-20px) the default 1.5 reads lighter than
- * Phosphor's regular — measured side by side at 1.5 the section-header search/funnel pair nearly
- * disappeared — so 2 is what actually matches. This is the knob if that judgement changes.
+ * are baked per glyph. 1.5 is the library's own default and the app's lighter line (owner, 2026-10-23:
+ * the UI felt busy at 2); it holds at the 14-20px sizes the app uses most. This is the knob if that
+ * judgement changes; `__setIconStroke(w)` previews a value on the running app.
  */
-const DEFAULT_STROKE_WIDTH = 2;
+const DEFAULT_STROKE_WIDTH = 1.5;
 
 const listeners = new Set<() => void>();
 let current: IconFamily = DEFAULT_FAMILY;

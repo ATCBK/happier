@@ -438,6 +438,11 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 
 - Interface icons use one size and one stroke weight in chrome, from the icon owner's defaults; a
   different size is a different role (identity marks, empty-state art), not a local adjustment.
+- The default interface stroke is 1.5 units (the icon owner's `DEFAULT_STROKE_WIDTH`): 1.25 lets
+  the small glyphs (composer chips, right rail) disappear, 2 reads busy. A rail glyph rests in the
+  secondary ink at 80% (at least 3:1 against the rail in light and dark; `text.tertiary` falls
+  under it on the light rail); the open destination is filled in the primary ink. Rail badges are
+  drawn by the rail slot (`AppRailSlot`), so every badge sits at the same offset from its glyph.
 - Item glyphs stay in the ink; colour is for state, not for decorating a type of item.
 - Use the existing icon system and canonical product imagery before introducing a new visual family.
 - Icons communicate familiar actions; labels remain necessary when meaning is not immediately predictable.
