@@ -63,6 +63,13 @@ it('demands authorized targets only while open and retains incomplete refreshes 
     await act(async () => publishHomeAccountChange(serverId, ['source'], { changeKinds: ['session'], sessionListQueryAffects: false }));
     await flushHookEffects();
     expect(homes.requests).toHaveLength(afterRead);
+    await act(async () => {
+        for (let index = 0; index < 1_000; index++) {
+            publishHomeAccountChange(serverId, [`unrelated-key-${index}`], { changeKinds: ['kv'], sessionListQueryAffects: false });
+        }
+    });
+    await flushHookEffects();
+    expect(homes.requests.length - afterRead).toBe(0);
     homes.answer(serverId, '/v2/sessions/source', { status: 503, body: { error: 'unavailable' } });
     await act(async () => closed.getCurrent().refresh());
     await vi.waitFor(() => expect(closed.getCurrent().manager).toMatchObject({

@@ -137,8 +137,10 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
       scope: 'all_accessible', startedBy: ['you', 'agents', 'triggers'] });
     const previewReads = () => homes.requests.filter(request => request.path === '/v2/sessions/query'
       || request.path === '/v2/account/session-follow-rules' || request.path === '/v1/account/encryption/currentness');
+    let targets: ReturnType<typeof useSessionTalkTargets> | null = null;
     function Matching({ filter }: { filter: SessionListFilterV1 }) {
-      const preview = useSessionTalkTargets('api', serverId, { matchingFilter: filter }).matching;
+      targets = useSessionTalkTargets('api', serverId, { matchingFilter: filter });
+      const preview = targets.matching;
       return <SessionTalkMatchingStep serverId={serverId} filter={filter} onFilterChange={() => {}}
         summary={preview.loading ? 'loading' : `${preview.coverage}:${preview.addresses.map(address => address.sessionId).join(',')}`}
         canUse={!preview.loading && preview.coverage === 'complete'}
@@ -147,6 +149,10 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     const screen = await renderScreen(<Matching filter={filter} />);
     try {
       await vi.waitFor(() => expect(matchingReads).toHaveLength(1));
+      // Only Matching is held. Finish sibling selectors' initial reads before
+      // attributing every preview request to the equal-filter rerender below.
+      await vi.waitFor(() => expect(targets && (['manager', 'workers', 'siblings', 'followers', 'following'] as const)
+        .every(selector => !targets?.[selector].loading)).toBe(true));
       const before = previewReads().length;
       await screen.update(<Matching filter={normalizeSessionListFilterV1({ ...filter })} />);
       expect(previewReads()).toHaveLength(before);

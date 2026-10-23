@@ -2,9 +2,8 @@ import * as React from 'react';
 import type { ActionSessionAddress } from '@happier-dev/protocol/actions/executor/types';
 import type { SessionTargetSelectorV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
-import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
-import { PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
+import { isSessionFollowAccountChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
 import { createDefaultActionExecutor, type UiSessionTargetPreview } from '@/sync/ops/actions/defaultActionExecutor';
 import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -137,14 +136,9 @@ export function useSessionTalkTargets(sessionId: string, serverId: string | null
         if (!enabled || !binding?.isCurrent()) return;
         return subscribeHomeAccountChange(event => {
             if (!binding.isCurrent() || !areServerProfileIdentifiersEquivalent(event.serverId, binding.serverId)) return;
-            // Focused transcript-only wakes explicitly prove that membership did not change.
-            // Unqualified concurrent-Home/reconnect wakes retain the owner's conservative semantics.
-            if (event.changeKinds?.every(kind => kind === 'session') && event.sessionListQueryAffects === false) return;
-            if (event.changeKinds && !event.changeKinds.some(kind => kind === 'session' || kind === 'share'
-                || kind === 'discussion' || kind === 'account' || kind === 'kv')) return;
-            if (event.changeKinds?.every(kind => kind === 'account') && event.entityIds
-                && !event.entityIds.some(id => id === ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID || id === 'self'
-                    || id.startsWith(PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1))) return;
+            // Discussion participants have independent membership; all Session
+            // and Follow corpus changes use the same relevance owner as rule counts.
+            if (!event.changeKinds?.includes('discussion') && !isSessionFollowAccountChangeRelevant(event)) return;
             refresh();
         });
     }, [enabled, binding]);
