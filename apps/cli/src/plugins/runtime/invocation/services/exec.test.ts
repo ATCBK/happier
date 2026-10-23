@@ -61,6 +61,17 @@ function createService(options?: Readonly<{ current?: () => boolean; controller?
 }
 
 describe('createStablePluginExecService', () => {
+    it.skipIf(process.platform !== 'linux')('keeps an ordinary Exec launch in its own process group by default', async () => {
+        const handle = await createService().spawn({ executable, args: ['-e', 'process.stdin.resume()'] });
+        try {
+            const pid = readSupervisedPluginProcessIdForHost(handle);
+            if (pid === null) throw new Error('Expected the native Exec process identity');
+            const census = await readProcessCensus({ freshness: 'fresh', pids: [pid], fields: [] });
+            expect(census.status).toBe('ok');
+            if (census.status === 'ok') expect(census.rows.find(row => row.pid === pid)?.pgid).toBe(pid);
+        } finally { await handle.dispose(); }
+    });
+
     it('finishes protocol disposal when the child never replies to shutdown', async () => {
         const handle = await createService().clients.spawn({
             kind: 'jsonRpc', framing: 'jsonLines', maxFrameBytes: 1024 * 1024,
@@ -410,7 +421,10 @@ describe('createStablePluginExecService', () => {
                 if (current.status !== 'ok') throw new Error('Native census unavailable');
                 const rows = resolveProcessOwnership({ snapshot: current.snapshot, roots,
                     daemonScopeKey: '123456789abc', daemonPrincipal: self.principal });
-                expect(rows.find(row => row.pid === pids[1])?.level).toBe('left_behind');
+                const survivor = rows.find(row => row.pid === pids[1]);
+                expect(survivor?.level, JSON.stringify({ roots,
+                    native: current.snapshot.rows.find(row => row.pid === pids[1]), ownership: survivor,
+                })).toBe('left_behind');
             } finally {
                 for (const pid of pids) {
                     try { process.kill(pid, 'SIGKILL'); } catch { /* Already absent on success. */ }

@@ -41,11 +41,16 @@ describe('spawnSupervisedPluginProcess', () => {
         } finally { await supervised.dispose(); }
     });
 
-    it.for([undefined, 'preserve-on-success'] as const)('settles a daemonizing launcher with descendant disposition %s', async (descendantDisposition, { task }) => {
+    it.for([
+        { descendantDisposition: undefined, detached: true },
+        { descendantDisposition: undefined, detached: false },
+        { descendantDisposition: 'preserve-on-success', detached: true },
+        { descendantDisposition: 'preserve-on-success', detached: false },
+    ] as const)('settles a daemonizing launcher with descendant disposition $descendantDisposition and detached $detached', async ({ descendantDisposition, detached }, { task }) => {
         await withTempDir('happier-native-descendants-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);
             const supervised = spawnSupervisedPluginProcess({ command: process.execPath, args: fixture.args,
-                env: {}, spawnOptions: { detached: true, windowsHide: true }, descendantDisposition });
+                env: {}, spawnOptions: { detached, windowsHide: true }, descendantDisposition });
             try {
                 const pid = await fixture.ready({ timeoutMs: task.timeout });
                 await fixture.release();

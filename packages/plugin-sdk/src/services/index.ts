@@ -1,5 +1,7 @@
 /** @moduleRealm daemon */
 import type { PluginOperationAvailability } from '../availability.js';
+import type { BackgroundServicesService } from '../backgroundServices.js';
+export type { BackgroundServiceDemandHandle, BackgroundServicesService } from '../backgroundServices.js';
 import type { ActionsService } from '../actions/service.js';
 import type { ConnectedAccountsService } from '../connectedAccounts.js';
 import type { ComposerContentService } from './composerContent.js';
@@ -323,6 +325,7 @@ export type {
 
 export type PluginServiceId =
     | 'logger'
+    | 'backgroundServices'
     | 'storage'
     | 'settings'
     | 'secrets'
@@ -346,6 +349,7 @@ export type PluginServiceId =
 export interface PluginServices {
     availability(serviceId: PluginServiceId): PluginOperationAvailability;
     readonly logger: LoggerService;
+    readonly backgroundServices: BackgroundServicesService;
     readonly storage: StorageService;
     readonly settings: SettingsService;
     readonly secrets: SecretsService;

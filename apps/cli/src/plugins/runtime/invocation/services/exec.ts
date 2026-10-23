@@ -308,6 +308,8 @@ export function spawnAuthorizedHostExecLaunchForHost(
     options: Readonly<{
         signal?: AbortSignal;
         processCustody?: ProcessCustodySpawnSpec;
+        /** Host-owned worker containment; ordinary Exec retains its dedicated group. */
+        posixProcessGroup?: 'inherit';
         processTreeSystemBoundary?: Parameters<typeof spawnSupervisedPluginProcess>[0]['processTreeSystemBoundary'];
         descendantDisposition?: NonNullable<Parameters<ExecService['spawn']>[1]>['descendantDisposition'];
         linuxProcessLaunchScope?: LinuxProcessLaunchScope | null;
@@ -348,7 +350,7 @@ export function spawnAuthorizedHostExecLaunchForHost(
             ...(custody ? { processCustody: custody } : {}),
             ...(options.processTreeSystemBoundary ? { processTreeSystemBoundary: options.processTreeSystemBoundary } : {}),
             spawnOptions: {
-                detached: process.platform !== 'win32',
+                detached: process.platform !== 'win32' && options.posixProcessGroup !== 'inherit',
                 ...(custody ? {} : { windowsVerbatimArguments: launch.windowsVerbatimArguments }),
             },
             ...(options.recordRuntimeLimitMeasurement
@@ -1004,6 +1006,8 @@ export function adaptStablePluginExecLegacyProcessHandle(
 export function createStablePluginExecService(params: Readonly<{
     /** Prepared by the host invocation owner, never an Exec request field. */
     processOwner?: ProcessOwnerRef;
+    /** Host-private placement inside an already supervised worker process group. */
+    posixProcessGroup?: 'inherit';
     processTreeSystemBoundary?: Parameters<typeof spawnSupervisedPluginProcess>[0]['processTreeSystemBoundary'];
     allowedExecutables: readonly ManagedExecutableRef[];
     allowedEnvKeys?: readonly string[];
@@ -1386,6 +1390,7 @@ export function createStablePluginExecService(params: Readonly<{
         const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment,
             processOwnerTag: managedCustody?.processOwnerTag ?? processOwnerTag }, {
             readSpawnFailureLimits: params.readSpawnFailureLimits,
+            ...(params.posixProcessGroup ? { posixProcessGroup: params.posixProcessGroup } : {}),
             ...(params.processTreeSystemBoundary ? { processTreeSystemBoundary: params.processTreeSystemBoundary } : {}),
             ...(options?.descendantDisposition ? { descendantDisposition: options.descendantDisposition } : {}),
             ...(lifetime ? { signal: lifetime.signal } : options?.signal ? { signal: options.signal } : {}),

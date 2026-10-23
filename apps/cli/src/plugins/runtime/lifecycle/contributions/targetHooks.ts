@@ -47,6 +47,10 @@ export type TargetInvocationServiceOwner = Readonly<{
     createOrdinaryServiceBinding: CreatePluginInvocationServiceBinding;
     resolveInvocationHostPolicy?: ResolvePluginInvocationHostPolicy;
     createServices: CreatePluginInvocationServices;
+    prepareBackgroundServiceProcessLocalPolicy?(
+        seed: PluginInvocationServicesSeed,
+        binding: import('../../invocation/services/types').PluginInvocationServiceBinding,
+    ): Promise<import('./backgroundServiceProcessServices').PreparedBackgroundServiceProcessLocalServices>;
 }>;
 
 function readTargetHookDispatcherContext(context: unknown): TargetHookDispatcherContext {

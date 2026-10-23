@@ -222,6 +222,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
     now?: () => number;
     exec?: Readonly<{
         readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
+        posixProcessGroup?: Parameters<typeof createStablePluginExecService>[0]['posixProcessGroup'];
         resolveExecutable: (
             executable: Parameters<Parameters<typeof createStablePluginExecService>[0]['resolveExecutable']>[0],
             pluginId: string,
@@ -270,6 +271,30 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
     secrets?: StableDeclaredPluginSecretsHost;
     secretRedactor?: PluginInvocationSecretRedactor;
 }>;
+
+/** One executable selection path for ordinary invocations and child-process placement. */
+export async function resolvePluginInvocationExecutable(
+    executable: import('@happier-dev/plugin-sdk').ManagedExecutableRef,
+    pluginId: string,
+    exec: NonNullable<PluginInvocationServicesFactoryParams['exec']>,
+    systemTools: ExecSystemToolServiceV1 | undefined,
+    context?: unknown,
+): Promise<import('./exec').ResolvedPluginExecutable> {
+    const localToolId = executable.kind === 'systemTool'
+        ? typeof executable.id === 'string' ? executable.id
+            : executable.id.pluginId === pluginId ? executable.id.localId : null
+        : null;
+    if (systemTools && localToolId !== null) {
+        const grant = await systemTools.resolve({ toolId: localToolId, purpose: 'Execute a plugin-declared system tool' });
+        return {
+            command: grant.launch.executablePath,
+            ...(grant.launch.args ? { args: grant.launch.args } : {}),
+            ...(grant.launch.env ? { env: grant.launch.env } : {}),
+            ...(grant.allowedArguments ? { allowedArguments: grant.allowedArguments } : {}),
+        };
+    }
+    return await exec.resolveExecutable(executable, pluginId, context);
+}
 
 type PluginInvocationServiceDescriptorContext = Readonly<{
     seed: PluginInvocationServicesSeed;
@@ -348,6 +373,21 @@ function createHostAccessDisclosureMismatchRecorder(
  * between independently maintained matrices.
  */
 export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
+    backgroundServices: {
+        id: 'backgroundServices', publicProperty: 'backgroundServices', availabilityOwner: 'host', unavailableCode: PLUGIN_SERVICE_UNAVAILABLE_CODE, deniedCode: PLUGIN_SERVICE_RESOURCE_NOT_SELECTED_CODE,
+        createUnavailable(code?: string, diagnostic?: PluginServiceUnavailableDiagnostic): PluginServices['backgroundServices'] {
+            return Object.freeze({ demand: unavailableMethod('backgroundServices', code, diagnostic) });
+        },
+        createAvailable({ seed, binding }): PluginServices['backgroundServices'] | null {
+            if (binding.availability.backgroundServices === 'denied' || !seed.demandBackgroundService) return null;
+            return Object.freeze({ demand(localId, reason) {
+                if (seed.signal.aborted || !seed.isOccurrenceCurrent()) throw new PluginError('plugin_service_unavailable', 'Background service caller is no longer current');
+                // An accepted background demand outlives its initiating Action;
+                // the returned handle and the service occurrence own retirement.
+                return seed.demandBackgroundService!(localId, reason);
+            } });
+        },
+    },
     logger: {
         id: 'logger', publicProperty: 'logger', availabilityOwner: 'binding', unavailableCode: PLUGIN_SERVICE_UNAVAILABLE_CODE, deniedCode: PLUGIN_SERVICE_RESOURCE_NOT_SELECTED_CODE,
         createUnavailable(code?: string, diagnostic?: PluginServiceUnavailableDiagnostic): PluginLoggerService {
@@ -962,6 +1002,7 @@ export function createPluginInvocationServicesFromDescriptors(
     const exec = execAvailable
         ? createStablePluginExecService({
             readSpawnFailureLimits: params.exec?.readSpawnFailureLimits,
+            ...(params.exec?.posixProcessGroup ? { posixProcessGroup: params.exec.posixProcessGroup } : {}),
             ...(seed.processOwner ? { processOwner: seed.processOwner }
                 : seed.session ? { processOwner: { kind: 'session', sessionId: seed.session.id } } : {}),
             allowedExecutables: binding.processExecutables!,
@@ -972,27 +1013,11 @@ export function createPluginInvocationServicesFromDescriptors(
             ...(binding.execOutputObserver ? { observeProcessOutput: binding.execOutputObserver } : {}),
             ...(binding.execInvocationTimeoutMs === undefined ? {} : { invocationTimeoutMs: binding.execInvocationTimeoutMs }),
             async resolveExecutable(executable) {
-                const localToolId = executable.kind === 'systemTool'
-                    ? typeof executable.id === 'string' ? executable.id
-                        : executable.id.pluginId === seed.plugin.id ? executable.id.localId : null
-                    : null;
-                if (systemTools && localToolId !== null) {
-                    // A declarative spawn must consume the same invocation
-                    // selection as systemTools.resolve, including Agent CLI
-                    // managed installs and overrides. Never reselect on PATH.
-                    const grant = await systemTools.resolve({
-                        toolId: localToolId, purpose: 'Execute a plugin-declared system tool',
-                    });
-                    return {
-                        command: grant.launch.executablePath,
-                        ...(grant.launch.args ? { args: grant.launch.args } : {}),
-                        ...(grant.launch.env ? { env: grant.launch.env } : {}),
-                        ...(grant.allowedArguments ? { allowedArguments: grant.allowedArguments } : {}),
-                    };
-                }
-                return await params.exec!.resolveExecutable(
+                return await resolvePluginInvocationExecutable(
                     executable,
                     seed.plugin.id,
+                    params.exec!,
+                    systemTools,
                     managedProviderRuntime
                         ? Object.freeze({
                             kind: 'managedProviderRuntime' as const,

@@ -25,12 +25,18 @@ export function createRefCountedLeaseOwner<Payload extends object, ReleaseOption
                 ...input.payload,
                 retain: () => owner.retain(),
                 async release(options?: ReleaseOptions) {
-                    if (released) return;
-                    released = true;
-                    references -= 1;
+                    if (!released) {
+                        released = true;
+                        references -= 1;
+                    }
                     if (references !== 0) return;
                     disposed = true;
-                    disposal ??= input.dispose(options);
+                    // Admission stays closed, but a rejected final release is
+                    // not proof that its physical resource has been released.
+                    disposal ??= input.dispose(options).catch((error: unknown) => {
+                        disposal = null;
+                        throw error;
+                    });
                     await disposal;
                 },
             });

@@ -42,6 +42,7 @@ export type BundledActivationSourceSelectionOptions = Readonly<{ realm?: 'accoun
 
 type BundledActivationSource = Readonly<{
     kind: 'bundled';
+    processEntry?: import('./activationSources').PluginActivationProcessEntry;
     sourceAuthority?: PluginRuntimeSourceAuthority;
     moduleId: string;
     prepare?: () => Promise<void>;
@@ -786,6 +787,9 @@ export function createBundledActivationSourceResolver(params: Readonly<{
         return {
             kind: 'bundled' as const,
             moduleId: daemonEntryPath,
+            get processEntry() {
+                return resolveSelectedEntry() ?? undefined;
+            },
             ...(sourceAuthority ? { sourceAuthority } : {}),
             prepare,
             resolveRelativeModule,

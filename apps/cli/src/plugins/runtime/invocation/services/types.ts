@@ -69,6 +69,8 @@ export type PluginExternalActionContext = Readonly<{
 }>;
 
 export type PluginInvocationServicesSeed = Readonly<{
+    /** Bound only by the canonical daemon background-service lifecycle. */
+    demandBackgroundService?: PluginServices['backgroundServices']['demand'];
     /** Host invocation identity; never projected into the public plugin context. */
     processOwner?: ProcessOwnerRef;
     /** Exact host-admitted managed row; never plugin input or SDK context. */

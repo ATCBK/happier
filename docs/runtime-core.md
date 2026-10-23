@@ -1318,6 +1318,34 @@ immediate cleanup before resource/Machine binding. The same policy driver can
 delete a declared, retained native-operation handle; unknown handles remain
 recovery work and cannot supply a native target. No new cleanup queue is added.
 
+## Background-service process custody (unreleased 0.3)
+
+The plugin background-service lifecycle owner also runs host-owned background
+services. It owns demand, coalesced follow-up runs, settlement and retirement;
+`placement: 'process'` selects its child-process adapter rather than a second
+runtime or managed-service registry. Launch uses the binary-safe Happier CLI
+launcher and the shared
+[`process custody`](../apps/cli/src/subprocess/supervision/processCustody.ts)
+and supervision owners, including process-tree termination and Windows Job
+custody. The ordinary process census observes that child independently of the
+daemon.
+
+The daemon retains admitted source custody, currentness and invocation authority.
+The child runs the selected runner and consumed reader surfaces from that admitted
+source. It cannot publish a catalog, admit Actions, start sibling contributions or
+migrate public daemon databases independently. Its service bridge delegates those
+operations to the existing bound daemon owners; public database callbacks and
+transaction handles retain their original ownership.
+
+A finite demand runner returns when its work is complete. The lifecycle joins
+child termination before reporting successful demand settlement; the next demand creates a
+new child.
+Plugin retirement and daemon shutdown send abort and join that same path. A crash
+is a visible background-service failure, not successful completion. Host placement
+adds no idle timer: work settlement decides when a demand child ends. The
+[plugin platform contract](plugin-platform.md#background-service-placement-unreleased-03)
+owns declaration defaults, caller cancellation and process-service availability.
+
 ## Managed service custody (0.3 development)
 
 The incumbent [managed-services owner](../apps/cli/src/plugins/runtime/invocation/services/managedServicesOwner.ts)

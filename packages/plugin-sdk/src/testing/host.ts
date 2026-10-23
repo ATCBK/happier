@@ -420,6 +420,7 @@ function createPluginServices(
         targetedContributions: fixtureService(fixture, 'targetedContributions'),
         interactions: fixtureService(fixture, 'interactions'),
         composerContent: fixtureService(fixture, 'composerContent'),
+        backgroundServices: fixtureService(fixture, 'backgroundServices'),
     });
 }
 

@@ -233,7 +233,8 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         if (refreshedRootExitCapture || !child.pid
             || child.exitCode !== null || child.signalCode !== null) return;
         const needsNativeCapture = !input.rootExitObservation && !input.processCustody
-            && !input.terminateProcessTree && input.spawnOptions?.detached === true;
+            && !input.terminateProcessTree && (input.spawnOptions?.detached === true
+                || (process.platform !== 'win32' && input.spawnOptions?.detached === false));
         if (!input.rootExitObservation && !needsNativeCapture) return;
         refreshedRootExitCapture = true;
         // One existing first-output boundary offers a later pre-exit observation;

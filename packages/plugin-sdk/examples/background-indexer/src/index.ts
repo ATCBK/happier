@@ -36,7 +36,7 @@ export const daemonDatabases = Object.freeze({
 }) satisfies PluginDaemonDatabaseRuntimeProjection;
 
 /**
- * The host starts this one-shot generation-scoped runner after adoption. It
+ * An Action demands this finite runner in a supervised Happier child. It
  * exercises the same declared database public API an indexer uses for ordinary
  * writes and query verification; it deliberately creates no poller or scheduler.
  */
@@ -74,14 +74,37 @@ export const { manifest, activate } = definePlugin({
     id: 'examples.background-indexer',
     version: '0.1.0',
     displayName: 'Background Indexer',
-    description: 'A public-only daemon database and background-service reference.',
+    description: 'A public-only daemon database and on-demand process-service reference.',
     entrypoints: { daemon: './dist/index.js' },
     hostAccess: { required: [], optional: [] },
     daemonDatabases,
+    actions: {
+        refresh: {
+            title: 'Refresh workspace index',
+            scopes: ['global'],
+            surfaces: ['cli', 'ui', 'plugin'],
+            execution: { target: 'daemon' },
+            dangerLevel: 'safe',
+            run: async (_input, context) => {
+                context.signal.throwIfAborted();
+                const demand = context.services.backgroundServices.demand('workspace-indexer', 'explicit-refresh');
+                const cancel = () => demand.cancel();
+                context.signal.addEventListener('abort', cancel, { once: true });
+                try {
+                    await demand.settlement;
+                    return { indexed: true };
+                } finally {
+                    context.signal.removeEventListener('abort', cancel);
+                }
+            },
+        },
+    },
     backgroundServices: [{
         declaration: {
             id: 'workspace-indexer',
             title: 'Index workspace documents',
+            placement: 'process',
+            activation: 'demand',
         },
         runner: runWorkspaceIndexer,
     }],

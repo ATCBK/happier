@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "id": "acme.packed-background-service",
+  "version": "1.0.0",
+  "displayName": "Background service Exec custody fixture",
+  "engines": { "happier": "^0.2.0" },
+  "runtime": { "apiVersion": 1 },
+  "entrypoints": { "daemon": "./src/daemon.mjs" },
+  "activation": { "events": [{ "kind": "startup" }] },
+  "hostAccess": {
+    "required": [{
+      "id": "fixture-exec", "capability": "process", "reason": "Exercise native process custody in a test-owned worker",
+      "scope": { "executables": [{ "kind": "systemTool", "id": "fixture-tail" }] }
+    }],
+    "optional": []
+  },
+  "contributes": {
+    "systemTools": [{ "id": "fixture-tail", "title": "Native tail custody probe", "executableNames": ["tail"] }],
+    "backgroundServices": [{ "id": "custody", "placement": "process", "activation": "demand" }],
+    "events": [
+      { "id": "ready", "kind": "event", "title": "Native custody ready" },
+      { "id": "cancel-requested", "kind": "event", "title": "Cancel one native custody probe" },
+      { "id": "observe-ready", "kind": "subscription", "target": { "kind": "plugin", "event": { "pluginId": "acme.packed-background-service", "localId": "ready" } } },
+      { "id": "observe-cancel", "kind": "subscription", "target": { "kind": "plugin", "event": { "pluginId": "acme.packed-background-service", "localId": "cancel-requested" } } }
+    ],
+    "actions": [
+      { "id": "start-held", "title": "Start test-owned native work", "scopes": ["global"], "surfaces": ["cli"], "execution": { "target": "daemon" }, "dangerLevel": "safe" },
+      { "id": "cancel-one", "title": "Cancel one test-owned native probe", "scopes": ["global"], "surfaces": ["cli"], "execution": { "target": "daemon" }, "dangerLevel": "safe" },
+      { "id": "wait-held", "title": "Await test-owned native work", "scopes": ["global"], "surfaces": ["cli"], "execution": { "target": "daemon" }, "dangerLevel": "safe" },
+      { "id": "probe-state", "title": "Read test-owned demand state", "scopes": ["global"], "surfaces": ["cli"], "execution": { "target": "daemon" }, "dangerLevel": "safe" }
+    ]
+  }
+}

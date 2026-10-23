@@ -309,6 +309,7 @@ export function createPluginReloadController(params?: Readonly<{
     let lastResult: PluginReloadResult | null = null;
     let coldInitializationPromise: Promise<PluginReloadResult> | null = null;
     let shutdownPromise: Promise<void> | null = null;
+    let shutdownProjectRetirement: Promise<void> | undefined;
     let shutdownStarted = false;
     let highestObservedDurableRevision: number | null = null;
     // Commit notification precedes asynchronous adoption custody. Keep that
@@ -431,16 +432,18 @@ export function createPluginReloadController(params?: Readonly<{
 
     async function releaseRegistryLease(registry: ResolvedExecutablePluginRuntimeRegistry): Promise<void> {
         const currentCount = outstandingLeaseCounts.get(registry) ?? 0;
-        if (currentCount <= 1) {
-            outstandingLeaseCounts.delete(registry);
-            if (pendingDisposal.has(registry) && registry !== activeRegistry) {
-                pendingDisposal.delete(registry);
-                await registry.dispose();
+        try {
+            if (currentCount <= 1) {
+                outstandingLeaseCounts.delete(registry);
+                if (pendingDisposal.has(registry) && registry !== activeRegistry && !shutdownStarted) {
+                    await disposeRegistryWhenSafe(registry);
+                }
+            } else {
+                outstandingLeaseCounts.set(registry, currentCount - 1);
             }
-        } else {
-            outstandingLeaseCounts.set(registry, currentCount - 1);
+        } finally {
+            for (const listener of leaseDrainListeners) listener();
         }
-        for (const listener of leaseDrainListeners) listener();
     }
 
     function createRuntimeRegistryLease(
@@ -451,6 +454,7 @@ export function createPluginReloadController(params?: Readonly<{
             ? (activeRegistryDurableRevision ?? registry.durableRevision ?? -1)
             : (registry.durableRevision ?? -1);
         let released = false;
+        let releasePromise: Promise<void> | null = null;
         return {
             registry,
             source: 'active',
@@ -464,9 +468,18 @@ export function createPluginReloadController(params?: Readonly<{
                 return activeRegistry?.resolveCurrentMediatorContributionMaterializationRef?.(mediator) ?? null;
             },
             release: async () => {
-                if (released) return;
-                released = true;
-                await releaseRegistryLease(registry);
+                releasePromise ??= (async () => {
+                    if (!released) {
+                        released = true;
+                        await releaseRegistryLease(registry);
+                    } else if (pendingDisposal.has(registry) && !shutdownStarted) {
+                        await disposeRegistryWhenSafe(registry);
+                    }
+                })().catch((error: unknown) => {
+                    releasePromise = null;
+                    throw error;
+                });
+                await releasePromise;
             },
         };
     }
@@ -500,11 +513,12 @@ export function createPluginReloadController(params?: Readonly<{
     }
 
     async function disposeRegistryWhenSafe(registry: ResolvedExecutablePluginRuntimeRegistry): Promise<void> {
+        pendingDisposal.add(registry);
         if ((outstandingLeaseCounts.get(registry) ?? 0) > 0) {
-            pendingDisposal.add(registry);
             return;
         }
         await registry.dispose();
+        pendingDisposal.delete(registry);
     }
 
     function disposeRegistryWhenSafeInBackground(registry: ResolvedExecutablePluginRuntimeRegistry): void {
@@ -521,6 +535,7 @@ export function createPluginReloadController(params?: Readonly<{
         projectRetirement?: Promise<void>,
     ): Promise<void> {
         let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+        pendingDisposal.add(registry);
         const disposePromise = Promise.all([registry.dispose({
             ...(timeoutMs === null ? {} : { timeoutMs }),
             onError: (event) => {
@@ -531,12 +546,18 @@ export function createPluginReloadController(params?: Readonly<{
                 });
             },
         }), ...(projectRetirement ? [projectRetirement] : [])]).then(
-            () => 'disposed' as const,
+            () => {
+                pendingDisposal.delete(registry);
+                return 'disposed' as const;
+            },
             (error: unknown) => {
+                // The existing custody set remains the explicit retry handle,
+                // including a failure arriving after a bounded shutdown wait.
+                shutdownPromise = null;
                 logger.warn('[PLUGIN RUNTIME] Plugin runtime registry disposal failed during daemon shutdown', {
                     error: projectPluginFailureText(error),
                 });
-                return 'failed' as const;
+                throw error;
             },
         );
         if (timeoutMs === null) {
@@ -1028,11 +1049,21 @@ export function createPluginReloadController(params?: Readonly<{
         async shutdown(shutdownParams) {
             if (shutdownPromise) return await shutdownPromise;
             shutdownPromise = (async () => {
+                if (!shutdownStarted && projectManagedServicesOwner) {
+                    shutdownProjectRetirement = Promise.all([
+                        projectManagedServicesOwner.retireProjectServices(),
+                        projectManagedServicesOwner.retireSharedProviderServices(),
+                    ]).then(() => undefined, (error: unknown) => {
+                        // Preserve this separate owner's existing best-effort
+                        // shutdown semantics; it is not registry child custody.
+                        logger.warn('[PLUGIN RUNTIME] Project service retirement failed during daemon shutdown', {
+                            error: projectPluginFailureText(error),
+                        });
+                    });
+                }
                 shutdownStarted = true;
                 shutdownTimeoutMs = normalizeShutdownTimeoutMs(shutdownParams?.timeoutMs);
-                const projectRetirement = projectManagedServicesOwner
-                    ? Promise.all([projectManagedServicesOwner.retireProjectServices(), projectManagedServicesOwner.retireSharedProviderServices()]).then(() => undefined)
-                    : undefined;
+                const projectRetirement = shutdownProjectRetirement;
                 // The same shutdown join below reports failures. Attach its
                 // handler now while admitted registry leases are draining.
                 void projectRetirement?.catch(() => undefined);
@@ -1046,15 +1077,25 @@ export function createPluginReloadController(params?: Readonly<{
                 unsubscribeServingRegistryFences?.();
                 unsubscribeServingRegistryFences = null;
                 slots.clear();
-                pendingDisposal.clear();
+                for (const registry of registriesToDispose) pendingDisposal.add(registry);
                 shutdownCustodyPredecessors.clear();
                 await waitForRegistryLeasesToDrain(registriesToDispose, shutdownTimeoutMs);
                 outstandingLeaseCounts.clear();
+                const failures: unknown[] = [];
                 for (const registry of registriesToDispose) {
-                    // eslint-disable-next-line no-await-in-loop
-                    await disposeRegistryForShutdown(registry, shutdownTimeoutMs, projectRetirement);
+                    try {
+                        // eslint-disable-next-line no-await-in-loop
+                        await disposeRegistryForShutdown(registry, shutdownTimeoutMs, projectRetirement);
+                    } catch (error) {
+                        failures.push(error);
+                    }
                 }
-            })();
+                if (failures.length === 1) throw failures[0];
+                if (failures.length > 1) throw new AggregateError(failures, 'Failed to dispose plugin runtime registries');
+            })().catch((error: unknown) => {
+                shutdownPromise = null;
+                throw error;
+            });
             return await shutdownPromise;
         },
         getState() {

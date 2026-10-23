@@ -21,7 +21,7 @@ import type { ResolvedContributionRegistry } from '@/plugins/projection/registry
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
 import { activatePluginRuntimeRegistry } from '../manager';
 import type { TargetInvocationServiceOwner } from './targetHooks';
-import { createBackgroundServiceRunnerHost } from './backgroundServices';
+import { createBackgroundServiceRunnerHost, type PluginBackgroundServiceRunnerRegistration } from './backgroundServices';
 
 function deferred() {
     let resolve!: () => void;
@@ -33,7 +33,7 @@ function deferred() {
 
 function registration(
     localId: string,
-    runner: Parameters<typeof createBackgroundServiceRunnerHost>[0]['registrations'][number]['runner'],
+    runner: PluginBackgroundServiceRunnerRegistration['runner'],
 ) {
     return Object.freeze({
         pluginId: 'acme.indexer',

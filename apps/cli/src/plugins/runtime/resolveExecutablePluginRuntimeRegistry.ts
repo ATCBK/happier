@@ -121,6 +121,10 @@ import type {
 } from './types';
 import type { PluginActivationSource } from './activationSources';
 import {
+    projectAdmittedBackgroundServicePlugin,
+    type AdmittedBackgroundServicePlugin,
+} from './lifecycle/contributions/backgroundServiceProcessSource';
+import {
     collectActivationTargets,
     type ActivationTarget,
 } from './lifecycle/activation/targets';
@@ -625,6 +629,8 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
         occurrenceId: PluginRuntimeOccurrenceId,
     ): boolean;
     readPluginSourceCustody?(pluginId: string): PluginSourceCustody | null;
+    /** Exact daemon-admitted sources for a background child; this does not activate them. */
+    readAdmittedBackgroundServicePlugins?(pluginIds: readonly string[]): readonly AdmittedBackgroundServicePlugin[];
     targetActivationFacts?: Awaited<ReturnType<typeof activatePluginRuntimeRegistry>>['targetActivationFacts'];
     targetActionInvocations?: ReturnType<typeof createTargetActionInvocationRegistry>;
     /** Existing authenticated machine reverse RPC; the answering UI owns client execution. */
@@ -945,6 +951,9 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
         signal: AbortSignal;
     }>): Promise<ResolvedMcpEndpointDiscoveryResult>;
     createAgentInvocationServices: CreateAgentInvocationServices;
+    prepareBackgroundServiceProcessAgentServices?(
+        agentParams: import('./lifecycle/contributions/backgroundServiceProcessBootstrap').BackgroundServiceProcessAgentInvocationRequest,
+    ): Promise<import('./lifecycle/contributions/backgroundServiceProcessServices').PreparedBackgroundServiceProcessLocalServices>;
     /** Reuses exact retained/current-source attestation for daemon-owned services. */
     attestRetainedRunnerAgentServiceBinding?(params: Readonly<{
         binding: AgentSessionRunnerBindingV1;
@@ -2297,6 +2306,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
             },
             createServices(seed, binding) {
                 return invocationServiceOwners.createServices(seed, binding);
+            },
+            prepareBackgroundServiceProcessLocalPolicy(seed, binding) {
+                return invocationServiceOwners.prepareBackgroundServiceProcessLocalPolicy(seed, binding);
             },
             resolveInvocationHostPolicy(target, context) {
                 return invocationServiceOwners.resolveInvocationHostPolicy(target, context);
@@ -4504,6 +4516,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
             subscribeToCatalogChanges: () => () => {},
         }).bind(binding); } } : undefined;
     invocationServiceOwners = createProductionPluginInvocationServiceOwners({
+        ...(!params?.accountExecution ? {
+            demandBackgroundService: (target) => activatedRegistry.demandBackgroundService(target),
+        } : {}),
         ...(params?.stableEventsBroker
             ? { eventsBroker: params.stableEventsBroker }
             : {}),
@@ -7265,6 +7280,130 @@ export async function resolveExecutablePluginRuntimeRegistry(
         return snapshot.account || snapshot.daemon ? Object.freeze(snapshot) : null;
     };
 
+    async function prepareAgentInvocationServiceOperation(agentParams: Parameters<CreateAgentInvocationServices>[0]) {
+        const declaredAgent = authoritativeContributes.agents.find((candidate) => (
+            candidate.pluginId === agentParams.pluginId
+            && candidate.id === agentParams.agentId
+        ));
+        if (!declaredAgent) {
+            throw new PluginError({
+                code: 'plugin_agent_operation_undeclared',
+                message: `Agent '${agentParams.agentId}' is not declared by plugin '${agentParams.pluginId}'`,
+            });
+        }
+        const currentOccurrenceId = readCurrentPluginOccurrenceId(agentParams.pluginId);
+        if (
+            !currentOccurrenceId
+            || agentParams.occurrenceId !== currentOccurrenceId
+            || !agentParams.isOccurrenceCurrent()
+        ) {
+            throw new PluginError({
+                code: 'plugin_generation_stale',
+                message: `Agent '${agentParams.agentId}' belongs to a retired plugin generation`,
+            });
+        }
+        const declaredAgentLocalId = declaredAgent.identity?.localId ?? declaredAgent.id;
+        const agentSystemTools = createDeclaredAgentCliSystemToolService({
+            agentId: agentParams.agentId,
+            localAgentId: declaredAgentLocalId,
+            binding: declaredAgent.catalogEntry?.agentCliSystemTool,
+            runtimeSpec: declaredAgent.runtimeSpec,
+            agentCliLaunch: agentParams.agentCliLaunch,
+            definitions: projectPluginSystemToolContributions(
+                systemToolDefinitionsByPluginId.get(agentParams.pluginId) ?? Object.freeze([]),
+            ),
+            processEnv: createAgentCliHostResolutionEnvironment({
+                processEnv: process.env,
+                ...(params?.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
+            }),
+            delegate: declaredAgent.catalogEntry?.agentCliSystemTool
+                ? systemToolServicesByPluginId.get(agentParams.pluginId)
+                : undefined,
+        });
+        const storePaths = resolvePluginStorePaths({ happyHomeDir: params?.happyHomeDir });
+        // Callers address an Agent by its host routing id, which is
+        // qualified for an installed Agent and differently cased for some
+        // bundled ones. A plugin-contribution identity is always
+        // `{pluginId, localId}`, so it is resolved from the Agent's own
+        // durable identity here rather than re-read from the routing id.
+        const agentLocalId = declaredAgent.identity?.localId ?? agentParams.agentId;
+        const currentSession = agentParams.currentSession ?? agentParams.session?.current;
+        const sourceCustody = readCurrentPluginSourceCustody(agentParams.pluginId);
+        const seed = Object.freeze({
+            plugin: Object.freeze({ id: agentParams.pluginId, version: agentParams.pluginVersion }),
+            contribution: Object.freeze({
+                id: agentLocalId,
+                qualifiedId: resolveAgentContributionQualifiedId({
+                    pluginId: agentParams.pluginId,
+                    localId: agentLocalId,
+                }),
+            }),
+            occurrenceId: currentOccurrenceId,
+            correlationId: agentParams.correlationId,
+            surface: 'agent' as const,
+            ...(agentParams.processOwner ? { processOwner: agentParams.processOwner } : {}),
+            ...(agentParams.readActiveTurnAdmissionWitness
+                ? { readActiveTurnAdmissionWitness: agentParams.readActiveTurnAdmissionWitness }
+                : {}),
+            ...(!agentParams.readActiveTurnAdmissionWitness && agentParams.actionRequestAttributionV1
+                ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(agentParams.actionRequestAttributionV1) }
+                : {}),
+            ...(sourceCustody ? { sourceCustody } : {}),
+            ...(agentParams.session ? {
+                session: Object.freeze({ id: agentParams.session.id }),
+            } : {}),
+            ...(currentSession ? { currentSession } : {}),
+            signal: agentParams.signal,
+            isOccurrenceCurrent: () => (
+                isCurrentPluginOccurrence(agentParams.pluginId, currentOccurrenceId)
+                && agentParams.isOccurrenceCurrent()
+            ),
+        });
+        const requiredHostAccess = composeProviderBindingProcessAccess({
+            requests: declaredAgent.hostAccess?.required ?? [],
+            providerRequirements: declaredAgent.definition.providerRequirements,
+            environment: agentParams.environment,
+            providerBindingActive: agentParams.providerBindingActive === true,
+        });
+        const admittedEnvironmentKeys = Object.keys(agentParams.environment ?? {});
+        const invocationHostAccess = admittedEnvironmentKeys.length === 0
+            ? requiredHostAccess
+            : requiredHostAccess.map((request) => request.capability === 'process'
+                ? Object.freeze({
+                    ...request,
+                    scope: Object.freeze({
+                        ...request.scope,
+                        envKeys: [
+                            ...new Set([
+                                ...(request.scope.envKeys ?? []),
+                                ...admittedEnvironmentKeys,
+                            ]),
+                        ],
+                    }),
+                })
+                : request);
+        const connectedAccountHostAccess = projectConnectedAccountPurposeDeclarationsToHostAccess(
+            declaredAgent.richDefinition?.definition.connectedAccounts ?? Object.freeze([]),
+        );
+        return { seed, operation: {
+            filesystemRoots: Object.freeze({
+                pluginData: join(storePaths.storageDir, agentParams.pluginId, 'fs'),
+                workspace: agentParams.cwd,
+                projects: new Map(),
+            }),
+            hostAccessRequests: Object.freeze([
+                ...invocationHostAccess.map((request) => Object.freeze({ request, required: true })),
+                ...connectedAccountHostAccess,
+            ]),
+            ...(agentParams.environment ? { environment: agentParams.environment } : {}),
+            ...(agentParams.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: agentParams.prepareAgentNativeLaunch } : {}),
+            ...(agentParams.assertLaunchCurrent ? { assertLaunchCurrent: agentParams.assertLaunchCurrent } : {}),
+            ...(agentParams.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: agentParams.exactPurposeBindingSubjectId } : {}),
+            ...(agentParams.connectedAccountsOwner ? { connectedAccountsOwner: agentParams.connectedAccountsOwner } : {}),
+            ...(agentSystemTools ? { systemTools: agentSystemTools } : {}),
+        } };
+    }
+
     const resolvedRuntimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
         ...(accountActivationSources ? { executionRealm: 'account' as const,
             revalidateAccountExecution: accountActivationSources.revalidate,
@@ -7296,8 +7435,23 @@ export async function resolveExecutablePluginRuntimeRegistry(
         readPluginOccurrenceId: readCurrentPluginOccurrenceId,
         isPluginOccurrenceCurrent: isCurrentPluginOccurrence,
         readPluginSourceCustody: readCurrentPluginSourceCustody,
-        // Component retirement changes the activation facts at the lifecycle
-        // owner. Do not freeze the startup snapshot into the resolved registry.
+        readAdmittedBackgroundServicePlugins(pluginIds) {
+            return Object.freeze([...new Set(pluginIds)].map((pluginId) => {
+                const target = activationTargets.find((candidate) => candidate.pluginId === pluginId);
+                const occurrenceId = readCurrentPluginOccurrenceId(pluginId);
+                const sourceCustody = readCurrentPluginSourceCustody(pluginId);
+                const source = target
+                    ? resolveCommittedActivationSource(target, { recordActivatedManifestAuthority: false })
+                    : null;
+                if (!target || !occurrenceId || !sourceCustody || !source
+                    || !isCurrentPluginOccurrence(pluginId, occurrenceId)) {
+                    throw new Error(`Background service source '${pluginId}' is unavailable`);
+                }
+                return projectAdmittedBackgroundServicePlugin({ target, occurrenceId, sourceCustody, source });
+            }));
+        },
+        // Component retirement changes activation facts at the lifecycle owner.
+        // Do not freeze the startup snapshot into the resolved registry.
         // Ordinary finite background-runner settlement remains diagnostic-only.
         get targetActivationFacts() {
             return activatedRegistry.targetActivationFacts;
@@ -8442,127 +8596,15 @@ export async function resolveExecutablePluginRuntimeRegistry(
             });
         },
         async createAgentInvocationServices(agentParams) {
-            const declaredAgent = authoritativeContributes.agents.find((candidate) => (
-                candidate.pluginId === agentParams.pluginId
-                && candidate.id === agentParams.agentId
-            ));
-            if (!declaredAgent) {
-                throw new PluginError({
-                    code: 'plugin_agent_operation_undeclared',
-                    message: `Agent '${agentParams.agentId}' is not declared by plugin '${agentParams.pluginId}'`,
-                });
-            }
-            const currentOccurrenceId = readCurrentPluginOccurrenceId(agentParams.pluginId);
-            if (
-                !currentOccurrenceId
-                || agentParams.occurrenceId !== currentOccurrenceId
-                || !agentParams.isOccurrenceCurrent()
-            ) {
-                throw new PluginError({
-                    code: 'plugin_generation_stale',
-                    message: `Agent '${agentParams.agentId}' belongs to a retired plugin generation`,
-                });
-            }
-            const declaredAgentLocalId = declaredAgent.identity?.localId ?? declaredAgent.id;
-            const agentSystemTools = createDeclaredAgentCliSystemToolService({
-                agentId: agentParams.agentId,
-                localAgentId: declaredAgentLocalId,
-                binding: declaredAgent.catalogEntry?.agentCliSystemTool,
-                runtimeSpec: declaredAgent.runtimeSpec,
-                agentCliLaunch: agentParams.agentCliLaunch,
-                definitions: projectPluginSystemToolContributions(
-                    systemToolDefinitionsByPluginId.get(agentParams.pluginId) ?? Object.freeze([]),
-                ),
-                processEnv: createAgentCliHostResolutionEnvironment({
-                    processEnv: process.env,
-                    ...(params?.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
-                }),
-                delegate: declaredAgent.catalogEntry?.agentCliSystemTool
-                    ? systemToolServicesByPluginId.get(agentParams.pluginId)
-                    : undefined,
+            const prepared = await prepareAgentInvocationServiceOperation(agentParams);
+            return invocationServiceOwners.createOperationServices(prepared.seed, prepared.operation);
+        },
+        async prepareBackgroundServiceProcessAgentServices(agentParams) {
+            const prepared = await prepareAgentInvocationServiceOperation({
+                ...agentParams,
+                isOccurrenceCurrent: () => isCurrentPluginOccurrence(agentParams.pluginId, agentParams.occurrenceId),
             });
-            const storePaths = resolvePluginStorePaths({ happyHomeDir: params?.happyHomeDir });
-            // Callers address an Agent by its host routing id, which is
-            // qualified for an installed Agent and differently cased for some
-            // bundled ones. A plugin-contribution identity is always
-            // `{pluginId, localId}`, so it is resolved from the Agent's own
-            // durable identity here rather than re-read from the routing id.
-            const agentLocalId = declaredAgent.identity?.localId ?? agentParams.agentId;
-            const currentSession = agentParams.currentSession ?? agentParams.session?.current;
-            const sourceCustody = readCurrentPluginSourceCustody(agentParams.pluginId);
-            const seed = Object.freeze({
-                plugin: Object.freeze({ id: agentParams.pluginId, version: agentParams.pluginVersion }),
-                contribution: Object.freeze({
-                    id: agentLocalId,
-                    qualifiedId: resolveAgentContributionQualifiedId({
-                        pluginId: agentParams.pluginId,
-                        localId: agentLocalId,
-                    }),
-                }),
-                occurrenceId: currentOccurrenceId,
-                correlationId: agentParams.correlationId,
-                surface: 'agent' as const,
-                ...(agentParams.processOwner ? { processOwner: agentParams.processOwner } : {}),
-                ...(agentParams.readActiveTurnAdmissionWitness
-                    ? { readActiveTurnAdmissionWitness: agentParams.readActiveTurnAdmissionWitness }
-                    : {}),
-                ...(!agentParams.readActiveTurnAdmissionWitness && agentParams.actionRequestAttributionV1
-                    ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(agentParams.actionRequestAttributionV1) }
-                    : {}),
-                ...(sourceCustody ? { sourceCustody } : {}),
-                ...(agentParams.session ? {
-                    session: Object.freeze({ id: agentParams.session.id }),
-                } : {}),
-                ...(currentSession ? { currentSession } : {}),
-                signal: agentParams.signal,
-                isOccurrenceCurrent: () => (
-                    isCurrentPluginOccurrence(agentParams.pluginId, currentOccurrenceId)
-                    && agentParams.isOccurrenceCurrent()
-                ),
-            });
-            const requiredHostAccess = composeProviderBindingProcessAccess({
-                requests: declaredAgent.hostAccess?.required ?? [],
-                providerRequirements: declaredAgent.definition.providerRequirements,
-                environment: agentParams.environment,
-                providerBindingActive: agentParams.providerBindingActive === true,
-            });
-            const admittedEnvironmentKeys = Object.keys(agentParams.environment ?? {});
-            const invocationHostAccess = admittedEnvironmentKeys.length === 0
-                ? requiredHostAccess
-                : requiredHostAccess.map((request) => request.capability === 'process'
-                    ? Object.freeze({
-                        ...request,
-                        scope: Object.freeze({
-                            ...request.scope,
-                            envKeys: [
-                                ...new Set([
-                                    ...(request.scope.envKeys ?? []),
-                                    ...admittedEnvironmentKeys,
-                                ]),
-                            ],
-                        }),
-                    })
-                    : request);
-            const connectedAccountHostAccess = projectConnectedAccountPurposeDeclarationsToHostAccess(
-                declaredAgent.richDefinition?.definition.connectedAccounts ?? Object.freeze([]),
-            );
-            return invocationServiceOwners.createOperationServices(seed, {
-                filesystemRoots: Object.freeze({
-                    pluginData: join(storePaths.storageDir, agentParams.pluginId, 'fs'),
-                    workspace: agentParams.cwd,
-                    projects: new Map(),
-                }),
-                hostAccessRequests: Object.freeze([
-                    ...invocationHostAccess.map((request) => Object.freeze({ request, required: true })),
-                    ...connectedAccountHostAccess,
-                ]),
-                ...(agentParams.environment ? { environment: agentParams.environment } : {}),
-                ...(agentParams.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: agentParams.prepareAgentNativeLaunch } : {}),
-                ...(agentParams.assertLaunchCurrent ? { assertLaunchCurrent: agentParams.assertLaunchCurrent } : {}),
-                ...(agentParams.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: agentParams.exactPurposeBindingSubjectId } : {}),
-                ...(agentParams.connectedAccountsOwner ? { connectedAccountsOwner: agentParams.connectedAccountsOwner } : {}),
-                ...(agentSystemTools ? { systemTools: agentSystemTools } : {}),
-            });
+            return invocationServiceOwners.prepareBackgroundServiceProcessOperationServices(prepared.seed, prepared.operation);
         },
         ...(resourcesOwner ? {
             getPluginUiResourceCapability(pluginId: string) {

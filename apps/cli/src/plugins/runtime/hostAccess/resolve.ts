@@ -29,6 +29,7 @@ import type {
 import type { TargetActionHostAccessDecision } from '../policy/evaluate';
 import { isPluginHostAccessRequestAuthorizedBySelection } from './resourceSelection';
 import { fingerprintPluginHostAccessRequest } from './scope';
+import { BACKGROUND_SERVICE_PROCESS_SUPPORTED_SERVICE_IDS } from '../lifecycle/contributions/backgroundServiceProcessPolicy';
 
 export type TargetActionHostAccessRequest = Readonly<{
     request: PluginHostAccessRequestV2;
@@ -48,7 +49,7 @@ export type TargetActionHostBindingContext = Readonly<{
      * service. Its finite daemon-service protocol cannot own a duplex
      * WebSocket connection.
      */
-    executionRealm?: 'runner';
+    executionRealm?: 'runner' | 'background-service-process';
     sessionId?: string;
     signal?: AbortSignal;
 }>;
@@ -276,15 +277,24 @@ export function createPluginInvocationHostPolicyResolver(params?: Readonly<{
     const createServiceBinding = params?.createServiceBinding
         ?? createUnavailablePluginInvocationServiceBinding;
     return (action, context) => {
-        const serviceBinding = createServiceBinding(
+        const hostServiceBinding = createServiceBinding(
             action.occurrenceId,
             `${action.qualifiedId}:binding`,
             context.hostAccessRequests,
             action.qualifiedId,
         );
+        const serviceBinding = context.executionRealm === 'background-service-process'
+            ? PLUGIN_SERVICE_IDS.reduce((binding, serviceId) => (
+                BACKGROUND_SERVICE_PROCESS_SUPPORTED_SERVICE_IDS.includes(serviceId)
+                    ? binding
+                    : withPluginInvocationServiceBindingAvailability(binding, { serviceId, availability: 'unavailable' })
+            ), withPluginInvocationAccountStorageAvailability(hostServiceBinding, 'unavailable'))
+            : hostServiceBinding;
         const optionalAccess = params?.resolveOptionalAccess?.(action.pluginId) ?? Object.freeze([]);
         const hostAccess: TargetActionHostAccessDecision[] = context.hostAccessRequests.map(({ request, required }) => {
-            const serviceAvailability = resolveServiceAvailability(
+            const serviceAvailability = context.executionRealm === 'background-service-process' && request.capability === 'terminal'
+                ? 'unavailable'
+                : resolveServiceAvailability(
                 request,
                 serviceBinding,
                 params?.sessionServiceAvailable === true,

@@ -103,6 +103,7 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
             ).then(result => result.graph);
             const sharedSource = {
                 sourceAuthority: developmentAuthority,
+                processEntry: { rootPath, entryPath, loadMode: 'source-ts' as const },
                 resolveRelativeModule: async (module) => await resolvePluginAuthorStagingModule({
                     graph: {
                         rootPath,
@@ -115,7 +116,9 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
                     },
                     module,
                 }),
-            } satisfies Pick<PluginActivationSource<PluginDaemonModuleNamespace>, 'sourceAuthority' | 'resolveRelativeModule'>;
+            } satisfies Pick<PluginActivationSource<PluginDaemonModuleNamespace>, 'sourceAuthority' | 'resolveRelativeModule'> & {
+                processEntry: import('./activationSources').PluginActivationProcessEntry;
+            };
             return development
                 ? { ...sharedSource, kind: 'prepared', module: development.module }
                 : { ...sharedSource, kind: 'bundled', moduleId: entryPath, load: async () => (await readGraph()).module };
@@ -293,6 +296,11 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
         if (preparedActivationGraph) {
             return {
                 kind: 'prepared',
+                processEntry: {
+                    entryPath,
+                    rootPath: generationRootPath,
+                    loadMode: resolvePluginModuleLoadMode({ entryPath, useDevelopmentEntry }),
+                },
                 module: preparedActivationGraph.module,
                 sourceAuthority,
                 committedAuthorization,

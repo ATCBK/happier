@@ -121,6 +121,13 @@ export type StablePluginHttpHost = Readonly<{
         binding: PluginInvocationServiceBinding,
         policy?: StablePluginHttpBindingPolicy,
     ): HttpService;
+    /** Keeps the admitted host policy while placing only physical I/O in a child process. */
+    bindWithAdapter?(
+        seed: PluginInvocationServicesSeed,
+        binding: PluginInvocationServiceBinding,
+        adapter: PluginHttpRuntimeAdapter,
+        policy?: StablePluginHttpBindingPolicy,
+    ): HttpService;
 }>;
 
 type StablePluginHttpResponse = Awaited<ReturnType<HttpService['request']>>;
@@ -1103,6 +1110,9 @@ export function createStablePluginHttpHost(params: StablePluginHttpHostParams): 
         });
     };
     return Object.freeze({
+        bindWithAdapter(seed: PluginInvocationServicesSeed, binding: PluginInvocationServiceBinding, adapter: PluginHttpRuntimeAdapter, policy?: StablePluginHttpBindingPolicy): HttpService {
+            return createStablePluginHttpHost({ ...params, adapter }).bind(seed, binding, policy);
+        },
         bind(seed, binding, policy): HttpService {
             const privateCredentialHeaderNamesByRequest = new WeakMap<
                 PluginHttpRequest,

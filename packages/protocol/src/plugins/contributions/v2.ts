@@ -856,6 +856,8 @@ export type PluginHookContributionV2 = z.infer<typeof PluginHookContributionV2Sc
 export const BackgroundServiceContributionSchema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: z.optional(PluginLocalizedStringV2Schema),
+  placement: z.optional(z.enum(['daemon', 'process'])),
+  activation: z.optional(z.enum(['continuous', 'demand'])),
 }));
 export type BackgroundServiceContribution = z.infer<typeof BackgroundServiceContributionSchema>;
 

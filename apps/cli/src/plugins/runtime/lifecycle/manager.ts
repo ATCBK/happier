@@ -81,7 +81,11 @@ import {
     createTargetAgentRuntimeRegistry,
     type AgentRuntimeRegistrationLease,
 } from './contributions/targetAgents';
-import { createBackgroundServiceRunnerHost } from './contributions/backgroundServices';
+import { createBackgroundServiceRunnerHost, type BackgroundServiceDemandTarget } from './contributions/backgroundServices';
+import type { BackgroundServiceContext, BackgroundServiceDemandHandle } from '@happier-dev/plugin-sdk/background-services';
+import { createBackgroundServiceProcessExecution } from './contributions/backgroundServiceProcessExecution';
+import { projectAdmittedBackgroundServicePlugin } from './contributions/backgroundServiceProcessSource';
+import type { PreparedBackgroundServiceProcessLocalServices } from './contributions/backgroundServiceProcessServices';
 import {
     projectRequiredManifestEnvironmentNames,
     projectRequiredManifestWorkspaceFilesystemReadPaths,
@@ -177,6 +181,7 @@ export type ActivatedPluginRuntimeRegistry = ActivatedHandlerRegistry & Readonly
      */
     recordPluginActivationFailure: (pluginId: string, message: string) => void;
     startAdoptedBackgroundServices: () => void;
+    demandBackgroundService(target: Extract<BackgroundServiceDemandTarget, { pluginId: string }>): BackgroundServiceDemandHandle;
     retireBackgroundServices: (pluginIds: readonly string[]) => void;
     settleRetiredBackgroundServices: (pluginIds: readonly string[]) => Promise<void>;
     addRuntimeDisposable: (pluginId: string, disposable: PluginDisposable) => PluginDisposable;
@@ -240,6 +245,9 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
     contributes: ResolvedContributionRegistry;
     generation: number;
     executionRealm?: 'account';
+    /** A daemon-admitted child loads registrations without starting sibling services. */
+    serviceHost?: true;
+    serviceHostCreateAgentInvocationServices?: import('../invocation/services/types').CreateAgentInvocationServices;
     happyHomeDir?: string;
     pluginIds?: readonly string[];
     retainedRegistries?: readonly ActivatedPluginRuntimeRegistry[];
@@ -612,8 +620,9 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
             ] as const];
         }),
     );
+    const processPreparations = new WeakMap<BackgroundServiceContext, PreparedBackgroundServiceProcessLocalServices>();
     const backgroundServiceRegistrations = targetRegistrations.flatMap((entry) => {
-        if (entry.registration.family !== 'backgroundServices') return [];
+        if (entry.registration.family !== 'backgroundServices' || params.serviceHost) return [];
         if (occurrencesByPluginId.get(entry.pluginId)?.occurrenceId !== entry.occurrenceId) {
             throw new Error(
                 `Background service '${entry.pluginId}/backgroundServices/${entry.registration.localId}' was published for a retired occurrence`,
@@ -634,6 +643,34 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
             occurrenceId: entry.occurrenceId,
             localId: entry.registration.localId,
             runner: entry.registration.value,
+            placement: declaration.placement,
+            activation: declaration.activation,
+            ...(declaration.placement === 'process' ? {
+                createExecution: () => {
+                    const sourceCustody = occurrencesByPluginId.get(entry.pluginId)?.sourceCustody;
+                    if (!sourceCustody) throw new Error('background_service_process_source_custody_unavailable');
+                    const source = resolveActivationSource(target, params.resolveActivationSource);
+                    return createBackgroundServiceProcessExecution({
+                        serviceId: `${entry.pluginId}/backgroundServices/${entry.registration.localId}`,
+                        pluginId: entry.pluginId,
+                        bootstrap: {
+                            entry: 'plugin', payload: {
+                                pluginId: entry.pluginId, localId: entry.registration.localId,
+                                generation: params.generation,
+                                plugins: [projectAdmittedBackgroundServicePlugin({
+                                    target, occurrenceId: entry.occurrenceId, sourceCustody, source,
+                                })],
+                            },
+                        },
+                        prepareRun(context) {
+                            const prepared = processPreparations.get(context as BackgroundServiceContext);
+                            processPreparations.delete(context as BackgroundServiceContext);
+                            if (!prepared) throw new Error('background_service_process_policy_unavailable');
+                            return { localServicesPolicy: prepared.localPolicy, additionalServices: prepared.services };
+                        },
+                    });
+                },
+            } : {}),
         })];
     });
     if (!params.invocationServices) {
@@ -664,6 +701,9 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                 signal: lifetime.signal,
                 redactionLifetimeSignal: lifetime.redactionLifetimeSignal,
                 isOccurrenceCurrent: input.isOccurrenceCurrent,
+                demandBackgroundService: (localId, reason) => demandBackgroundService({
+                    pluginId: input.pluginId, occurrenceId: input.occurrenceId, localId, reason,
+                }),
             });
             try {
                 const target = activationTargets.find((candidate) => candidate.pluginId === input.pluginId);
@@ -693,6 +733,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                         hostAccessRequests,
                         surface: seed.surface,
                         signal: seed.signal,
+                        ...(input.placement === 'process' ? { executionRealm: 'background-service-process' as const } : {}),
                     });
                 const unavailableRequired = hostAccessRequests
                     .filter(({ required }) => required)
@@ -713,18 +754,15 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                         }),
                     });
                 }
-                const services = params.invocationServices.createServices(
-                    seed,
-                    hostAccessPolicy?.serviceBinding
+                const serviceBinding = hostAccessPolicy?.serviceBinding
                         ?? params.invocationServices.createOrdinaryServiceBinding(
                             seed.occurrenceId,
                             `${seed.contribution.qualifiedId}:${seed.correlationId}:binding`,
                             undefined,
                             seed.contribution.qualifiedId,
-                        ),
-                );
-                return Object.freeze({
-                    context: Object.freeze({
+                        );
+                const services = params.invocationServices.createServices(seed, serviceBinding);
+                const context: BackgroundServiceContext = Object.freeze({
                         plugin: seed.plugin,
                         contribution: seed.contribution,
                         surface: 'background' as const,
@@ -736,9 +774,23 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                             signal: seed.signal,
                             isOccurrenceCurrent: seed.isOccurrenceCurrent,
                         }),
-                    }),
-                    complete: () => lifetime.complete(),
                 });
+                const created = () => Object.freeze({
+                    context,
+                    complete() { processPreparations.delete(context); return lifetime.complete(); },
+                });
+                if (input.placement === 'process') {
+                    const prepare = params.invocationServices.prepareBackgroundServiceProcessLocalPolicy;
+                    if (!prepare) {
+                        lifetime.complete();
+                        return { unavailable: { code: 'background_service_process_policy_unavailable', hostAccessId: hostAccessRequests[0]?.request.id ?? 'process-placement', status: 'unavailable' as const } };
+                    }
+                    return prepare(seed, serviceBinding).then((prepared) => {
+                        processPreparations.set(context, prepared);
+                        return created();
+                    }, (error: unknown) => { lifetime.complete(); throw error; });
+                }
+                return created();
             } catch (error) {
                 lifetime.complete();
                 throw error;
@@ -747,7 +799,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         onDiagnostic(event) {
             logger.warn('[PLUGIN RUNTIME] Background service lifecycle diagnostic', {
                 code: event.code,
-                pluginId: event.pluginId,
+                ...('pluginId' in event ? { pluginId: event.pluginId } : { owner: event.owner }),
                 occurrenceId: event.occurrenceId,
                 localId: event.localId,
                 ...(event.code === 'background_service_failed' && event.error !== undefined
@@ -788,6 +840,9 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         readPluginOccurrenceId: (pluginId) => occurrencesByPluginId.get(pluginId)?.occurrenceId ?? null,
         readPluginSourceCustody: (pluginId) => occurrencesByPluginId.get(pluginId)?.sourceCustody ?? null,
         isOccurrenceCurrent: () => lifecycleState === 'active',
+        ...(params.serviceHost && params.serviceHostCreateAgentInvocationServices
+            ? { createAgentInvocationServices: params.serviceHostCreateAgentInvocationServices }
+            : {}),
         retirementSignal: agentExternalSessionsRetirement.signal,
         onDuplicate: ({ agentId, firstPluginId, secondPluginId }) => {
             for (const [pluginId, otherPluginId] of [
@@ -1214,6 +1269,35 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         }
     }
 
+    function demandBackgroundService(target: Extract<BackgroundServiceDemandTarget, { pluginId: string }>): BackgroundServiceDemandHandle {
+        let cancelled = false;
+        let inner: BackgroundServiceDemandHandle | undefined;
+        let rejectCancellation!: (error: unknown) => void;
+        const cancellation = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+        const operation = Promise.resolve().then(async () => {
+            if (cancelled || lifecycleState !== 'active') throw new Error('Background service demand is no longer current');
+            await activateContributionsOnDemand([{ pluginId: target.pluginId, family: 'backgroundServices', localId: target.localId }]);
+            if (cancelled || lifecycleState !== 'active') throw new Error('Background service demand is no longer current');
+            const local = backgroundServiceRegistrations.some((registration) => registration.pluginId === target.pluginId);
+            if (local) inner = backgroundServiceRunnerHost.demand(target);
+            else {
+                const registry = backgroundServiceRegistries().find((candidate) => candidate.readPluginOccurrenceId(target.pluginId) !== null);
+                if (!registry) throw new Error('Background service demand targets an unavailable plugin');
+                inner = registry.demandBackgroundService(target);
+            }
+            if (cancelled) inner.cancel();
+            await inner.settlement;
+        });
+        return Object.freeze({ settlement: Promise.race([operation, cancellation]), cancel() {
+            if (cancelled) return;
+            cancelled = true;
+            inner?.cancel();
+            const error = new Error('Background service demand was cancelled');
+            error.name = 'AbortError';
+            rejectCancellation(error);
+        } });
+    }
+
     function retireBackgroundServices(pluginIds: readonly string[]): void {
         for (const pluginId of pluginIds) {
             retiredRuntimeDisposablePluginIds.add(pluginId);
@@ -1300,6 +1384,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         activatePluginsForValidation,
         recordPluginActivationFailure,
         startAdoptedBackgroundServices,
+        demandBackgroundService,
         retireBackgroundServices,
         settleRetiredBackgroundServices,
         addRuntimeDisposable,
@@ -1310,7 +1395,14 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                 agentExternalSessionsRetirement.abort();
                 targetOccurrenceCurrent = false;
                 try {
-                    await backgroundServiceRunnerHost.dispose();
+                    try {
+                        await backgroundServiceRunnerHost.dispose();
+                    } catch (error) {
+                        // Admission remains disposed. A later definitive Stop
+                        // retries retained child custody before plugin cleanup.
+                        disposalPromise = null;
+                        throw error;
+                    }
                     for (const target of [...targetActivationDisposers].reverse()) {
                         await runPluginDisposalStep({
                             pluginId: target.pluginId,

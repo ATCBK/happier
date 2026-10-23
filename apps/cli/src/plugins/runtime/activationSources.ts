@@ -33,6 +33,13 @@ export type CommittedPluginExecutionAuthorization = Readonly<{
     immutableGenerationId: string;
 }>;
 
+/** Exact executable selection already admitted by the daemon, for its child host. */
+export type PluginActivationProcessEntry = Readonly<{
+    entryPath: string;
+    rootPath: string;
+    loadMode: 'immutable-js' | 'source-ts';
+}>;
+
 export type FileBackedPluginActivationSource = Readonly<{
     kind: 'file_backed';
     sourceAuthority?: PluginRuntimeSourceAuthority;
@@ -51,6 +58,7 @@ export type FileBackedPluginActivationSource = Readonly<{
 
 export type BundledPluginActivationSource<TModule> = Readonly<{
     kind: 'bundled';
+    processEntry?: PluginActivationProcessEntry;
     sourceAuthority?: PluginRuntimeSourceAuthority;
     /**
      * Stable identity for caching/diagnostics. In PS-04 this should come from the
@@ -73,6 +81,7 @@ export type BundledPluginActivationSource<TModule> = Readonly<{
 
 export type PreparedPluginActivationSource<TModule> = Readonly<{
     kind: 'prepared';
+    processEntry?: PluginActivationProcessEntry;
     sourceAuthority?: PluginRuntimeSourceAuthority;
     module: TModule;
     committedAuthorization?: CommittedPluginExecutionAuthorization;

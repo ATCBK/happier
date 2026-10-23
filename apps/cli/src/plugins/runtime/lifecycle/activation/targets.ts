@@ -19,9 +19,9 @@ export type PluginContributionActivationDemand = Readonly<{
  * the live registration; adding a family without that boundary silently
  * deletes registrations the consumer still reads synchronously.
  *
- * Everything else is deliberately eager: `backgroundServices` is a declared
- * machine-runtime service, and Event subscriptions must be listening before
- * the first event arrives.
+ * Continuous background services and Event subscriptions remain eager so they
+ * are listening before the first event arrives. Finite services activate only
+ * through the canonical background-service demand boundary.
  */
 const PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES = new Set([
     'actions',
@@ -36,6 +36,8 @@ const PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES = new Set([
     'agents',
     'providers',
     'voiceProviders',
+    // Capture registration resolves and demands the exact declared source.
+    'captureSources',
     // Resource binding and plugin invocation prepare the exact registered
     // producer before exposing its synchronous descriptor/watch services.
     'resources',
@@ -144,7 +146,9 @@ export function shouldActivateTargetAtStartup(target: ActivationTarget): boolean
     // nominally "lazy" cutover from silently deleting registrations that are
     // still read synchronously today.
     return registrationRights.some((right) => (
-        !PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES.has(right.family)
+        right.family === 'backgroundServices'
+            ? target.manifest.contributes.backgroundServices.some((service) => service.id === right.localId && service.activation !== 'demand')
+            : !PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES.has(right.family)
     ));
 }
 

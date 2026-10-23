@@ -137,8 +137,8 @@ existing activation owner. An activated plugin's asynchronous invocation boundar
 settles its Resource descriptors before supplying synchronous `describe` and
 `watch` services. Composer inventory comes from admitted declarations; search
 and resolution demand the exact declared reference before reading registrations.
-Explicit startup activation, background services and Event subscriptions retain
-their startup lifecycle. Source custody, exact occurrence checks and retirement
+Explicit startup activation, continuous background services and Event
+subscriptions retain their startup lifecycle. Source custody, exact occurrence checks and retirement
 continue to govern both bundled and installed plugins.
 
 Account Action discovery retains selected manifests and exact source custody,
@@ -206,6 +206,49 @@ those combined facts to the same current-generation policy. Cold daemon
 activation therefore cannot block an already applied client handler, while a
 missing, replaced or retired client registration still refuses execution. This
 applies to bundled and installed plugins in 0.3 development source.
+
+### Background-service placement (unreleased 0.3)
+
+Each `backgroundServices` declaration selects `placement: 'daemon' | 'process'`
+and `activation: 'continuous' | 'demand'`. Omitting them preserves the existing
+daemon/continuous behavior. The
+[`background-service lifecycle owner`](../apps/cli/src/plugins/runtime/lifecycle/contributions/backgroundServices.ts)
+owns start, demand coalescing, settlement and retirement for both placements,
+including host-owned services. A demand runner is finite; daemon-realm Actions,
+Event handlers and runners of the declaring plugin request it through
+`services.backgroundServices.demand(localId, reason?)`. The returned
+`{ settlement, cancel }` handle belongs to that caller. Successful Action
+completion does not withdraw an accepted demand. Callers that need cancellation
+forward their signal to `cancel()` and await `settlement`. Cancellation rejects
+only that caller's handle without waiting for shared cleanup; it does not cancel
+other callers. Demands accepted during a run join one sequential
+follow-up run.
+
+Process placement uses a supervised Happier child through the existing binary-safe
+launch and process-custody owners. The daemon admits the plugin's source and policy;
+the child loads that exact source to activate the selected runner and any consumed
+reader surfaces. It starts no sibling services or subscriptions and becomes no
+catalog, installation, Action-admission or public-database migration authority.
+For demand activation, successful settlement joins child exit; a later demand starts a new
+child. Replacement, disable/uninstall and shutdown use the same abort-and-settle
+retirement path. There is no host-owned idle timer.
+
+The process runner rebuilds `logger`, `fs`, `http` and `exec` locally under admitted
+policy. One bridge reaches the daemon's bound `storage`, `settings`, `events`,
+`sessions` and `actions` owners, retaining cancellation, callback and watch
+lifetimes. In particular, public daemon databases keep their host-owned migration,
+transaction and incumbent-query callbacks; the child does not reopen their SQLite
+files. Other services are unavailable in this first process-service contract,
+including `backgroundServices` itself and UI. Availability reports the bindings
+actually supplied, and required unsupported HostAccess refuses admission. This is
+process placement for trusted plugin code, not a sandbox.
+
+The maintained public example is
+[`background-indexer`](../packages/plugin-sdk/examples/background-indexer/src/index.ts).
+Its refresh Action demands the process runner through the same SDK boundary used
+by installed external plugins. These declarations are unreleased 0.3 contracts;
+the generated SDK inventory and capability matrix remain the public export and
+availability authorities.
 
 ### Portable Account Actions (0.3 development source)
 

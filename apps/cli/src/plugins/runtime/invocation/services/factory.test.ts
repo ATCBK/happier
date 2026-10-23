@@ -29,6 +29,8 @@ import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { createPluginAgentCliReadinessService } from '@/plugins/runtime/context/agents';
 import { createPluginExecSystemToolResolver } from '@/plugins/runtime/exec/system/tools/resolveGrant';
 import { createPluginStorageOwner } from '@/plugins/runtime/context/storage';
+import { createPluginInvocationLifetime } from '../lifetime';
+import { createBackgroundServiceRunnerHost } from '../../lifecycle/contributions/backgroundServices';
 
 const seedMaterialization = createPluginActionCallerMaterializationFixture('acme.alpha');
 
@@ -45,6 +47,30 @@ const seed = Object.freeze({
 });
 
 describe('unavailable plugin invocation services factory', () => {
+    it('keeps an accepted daemon background demand alive after its initiating invocation completes', async () => {
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => { entered = resolve; });
+        let finish!: () => void;
+        const release = new Promise<void>((resolve) => { finish = resolve; });
+        let runSignal: AbortSignal | undefined;
+        const host = createBackgroundServiceRunnerHost({ registrations: [{
+            owner: { kind: 'host', serviceId: 'factory-test' }, localId: 'index', occurrenceId: 'one', activation: 'demand',
+            async runner(context) { runSignal = context.signal; entered(); await release; },
+        }], createContext() { throw new Error('No plugin context for host service'); } });
+        const lifetime = createPluginInvocationLifetime();
+        const services = createPluginInvocationServicesFactory({ loggerSink: { write() {} } })(
+            { ...seed, signal: lifetime.signal, demandBackgroundService: () => host.demand({ serviceId: 'factory-test' }) },
+            createLoggerAvailablePluginInvocationServiceBinding('7', 'binding'),
+        );
+        const handle = services.backgroundServices.demand('index');
+        await started;
+        await lifetime.complete();
+        expect(runSignal?.aborted).toBe(false);
+        finish();
+        await handle.settlement;
+        await host.dispose();
+    });
+
     it('refuses bootstrap credential materialization for an ordinary plugin invocation', async () => {
         for (const [factory, binding] of [
             [createUnavailablePluginServicesFactory(), createUnavailablePluginInvocationServiceBinding('7', 'binding')],
@@ -746,6 +772,8 @@ describe('unavailable plugin invocation services factory', () => {
         );
 
         expect(Object.isFrozen(services)).toBe(true);
+        expect(services.availability('backgroundServices')).toEqual({ status: 'unavailable', code: 'plugin_service_unavailable' });
+        expect(() => services.backgroundServices.demand('unbound')).toThrow(expect.objectContaining({ code: 'plugin_service_unavailable' }));
         expect(services.availability('logger')).toEqual({
             status: 'unavailable',
             code: 'plugin_service_unavailable',

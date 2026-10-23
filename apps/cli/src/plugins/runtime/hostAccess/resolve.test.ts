@@ -35,6 +35,41 @@ const action = Object.freeze({
 });
 
 describe('target action HostAccess binding resolver', () => {
+    it('refuses Account storage in the v1 process background service set', () => {
+        const resolve = createPluginInvocationHostPolicyResolver({
+            createServiceBinding: (occurrenceId, id) => ({
+                ...createUnavailablePluginInvocationServiceBinding(occurrenceId, id),
+                accountStorageAvailability: 'available',
+            }),
+        });
+        const hostAccessRequests = [{ required: true, request: {
+            id: 'account-store', capability: 'storage.account' as const, reason: 'Persist collection',
+            scope: { enabled: true as const },
+        } }];
+        expect(resolve(action, { hostAccessRequests, surface: 'background' }).hostAccess[0]?.status).toBe('available');
+        const process = resolve(action, { hostAccessRequests, surface: 'background', executionRealm: 'background-service-process' });
+        expect(process.hostAccess[0]).toMatchObject({ status: 'unavailable', code: 'plugin_host_access_service_unavailable' });
+        expect(process.serviceBinding.accountStorageAvailability).toBe('unavailable');
+    });
+
+    it('refuses required Connected Accounts in process background placement while preserving daemon admission', () => {
+        const resolve = createPluginInvocationHostPolicyResolver({
+            createServiceBinding: (occurrenceId, id) => addConnectedAccountsAvailablePluginInvocationServiceBinding(
+                createUnavailablePluginInvocationServiceBinding(occurrenceId, id),
+            ),
+        });
+        const hostAccessRequests = [{ required: true, request: {
+            id: 'connection', capability: 'connectedAccounts' as const, reason: 'Use declared connection',
+            scope: { serviceRefs: ['account'], operations: ['select' as const, 'use' as const] },
+        } }];
+        expect(resolve(action, { hostAccessRequests, surface: 'background' }).hostAccess[0]?.status).toBe('available');
+        const process = resolve(action, { hostAccessRequests, surface: 'background', executionRealm: 'background-service-process' });
+        expect(process.hostAccess[0]).toMatchObject({
+            id: 'connection', required: true, status: 'unavailable', code: 'plugin_host_access_service_unavailable',
+        });
+        expect(process.serviceBinding.availability.connectedAccounts).toBe('unavailable');
+    });
+
     it('binds required Account storage and fails closed before a Resource callback when unavailable', () => {
         const scope = Object.freeze({ marker: true }) as unknown as PluginAccountStorageScope;
         let binds = 0;

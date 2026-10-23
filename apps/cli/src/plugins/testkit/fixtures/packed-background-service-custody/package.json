@@ -1,0 +1,8 @@
+{
+  "name": "happier-plugin-acme-background-service-custody",
+  "version": "1.0.0",
+  "type": "module",
+  "keywords": ["happier-plugin"],
+  "happier": { "manifest": ".happier-plugin/plugin.json" },
+  "files": [".happier-plugin", "src"]
+}

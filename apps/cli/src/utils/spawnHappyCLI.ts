@@ -51,6 +51,7 @@
 
 import { spawn, SpawnOptions, type ChildProcess } from 'child_process';
 import { observeProcessLaunch } from '@/processes/launchNotification';
+import type { ProcessCustodySpawnSpec } from '@/subprocess/supervision/processCustody';
 import {
   constants,
   copyFileSync,
@@ -220,6 +221,8 @@ function shouldPreferDevTsxSubprocess(env: NodeJS.ProcessEnv = process.env): boo
 export type HappyCliSubprocessRuntime = 'node' | 'bun' | 'binary';
 
 export type HappyCliSubprocessLaunchOptions = Readonly<{
+  /** The caller owns the shared helper's assignment handshake and terminal Job proof. */
+  processCustody?: ProcessCustodySpawnSpec;
   preferWindowsPackagedBinary?: boolean;
   allowAdmittedDaemonStartupClosure?: boolean;
   runtimeDecision?: HappyCliSubprocessRuntimeDecision;
@@ -1298,7 +1301,18 @@ export function spawnHappyCLI(
       ...(launchSpec.env ?? {}),
     }),
   };
-  const child = spawn(launchSpec.filePath, launchSpec.args, { ...spawnOptions, windowsHide: spawnOptions.windowsHide !== false });
+  const invocation = launchOptions?.processCustody
+    ? {
+      command: launchOptions.processCustody.executablePath,
+      args: [
+        // Ordinary service mode cleans descendants when the target root exits.
+        'run', `--job=${launchOptions.processCustody.jobName}`,
+        `--handshake=${launchOptions.processCustody.handshakePath}`,
+        '--', launchSpec.filePath, ...launchSpec.args,
+      ],
+    }
+    : { command: launchSpec.filePath, args: launchSpec.args };
+  const child = spawn(invocation.command, invocation.args, { ...spawnOptions, windowsHide: spawnOptions.windowsHide !== false });
   observeProcessLaunch(child);
   return child;
 }

@@ -2,16 +2,23 @@
 
 This maintained reference plugin uses only public Plugin SDK imports and the one
 public author path, `definePlugin(...)`. Its single source module declares one
-daemon-local `workspace-index` database and one generation-scoped
-`workspace-indexer` background service; the author build projects the cold
+daemon-local `workspace-index` database and one `process` + `demand`
+`workspace-indexer` background service in unreleased 0.3 development source. The
+`refresh` Action demands a finite run and awaits its settlement, forwarding
+cancellation through the returned handle. Cancelling rejects only that caller's
+handle; it does not wait for shared child teardown. The author build projects the cold
 `.happier-plugin/plugin.json` from that same module, so there is no
 hand-maintained manifest to keep in sync. The runner opens the database through
 `context.services.storage.daemon.database(...)`, writes an index heartbeat, and
 verifies it with a bounded query.
 
-It intentionally has no scheduler, worker, host import, or private database
-driver access. The host owns database path derivation, migration safety,
-currentness, cancellation, quotas, and close/reload behavior.
+The host launches the runner in a supervised Happier child and lets that child
+exit after the run settles. Its database calls, including migration and
+transaction callbacks, reach the daemon's bound storage owner through the
+shared process-service bridge. The plugin creates no scheduler, launcher, host
+import, or private database driver access. The host owns database path
+derivation, migration safety, currentness, cancellation, quotas, and
+close/reload behavior.
 
 Run the normal external-author commands from this directory:
 

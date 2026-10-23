@@ -375,6 +375,7 @@ describe('CORE.T1/T5 public contract', () => {
     it('freezes the exact service roster behind one availability query', () => {
         expectTypeOf<PluginServiceId>().toEqualTypeOf<
             | 'logger'
+            | 'backgroundServices'
             | 'storage'
             | 'settings'
             | 'secrets'

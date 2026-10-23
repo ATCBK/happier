@@ -1,27 +1,100 @@
 ---
 title: Run background work
-description: Register daemon-occurrence background work without adding a second lifecycle owner.
+description: Declare continuous or on-demand work and let Happier own its process and lifetime.
 ---
 
-Use `backgroundServices` for daemon/machine work that is not an action,
-Session turn, Agent factory, or event handler. A `definePlugin` declaration
-pairs a cold row with one runner; the runner registration itself is generated,
-so there is no separate registration call to maintain.
+Use `backgroundServices` for work whose lifetime Happier manages independently
+of an Action or Session turn. A `definePlugin` declaration pairs one service
+with one runner. An Action or Event handler can demand a finite run without
+owning a launcher or scheduler.
+
+## Availability
+
+Process placement and demand activation describe **unreleased 0.3 development
+source**. Check the [SDK surface](/plugins/api/surface) and
+[capability availability](/plugins/manifest/availability) before targeting a
+published toolchain. Older hosts may reject declarations with these new fields
+through their normal compatibility admission.
+
+## Declare and demand a run
+
+Start from a plugin using the public `definePlugin` authoring API. Set
+`placement: 'process'` to run in a supervised Happier child and
+`activation: 'demand'` to start only when requested:
 
 ```ts
 backgroundServices: [{
-  declaration: { id: 'catalog-refresh', title: 'Refresh catalog' },
+  declaration: {
+    id: 'catalog-refresh',
+    title: 'Refresh catalog',
+    placement: 'process',
+    activation: 'demand',
+  },
   async runner(context) {
     context.signal.throwIfAborted();
-    // Do bounded work with context.services.
+    await context.services.storage.daemon.set(
+      'last-refreshed-at', Date.now(), { signal: context.signal },
+    );
   },
 }],
+actions: {
+  refresh: {
+    title: 'Refresh catalog',
+    scopes: ['global'],
+    surfaces: ['cli', 'ui'],
+    execution: { target: 'daemon' },
+    dangerLevel: 'safe',
+    async run(_input, context) {
+      context.signal.throwIfAborted();
+      const demand = context.services.backgroundServices.demand(
+        'catalog-refresh', 'explicit-refresh',
+      );
+      const cancel = () => demand.cancel();
+      context.signal.addEventListener('abort', cancel, { once: true });
+      try {
+        await demand.settlement;
+        return { refreshed: true };
+      } finally {
+        context.signal.removeEventListener('abort', cancel);
+      }
+    },
+  },
+},
 ```
 
-The host starts the runner after occurrence commit and retires it on
-replacement, disable/uninstall, or daemon shutdown. Do not use event activation
-as a background scheduler, and do not build a runner-owned polling loop to
-imitate one: use the Events service for event semantics, not for plugin-owned
-background lifecycle. Honor `context.signal`, let failures surface as
-diagnostics, and avoid a plugin-owned watcher, timer registry, or service
-lifecycle cache.
+The service id is local to the declaring plugin. `settlement` resolves when the
+demanded work and its child have settled, or rejects on failure or cancellation.
+An accepted demand can outlive the Action that requested it; forward cancellation
+explicitly when the Action should wait for and cancel its own demand. Cancelling
+one handle rejects only that caller without waiting for shared cleanup; it does
+not cancel another caller's demand.
+
+Demands that arrive during a run share one follow-up run. When the last run
+settles, the child exits; the next demand starts a fresh child. Honor the runner's
+`context.signal` so replacement, disable/uninstall and daemon shutdown can retire
+the work. Let failures surface through the host diagnostics.
+
+Omitting both fields keeps the existing daemon-process, continuous behavior:
+the host starts that runner after plugin adoption. The same lifecycle owner
+supports either placement and activation choice. A finite demand runner needs
+no polling loop or guessed idle delay.
+
+## Services in the child
+
+The first process-service contract supplies local logging, filesystem, HTTP and
+execution services under the plugin's admitted policy. Storage, Settings,
+Events, Sessions and Actions reach their existing daemon owners through one
+bridge. Public daemon database migrations and transaction callbacks still use
+the daemon's storage owner.
+
+Other services, including Secrets, managed services, UI and demanding another
+background service from the child, are unavailable in this contract. Check
+`context.services.availability(serviceId)` and declare required HostAccess
+truthfully: an unsupported required service prevents admission. A child process
+does not sandbox trusted plugin code.
+
+## Related
+
+- [Public SDK surface](/plugins/api/surface)
+- [Capability availability](/plugins/manifest/availability)
+- [Storage services](/plugins/services/storage)

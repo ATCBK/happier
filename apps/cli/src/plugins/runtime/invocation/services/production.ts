@@ -13,6 +13,7 @@ import {
     createPluginInvocationServicesFactory,
 } from './factory';
 import {
+    resolvePluginInvocationExecutable,
     withPluginInvocationAccountStorageAvailability,
     withPluginInvocationServiceBindingAvailability,
 } from './unavailable';
@@ -119,6 +120,9 @@ import type {
 } from './actions';
 import type { StableTargetedContributionsOwner } from './targetedContributions';
 import type { StablePluginComposerContentOwner } from './composerContent';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import type { BackgroundServiceProcessLocalPolicy, PreparedBackgroundServiceProcessLocalServices } from '../../lifecycle/contributions/backgroundServiceProcessServices';
+import { projectBackgroundServiceProcessProxiedServices } from '../../lifecycle/contributions/backgroundServiceProcessPolicy';
 
 type ResolvePluginExecutable = (
     executable: ManagedExecutableRef,
@@ -160,7 +164,7 @@ type PluginOperationServicesInput = Readonly<{
         required: boolean;
     }>[];
     /** The isolated Agent/session process has no duplex WebSocket wire. */
-    executionRealm?: 'runner';
+    executionRealm?: 'runner' | 'background-service-process';
 }>;
 
 export type ManagedProviderRuntimeInvocationServices = Readonly<{
@@ -252,6 +256,9 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
     invokeContributedAction?: InvokeContributedAction;
     targetedContributions?: StableTargetedContributionsOwner;
     composerContent?: StablePluginComposerContentOwner;
+    demandBackgroundService?(target: Readonly<{
+        pluginId: string; occurrenceId: string; localId: string; reason?: string;
+    }>): import('@happier-dev/plugin-sdk/background-services').BackgroundServiceDemandHandle;
     /**
      * Host-private current materialization authority. The resolved runtime
      * registry owns this lookup; invocation service construction only consumes
@@ -927,12 +934,12 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         ...hostPolicyParams,
         ...(params?.isOccurrenceCurrent ? { isOccurrenceCurrent: params.isOccurrenceCurrent } : {}),
     });
-    const createOperationServices = (
+    const createOperationServicesWithBinding = (
         seed: Parameters<typeof createServicesFactory>[0],
         operation: PluginOperationServicesInput,
-    ): ReturnType<typeof createServicesFactory> => {
+    ): Readonly<{ services: PluginServices; binding: PluginInvocationServiceBinding; seed: PluginInvocationServicesSeed; hostAccess: ReturnType<ReturnType<typeof createPluginInvocationHostPolicyResolver>>['hostAccess'] }> => {
         const currentSeed = attachCurrentPluginCallerResolvers(seed);
-        const baseBinding = createPluginInvocationHostPolicyResolver({
+        const policy = createPluginInvocationHostPolicyResolver({
             ...(params?.resolveOptionalAccess ? { resolveOptionalAccess: params.resolveOptionalAccess } : {}),
             createServiceBinding: createTargetServiceBindingForRoots(
                 operation.filesystemRoots,
@@ -950,7 +957,8 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             ...(operation.executionRealm === undefined
                 ? {}
                 : { executionRealm: operation.executionRealm }),
-        }).serviceBinding;
+        });
+        const baseBinding = policy.serviceBinding;
         const binding = operation.managedProviderRuntime
             && params?.managedServices
             ? withPluginInvocationServiceBindingAvailability(
@@ -979,7 +987,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             currentSeed.redactionLifetimeSignal ?? currentSeed.signal,
         );
         try {
-            return createOperationServicesFactory(
+            const services = createOperationServicesFactory(
                 operation.filesystemRoots,
                 operation.environment ?? Object.freeze({}),
                 operation.systemTools,
@@ -1025,10 +1033,91 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                         : {}),
                 },
             )(currentSeed, binding);
+            return { services, binding, seed: currentSeed, hostAccess: policy.hostAccess };
         } catch (error) {
             secretRedactor.completeInvocation(diagnosticScope);
             throw error;
         }
+    };
+    const createOperationServices = (seed: PluginInvocationServicesSeed, operation: PluginOperationServicesInput): PluginServices => (
+        createOperationServicesWithBinding(seed, operation).services
+    );
+    const prepareBackgroundServiceProcessLocalPolicy = async (
+        seed: PluginInvocationServicesSeed,
+        binding: PluginInvocationServiceBinding,
+        operation?: PluginOperationServicesInput,
+    ): Promise<PreparedBackgroundServiceProcessLocalServices> => {
+        if (seed.occurrenceId !== binding.occurrenceId || seed.signal.aborted || !seed.isOccurrenceCurrent()) {
+            throw new PluginError({ code: 'plugin_final_generation_retired', message: 'Background service occurrence is no longer current' });
+        }
+        if (operation?.managedProviderRuntime) {
+            throw new PluginError({ code: 'background_service_process_managed_runtime_unavailable', message: 'Managed provider custody cannot be transferred to a background service child' });
+        }
+        const roots = operation?.filesystemRoots ?? filesystemRoots ?? params?.resolveFilesystemRoots?.(seed.plugin.id) ?? undefined;
+        const { id, occurrenceId, availability, unavailableDiagnostics, filesystemScopes, filesystemRequestIds,
+            processExecutables, processEnvKeys, processRequestIds, environmentRequestIds,
+            networkOrigins, networkHostSuffixes, networkRequestIds, networkScopes,
+            networkClientOrigins, networkClientHostSuffixes, networkClientRequestIds, networkClientScopes } = binding;
+        const environment = operation ? operation.environment ?? {} : process.env;
+        const localPolicy: BackgroundServiceProcessLocalPolicy = {
+            binding: { id, occurrenceId, availability, unavailableDiagnostics, filesystemScopes, filesystemRequestIds,
+                processExecutables, processEnvKeys, processRequestIds, environmentRequestIds,
+                networkOrigins, networkHostSuffixes, networkRequestIds, networkScopes,
+                networkClientOrigins, networkClientHostSuffixes, networkClientRequestIds, networkClientScopes },
+            ...(roots ? { filesystemRoots: { pluginData: roots.pluginData, workspace: roots.workspace, projects: [...roots.projects] } } : {}),
+            environment: Object.fromEntries((processEnvKeys ?? []).flatMap((key) => {
+                const value = environment[key];
+                return value === undefined ? [] : [[key, value]];
+            })),
+        };
+        const systemTools = operation?.systemTools ?? params?.exec?.systemToolsForPlugin?.(seed.plugin.id);
+        const http = params?.http;
+        if (binding.availability.http === 'available' && !http?.bindWithAdapter) {
+            throw new PluginError({ code: 'background_service_process_http_policy_unavailable', message: 'HTTP policy owner cannot place its physical transport in this child' });
+        }
+        return {
+            localPolicy,
+            services: { __backgroundServiceProcessLocal: {
+                async writeLog(record) {
+                    const invocationLogger = resolveInvocationLogger(seed);
+                    if (record.level === 'diagnostic') {
+                        // The private adapter carries SDK diagnostic operands; this canonical
+                        // logger owns their invocation scope, redaction and bounds.
+                        if (record.diagnostic) invocationLogger.diagnostic(record.diagnostic as unknown as PluginDiagnosticData);
+                    } else {
+                        invocationLogger[record.level](record.message ?? '', record.fields);
+                    }
+                },
+                ...(systemTools ? { systemTools } : {}),
+                ...(params?.exec?.agentCli ? { agentCli: params.exec.agentCli } : {}),
+                ...(operation?.assertLaunchCurrent ? { assertLaunchCurrent: operation.assertLaunchCurrent } : {}),
+                ...(params?.exec ? { resolveExecutable: async (executable) => {
+                    if (seed.signal.aborted || !seed.isOccurrenceCurrent()) throw new PluginError({ code: 'plugin_final_generation_retired', message: 'Background service occurrence is no longer current' });
+                    const exec = operation?.resolveExecutable ? { ...params.exec!, resolveExecutable: operation.resolveExecutable } : params.exec!;
+                    const resolved = await resolvePluginInvocationExecutable(executable, seed.plugin.id, exec, systemTools);
+                    if (seed.signal.aborted || !seed.isOccurrenceCurrent()) {
+                        await resolved.release?.();
+                        throw new PluginError({ code: 'plugin_final_generation_retired', message: 'Background service occurrence is no longer current' });
+                    }
+                    if (!resolved.release) return resolved;
+                    const releaseExecutable = resolved.release;
+                    let released = false;
+                    const release = () => {
+                        if (released) return;
+                        released = true;
+                        seed.signal.removeEventListener('abort', release);
+                        releaseExecutable();
+                    };
+                    seed.signal.addEventListener('abort', release, { once: true });
+                    seed.retainCleanup?.({ async dispose() { release(); } });
+                    return { ...resolved, release };
+                } } : {}),
+                ...(http?.bindWithAdapter ? { http: {
+                    request: (input, options, adapter) => http.bindWithAdapter!(seed, binding, adapter, operation?.httpBinding).request(input, options),
+                    openWebSocket: (input, options, adapter) => http.bindWithAdapter!(seed, binding, adapter, operation?.httpBinding).openWebSocket(input, options),
+                } } : {}),
+            } },
+        };
     };
     return Object.freeze({
         stableEventsBroker: broker,
@@ -1099,6 +1188,18 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         addOrdinaryAvailableServices,
         createOrdinaryServiceBinding,
         createOperationServices,
+        prepareBackgroundServiceProcessLocalPolicy,
+        async prepareBackgroundServiceProcessOperationServices(seed: PluginInvocationServicesSeed, operation: PluginOperationServicesInput): Promise<PreparedBackgroundServiceProcessLocalServices> {
+            const processOperation = { ...operation, executionRealm: 'background-service-process' as const };
+            const admitted = createOperationServicesWithBinding(seed, processOperation);
+            const unavailableRequired = processOperation.hostAccessRequests.find(({ required, request }) => required && admitted.hostAccess.find((decision) => decision.id === request.id)?.status !== 'available');
+            if (unavailableRequired) throw new PluginError({ code: 'plugin_host_access_service_unavailable', message: 'Native reader requires a service unavailable in background process placement', details: { hostAccessId: unavailableRequired.request.id } });
+            const local = await prepareBackgroundServiceProcessLocalPolicy(admitted.seed, admitted.binding, processOperation);
+            return { localPolicy: local.localPolicy, services: {
+                ...projectBackgroundServiceProcessProxiedServices(admitted.services),
+                ...local.services,
+            } };
+        },
         createManagedProviderRuntimeInvocationServices(
             seed: Parameters<typeof createServicesFactory>[0],
             operation: PluginOperationServicesInput & Readonly<{
@@ -1128,7 +1229,12 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             ...args: Parameters<typeof createServicesFactory>
         ): ReturnType<typeof createServicesFactory> {
             const [inputSeed] = args;
-            const seed = attachCurrentPluginCallerResolvers(inputSeed);
+            const resolvedSeed = attachCurrentPluginCallerResolvers(inputSeed);
+            const seed: PluginInvocationServicesSeed = params?.demandBackgroundService
+                ? { ...resolvedSeed, demandBackgroundService: (localId, reason) => params.demandBackgroundService!({
+                    pluginId: resolvedSeed.plugin.id, occurrenceId: resolvedSeed.occurrenceId, localId, reason,
+                }) }
+                : resolvedSeed;
             retainResourceGeneration(
                 params?.resources,
                 seed.occurrenceId,

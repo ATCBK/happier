@@ -69,6 +69,7 @@ type _SubagentOperationsMustBeIntentOriented = AssertTrue<Equal<
 type _ServiceIdsMustBeExact = AssertTrue<Equal<
     PluginServiceId,
     | 'logger'
+    | 'backgroundServices'
     | 'storage'
     | 'settings'
     | 'secrets'
