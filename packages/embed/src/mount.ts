@@ -10,6 +10,22 @@ import { EMBED_PLACEHOLDER_THEME } from './themeTokenIds.js';
 /** The same ready deadline as the hosted-web bootstrap, not a credential lifetime. */
 const READY_TIMEOUT_MS = 30_000;
 
+/** Strict embed presentation values are JSON-only; compare them before crossing the frame wire. */
+function areEmbedPresentationValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((value, index) => areEmbedPresentationValuesEqual(value, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return keys.length === Object.keys(rightRecord).length
+    && keys.every((key) => Object.hasOwn(rightRecord, key)
+      && areEmbedPresentationValuesEqual(leftRecord[key], rightRecord[key]));
+}
+
 export function mountHappierSession(container: HTMLElement, options: EmbedOptions): EmbedHandle {
   const document = container.ownerDocument;
   const realm = document.defaultView;
@@ -184,13 +200,24 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
       if (disposed) return;
       const parsed = EmbedConfigureV1Schema.safeParse({ kind: 'configure', ...(update.ui === undefined ? {} : { ui: update.ui }), ...(update.style === undefined ? {} : { style: { ...update.style, v: 1 } }) });
       if (!parsed.success) return;
+      const titleChanged = update.title !== undefined && update.title !== presentation.title;
+      const uiChanged = parsed.data.ui !== undefined
+        && !areEmbedPresentationValuesEqual(parsed.data.ui, presentation.ui);
+      const styleChanged = parsed.data.style !== undefined
+        && !areEmbedPresentationValuesEqual(parsed.data.style,
+          presentation.style === undefined ? undefined : { ...presentation.style, v: 1 });
+      if (!titleChanged && !uiChanged && !styleChanged) return;
       presentation = { ...presentation, ...update };
-      if (update.title !== undefined) {
+      if (titleChanged) {
         frame.title = update.title || 'Chat';
         placeholder.setAttribute('aria-label', `Loading ${frame.title}`);
       }
-      applyPlaceholderStyle();
-      send(parsed.data);
+      if (styleChanged) applyPlaceholderStyle();
+      if (uiChanged || styleChanged) send({
+        kind: 'configure',
+        ...(uiChanged ? { ui: parsed.data.ui } : {}),
+        ...(styleChanged ? { style: parsed.data.style } : {}),
+      });
     },
     destroy() {
       if (disposed) return;

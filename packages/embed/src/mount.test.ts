@@ -151,6 +151,23 @@ describe('embed host', () => {
       for (const channel of nativeChannels) { channel.port1.close(); channel.port2.close(); }
     }
   });
+  it('publishes configuration only when the effective presentation changes', async () => {
+    const m = mount('A');
+    m.ready();
+    await flush();
+    const port = channels[0]!.port1;
+    port.postMessage.mockClear();
+    m.handle.update({ ui: { attachments: false }, style: { radius: 'soft' } });
+    m.handle.update({ ui: { attachments: false }, style: { radius: 'soft' } });
+    expect(port.postMessage).toHaveBeenCalledTimes(1);
+    expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      payload: { kind: 'configure', ui: { attachments: false }, style: { v: 1, radius: 'soft' } },
+    }));
+    m.handle.update({ title: 'Lead chat' });
+    expect(m.frame.title).toBe('Lead chat');
+    expect(port.postMessage).toHaveBeenCalledTimes(1);
+    m.handle.destroy();
+  });
   it('opens a titled, sandboxed new-chat frame without navigating its parent', () => {
     const container = document.createElement('div');
     document.body.append(container);
