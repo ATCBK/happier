@@ -739,15 +739,18 @@ async function pressButtonWithAccessibleLabelFragment(fragment: string): Promise
 
 /** Choose one option of a field Select through the shared menu it opens. */
 async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promise<void> {
-  // The menu trigger itself, not a row whose name also mentions the field.
-  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]')).find((candidate) => (
-    candidate.getAttribute('aria-label')?.includes(fieldLabel)
-  ));
-  expect(trigger, `Expected a ${JSON.stringify(fieldLabel)} field menu trigger`).toBeDefined();
-  await act(async () => { trigger?.click(); });
-  const option = await vi.waitFor(() => {
-    const candidate = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
-      .find((item) => item.textContent?.includes(optionLabel));
+  const findOption = () => Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+    .find((item) => item.textContent?.includes(optionLabel));
+  // A live reread can remount the row while the menu opens; open it again until its options are there.
+  const option = await vi.waitFor(async () => {
+    if (findOption() === undefined) {
+      const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]')).find((candidate) => (
+        candidate.getAttribute('aria-label')?.includes(fieldLabel)
+      ));
+      expect(trigger, `Expected a ${JSON.stringify(fieldLabel)} field menu trigger`).toBeDefined();
+      await act(async () => { trigger?.click(); });
+    }
+    const candidate = findOption();
     expect(candidate, `Expected a ${JSON.stringify(optionLabel)} option in the ${fieldLabel} menu`).toBeDefined();
     return candidate!;
   });
@@ -756,7 +759,7 @@ async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promi
 
 /** The current value a closed field Select states on its trigger. */
 function expectFieldValue(fieldLabel: string, optionLabel: string): void {
-  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]')).find((candidate) => (
+  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]')).find((candidate) => (
     candidate.getAttribute('aria-label')?.includes(fieldLabel)
   ));
   expect(trigger?.textContent ?? trigger?.getAttribute('aria-label')).toContain(optionLabel);
@@ -2445,7 +2448,19 @@ describe('Channels mounted ingress attention recovery', () => {
     });
 
     try {
-      await expect(fixture.findByRole('button', { name: 'Retry saved input' })).resolves.toBeDefined();
+      // The retry names the row it acts on, so two rows' identical buttons stay distinguishable.
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-testid="channels-ingress-attention-retry-${blockedObligationId}"]`)
+          ?.getAttribute('aria-label')).toMatch(/^Retry saved input \(.+\)$/);
+      });
+      // Each row names its conversation, says what happened and when, and never shows an id.
+      const blockedRow = document.querySelector(`[data-testid="channels-ingress-attention-${blockedObligationId}"]`);
+      const at = (atMs: number) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        .format(new Date(atMs));
+      expect(blockedRow?.textContent).toContain('Example conversation');
+      expect(blockedRow?.textContent).toContain('Retry stopped after 5 attempts');
+      expect(blockedRow?.textContent).toContain(at(20));
+      expect(document.body.textContent).not.toContain(blockedObligationId);
       await expect(fixture.getByText('Dropped because the sender could not be verified.')).resolves.toBeDefined();
       await expect(fixture.getByText('Dropped because the sender is not allowed.')).resolves.toBeDefined();
       await expect(fixture.getByText('Dropped because automated senders are not allowed.')).resolves.toBeDefined();
@@ -7062,9 +7077,9 @@ describe('Channels connection policy editing across a source change', () => {
       });
       await pressByTestId('channels-detail-resource-refresh');
 
-      await vi.waitFor(() => {
-        expectFieldValue('Maximum observation age', editedObservationAge);
-      });
+      await expect(fixture.getByRole('button', {
+        name: `Maximum observation age: ${editedObservationAge}`,
+      })).resolves.toBeDefined();
       const notice = document.querySelector<HTMLElement>('[data-testid="channels-connection-source-changed"]');
       expect(notice).not.toBeNull();
       const save = document.querySelector<HTMLElement>('[data-testid="channels-connection-save"]');
@@ -7078,9 +7093,9 @@ describe('Channels connection policy editing across a source change', () => {
       await vi.waitFor(() => {
         expect(document.querySelector('[data-testid="channels-connection-source-changed"]')).toBeNull();
       });
-      await vi.waitFor(() => {
-        expectFieldValue('Maximum observation age', '2 minutes');
-      });
+      await expect(fixture.getByRole('button', {
+        name: 'Maximum observation age: 2 minutes',
+      })).resolves.toBeDefined();
       expect(document.querySelector('[data-testid="channels-connection-save"]')?.getAttribute('aria-disabled'))
         .not.toBe('true');
     } finally {
@@ -7184,9 +7199,9 @@ describe('Channels connection policy editing across a source change', () => {
       await pressByTestId('channels-detail-resource-refresh');
 
       expect(document.querySelector('[data-testid="channels-connection-source-changed"]')).toBeNull();
-      await vi.waitFor(() => {
-        expectFieldValue('Maximum observation age', '2 minutes');
-      });
+      await expect(fixture.getByRole('button', {
+        name: 'Maximum observation age: 2 minutes',
+      })).resolves.toBeDefined();
       expect(document.querySelector('[data-testid="channels-connection-save"]')?.getAttribute('aria-disabled'))
         .not.toBe('true');
     } finally {
@@ -10007,7 +10022,7 @@ describe('Channels collapsed row identity', () => {
     }
   });
 
-  it('groups delivery decisions by the conversation each belongs to, not by their connection', async () => {
+  it('lists every undecided delivery in one list, each row naming its conversation and when it was sent', async () => {
     const account = createOfflineChannelStateFixture();
     const morges = offlineBindingRow();
     const morgesBinding = {
@@ -10040,10 +10055,12 @@ describe('Channels collapsed row identity', () => {
       };
     };
     const exampleCustodyId = 'c'.repeat(43);
+    const exampleSecondCustodyId = 'f'.repeat(43);
     const morgesCustodyId = 'd'.repeat(43);
     const unboundCustodyId = 'e'.repeat(43);
     for (const row of [
       deliveryFor(exampleCustodyId, 'binding-1'),
+      deliveryFor(exampleSecondCustodyId, 'binding-1'),
       deliveryFor(morgesCustodyId, 'binding-2'),
       deliveryFor(unboundCustodyId, undefined),
     ]) account.deliveries.rows.set(row.rowId, row);
@@ -10060,37 +10077,31 @@ describe('Channels collapsed row identity', () => {
 
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
-      const group = (key: string) => document.querySelector<HTMLElement>(
-        `[data-testid="channels-delivery-resolution-group-${key}"]`,
-      );
-      const rowIn = (key: string, custodyId: string) => group(key)?.querySelector(
+      const list = () => document.querySelector<HTMLElement>('[data-testid="channels-delivery-resolution-list"]');
+      const header = (custodyId: string) => document.querySelector<HTMLElement>(
         `[data-testid="channels-delivery-resolution-${custodyId}.header"]`,
-      ) ?? null;
+      );
       await vi.waitFor(() => {
-        expect(group('binding-2')?.textContent).toContain('Chantier Morges');
+        expect(header(morgesCustodyId)?.textContent).toContain('Chantier Morges');
       });
-      // One connection carries three deliveries: each conversation is its own named group holding
-      // only its deliveries, and the delivery outside any linked conversation stays connection-level.
-      expect(group('binding-1')?.textContent).toContain('Example conversation');
-      // Every delivery needs the same decision, so its count is said once above the conversations.
-      expect(document.querySelector('[data-testid="channels-delivery-resolution-controls"]')?.textContent)
-        .toContain('3 deliveries with an unknown outcome');
-      expect(group('binding-1')?.textContent).not.toContain('delivery with an unknown outcome');
-      expect(rowIn('binding-1', exampleCustodyId)).not.toBeNull();
-      expect(rowIn('binding-1', morgesCustodyId)).toBeNull();
-      expect(rowIn('binding-2', morgesCustodyId)).not.toBeNull();
-      expect(rowIn('binding-2', exampleCustodyId)).toBeNull();
-      expect(group('connection')?.textContent).toContain('Outside linked conversations');
-      expect(rowIn('connection', unboundCustodyId)).not.toBeNull();
-      expect(rowIn('connection', exampleCustodyId)).toBeNull();
-      // Conversations read by name; the connection-level group comes last.
-      const order = Array.from(document.querySelectorAll('[data-testid^="channels-delivery-resolution-group-"]'))
+      // Every delivery needs the same decision, so its count and what each choice does are said once above.
+      const controls = document.querySelector('[data-testid="channels-delivery-resolution-controls"]');
+      expect(controls?.textContent).toContain('4 deliveries with an unknown outcome');
+      expect(controls?.textContent?.split('Happier lost the answer while sending').length).toBe(2);
+      // One list, no per-conversation blocks: each row names its conversation and says when it was sent.
+      expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-group-"]')).toHaveLength(0);
+      for (const custodyId of [exampleCustodyId, exampleSecondCustodyId, morgesCustodyId, unboundCustodyId]) {
+        expect(list()?.contains(header(custodyId))).toBe(true);
+        expect(header(custodyId)?.textContent).toContain('Sent ');
+      }
+      expect(header(exampleSecondCustodyId)?.textContent).toContain('Example conversation');
+      expect(header(unboundCustodyId)?.textContent).toContain('Outside linked conversations');
+      // Conversations read by name; the connection-level delivery comes last.
+      const order = Array.from(list()?.querySelectorAll('[data-testid$=".header"]') ?? [])
         .map((element) => element.getAttribute('data-testid'));
-      expect(order).toEqual([
-        'channels-delivery-resolution-group-binding-2',
-        'channels-delivery-resolution-group-binding-1',
-        'channels-delivery-resolution-group-connection',
-      ]);
+      expect(order[0]).toBe(`channels-delivery-resolution-${morgesCustodyId}.header`);
+      expect(order.at(-1)).toBe(`channels-delivery-resolution-${unboundCustodyId}.header`);
+      expect(order).toHaveLength(4);
     } finally {
       await fixture.dispose();
     }
