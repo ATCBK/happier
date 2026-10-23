@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -247,6 +248,127 @@ test('host source aliases follow the importing host through the ordinary UI load
         const resolved = await server.pluginContainer.resolveId('@/sync/domains/browser/actions/runtimeActionExecutor', importer);
         assert.equal(resolved?.id, uiSource);
     }
+});
+
+test('ordinary UI collection loads current Settings metadata from source with poisoned workspace dist', async (t) => {
+    const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+    // Keep dependency lookup in this checkout, while every poisoned byte lives
+    // in a disposable replica rather than the shared workspace publication.
+    const fixturesRoot = resolve(repoRoot, '.project/tmp');
+    mkdirSync(fixturesRoot, { recursive: true });
+    const fixtureRoot = mkdtempSync(resolve(fixturesRoot, 'vitest-stale-dist-'));
+    t.after(() => { rmSync(fixtureRoot, { recursive: true, force: true }); });
+    const uiRoot = resolve(fixtureRoot, 'apps/ui');
+    const packageRoot = resolve(fixtureRoot, 'packages/protocol');
+    const metadataLeaf = 'actions/settings/builtInSettingsMetadata';
+    const sourcePath = resolve(packageRoot, `src/${metadataLeaf}.ts`);
+    const distPath = resolve(packageRoot, `dist/${metadataLeaf}.js`);
+    const evaluationPath = resolve(fixtureRoot, 'dist-evaluations');
+    const sourceEvaluationPath = resolve(fixtureRoot, 'source-evaluations');
+    const importId = `@happier-dev/protocol/${metadataLeaf}`;
+    mkdirSync(resolve(uiRoot, 'sources'), { recursive: true });
+    mkdirSync(resolve(packageRoot, 'src/actions/settings'), { recursive: true });
+    mkdirSync(resolve(packageRoot, 'dist/actions/settings'), { recursive: true });
+    mkdirSync(resolve(fixtureRoot, 'node_modules/@happier-dev'), { recursive: true });
+    symlinkSync(resolve(repoRoot, 'scripts'), resolve(fixtureRoot, 'scripts'), 'junction');
+    symlinkSync(packageRoot, resolve(fixtureRoot, 'node_modules/@happier-dev/protocol'), 'junction');
+    copyFileSync(resolve(repoRoot, 'apps/ui/vitest.config.ts'), resolve(uiRoot, 'vitest.config.ts'));
+    copyFileSync(resolve(repoRoot, 'packages/protocol/package.json'), resolve(packageRoot, 'package.json'));
+    writeFileSync(sourcePath, [
+        'import { appendFileSync } from "node:fs";',
+        `appendFileSync(${JSON.stringify(sourceEvaluationPath)}, JSON.stringify({ source: import.meta.url, pid: process.pid }) + "\\n");`,
+        readFileSync(resolve(repoRoot, `packages/protocol/src/${metadataLeaf}.ts`), 'utf8'),
+    ].join('\n'), 'utf8');
+    writeFileSync(distPath, [
+        'import { appendFileSync } from "node:fs";',
+        `appendFileSync(${JSON.stringify(evaluationPath)}, "evaluated\\n");`,
+        'export const BUILT_IN_SETTINGS_METADATA_V1 = [];',
+        'throw new Error("Poisoned first-party dist evaluated");',
+    ].join('\n'), 'utf8');
+    const collectorPath = resolve(uiRoot, 'sources/settingsMetadataCollection.ts');
+    writeFileSync(collectorPath, [
+        `import { BUILT_IN_SETTINGS_METADATA_V1 } from ${JSON.stringify(importId)};`,
+        'export const encryptionMetadata = BUILT_IN_SETTINGS_METADATA_V1.find(',
+        '  (metadata) => metadata.anchor === "account.encryptionMode",',
+        ');',
+        'if (!encryptionMetadata) throw new Error("Current Settings metadata missing during collection");',
+    ].join('\n'), 'utf8');
+
+    const transformedPaths: string[] = [];
+    const server = await createServer({
+        root: uiRoot,
+        configFile: resolve(uiRoot, 'vitest.config.ts'),
+        server: { middlewareMode: true, watch: null },
+        optimizeDeps: { noDiscovery: true },
+        logLevel: 'silent',
+        plugins: [{
+            name: 'observe-first-party-collection-paths',
+            transform(_source, id) { transformedPaths.push(id); },
+        }],
+    });
+    t.after(async () => { await server.close(); });
+
+    const resolved = await server.pluginContainer.resolveId(importId, collectorPath);
+    assert.equal(resolved?.id, sourcePath);
+    const collected = await server.ssrLoadModule(collectorPath);
+    assert.equal(collected.encryptionMetadata?.anchor, 'account.encryptionMode');
+    assert.ok(transformedPaths.includes(sourcePath), 'the source metadata must actually be transformed and evaluated');
+    const distTransforms = transformedPaths.filter((path) => /\/packages\/(?:plugins\/)?[^/]+\/dist\//.test(path));
+    assert.deepEqual(distTransforms, []);
+    assert.equal(existsSync(evaluationPath), false, 'no first-party dist may evaluate during source collection');
+    t.diagnostic(JSON.stringify({ resolvedSource: resolved?.id, evaluatedSource: sourcePath, firstPartyDistEvaluations: 0 }));
+
+    // The ordinary Vitest setup stays intact. Link its real source graph into
+    // the replica, retaining the copied metadata leaf and poisoned publication.
+    for (const entry of readdirSync(resolve(repoRoot, 'apps/ui/sources'), { withFileTypes: true })) {
+        symlinkSync(resolve(repoRoot, 'apps/ui/sources', entry.name), resolve(uiRoot, 'sources', entry.name), entry.isDirectory() ? 'junction' : 'file');
+    }
+    for (const entry of readdirSync(resolve(repoRoot, 'packages'), { withFileTypes: true })) {
+        if (entry.name === 'protocol') continue;
+        symlinkSync(resolve(repoRoot, 'packages', entry.name), resolve(fixtureRoot, 'packages', entry.name), entry.isDirectory() ? 'junction' : 'file');
+    }
+    for (const [parent, retained] of [['', 'actions'], ['actions', 'settings'], ['actions/settings', 'builtInSettingsMetadata.ts']] as const) {
+        for (const entry of readdirSync(resolve(repoRoot, 'packages/protocol/src', parent), { withFileTypes: true })) {
+            if (entry.name === retained) continue;
+            symlinkSync(resolve(repoRoot, 'packages/protocol/src', parent, entry.name), resolve(packageRoot, 'src', parent, entry.name), entry.isDirectory() ? 'junction' : 'file');
+        }
+    }
+    rmSync(sourceEvaluationPath);
+    const childTestPath = resolve(uiRoot, 'sources/settingsMetadataCollection.test.ts');
+    writeFileSync(childTestPath, [
+        'import { expect, it } from "vitest";',
+        'import { existsSync, readFileSync } from "node:fs";',
+        'import { fileURLToPath } from "node:url";',
+        `import { BUILT_IN_SETTINGS_METADATA_V1 } from ${JSON.stringify(importId)};`,
+        'it("collects current source metadata while dist is poisoned", () => {',
+        '  expect(BUILT_IN_SETTINGS_METADATA_V1.some((metadata) => metadata.anchor === "account.encryptionMode")).toBe(true);',
+        `  const evaluations = readFileSync(${JSON.stringify(sourceEvaluationPath)}, "utf8").trim().split("\\n").map((line) => JSON.parse(line));`,
+        `  expect(evaluations.some(({ source, pid }) => fileURLToPath(source) === ${JSON.stringify(sourcePath)} && pid === process.pid)).toBe(true);`,
+        `  expect(existsSync(${JSON.stringify(evaluationPath)})).toBe(false);`,
+        '});',
+    ].join('\n'), 'utf8');
+    const childResultPath = resolve(fixtureRoot, 'vitest-result.json');
+    const child = spawnSync(process.execPath, [
+        resolve(repoRoot, 'node_modules/vitest/vitest.mjs'), 'run',
+        'sources/settingsMetadataCollection.test.ts', '--config', resolve(uiRoot, 'vitest.config.ts'),
+        '--reporter=json', '--outputFile', childResultPath,
+    ], { cwd: uiRoot, encoding: 'utf8' });
+    // Do not print child setup/fixture output: it can contain credential-shaped
+    // values from unrelated canonical UI boundary fixtures.
+    assert.equal(child.error, undefined, 'the real Vitest child must launch');
+    assert.equal(child.status, 0, `the real Vitest child must pass (signal=${child.signal})`);
+    const childResult = JSON.parse(readFileSync(childResultPath, 'utf8')) as { numPassedTests: number; numFailedTests: number };
+    assert.equal(childResult.numPassedTests, 1);
+    assert.equal(childResult.numFailedTests, 0);
+    const childEvaluations = readFileSync(sourceEvaluationPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { source: string; pid: number });
+    assert.ok(childEvaluations.some(({ source, pid }) => fileURLToPath(source) === sourcePath && pid !== process.pid));
+    assert.equal(existsSync(evaluationPath), false, 'the real Vitest child must evaluate zero poisoned dist modules');
+    t.diagnostic(JSON.stringify({ vitestChildPassedTests: childResult.numPassedTests, evaluatedSource: childEvaluations.map(({ source }) => fileURLToPath(source)), firstPartyDistEvaluations: 0 }));
+
+    // This control proves the fixture is executable poison, not an absent dist
+    // file or a marker that the loader could silently ignore.
+    await assert.rejects(server.ssrLoadModule(distPath), /Poisoned first-party dist evaluated/);
+    assert.equal(readFileSync(evaluationPath, 'utf8'), 'evaluated\n');
 });
 
 test('ordinary workspace-source Vitest configs use the canonical resolver instead of package aliases', async () => {
