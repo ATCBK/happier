@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-import { PrismaClient } from "../generated/mysql-client/index.js";
+import { createDbMaintenanceClient } from "../sources/storage/db";
 import {
     hasSessionSystemRecordContractMigration,
     runSessionSystemRecordFinalContractBackfill,
@@ -436,10 +436,10 @@ export async function runMysqlMigrationDeploy(input: Readonly<{
     await verifyTriggerPostflight(input.database, authority, pendingMigrations);
 }
 
-async function main(): Promise<void> {
+export async function runMysqlMigrationDeployMain(): Promise<void> {
     const env: NodeJS.ProcessEnv = { ...process.env };
     const serverRoot = resolveServerWorkspaceRoot(import.meta.url);
-    const prisma = new PrismaClient();
+    const prisma = await createDbMaintenanceClient("mysql");
     const database: MysqlMigrationAdmissionDatabase = {
         query: (sql, ...values) => prisma.$queryRawUnsafe<QueryRows>(sql, ...values),
     };
@@ -479,7 +479,7 @@ const invokedAsMain =
     && pathToFileURL(process.argv[1]).href === import.meta.url;
 
 if (invokedAsMain) {
-    void main().catch((error: unknown) => {
+    void runMysqlMigrationDeployMain().catch((error: unknown) => {
         console.error(error);
         process.exit(1);
     });
