@@ -1,5 +1,7 @@
 import type { Tx } from "@/storage/inTx";
-import { AccountStatus, TeamMembershipStatus, TeamRole } from "@/storage/enums.generated";
+import { resolveDbSqlDialect } from "@/config/databaseProvider";
+import { getDbProviderFromEnv, prismaRuntime } from "@/storage/prisma";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 
 /**
  * The one Team-ownership question Account erasure must ask.
@@ -29,42 +31,35 @@ export async function readTeamOwnershipErasureDecisionsInTx(
     );
     if (accountIds.length === 0) return decisions;
 
-    const ownedTeams = await tx.teamMembership.findMany({
-        where: { accountId: { in: accountIds }, role: TeamRole.owner },
-        select: { accountId: true, teamId: true },
-    });
-    if (ownedTeams.length === 0) return decisions;
-
-    const teamIds = [...new Set(ownedTeams.map(({ teamId }) => teamId))];
-    const [teams, activeMemberships] = await Promise.all([
-        tx.team.findMany({
-            where: { id: { in: teamIds } },
-            select: { id: true, archivedAt: true },
-        }),
-        tx.teamMembership.findMany({
-            where: {
-                teamId: { in: teamIds },
-                status: TeamMembershipStatus.active,
-                account: { status: AccountStatus.active },
-            },
-            select: { teamId: true, accountId: true, role: true },
-        }),
-    ]);
-    const archivedByTeamId = new Map(teams.map((team) => [team.id, team.archivedAt !== null]));
-    const activeMembershipsByTeamId = new Map<string, typeof activeMemberships>();
-    for (const membership of activeMemberships) {
-        const members = activeMembershipsByTeamId.get(membership.teamId) ?? [];
-        members.push(membership);
-        activeMembershipsByTeamId.set(membership.teamId, members);
-    }
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
+    // Identifiers are fixed here; only the requested Account ids are bound data.
+    const identifier = (name: string) => prismaRuntime.raw(dialect === "mysql" ? `\`${name}\`` : `"${name}"`);
+    // Ownership survives retirement/suspension for erasure retries. The joined
+    // members are only *other* current members, never the target's lifecycle.
+    // Aggregate at the database: return blocked identities, not a Team or
+    // membership inventory, and avoid repeating a correlated scan per Team.
+    const blockedOwnerships = (await Promise.all(portableQueryChunks({ values: accountIds, bindingsPerValue: 1 }).map(ids =>
+        tx.$queryRaw<Array<{ accountId: string; teamId: string }>>(prismaRuntime.sql`
+            SELECT ownership.${identifier("accountId")} AS ${identifier("accountId")},
+                ownership.${identifier("teamId")} AS ${identifier("teamId")}
+            FROM ${identifier("TeamMembership")} AS ownership
+            JOIN ${identifier("Team")} AS ownedTeam ON ownedTeam.${identifier("id")} = ownership.${identifier("teamId")}
+            JOIN ${identifier("TeamMembership")} AS otherMembership
+                ON otherMembership.${identifier("teamId")} = ownership.${identifier("teamId")}
+                AND otherMembership.${identifier("accountId")} <> ownership.${identifier("accountId")}
+                AND otherMembership.${identifier("status")} = 'active'
+            JOIN ${identifier("Account")} AS otherAccount
+                ON otherAccount.${identifier("id")} = otherMembership.${identifier("accountId")}
+                AND otherAccount.${identifier("status")} = 'active'
+            WHERE ownership.${identifier("accountId")} IN (${prismaRuntime.join([...ids])})
+                AND ownership.${identifier("role")} = 'owner'
+                AND ownedTeam.${identifier("archivedAt")} IS NULL
+            GROUP BY ownership.${identifier("accountId")}, ownership.${identifier("teamId")}
+            HAVING COUNT(CASE WHEN otherMembership.${identifier("role")} = 'owner' THEN 1 END) = 0
+        `),
+    ))).flat();
     const blockedByAccountId = new Map<string, string[]>();
-
-    for (const ownership of ownedTeams) {
-        if (archivedByTeamId.get(ownership.teamId) !== false) continue;
-        const otherActiveMemberships = (activeMembershipsByTeamId.get(ownership.teamId) ?? [])
-            .filter((membership) => membership.accountId !== ownership.accountId);
-        if (otherActiveMemberships.some((membership) => membership.role === TeamRole.owner)) continue;
-        if (otherActiveMemberships.length === 0) continue;
+    for (const ownership of blockedOwnerships) {
         const blocked = blockedByAccountId.get(ownership.accountId) ?? [];
         blocked.push(ownership.teamId);
         blockedByAccountId.set(ownership.accountId, blocked);
