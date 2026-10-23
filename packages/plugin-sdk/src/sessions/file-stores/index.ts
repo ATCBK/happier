@@ -1,5 +1,6 @@
 export type { AgentAccountingJsonlProjection } from '../fileStores/accountingJsonl.js';
 export type { AgentAccountingJsonlState } from '../fileStores/accountingJsonl.js';
+export type { ContentPrefilterParams } from '../fileStores/contentSearch.js';
 export type { ExternalSessionContentSearchControl } from '../fileStores/contentSearch.js';
 export type { ExternalSessionContentSearchPageProgress } from '../fileStores/contentSearch.js';
 export { ExternalSessionContentSearchYield } from '../fileStores/contentSearch.js';

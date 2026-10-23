@@ -93,7 +93,7 @@ function escapePattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-type ContentPrefilterParams = Readonly<{
+export type ContentPrefilterParams = Readonly<{
   query: string;
   paths: readonly string[];
   ripgrep: NonNullable<AgentExternalSessionsInvocation['ripgrep']>;
