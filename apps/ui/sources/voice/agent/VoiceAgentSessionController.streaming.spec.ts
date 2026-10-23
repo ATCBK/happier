@@ -320,7 +320,6 @@ describe('VoiceExecutionTransport (streaming)', () => {
         return new Response('{}', { status: 404 });
       }),
     });
-    vi.useFakeTimers();
     setVoiceControllerState();
     useVoiceTargetStore.setState({ scope: 'global', primaryActionSessionAddress: null, voiceLiveContextSessionAddresses: [], lastFocusedSessionAddress: null } as any);
     daemonRunGet.mockReset();
@@ -1070,6 +1069,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     }));
 
     const controller = createVoiceExecutionTransport();
+    await controller.ensureRunning('s1');
+    vi.useFakeTimers();
     const sendTurnOutcome = trackPromise(controller.sendTurn('s1', 'hello'));
 
     await flushHookEffects({ cycles: 1, advanceTimersMs: 1300 });
@@ -1122,6 +1123,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     );
 
     const controller = createVoiceExecutionTransport();
+    await controller.ensureRunning('s1');
+    vi.useFakeTimers();
     const sendTurnOutcome = trackPromise(controller.sendTurn('s1', 'hello'));
 
     await flushHookEffects({ cycles: 1, advanceTimersMs: 1800 });
@@ -1161,6 +1164,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     );
 
     const controller = createVoiceExecutionTransport();
+    await controller.ensureRunning('s1');
+    vi.useFakeTimers();
 
     const sendTurnOutcome = trackPromise(controller.sendTurn('s1', 'hello'));
 
@@ -1187,6 +1192,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
       });
 
       const controller = createVoiceExecutionTransport();
+      await controller.ensureRunning('s1');
+      vi.useFakeTimers();
       const abortController = new AbortController();
 
       const sendTurnOutcome = trackPromise(controller.sendTurn('s1', 'hello', { signal: abortController.signal } as any));
@@ -1238,6 +1245,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     );
 
     const controller = createVoiceExecutionTransport();
+    await controller.ensureRunning('s1');
+    vi.useFakeTimers();
 
     const sendTurnOutcome = trackPromise(controller.sendTurn('s1', 'hello'));
 

@@ -860,7 +860,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         await authorityInvalidation.promise;
         throw new Error('unreachable_connected_account_authority');
       });
-      const browser = installVoiceWebRtcBrowserBoundary();
+      const peerCreated = createDeferredVoid();
+      const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: () => peerCreated.resolve() });
       const composed = await environment.createRuntime(browser, {
         respondToDaemonAccountOperation: request,
       });
@@ -904,6 +905,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           requestedTargetSessionAddress: null,
           initialContext: '',
         });
+        await Promise.race([peerCreated.promise, secondStart]);
         await vi.waitFor(() => expect(
           browser.peer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));

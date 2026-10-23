@@ -47,7 +47,10 @@ describe('real Local Voice Agent activation', () => {
                 failure = await Promise.race([stopping, Promise.resolve(null)]);
                 expect(failure).not.toBeNull();
             });
-            expect(readRpcErrorCode(failure)).toBe(outcome === 'cancel' ? 'SOCKET_RPC_ABORTED' : RPC_ERROR_CODES.OUTCOME_UNKNOWN);
+            // An interrupted cleanup read is transport-unavailable; mutation
+            // acknowledgments retain their outcome-unknown public code.
+            expect(readRpcErrorCode(failure)).toBe(outcome === 'cancel' ? 'SOCKET_RPC_ABORTED'
+                : outcome === 'cleanup_disconnect' ? RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE : RPC_ERROR_CODES.OUTCOME_UNKNOWN);
             if (outcome === 'cancel') {
                 expect(fixture.rpcSockets.some(socket => vi.mocked(socket.emit).mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true);
             }

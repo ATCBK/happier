@@ -5,7 +5,7 @@ import 'fake-indexeddb/auto';
 import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import renderer, { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { setPreferredLanguageFromSettings, t } from '@/text';
 
 import { storage } from '@/sync/domains/state/storage';
@@ -264,6 +264,22 @@ async function renderScreen(element: React.ReactElement) {
       {element}
     </InjectedAuthProvider>,
   );
+}
+
+// Observe actual Start settlement; the containing test owns the time budget.
+async function waitForQaStart() {
+  await new Promise<void>((resolve, reject) => {
+    const observe = () => {
+      const status = useVoiceQaStore.getState().status;
+      if (status !== 'running' && status !== 'error') return;
+      unsubscribe();
+      if (status === 'running') resolve();
+      else reject(new Error('voice_qa_start_failed'));
+    };
+    const unsubscribe = useVoiceQaStore.subscribe(observe);
+    onTestFinished(unsubscribe);
+    observe();
+  });
 }
 
 // Hoist framework boundaries before storage's import graph reaches real media owners.
@@ -948,6 +964,7 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
+    await waitForQaStart();
     await vi.waitFor(() => {
       const state = useVoiceQaStore.getState();
       expect({ status: state.status,
@@ -976,6 +993,7 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
+    await waitForQaStart();
     await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
     expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
       targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_media' } });
@@ -1019,6 +1037,7 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(startButton);
     });
 
+    await waitForQaStart();
     await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
     expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
       targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_relay' } });
@@ -1117,6 +1136,7 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(sendButton);
     });
 
+    await waitForQaStart();
     await vi.waitFor(() => expect(pendingWrites).toHaveLength(1));
     await vi.waitFor(() => expect(sdk.sendUserMessage).toHaveBeenCalledWith('prompt_latest'));
     expect(useVoiceQaStore.getState().targetSessionAddress?.sessionId).toBe('session_send');

@@ -361,7 +361,9 @@ describe('local voice engine device STT (experimental)', () => {
                 status: 'error', canStop: false, errorCode: 'mic_permission_denied',
             }));
             const dismissal = lifecycle.dismissFailedAttempt('s1');
-            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', adapterId: null });
+            // Dismiss retires the failed attempt through the same physical
+            // cleanup owner as End; controls remain until cleanup settles.
+            expect(lifecycle.getSnapshot()).toMatchObject({ adapterId: providerId, canStop: true });
             expect(getVoiceSessionEndedAttempt()).toBeNull();
             const restart = lifecycle.toggle(target);
             await Promise.all([dismissal, restart]);
@@ -418,13 +420,13 @@ describe('local voice engine device STT (experimental)', () => {
                 if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
             });
             const snapshot = lifecycle.getSnapshot();
-            expect(snapshot).toMatchObject({ status: 'disconnected', canStop: false });
+            expect(snapshot).toMatchObject({ status: 'connected', mode: 'idle', canStop: true });
             const control = resolveVoiceAttemptControl({
                 ...snapshot, surfaceState: resolveVoiceSurfaceState(snapshot), tone: 'neutral',
                 muted: false, capturing: false, startAdmitted: true, hasRecovery: false,
             });
-            expect(control).toMatchObject({ surfaceState: 'idle', live: false, primaryAction: 'start' });
-            expect(getVoiceSessionEndedAttempt()).toMatchObject({ sessionId: 's1', reason: { kind: 'stopped' } });
+            expect(control).toMatchObject({ surfaceState: 'idle', live: true, primaryAction: 'end' });
+            expect(getVoiceSessionEndedAttempt()).toBeNull();
             expect(getVoiceConversationRuntimeSnapshot().state).toBe('ending');
             let restartSettled = false;
             const restart = lifecycle.toggle(target).finally(() => { restartSettled = true; });
@@ -442,7 +444,9 @@ describe('local voice engine device STT (experimental)', () => {
             if (outcome === 'account') lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
             if (outcome === 'provider') lifecycle.setConfiguredProviderId('off');
             if (outcome !== 'start') {
-                expect(lifecycle.getSnapshot().status).toBe('disconnected');
+                if (outcome !== 'dispose') expect(lifecycle.getSnapshot()).toMatchObject({
+                    status: 'connected', mode: 'idle', canStop: true,
+                });
                 expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
                 expect(lifecycle.getSnapshot().errorMessage).toBeUndefined();
                 // Cancelling Start retires its observer while the OS still
@@ -452,7 +456,11 @@ describe('local voice engine device STT (experimental)', () => {
             emitSpeechRecEvent('end');
             await Promise.all([end, restart, cancellation]);
             if (outcome !== 'start') {
-                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
+                if (outcome === 'dispose') {
+                    // Disposal freezes its last publication. The OS release,
+                    // rather than that retired snapshot, proves cleanup.
+                    expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+                } else expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
                 expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
             }
             expect(speechRecStart).toHaveBeenCalledTimes(outcome === 'start' ? 2 : 1);
