@@ -77,7 +77,7 @@ export type DaemonPublicVoiceModelPackEntry = Readonly<{
 
 export type DaemonPublicVoiceModelPackRuntime = Readonly<{
   ready(): Promise<void>;
-  list(): Promise<readonly DaemonPublicVoiceModelPackEntry[]>;
+  list(keys?: readonly string[]): Promise<readonly DaemonPublicVoiceModelPackEntry[]>;
   resolve(key: string): Promise<DaemonPublicVoiceModelPackEntry | null>;
   install(input: Readonly<{
     key: string;
@@ -342,7 +342,8 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
     return actualManifest;
   }
 
-  async function project(): Promise<readonly DaemonPublicVoiceModelPackEntry[]> {
+  async function project(keys?: readonly string[]): Promise<readonly DaemonPublicVoiceModelPackEntry[]> {
+    const requestedKeys = keys === undefined ? null : new Set(keys);
     await ready();
     const durable = await state.read();
     const pluginCatalog = await readInstalledPluginCatalogSnapshot({ happyHomeDir: params.happyHomeDir });
@@ -403,11 +404,15 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
         verifiedInstallKeys.delete(verificationKeyFor(installedMetadata));
         verifiedPhysicalFingerprints.delete(verificationKeyFor(installedMetadata));
       }
+      const key = buildQualifiedPluginContributionKey({
+        pluginId: descriptor.identity.pluginId,
+        localId: descriptor.identity.packId,
+      });
+      // Admission and invalidation still observe the whole current catalog;
+      // physical model reads belong only to the caller's requested packs.
+      if (requestedKeys && !requestedKeys.has(key)) continue;
       entries.push(Object.freeze({
-        key: buildQualifiedPluginContributionKey({
-          pluginId: descriptor.identity.pluginId,
-          localId: descriptor.identity.packId,
-        }),
+        key,
         identity: descriptor.identity,
         directoryKey: descriptor.directoryKey,
         descriptor,
@@ -428,11 +433,13 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
     for (const metadata of durable.installed) {
       const identityKey = JSON.stringify([metadata.identity.pluginId, metadata.identity.packId]);
       if (activeIdentityKeys.has(identityKey)) continue;
+      const key = buildQualifiedPluginContributionKey({
+        pluginId: metadata.identity.pluginId,
+        localId: metadata.identity.packId,
+      });
+      if (requestedKeys && !requestedKeys.has(key)) continue;
       entries.push(Object.freeze({
-        key: buildQualifiedPluginContributionKey({
-          pluginId: metadata.identity.pluginId,
-          localId: metadata.identity.packId,
-        }),
+        key,
         identity: metadata.identity,
         directoryKey: metadata.directoryKey,
         descriptor: null,
@@ -452,11 +459,13 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
         cleanupOnly.identity.packId,
       ]);
       if (activeIdentityKeys.has(identityKey)) continue;
+      const key = buildQualifiedPluginContributionKey({
+        pluginId: cleanupOnly.identity.pluginId,
+        localId: cleanupOnly.identity.packId,
+      });
+      if (requestedKeys && !requestedKeys.has(key)) continue;
       entries.push(Object.freeze({
-        key: buildQualifiedPluginContributionKey({
-          pluginId: cleanupOnly.identity.pluginId,
-          localId: cleanupOnly.identity.packId,
-        }),
+        key,
         identity: cleanupOnly.identity,
         directoryKey: cleanupOnly.directoryKey,
         descriptor: null,
@@ -470,7 +479,7 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
   }
 
   const resolve = async (key: string): Promise<DaemonPublicVoiceModelPackEntry | null> => (
-    (await project()).find((entry) => entry.key === key) ?? null
+    (await project([key])).find((entry) => entry.key === key) ?? null
   );
 
   return Object.freeze({

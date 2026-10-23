@@ -25,6 +25,7 @@ import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
 import { createStorageCategoryCatalog } from '@/storage/categoryCatalog';
 import { readResidentVoiceModelPackPaths } from './storagePaths';
 import { readInstalledVoiceModelPackManifest } from '../voiceModelPackInstaller';
+import { createNodeInstalledModelPackIntegrityHost } from '../nodeModelPackIntegrityHost';
 import { createNodeModelPackInstallerHost } from '../nodeModelPackInstallerHost';
 import type { PinnedHttpStreamTransport } from '@/network/pinnedHttp';
 import {
@@ -93,6 +94,7 @@ async function installZipformerPluginFixture(params: Readonly<{
   happyHomeDir: string;
   roots: string[];
   requireLicenseAcceptance?: boolean;
+  packCount?: number;
 }>): Promise<ReadonlyMap<string, Uint8Array>> {
   const archiveSourceRoot = await mkdtemp(join(tmpdir(), 'happier-public-model-pack-archive-'));
   params.roots.push(archiveSourceRoot);
@@ -100,7 +102,7 @@ async function installZipformerPluginFixture(params: Readonly<{
   await materializeZipformerVoiceModelPackPluginFixture(archiveRoot);
   const pluginJsonPath = join(archiveRoot, '.happier-plugin', 'plugin.json');
   type FixturePluginJson = {
-    contributes: { voiceModelPacks: Array<{ manifest: {
+    contributes: { voiceModelPacks: Array<{ id: string; manifest: {
       license: {
         id: string;
         title: string;
@@ -131,6 +133,10 @@ async function installZipformerPluginFixture(params: Readonly<{
     file.sha256 = createHash('sha256').update(bytes).digest('hex');
     file.sizeBytes = bytes.byteLength;
     assets.set(file.url, bytes);
+  }
+  const firstPack = pluginJson.contributes.voiceModelPacks[0]!;
+  for (let index = 1; index < (params.packCount ?? 1); index += 1) {
+    pluginJson.contributes.voiceModelPacks.push({ ...structuredClone(firstPack), id: `fixture-pack-${index}` });
   }
   await writeFile(pluginJsonPath, JSON.stringify(pluginJson, null, 2), 'utf8');
   await installVoiceModelPackPluginArchiveFixture({
@@ -199,6 +205,56 @@ describe('daemon public Voice model-pack consumed vertical', () => {
     envScope.restore();
     reloadConfiguration();
     await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
+  });
+
+  it('reads only requested installed packs for exact resolution and targeted worker status', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-public-model-pack-demand-'));
+    roots.push(happyHomeDir);
+    envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir });
+    reloadConfiguration();
+    const assets = await installZipformerPluginFixture({ happyHomeDir, roots, packCount: 32 });
+    const paths = resolveVoiceInferencePaths();
+    const fingerprinted: string[] = [];
+    const integrityHost = createNodeInstalledModelPackIntegrityHost(paths.packsRootDir);
+    const params = {
+      accountId: 'account-demand', machineId: 'machine-demand', happyHomeDir, paths,
+      stateFilePath: join(happyHomeDir, 'packs-state.json'),
+      createInstallerHost: createFixtureInstallerHostFactory(assets),
+      fingerprintInstalledPack: async (packId: string, filePaths: readonly string[]) => {
+        fingerprinted.push(packId);
+        return await integrityHost.fingerprint(packId, filePaths);
+      },
+    };
+    const installer = createDaemonPublicVoiceModelPackRuntime(params);
+    const declared = await installer.list();
+    expect(declared).toHaveLength(32);
+    for (const entry of declared) {
+      await installer.install({ key: entry.key, signal: new AbortController().signal });
+    }
+    const runtime = createDaemonPublicVoiceModelPackRuntime(params);
+    const selected = declared[0]!;
+    fingerprinted.length = 0;
+    expect(await runtime.resolve(selected.key)).toMatchObject({ key: selected.key, installedManifest: expect.any(Object) });
+    expect(fingerprinted).toEqual([selected.directoryKey]);
+
+    const worker = await startVoiceInferenceWorker({ publicModelPacks: runtime, isolationMode: 'in_process' });
+    try {
+      fingerprinted.length = 0;
+      const statuses = await worker.getModelsStatus([selected.key, selected.key]);
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0]).toMatchObject({ packId: selected.key, installState: 'installed' });
+      expect(fingerprinted).toEqual([selected.directoryKey]);
+
+      fingerprinted.length = 0;
+      expect(await runtime.resolve('dev.happier.unknown/missing')).toBeNull();
+      expect(fingerprinted).toEqual([]);
+
+      fingerprinted.length = 0;
+      expect(await runtime.list()).toHaveLength(32);
+      expect(new Set(fingerprinted)).toEqual(new Set(declared.map(entry => entry.directoryKey)));
+    } finally {
+      await worker.stop();
+    }
   });
 
   it('retains packs for Trash, restores use metadata after real integrity verification and refuses tampered bytes', async () => {
