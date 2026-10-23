@@ -3,13 +3,48 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { transform } from 'esbuild';
+import { build, transform } from 'esbuild';
+import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import { readCliSourceEntries, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths } from '../sourceRuntimeEntries.mjs';
+import { createWorkspaceSourceResolver, readCliSourceEntries, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths } from '../sourceRuntimeEntries.mjs';
 
 describe('CLI source entry ownership', () => {
+  it('retains importer dependencies and import/require conditions in lazy shared chunks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-source-import-owner-'));
+    try {
+      const plugin = join(root, 'installed plugin#owner');
+      const output = join(root, 'runtime');
+      for (const directory of [root, plugin]) {
+        const dependency = join(directory, 'node_modules', 'fixture-css');
+        await mkdir(dependency, { recursive: true });
+        await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-css', type: 'module',
+          exports: { import: './index.js', require: './index.cjs' } }));
+        const owner = directory === plugin ? 'plugin' : 'host';
+        await writeFile(join(dependency, 'index.js'), `export const generate = '${owner}-import';`);
+        await writeFile(join(dependency, 'index.cjs'), `module.exports = { generate: '${owner}-require' };`);
+      }
+      await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }));
+      await writeFile(join(plugin, 'shape.js'), "import { generate } from 'fixture-css'; export { generate }; export const required = require('fixture-css').generate;");
+      await writeFile(join(plugin, 'index.js'), "export async function parse() { const shape = await import('./shape.js'); return [shape.generate, shape.required]; } export async function optional() { return import('fixture-uninstalled'); }");
+      await build({ entryPoints: [join(plugin, 'index.js')], outdir: output, bundle: true,
+        splitting: true, format: 'esm', platform: 'node',
+        banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
+        plugins: [createWorkspaceSourceResolver({ workspacePackages: new Map(), requireFromProject: createRequire(join(root, 'package.json')) })],
+      });
+      // Native import observes the emitted graph without Vitest re-resolving it.
+      const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+const m = await import(${JSON.stringify(pathToFileURL(join(output, 'index.js')).href)});
+let missing; try { await m.optional(); } catch (e) { missing = e.code; }
+console.log(JSON.stringify({ parsed: await m.parse(), missing }));
+`]);
+      expect(JSON.parse(stdout)).toEqual({ parsed: ['plugin-import', 'plugin-require'], missing: 'ERR_MODULE_NOT_FOUND' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('loads Stack storage helpers without unrelated Home lifecycle and account schemas', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'happier-storage-imports-'));
     try {
