@@ -10,7 +10,10 @@ const require = createRequire(path.join(uiRoot, 'package.json'));
 const { applyPatch, parsePatch, reversePatch } = require('diff');
 const filename = require.resolve('@expo/metro-config/build/serializer/serializeChunks');
 const patchFile = path.resolve(uiRoot, '../../patches/@expo__metro-config@55.0.13.patch');
-const serializerPatch = parsePatch(readFileSync(patchFile, 'utf8')).find(
+// An explicit test fixture can exercise a held candidate without installing it
+// or representing it as the tracked dependency patch.
+const suppliedPatch = process.env.HAPPIER_TEST_METRO_CONFIG_PATCH;
+const serializerPatch = parsePatch(suppliedPatch ?? readFileSync(patchFile, 'utf8')).find(
     patch => patch.newFileName === 'b/build/serializer/serializeChunks.js',
 );
 const installed = readFileSync(filename, 'utf8');
