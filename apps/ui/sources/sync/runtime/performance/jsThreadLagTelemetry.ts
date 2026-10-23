@@ -134,6 +134,9 @@ export function createJsThreadLagTelemetry(options: JsThreadLagTelemetryOptions)
     return {
         start(): boolean {
             if (timer) return false;
+            // Counts captures keep store/fiber attribution, not this diagnostic
+            // sampler's 50ms background work. Ordinary telemetry is unchanged.
+            if ((globalThis as unknown as { __HAPPIER_PERF_CAPTURE_MODE__?: unknown }).__HAPPIER_PERF_CAPTURE_MODE__ === 'counts') return false;
             if (!options.telemetry.isEnabled()) return false;
             expectedAtMs = now() + sampleIntervalMs;
             scheduleNext();
