@@ -18,6 +18,15 @@ import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/scr
 import type { NewSessionSimplePanelProps } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { NewSessionSimplePanel } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
+import { DestinationInstanceContext } from '@/components/appShell/workspace/destinationInstanceContext';
+
+const planetPaints = vi.hoisted(() => ({ count: 0, font: {} }));
+vi.mock('@shopify/react-native-skia', async () => ({
+    ...(await import('@/dev/testkit/mocks/reactNativeSkia')).createReactNativeSkiaMock(),
+    // Native picture allocation is the physical drawing boundary.
+    useFont: () => planetPaints.font,
+    createPicture: () => { planetPaints.count++; return { dispose() {} }; },
+}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -69,6 +78,74 @@ describe('New Session atmosphere at the real stage and focus boundary', () => {
         } } }));
     });
     afterEach(() => { storage.setState(previous, true); atmosphereStageStore.setSending(false); setReducedMotionPreferenceOverride(null); });
+
+    it('does no planet or band work for a retained inactive destination and resumes when presented', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+        let timerFires = 0;
+        const interval = globalThis.setInterval;
+        vi.spyOn(globalThis, 'setInterval').mockImplementation((callback, delay, ...args) =>
+            interval(() => { timerFires++; callback(...args); }, delay));
+        let mounts = 0;
+        function Draft() {
+            React.useEffect(() => { mounts++; }, []);
+            return <View testID="retained-draft" />;
+        }
+        const scene = (visible: boolean, focused = visible) => <DestinationInstanceContext.Provider value={{
+            tabId: 'retained-project', ref: { kind: 'home', params: {} }, pathname: '/', visible, focused,
+        }}>
+            <AtmosphereSurfaceFrame surface={{ project: { serverId: 'srv', projectKey: 'p1' } }}>
+                <Draft />
+            </AtmosphereSurfaceFrame>
+        </DestinationInstanceContext.Provider>;
+        const screen = await renderScreen(scene(true), { createNodeMock: () => ({
+            measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, 0, 390, 844),
+        }) });
+        try {
+            expect(planetPaints.count).toBeGreaterThan(0);
+            expect(atmosphereStageStore.get().panes).toHaveLength(1);
+            await screen.update(scene(false));
+            const hiddenPaints = planetPaints.count;
+            await act(async () => {
+                storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+                    ...state.settings.homeAtmosphere, planet: { ...state.settings.homeAtmosphere.planet, style: 'rich' },
+                } } }));
+                vi.advanceTimersByTime(300_000);
+            });
+            expect.soft(planetPaints.count - hiddenPaints).toBe(0);
+            expect.soft(screen.findAllByType(PlanetCanvas)).toHaveLength(0);
+            expect(atmosphereStageStore.get().panes).toHaveLength(0);
+            expect(timerFires).toBe(0);
+            expect(vi.getTimerCount()).toBe(0);
+            // A visible split pane still paints without keyboard focus.
+            await screen.update(scene(true, false));
+            expect(planetPaints.count).toBeGreaterThan(hiddenPaints);
+            expect(screen.findAllByType(PlanetCanvas)).toHaveLength(1);
+            expect(atmosphereStageStore.get().panes).toHaveLength(1);
+            expect(mounts).toBe(1);
+        } finally {
+            await screen.unmount();
+            vi.restoreAllMocks();
+            vi.useRealTimers();
+        }
+    });
+
+    it('lays the Project band over the page column, not over the whole pane group that holds it', async () => {
+        function Scene() {
+            const column = React.useRef<View>(null);
+            return <AtmosphereSurfaceFrame surface={{ project: { serverId: 'srv', projectKey: 'p1' } }} column={column}>
+                <View testID="project-column" ref={column} />
+            </AtmosphereSurfaceFrame>;
+        }
+        const screen = await renderScreen(<Scene />, { createNodeMock: (element: { props: { testID?: string } }) => ({
+            measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) =>
+                element.props.testID === 'project-column' ? done(700, 40, 400, 850) : done(300, 40, 800, 850),
+        }) });
+        try {
+            expect(atmosphereStageStore.get().panes[0]?.geometry?.rect).toEqual({ x: 700, y: 40, width: 400, height: 850 });
+        } finally {
+            await screen.unmount();
+        }
+    });
 
     it.each(['screen', 'modal'] as const)('uses Elements in the %s New composer instead of the content or menu material', async (mode) => {
         storage.setState(state => ({ ...state, settings: { ...state.settings,

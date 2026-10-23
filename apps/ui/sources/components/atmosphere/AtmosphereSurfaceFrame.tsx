@@ -28,14 +28,13 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
     editor?: AtmosphereEditor;
     /** False when the surface seats Look itself (the floating New Session composer's status row). */
     showLook?: boolean;
+    /** The column that holds the band when the frame wraps more than that column (a Project beside its editor). */
+    column?: React.RefObject<View | null>;
     children: React.ReactNode;
 }>) {
     const destinationFocus = useDestinationFocus();
     const destinationVisible = useDestinationVisibility();
     const destinationKey = useDestinationInstanceKey();
-    const { theme } = useUnistyles();
-    const phone = useDeviceType() === 'phone';
-    const atmosphere = useAtmosphere(props.surface);
     const homeAtmosphere = useSetting('homeAtmosphere');
     const behindSessions = homeAtmosphere.behindSessions;
     const sending = useAtmosphereSending() && homeAtmosphere.moments.send !== false;
@@ -51,7 +50,7 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
     const writing = React.useRef(false);
     const onLayout = React.useCallback(() => {
         const id = ++request.current;
-        void Promise.all([measure(paneRef.current), measure(bandRef.current)]).then(([pane, tabs]) => {
+        void Promise.all([measure(props.column?.current ?? paneRef.current), measure(bandRef.current)]).then(([pane, tabs]) => {
             if (!pane || id !== request.current) return;
             const band = tabs ? projectAtmosphereBand({ pane, tabs }) : 0;
             setGeometry(previous => previous && writing.current && previous.rect.width === pane.width
@@ -60,7 +59,7 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
                 : { rect: pane, band, horizonAt: 0.86,
                     focus: { x: pane.width / 2, y: tabs ? tabs.y + tabs.height / 2 - pane.y : pane.height / 2 } });
         });
-    }, [props.session]);
+    }, [props.session, props.column]);
     React.useEffect(() => { onLayout(); return () => { request.current++; }; }, [onLayout, visible]);
     // Every visible pane contributes its rectangle, including opaque transcripts. Only an atmosphere
     // surface (or the session opt-in) may select the scene; toggling the coat does not recrop its neighbors.
@@ -74,16 +73,26 @@ export function AtmosphereSurfaceFrame(props: Readonly<{
         <GlassSurface plane surfaceGroup="content" finishRole={null}
             atmosphereCoat={props.session ? behindSessions && pictureShown ? 'reading' : 'opaque' : undefined}
             style={{ flex: 1, minWidth: 0, minHeight: 0 }} testID={props.session ? 'session-atmosphere-coat' : 'atmosphere-surface'}>
-            {enabled && !props.session && geometry && atmosphere.source === 'planet' ? <HomePlanet
-                pane={{ width: geometry.rect.width, height: geometry.rect.height }} placement={atmosphere.planet.placement}
-                style={atmosphere.planet.style} digits={atmosphere.planet.digits} theme={theme.dark ? 'dark' : 'light'} phone={phone}
-                hero={geometry.band > 0 ? { composerTop: 2 * geometry.focus.y - geometry.band, aboveBottom: geometry.band, nextTop: null } : null}
-                band={typeof props.surface === 'object' && geometry.band > 0 ? geometry.band : undefined}
-                hidden={!visible || sending} leave={sending ? 'climb' : 'fade'} reducedMotion={atmosphere.reducedMotion} /> : null}
+            {visible && !props.session && geometry ? <SurfacePlanet surface={props.surface} geometry={geometry} sending={sending} /> : null}
             <AtmosphereBandBoundary.Provider value={enabled ? boundary : null}>{props.children}</AtmosphereBandBoundary.Provider>
             {enabled && !props.session && props.showLook !== false && typeof props.surface === 'string' ? <View style={{ position: 'absolute', right: 16, top: 14 }}>
                 <LookChip target={target} testID="new-session-look" />
             </View> : null}
         </GlassSurface>
     </View>;
+}
+
+/** Resolve device picture availability and draw only while this destination is presented. */
+function SurfacePlanet(props: Readonly<{ surface: AtmosphereSurface; geometry: AtmosphereStageGeometry; sending: boolean }>) {
+    const { theme } = useUnistyles();
+    const phone = useDeviceType() === 'phone';
+    const atmosphere = useAtmosphere(props.surface);
+    const { geometry, sending } = props;
+    if (atmosphere.source !== 'planet') return null;
+    return <HomePlanet
+        pane={{ width: geometry.rect.width, height: geometry.rect.height }} placement={atmosphere.planet.placement}
+        style={atmosphere.planet.style} digits={atmosphere.planet.digits} theme={theme.dark ? 'dark' : 'light'} phone={phone}
+        hero={geometry.band > 0 ? { composerTop: 2 * geometry.focus.y - geometry.band, aboveBottom: geometry.band, nextTop: null } : null}
+        band={typeof props.surface === 'object' && geometry.band > 0 ? geometry.band : undefined}
+        hidden={sending} leave={sending ? 'climb' : 'fade'} reducedMotion={atmosphere.reducedMotion} />;
 }

@@ -290,7 +290,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     const widePage = mainSurface === 'overview' || mainSurface === 'code';
 
     return (
-        <ProjectAtmosphereFrame project={{ serverId: workspaceRef.serverId, projectKey: workspaceRef.projectKey ?? workspaceRef.id }} focused={props.isFocused}>
+        <ProjectAtmosphereFrame project={{ serverId: workspaceRef.serverId, projectKey: workspaceRef.projectKey ?? workspaceRef.id }} focused={props.isFocused} column={pageColumnRef}>
         <View style={{ flex: 1 }} {...pane.overlayFocusReturnCaptureProps}>
             <AppPaneScopeHost
                 scopeId={scopeId}

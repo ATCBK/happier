@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
+import { View } from 'react-native';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_HOME_ATMOSPHERE } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -13,6 +14,9 @@ import { GlassAtmosphereBehindSetterProvider, GlassAtmosphereToneSetterProvider,
 import { resolveGlassSurfacePlaneMaterial } from '@/components/ui/glass/glassSurfacePaint';
 import { useGlassMaterialSettings } from '@/components/ui/glass/useGlassMaterialSettings';
 import type { GlassAtmosphereTone, GlassMaterialEnvironment } from '@/components/ui/glass/glassMaterial';
+import { AtmosphereSurfaceFrame } from './AtmosphereSurfaceFrame';
+import { DestinationInstanceContext } from '@/components/appShell/workspace/destinationInstanceContext';
+import { useAtmosphereBandBoundary } from './atmosphereBandBoundary';
 
 // Exercise the real browser drawing and device-storage adapters under their OS boundaries.
 vi.mock('./BackdropCanvas', async () => import('./BackdropCanvas.web'));
@@ -32,6 +36,143 @@ vi.mock('expo-router', async () => {
 });
 
 afterEach(() => { atmosphereStageStore.clearStage(-1); atmosphereStageStore.clearStage(-2); vi.unstubAllGlobals(); });
+
+function ProjectTabs() {
+    const boundary = useAtmosphereBandBoundary();
+    return <View testID="project-tabs" ref={boundary?.ref} onLayout={boundary?.onLayout} />;
+}
+
+it('does not remeasure a shared band render when another pane projects the same pixels', async () => {
+    let bufferReads = 0;
+    let jobs = 0;
+    vi.stubGlobal('Worker', class {
+        onmessage: ((event: { data: BackdropWorkerResponse }) => void) | null = null;
+        postMessage(message: BackdropWorkerRequest) {
+            if (!('request' in message)) return;
+            jobs++;
+            const { width: w, height: h } = message.request;
+            const rgba = new Uint8ClampedArray(w * h * 4);
+            // Measure reads of the real worker result, including tone sampling; no domain logic stub.
+            const result = { w, h, get rgba() { bufferReads++; return rgba; } };
+            queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true, result } }));
+        }
+        terminate() {}
+    });
+    vi.stubGlobal('ImageData', class {
+        constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    });
+    const previous = storage.getState();
+    const localId = 'band-tone-cost';
+    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+    try {
+        await pictureStore.put({ localId, kind: 'user', data: new Blob(['prepared picture']) });
+        storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...DEFAULT_HOME_ATMOSPHERE, source: 'picture', picture: { ref: { kind: 'user', localId }, layout: 'horizon' },
+        } } }));
+        const geometry = { rect: { x: 0, y: 0, width: 80, height: 60 }, band: 35, horizonAt: 0.86, focus: { x: 40, y: 25 } };
+        atmosphereStageStore.setStage({ id: -1, surface: 'home', geometry }, true);
+        screen = await renderScreen(<AtmosphereLayer sheetRadius={12} chrome={false} />, { createNodeMock: element =>
+            element.type === 'canvas' ? { getContext: () => ({ putImageData() {} }) } : {
+                measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, 0, 80, 60),
+            },
+        });
+        expect(bufferReads).toBeGreaterThan(1);
+        bufferReads = 0;
+        // The extra projection lies inside the existing scene: its pixels and tone are unchanged.
+        await act(async () => atmosphereStageStore.setStage({ id: -2, surface: 'new-session', geometry: {
+            ...geometry, rect: { ...geometry.rect, x: 40, width: 40 },
+        } }, false));
+        expect(screen.findAllHostsByTestId('atmosphere-band')).toHaveLength(2);
+        expect(jobs).toBe(1);
+        // One read copies the buffer into the new canvas. No repeated tone sampling is needed.
+        expect(bufferReads).toBe(1);
+    } finally {
+        await screen?.unmount();
+        storage.setState(previous, true);
+        await pictureStore.remove(localId);
+    }
+});
+
+it('withdraws a hidden retained Project band without worker jobs or paints, and restores it on activation', async () => {
+    let jobs = 0;
+    let paints = 0;
+    vi.stubGlobal('Worker', class {
+        onmessage: ((event: { data: BackdropWorkerResponse }) => void) | null = null;
+        postMessage(message: BackdropWorkerRequest) {
+            if (!('request' in message)) return;
+            jobs++;
+            const { width: w, height: h } = message.request;
+            queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ok: true,
+                result: { rgba: new Uint8ClampedArray(w * h * 4), w, h } } }));
+        }
+        terminate() {}
+    });
+    vi.stubGlobal('ImageData', class {
+        constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    });
+    const previous = storage.getState();
+    const localId = 'retained-project-band';
+    await pictureStore.put({ localId, kind: 'user', data: new Blob(['prepared picture'], { type: 'image/webp' }) });
+    const scene = (visible: boolean) => <>
+        <AtmosphereLayer sheetRadius={12} chrome={false} />
+        <DestinationInstanceContext.Provider value={{ tabId: 'retained-project', ref: { kind: 'project', params: {} },
+            pathname: '/projects/p1', visible, focused: visible }}>
+            <AtmosphereSurfaceFrame surface={{ project: { serverId: 'srv', projectKey: 'p1' } }} showLook={false}>
+                <ProjectTabs />
+            </AtmosphereSurfaceFrame>
+        </DestinationInstanceContext.Provider>
+    </>;
+    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+    try {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+        storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...DEFAULT_HOME_ATMOSPHERE, source: 'picture', picture: { ref: { kind: 'user', localId }, layout: 'horizon' },
+        } } }));
+        screen = await renderScreen(scene(true), { createNodeMock: element => element.type === 'canvas'
+            ? { getContext: () => ({ putImageData() { paints++; } }) }
+            : { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) =>
+                done(0, 0, 390, element.props.testID === 'project-tabs' ? 110 : 844) },
+        });
+        await vi.waitFor(() => {
+            expect(jobs).toBeGreaterThan(0);
+            expect(paints).toBeGreaterThan(0);
+        });
+        await screen.update(scene(false));
+        const hiddenJobs = jobs, hiddenPaints = paints;
+        const downloads = vi.fn(async () => new Response(null, { status: 503 }));
+        vi.stubGlobal('fetch', downloads);
+        await act(async () => storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...state.settings.homeAtmosphere, picture: { ref: { kind: 'builtin', id: 'calm-sea' }, layout: 'horizon' },
+        } } })));
+        await act(async () => { vi.advanceTimersByTime(300_000); });
+        await act(async () => {
+            // IndexedDB schedules transaction completion on real Node task turns.
+            for (let turn = 0; turn < 8; turn++) await new Promise<void>(resolve => setImmediate(resolve));
+        });
+        expect(screen.findAllHostsByTestId('atmosphere-band')).toHaveLength(0);
+        expect(jobs - hiddenJobs).toBe(0);
+        expect(paints - hiddenPaints).toBe(0);
+        expect(downloads).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        await act(async () => storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...state.settings.homeAtmosphere, picture: { ref: { kind: 'user', localId }, layout: 'horizon' },
+        } } })));
+        await screen.update(scene(true));
+        await vi.waitFor(() => {
+            expect(screen!.findAllHostsByTestId('atmosphere-band')).toHaveLength(1);
+            expect(paints).toBeGreaterThan(hiddenPaints);
+        });
+        await act(async () => storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...state.settings.homeAtmosphere, picture: { ref: { kind: 'builtin', id: 'calm-sea' }, layout: 'horizon' },
+        } } })));
+        await vi.waitFor(() => expect(downloads).toHaveBeenCalled());
+    } finally {
+        await screen?.unmount();
+        vi.useRealTimers();
+        storage.setState(previous, true);
+        await pictureStore.remove(localId);
+    }
+});
 
 function picturePosition(node: ReactTestInstance) {
     let x = 0, y = 0;
