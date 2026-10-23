@@ -12,7 +12,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return createServerScopedMachineRpcBoundaryMock(boundary.rpc);
 });
 
-import { getMachineCapabilitiesCacheState, prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale, useMachineCapabilitiesCache } from './useMachineCapabilitiesCache';
+import { getMachineCapabilitiesCacheState, prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale, subscribeMachineCapabilitiesCacheState, useMachineCapabilitiesCache } from './useMachineCapabilitiesCache';
 
 const response = (version: string) => ({ protocolVersion: 1, results: { 'cli.codex': { ok: true, checkedAt: 1, data: { version } } } });
 const request: CapabilitiesDetectRequest = { checklistId: CHECKLIST_IDS.NEW_SESSION, requests: [{ id: 'cli.codex', params: { includeLoginStatus: false } }] };
@@ -22,12 +22,56 @@ function lifetime(accountId: string) {
     const callbacks = new Set<() => void>();
     const value: ServerAccountScopeLifetime = { scope: { serverId: 'cache-accounts', accountId }, isCurrent: () => current,
         onRetire(cancel) { callbacks.add(cancel); return { dispose() { callbacks.delete(cancel); } }; } };
-    return { value, retire() { current = false; for (const cancel of callbacks) cancel(); } };
+    return { value, retirementObservers: () => callbacks.size,
+        retire() { current = false; for (const cancel of callbacks) cancel(); } };
 }
 
 afterEach(() => { boundary.rpc.mockReset(); vi.useRealTimers(); });
 
 describe('machine capabilities cache races at the RPC boundary', () => {
+    it('keeps failed finite capability reads finite with passive presenters, and recovers on real demand', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockRejectedValue(new Error('Transient transport failure'));
+        const targets = Array.from({ length: 22 }, (_, index) => ({
+            machineId: `passive-finite-error-${index}`, serverId: 'passive-finite-home', request,
+        }));
+        let presenterRenders = 0;
+        const presenters: Array<{
+            getCurrent(): ReturnType<typeof useMachineCapabilitiesCache>;
+            unmount(): Promise<void>;
+        }> = [];
+        try {
+            for (const target of targets) presenters.push(await renderHook(() => {
+                presenterRenders++;
+                return useMachineCapabilitiesCache({ ...target, enabled: false });
+            }));
+            expect(boundary.rpc).not.toHaveBeenCalled();
+            await act(async () => { await Promise.all(targets.map(target => prefetchMachineCapabilities(target))); });
+            expect(boundary.rpc).toHaveBeenCalledTimes(22);
+            expect(presenters.every(presenter => presenter.getCurrent().state.status === 'error')).toBe(true);
+            const settledRenders = presenterRenders;
+
+            // A display-only observer does not turn a completed finite collector
+            // into a recurring RPC/publication owner, even over several backoffs.
+            await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+            expect(boundary.rpc).toHaveBeenCalledTimes(22);
+            expect(presenterRenders).toBe(settledRenders);
+            expect(vi.getTimerCount()).toBe(0);
+
+            boundary.rpc.mockResolvedValue(response('explicit-recovery'));
+            await act(async () => presenters[0]!.getCurrent().refresh());
+            expect(boundary.rpc).toHaveBeenCalledTimes(23);
+            expect(presenters[0]!.getCurrent().state.status).toBe('loaded');
+            const active = await renderHook(() => useMachineCapabilitiesCache({ ...targets[1]!, enabled: true }));
+            try {
+                expect(boundary.rpc).toHaveBeenCalledTimes(24);
+                expect(active.getCurrent().state.status).toBe('loaded');
+            } finally { await active.unmount(); }
+        } finally {
+            for (const presenter of presenters) await presenter.unmount();
+        }
+    });
+
     it.each([
         { label: 'request', request: { requests: [{ id: 'cli.codex', params: { includeLoginStatus: true } }] } },
         { label: 'override', request: { checklistId: CHECKLIST_IDS.MACHINE_DETAILS,
@@ -134,6 +178,99 @@ describe('machine capabilities cache races at the RPC boundary', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
         expect(second.getCurrent().state).toMatchObject({ status: 'loaded', snapshot: { response: { results: { 'cli.codex': { data: { version: 'surviving-retry' } } } } } });
         await second.unmount();
+    });
+
+    it('cancels error retry when active detection ends even if a passive presenter remains', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockRejectedValue(new Error('Transient transport failure'));
+        const target = { machineId: 'active-error-with-passive', serverId: 'active-error-home', request };
+        const passive = await renderHook(() => useMachineCapabilitiesCache({ ...target, enabled: false }));
+        const active = await renderHook(() => useMachineCapabilitiesCache({ ...target, enabled: true }));
+        try {
+            expect(active.getCurrent().state.status).toBe('error');
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            await active.unmount();
+            expect(vi.getTimerCount()).toBe(0);
+            await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            expect(passive.getCurrent().state.status).toBe('error');
+        } finally { await passive.unmount(); }
+    });
+
+    it('transfers pending error recovery to a newly enabled reader without restarting the existing deadline', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockRejectedValueOnce(new Error('Transient transport failure')).mockResolvedValue(response('newly-enabled-retry'));
+        const target = { machineId: 'error-demand-successor', serverId: 'error-demand-successor-home', request, enabled: true };
+        const first = await renderHook(() => useMachineCapabilitiesCache(target));
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        const successor = await renderHook(() => useMachineCapabilitiesCache(target));
+        try {
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            await first.unmount();
+            await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+            expect(boundary.rpc).toHaveBeenCalledTimes(2);
+            expect(successor.getCurrent().state.status).toBe('loaded');
+        } finally { await successor.unmount(); }
+    });
+
+    it('transfers pending error recovery across a finite acquisition after a successful active read', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockResolvedValueOnce(response('initially-ready'));
+        const target = { machineId: 'active-finite-overlap', serverId: 'active-finite-overlap-home', request };
+        await prefetchMachineCapabilities(target);
+        const active = await renderHook(() => useMachineCapabilitiesCache({ ...target, enabled: true }));
+        try {
+            expect(active.getCurrent().state.status).toBe('loaded');
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            boundary.rpc.mockRejectedValueOnce(new Error('Finite refresh failed')).mockResolvedValue(response('recovered-active-demand'));
+            await act(async () => { await prefetchMachineCapabilities(target); });
+            expect(active.getCurrent().state.status).toBe('error');
+            expect(boundary.rpc).toHaveBeenCalledTimes(2);
+            await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+            expect(boundary.rpc).toHaveBeenCalledTimes(3);
+            expect(active.getCurrent().state.status).toBe('loaded');
+        } finally { await active.unmount(); }
+    });
+
+    it('disposes scoped recurring retry demand on Account retirement while a passive presenter remains', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockRejectedValue(new Error('Transient transport failure'));
+        const account = lifetime('retired-retry-demand');
+        const recurring = new AbortController();
+        const target = { machineId: 'retired-recurring-error', serverId: account.value.scope.serverId,
+            accountLifetime: account.value, retryWhileObserved: recurring.signal, request };
+        let publications = 0;
+        const stop = subscribeMachineCapabilitiesCacheState(target.machineId, target.serverId, undefined,
+            () => { publications++; }, account.value.scope.accountId);
+        try {
+            await prefetchMachineCapabilities(target);
+            expect(getMachineCapabilitiesCacheState(target.machineId, target.serverId, undefined, account.value.scope.accountId)?.status).toBe('error');
+            expect(account.retirementObservers()).toBe(1);
+            const settledPublications = publications;
+            account.retire();
+            expect(account.retirementObservers()).toBe(0);
+            expect(vi.getTimerCount()).toBe(0);
+            await vi.advanceTimersByTimeAsync(180_000);
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            expect(publications).toBe(settledPublications);
+        } finally { recurring.abort(); stop(); }
+    });
+
+    it('disposes scoped recurring retry demand after success without retaining a timer or retirement listener', async () => {
+        vi.useFakeTimers();
+        boundary.rpc.mockResolvedValue(response('ready-with-live-demand'));
+        const account = lifetime('successful-retry-demand');
+        const recurring = new AbortController();
+        const target = { machineId: 'successful-recurring-demand', serverId: account.value.scope.serverId,
+            accountLifetime: account.value, signal: recurring.signal, retryWhileObserved: recurring.signal, request };
+        await prefetchMachineCapabilities(target);
+        expect(getMachineCapabilitiesCacheState(target.machineId, target.serverId, undefined, account.value.scope.accountId)?.status).toBe('loaded');
+        expect(vi.getTimerCount()).toBe(0);
+        expect(account.retirementObservers()).toBe(1);
+        recurring.abort();
+        expect(account.retirementObservers()).toBe(0);
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
     });
 
     it('releases Updates collection loading when its actual collector is cancelled', async () => {

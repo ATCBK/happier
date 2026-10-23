@@ -130,7 +130,7 @@ function observe(input: Readonly<{ lifetime: ServerAccountScopeLifetime; machine
 }
 
 /** Shared inventory/selected-Agent refresh; the credential lifetime, never focused Home, owns transport. */
-export async function refreshMachineAgents(input: Readonly<{ serverId: string; machineId: string; accountLifetime: ServerAccountScopeLifetime; agentId?: string; definitionId?: string; force?: boolean; signal?: AbortSignal }>): Promise<void> {
+export async function refreshMachineAgents(input: Readonly<{ serverId: string; machineId: string; accountLifetime: ServerAccountScopeLifetime; agentId?: string; definitionId?: string; force?: boolean; signal?: AbortSignal; retryWhileObserved?: AbortSignal }>): Promise<void> {
     const lifetime = input.accountLifetime;
     if (input.signal?.aborted || !lifetime.isCurrent() || lifetime.scope.serverId !== input.serverId) return;
     hydrate(lifetime, input.machineId);
@@ -166,7 +166,8 @@ export async function refreshMachineAgents(input: Readonly<{ serverId: string; m
     }
     const requestedAgents = input.agentId ? agents.filter((agent) => agent.agentId === input.agentId) : agents;
     if (requestedAgents.length === 0 && !definitions?.length) return;
-    const args = { machineId: input.machineId, serverId: input.serverId, accountLifetime: lifetime, signal: input.signal, cacheKeySalt: capabilitySalt(lifetime, revision), request: buildMachineAgentsDetectRequest({
+    const args = { machineId: input.machineId, serverId: input.serverId, accountLifetime: lifetime, signal: input.signal,
+        retryWhileObserved: input.retryWhileObserved, cacheKeySalt: capabilitySalt(lifetime, revision), request: buildMachineAgentsDetectRequest({
         agents: requestedAgents, refresh: input.force,
         ...definitionInventory, ...(definitions ? { definitions } : {}),
         // Send needs installation and authentication, not a vendor's latest release.
@@ -217,16 +218,20 @@ function useInventoryDriver(target: MachineAgentsTarget) {
     React.useEffect(() => {
         if (!lifetime || !enabled || !online || target.load === false) return;
         const abort = new AbortController();
-        void refreshMachineAgents({ serverId, machineId, accountLifetime: lifetime, agentId, definitionId, signal: abort.signal });
+        // This enabled inventory remains a detection consumer after acquisition;
+        // its existing effect lifetime, unlike a finite Action, owns recovery.
+        void refreshMachineAgents({ serverId, machineId, accountLifetime: lifetime, agentId, definitionId,
+            signal: abort.signal, retryWhileObserved: abort.signal });
         return () => abort.abort();
     }, [acpCatalog?.data, agentId, definitionId, enabled, lifetime, online, projectionRevisions, machineId, projection.inputs, serverId, target.load]);
     const refreshAbort = React.useRef<AbortController | null>(null);
-    React.useEffect(() => () => refreshAbort.current?.abort(), [agentId, definitionId, enabled, lifetime, machineId, serverId]);
+    React.useEffect(() => () => refreshAbort.current?.abort(), [agentId, definitionId, enabled, lifetime, machineId, serverId, target.load]);
     const refresh = React.useCallback(async () => {
         refreshAbort.current?.abort();
         const abort = new AbortController();
         refreshAbort.current = abort;
-        if (enabled && lifetime) await refreshMachineAgents({ serverId, machineId, accountLifetime: lifetime, agentId, definitionId, force: true, signal: abort.signal });
+        if (enabled && lifetime) await refreshMachineAgents({ serverId, machineId, accountLifetime: lifetime, agentId, definitionId,
+            force: true, signal: abort.signal });
     }, [agentId, definitionId, enabled, lifetime, machineId, serverId]);
     return { key, lifetime, refresh };
 }

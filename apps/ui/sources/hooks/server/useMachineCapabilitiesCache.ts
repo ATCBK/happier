@@ -30,7 +30,14 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const listeners = new Map<string, Set<(state: MachineCapabilitiesCacheState) => void>>();
-const scheduledErrorRetryByCacheKey = new Map<string, ReturnType<typeof setTimeout>>();
+// Existing retry resources retain only explicitly demanded request lifetimes;
+// a successful answer has no timer, but a later finite read can still fail.
+const observedErrorRetryByCacheKey = new Map<string, Readonly<{
+    dispose(): void;
+    suspend(): void;
+    schedule(failedAt: number): void;
+    retainReader(params: MachineCapabilitiesFetchParams): void;
+}>>();
 
 const DEFAULT_STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DEFAULT_ERROR_BACKOFF_MS = 60_000;
@@ -141,9 +148,7 @@ function recordLatestAnswers(cacheKey: string, state: MachineCapabilitiesCacheSt
 
 function setEntry(cacheKey: string, entry: CacheEntry) {
     if (entry.state.status !== 'error') {
-        const retry = scheduledErrorRetryByCacheKey.get(cacheKey);
-        if (retry) clearTimeout(retry);
-        scheduledErrorRetryByCacheKey.delete(cacheKey);
+        observedErrorRetryByCacheKey.get(cacheKey)?.suspend();
     }
     cache.set(cacheKey, entry);
     notify(cacheKey);
@@ -207,9 +212,6 @@ function subscribe(cacheKey: string, cb: (state: MachineCapabilitiesCacheState) 
         current.delete(cb);
         if (current.size === 0) {
             listeners.delete(cacheKey);
-            const retry = scheduledErrorRetryByCacheKey.get(cacheKey);
-            if (retry) clearTimeout(retry);
-            scheduledErrorRetryByCacheKey.delete(cacheKey);
         }
     };
 }
@@ -452,33 +454,91 @@ type MachineCapabilitiesFetchParams = {
     timeoutMs?: number;
     accountLifetime?: ServerAccountScopeLifetime;
     signal?: AbortSignal;
+    /**
+     * Explicit recurring detection demand, not merely cancellation of this finite
+     * acquisition. Its owner aborts when detection is disabled, closed or retired.
+     * Passive cache observation and a completed prefetch never imply this demand.
+     */
+    retryWhileObserved?: AbortSignal;
 };
 
-function scheduleObservedErrorRetry(
+function retainObservedErrorRetryDemand(
     cacheKey: string,
     readers: readonly MachineCapabilitiesFetchParams[],
-    failedAt: number,
+    failedAt?: number,
 ): void {
-    if (scheduledErrorRetryByCacheKey.has(cacheKey) || !listeners.get(cacheKey)?.size) return;
-    const backoffMs = readMachineCapabilitiesErrorBackoffMsFromEnv();
-    if (backoffMs <= 0) return;
-    const retry = setTimeout(() => {
-        scheduledErrorRetryByCacheKey.delete(cacheKey);
-        const entry = getEntry(cacheKey);
-        if (!listeners.get(cacheKey)?.size
-            || entry?.state.status !== 'error'
-            || entry.updatedAt !== failedAt) return;
-        for (const params of readers) {
-            if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) continue;
-            void fetchAndMerge(params);
-        }
-    }, backoffMs);
-    scheduledErrorRetryByCacheKey.set(cacheKey, retry);
+    const isDemanded = (params: MachineCapabilitiesFetchParams) => params.retryWhileObserved !== undefined
+        && !params.retryWhileObserved.aborted && !params.signal?.aborted
+        && (!params.accountLifetime || params.accountLifetime.isCurrent());
+    const demandedReaders = readers.filter(isDemanded);
+    const existing = observedErrorRetryByCacheKey.get(cacheKey);
+    if (existing) {
+        for (const params of demandedReaders) existing.retainReader(params);
+        if (failedAt !== undefined) existing.schedule(failedAt);
+        return;
+    }
+    if (demandedReaders.length === 0) return;
+    const retained = new Map<AbortSignal, { params: MachineCapabilitiesFetchParams; dispose(): void }>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    const suspend = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = undefined;
+    };
+    const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        suspend();
+        for (const reader of retained.values()) reader.dispose();
+        retained.clear();
+        if (observedErrorRetryByCacheKey.get(cacheKey) === retryDemand) observedErrorRetryByCacheKey.delete(cacheKey);
+    };
+    const retainReader = (params: MachineCapabilitiesFetchParams) => {
+        const demand = params.retryWhileObserved;
+        if (disposed || !demand || !isDemanded(params) || retained.has(demand)) return;
+        let retirement: Readonly<{ dispose(): void }> | undefined;
+        const release = () => {
+            demand.removeEventListener('abort', retire);
+            params.signal?.removeEventListener('abort', retire);
+            retirement?.dispose();
+        };
+        const retire = () => {
+            release();
+            retained.delete(demand);
+            if (retained.size === 0) dispose();
+        };
+        retained.set(demand, { params, dispose: release });
+        demand.addEventListener('abort', retire, { once: true });
+        if (params.signal !== demand) params.signal?.addEventListener('abort', retire, { once: true });
+        retirement = params.accountLifetime?.onRetire(retire);
+        if (!isDemanded(params)) retire();
+    };
+    const schedule = (failureTime: number) => {
+        if (disposed || timer !== undefined) return;
+        // Named liveness: an enabled detection consumer still awaiting readiness
+        // recovers failed probes at this owner's existing backoff. Successful or
+        // retired demand has no timer; passive presenters never create demand.
+        const backoffMs = readMachineCapabilitiesErrorBackoffMsFromEnv();
+        if (backoffMs <= 0) return;
+        timer = setTimeout(() => {
+            timer = undefined;
+            const entry = getEntry(cacheKey);
+            if (entry?.state.status !== 'error' || entry.updatedAt !== failureTime) return;
+            for (const { params } of retained.values()) {
+                if (isDemanded(params)) void fetchAndMerge(params);
+            }
+        }, Math.max(0, failureTime + backoffMs - Date.now()));
+    };
+    const retryDemand = { dispose, suspend, schedule, retainReader };
+    observedErrorRetryByCacheKey.set(cacheKey, retryDemand);
+    for (const params of demandedReaders) retainReader(params);
+    if (failedAt !== undefined) schedule(failedAt);
 }
 
 async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<void> {
     if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) return;
     const cacheKey = toCacheKey(params.machineId, params.serverId, params.cacheKeySalt, params.accountLifetime?.scope.accountId);
+    retainObservedErrorRetryDemand(cacheKey, [params]);
     const requestKey = detectRequestKey(params.request);
     const scheduled = scheduledFetchByCacheKey.get(cacheKey);
     if (scheduled && scheduled.requestKey === requestKey && scheduled.isCurrent()) {
@@ -568,7 +628,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
                 updatedAt: failedAt,
                 settledRequestKeys: existing?.settledRequestKeys,
             });
-            scheduleObservedErrorRetry(cacheKey, currentReaders(), failedAt);
+            retainObservedErrorRetryDemand(cacheKey, currentReaders(), failedAt);
             return;
         }
 
@@ -607,7 +667,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
                 ? new Set([...(existing?.settledRequestKeys ?? []), requestKey])
                 : existing?.settledRequestKeys,
         });
-        if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, currentReaders(), updatedAt);
+        if (nextState.status === 'error') retainObservedErrorRetryDemand(cacheKey, currentReaders(), updatedAt);
     });
 
     // A cancelled queue slot releases its reader, while successors still wait for live predecessors.
@@ -628,30 +688,14 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
     return await retainReader(params);
 }
 
-export function prefetchMachineCapabilities(params: {
-    machineId: string;
-    serverId?: string | null;
-    cacheKeySalt?: string | number | null;
-    request: CapabilitiesDetectRequest;
-    timeoutMs?: number;
-    accountLifetime?: ServerAccountScopeLifetime;
-    signal?: AbortSignal;
-}): Promise<void> {
+export function prefetchMachineCapabilities(params: MachineCapabilitiesFetchParams): Promise<void> {
     return fetchAndMerge(params);
 }
 
-export function prefetchMachineCapabilitiesIfStale(params: {
-    machineId: string;
-    serverId?: string | null;
-    cacheKeySalt?: string | number | null;
-    staleMs: number;
-    request: CapabilitiesDetectRequest;
-    timeoutMs?: number;
-    accountLifetime?: ServerAccountScopeLifetime;
-    signal?: AbortSignal;
-}): Promise<void> {
+export function prefetchMachineCapabilitiesIfStale(params: MachineCapabilitiesFetchParams & { staleMs: number }): Promise<void> {
     if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) return Promise.resolve();
     const cacheKey = toCacheKey(params.machineId, params.serverId, params.cacheKeySalt, params.accountLifetime?.scope.accountId);
+    retainObservedErrorRetryDemand(cacheKey, [params]);
     const scheduled = scheduledFetchByCacheKey.get(cacheKey);
     const existing = getEntry(cacheKey);
     if (scheduled?.isCurrent() && (scheduled.requestKey === detectRequestKey(params.request)
@@ -659,42 +703,19 @@ export function prefetchMachineCapabilitiesIfStale(params: {
         return scheduled.retainReader(params);
     }
     if (!existing || existing.state.status === 'idle') {
-        return fetchAndMerge({
-            machineId: params.machineId,
-            serverId: params.serverId,
-            cacheKeySalt: params.cacheKeySalt,
-            request: params.request,
-            timeoutMs: params.timeoutMs,
-            accountLifetime: params.accountLifetime,
-            signal: params.signal,
-        });
+        return fetchAndMerge(params);
     }
     if (existing.state.status !== 'error'
         && requestNeedsRefetchFromState(existing.state, params.request,
             existing.settledRequestKeys?.has(detectRequestKey(params.request)))) {
-        return fetchAndMerge({
-            machineId: params.machineId,
-            serverId: params.serverId,
-            cacheKeySalt: params.cacheKeySalt,
-            request: params.request,
-            timeoutMs: params.timeoutMs,
-            accountLifetime: params.accountLifetime,
-            signal: params.signal,
-        });
+        return fetchAndMerge(params);
     }
     const now = Date.now();
     const shouldFetch = shouldRefetchEntry({ entry: existing, staleMs: params.staleMs, nowMs: now });
     if (shouldFetch) {
-        return fetchAndMerge({
-            machineId: params.machineId,
-            serverId: params.serverId,
-            cacheKeySalt: params.cacheKeySalt,
-            request: params.request,
-            timeoutMs: params.timeoutMs,
-            accountLifetime: params.accountLifetime,
-            signal: params.signal,
-        });
+        return fetchAndMerge(params);
     }
+    if (existing.state.status === 'error') retainObservedErrorRetryDemand(cacheKey, [params], existing.updatedAt);
     return Promise.resolve();
 }
 
@@ -741,10 +762,11 @@ export function useMachineCapabilitiesCache(params: {
                 : (next?.request ?? requestRef.current),
             timeoutMs: typeof next?.timeoutMs === 'number' ? next.timeoutMs : timeoutMsRef.current,
             signal: controller.signal,
+            ...(enabled ? { retryWhileObserved: controller.signal } : {}),
         });
         const entry = getEntry(toCacheKey(machineId, serverId, cacheKeySalt));
         if (entry) setState(entry.state);
-    }, [cacheKeySalt, machineId, serverId]);
+    }, [cacheKeySalt, enabled, machineId, serverId]);
 
     React.useEffect(() => {
         if (!cacheKey || !machineId) {
@@ -784,6 +806,7 @@ export function useMachineCapabilitiesCache(params: {
         void prefetchMachineCapabilitiesIfStale({
             machineId, serverId, cacheKeySalt, staleMs,
             request: requestRef.current, timeoutMs: timeoutMsRef.current, signal: controller.signal,
+            retryWhileObserved: controller.signal,
         });
 
         return unsubscribe;

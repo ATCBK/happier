@@ -54,6 +54,56 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it.each(['active', 'manual', 'withdrawn'] as const)('keeps capability failure recovery owned by %s inventory demand', async demand => {
+        const server = await network.addHome(`https://inventory-error-${demand}.example.test`, 'inventory-retry-account');
+        const scope = { serverId: server.id, accountId: 'inventory-retry-account' };
+        const machine = createMachineFixture({ id: `inventory-error-${demand}`, active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: { review: {
+            id: 'review', title: 'Review', capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } });
+        let detections = 0;
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') {
+                detections++;
+                if (detections <= (demand === 'active' ? 1 : 2)) return { error: 'Temporary capability service failure' };
+                return { protocolVersion: 1, results: { 'cli.review': { ok: true, checkedAt: Date.now(), data: {
+                    ...item, authStatus: { state: 'logged_in', checkedAt: Date.now() },
+                } } } };
+            }
+            return { jobs: [] };
+        });
+        vi.useFakeTimers();
+        const hook = await renderHook(({ load }: { load: boolean }) => useMachineAgents({
+            serverId: server.id, machineId: machine.id, agentId: 'review', load,
+        }), { initialProps: { load: true } });
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().status).toBe('error'));
+            expect(detections).toBe(1);
+            if (demand !== 'active') {
+                await act(async () => { await hook.getCurrent().refresh(); });
+                expect(hook.getCurrent().status).toBe('error');
+                expect(detections).toBe(2);
+            }
+            if (demand === 'withdrawn') await hook.rerender({ load: false });
+            // Presence remains live while the capability service recovers. These
+            // actual store arrivals must not restart the unchanged detection demand.
+            for (let beat = 0; beat < 3; beat++) await act(async () => {
+                await vi.advanceTimersByTimeAsync(19_000);
+                storage.setState({ machineListByServerId: { [server.id]: [{ ...machine, activeAt: Date.now() }] } });
+            });
+            await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+            if (demand !== 'withdrawn') {
+                await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+                expect(detections).toBe(demand === 'active' ? 2 : 3);
+            } else {
+                expect(hook.getCurrent().status).toBe('error');
+                expect(detections).toBe(2);
+            }
+        } finally { await hook.unmount(); vi.useRealTimers(); }
+    });
+
     it('does not reacquire Home correspondence for unchanged Agent inventory notifications or per Machine on rerender', async () => {
         const server = await network.addHome('https://perf-b3-r4.example.test', 'perf-b3-r4');
         const rows = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `perf-b3-${index}`, active: false, activeAt: 0 }));
