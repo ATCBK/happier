@@ -13,6 +13,13 @@ export { ApprovalPendingNotice, type ApprovalPendingNoticeProps } from './Approv
 export { ApprovalPrompt, type ApprovalPromptProps } from './ApprovalPrompt.js';
 export * from './Button.js';
 export * from './Collection.js';
+export {
+  useCollectionSavedViewsControl,
+  type CollectionSavedViewItem,
+  type CollectionSavedViewsLabels,
+  type CollectionSavedViewsControlProps,
+} from './CollectionSavedViews.js';
+export * from './CollectionFilter.js';
 export { CollectionToolbar, type CollectionToolbarFreshness, type CollectionToolbarProps } from './CollectionToolbar.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';
