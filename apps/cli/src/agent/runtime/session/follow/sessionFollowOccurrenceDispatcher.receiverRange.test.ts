@@ -19,6 +19,63 @@ import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecyc
 
 afterEach(() => vi.restoreAllMocks());
 
+it('does no rule inventory reads for 50 manager source arrivals without receiver rules in a 1000-Session Account', async () => {
+  const destinationSessionId = 'c222222222222222222222222';
+  const sessions = new Map(Array.from({ length: 1000 }, (_, index) => {
+    const id = `c${String(index).padStart(23, '0')}`;
+    return [id, createSessionRecordFixture({ id, ownerAccountId: 'account-1', encryptionMode: 'plain',
+      dataEncryptionKey: null, seq: 1, metadata: JSON.stringify({ path: '/work', host: 'host', machineId: 'machine' }) })] as const;
+  }));
+  const reads: string[] = [];
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [] } };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200,
+      data: { assigned: false, direct: false, team: false, group: false } };
+    if (path.endsWith('/messages')) return { status: 200, data: { messages: [{ id: 'sidechain-row', seq: 1,
+      localId: null, createdAt: 1, sidechainId: 'child-run',
+      content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Child output' } } } }], hasMore: false } };
+    const session = sessions.get(path.slice('/v2/sessions/'.length));
+    if (session) return { status: 200, data: { session } };
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  const writes = vi.spyOn(axios, 'post').mockRejectedValue(new Error('Sidechain rows are not Follow originals'));
+  const lifetime = new AbortController();
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+    token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId: 'home', serverHttpBaseUrl: 'http://scale-follow.test',
+    machineId: 'machine', installationId: 'installation', signal: lifetime.signal,
+    isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+    isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+  try {
+    // Warm the captured Account's canonical configuration once; arrivals do not change it.
+    expect(await dispatcher.readReceiverSessionIds()).toEqual([]);
+    reads.length = 0;
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+    for (const sourceSessionId of [...sessions.keys()].slice(0, 50)) {
+      expect(await dispatcher.dispatchReceiverRange({ destinationSessionId, sourceSessionId, observations: [{
+        sourceSessionId, destinationSessionId, relation: 'manager', attachedAt: 1, policy: { preset: 'everything' },
+        delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 },
+      }] })).toEqual({ coveredEvents: [] });
+    }
+    expect({
+      rules: reads.filter(path => path === '/v2/account/session-follow-rules').length,
+      preferences: reads.filter(path => path === '/v2/account/session-follow-preferences').length,
+      currentness: reads.filter(path => path === '/v1/account/encryption/currentness').length,
+      sourceDetails: reads.filter(path => path.startsWith('/v2/sessions/') && !path.endsWith('/messages')).length,
+      transcriptPages: reads.filter(path => path.endsWith('/messages')).length,
+    }).toEqual({ rules: 0, preferences: 0, currentness: 50, sourceDetails: 50, transcriptPages: 50 });
+    expect(writes).not.toHaveBeenCalled();
+  } finally { lifetime.abort(); dispatcher.dispose(); }
+});
+
 it.each([
   { show: 'sessions', homeServerId: 'home', exactReads: 0 },
   { show: 'runs', homeServerId: 'home', exactReads: 0 },
