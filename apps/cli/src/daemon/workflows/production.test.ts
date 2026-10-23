@@ -541,11 +541,10 @@ describe('production workflow coordinator', () => {
       }
       return previousGet(url, config);
     });
-    const previousRpc = readinessMachineRpc.callMachineRpc.getMockImplementation()!;
-    readinessMachineRpc.callMachineRpc.mockImplementation(async args => {
-      if (args.method !== SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1) return previousRpc(args);
-      const request = args.request.request;
-      const publicationInputId = concurrentRound ? request.replyReturn.requestLocalId : inputLocalId;
+    const publishNativeReturn = async (request: import('@happier-dev/protocol/discussions/api').DiscussionAgentPostPublicationV1) => {
+      const replyReturn = request.replyReturn;
+      if (!replyReturn?.workflow) throw new Error('Expected an accepted Workflow return');
+      const publicationInputId = concurrentRound ? replyReturn.requestLocalId : inputLocalId;
       const publicationWorkflow = admittedInputs.get(publicationInputId)!.workflow;
       const publicationSessionId = concurrentRound ? request.sessionId : 'session-1';
       const isReview = hasReview && publicationWorkflow.invocationRecordId !== [...admittedInputs.values()][0]!.workflow.invocationRecordId;
@@ -561,7 +560,7 @@ describe('production workflow coordinator', () => {
         denied = true;
         return { v: 1, ok: false, error: 'discussion_post_denied' };
       }
-      // This is the native RPC network boundary: the real append owner commits
+      // This is the installed Machine network boundary: the real append owner commits
       // one reply and C2 publicationRef, then its acknowledgement is lost.
       const publicationId = concurrentRound ? `published-${publicationSessionId}` : isReview ? 'published-review' : 'published-answer';
       committedPosts.set(expectedLocalId, publicationId);
@@ -574,7 +573,7 @@ describe('production workflow coordinator', () => {
             replyReturn: { ...request.replyReturn, outcome: 'answer' } } }, messageSeq: publicationSeq,
       } };
       throw new Error('committed_reply_ack_lost');
-    });
+    };
     const runOwner = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => accountId,
       storage: boundary, definitions: { get: async () => { throw new Error('No mutable definition read'); } },
       resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
@@ -609,9 +608,11 @@ describe('production workflow coordinator', () => {
         ...(projectsRound ? { action: { executor: createActionExecutor({ workflowAction: args => runOwner.execute(args) } as ActionExecutorDeps),
           buildContext: async execution => buildWorkflowActionContext(execution),
           observeRun: async () => { throw new Error('Round projection does not launch a Run'); } },
-          postWorkflowMessage: async publication => DiscussionAgentPostResponseV1Schema.parse({ v: 1, ok: true,
-            value: { message: { ...wireMessage(5), content: publication.request.content, producerV1: publication.producer }, messageSeq: 5 } }),
         } : {}),
+        postWorkflowMessage: async publication => 'producer' in publication
+          ? DiscussionAgentPostResponseV1Schema.parse({ v: 1, ok: true,
+            value: { message: { ...wireMessage(5), content: publication.request.content, producerV1: publication.producer }, messageSeq: 5 } })
+          : DiscussionAgentPostResponseV1Schema.parse(await publishNativeReturn(publication)),
         ...(scenario === 'review_stable_home' ? { serverIdentityId: 'srv_workflow_home' } : {}) },
       resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation' }),
       resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
