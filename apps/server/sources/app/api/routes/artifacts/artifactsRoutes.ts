@@ -277,32 +277,30 @@ export function artifactsRoutes(app: Fastify) {
         const projection = 'projection' in request.body ? request.body.projection : undefined;
         const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId,
             artifactIds: request.body.artifactIds, projection });
-        const items = (() => {
-            const result: Array<ArtifactReadBatchResponseV1['items'][number] | ArtifactReadHeadersBatchResponseV1['items'][number]> = [];
-            for (const { artifactId, read, census } of captured) {
-                if (!read.ok) {
-                    const refusal = projectArtifactHttpReadFailure(read, request.userId);
-                    result.push({ artifactId, ok: false, error: read.error, status: refusal.status, retryable: refusal.retryable });
-                    continue;
-                }
-                if (census && !census.ok) {
-                    // The incumbent recipient API rejects with a generic typed Error,
-                    // which the existing retry owner retries; preserve that classification.
-                    result.push({ artifactId, ok: false, error: census.error,
-                        status: artifactAccessHttpFailureStatus(census.error), retryable: true });
-                    continue;
-                }
-                if (projection === 'headers') {
-                    result.push({ artifactId, ok: true, artifact: projectArtifactListItem(read.artifact) });
-                    continue;
-                }
-                if (read.artifact.body === undefined) throw new Error('Full Artifact read did not capture its body');
-                result.push({ artifactId, ok: true, artifact: projectArtifactHttpRead({ ...read.artifact, body: read.artifact.body }),
-                    recipientCensus: census?.value ?? null });
+        const response: ArtifactReadBatchResponseV1 | ArtifactReadHeadersBatchResponseV1 = projection === 'headers'
+            ? { projection, items: [] } : { items: [] };
+        for (const { artifactId, read, census } of captured) {
+            if (!read.ok) {
+                const refusal = projectArtifactHttpReadFailure(read, request.userId);
+                response.items.push({ artifactId, ok: false, error: read.error, status: refusal.status, retryable: refusal.retryable });
+                continue;
             }
-            return result;
-        })();
-        return reply.send(projection === 'headers' ? { projection, items } : { items });
+            if (census && !census.ok) {
+                // The incumbent recipient API rejects with a generic typed Error,
+                // which the existing retry owner retries; preserve that classification.
+                response.items.push({ artifactId, ok: false, error: census.error,
+                    status: artifactAccessHttpFailureStatus(census.error), retryable: true });
+                continue;
+            }
+            if ('projection' in response) {
+                response.items.push({ artifactId, ok: true, artifact: projectArtifactListItem(read.artifact) });
+                continue;
+            }
+            if (read.artifact.body === undefined) throw new Error('Full Artifact read did not capture its body');
+            response.items.push({ artifactId, ok: true, artifact: projectArtifactHttpRead({ ...read.artifact, body: read.artifact.body }),
+                recipientCensus: census?.value ?? null });
+        }
+        return reply.send(response);
     });
 
     // GET /v1/artifacts/:id - Get single artifact with full body
