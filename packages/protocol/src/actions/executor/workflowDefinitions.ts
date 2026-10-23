@@ -24,6 +24,7 @@ import type { WorkflowActionExecuteArgs } from './types.js';
 import type { z } from 'zod/mini';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
 import type { ArtifactListSelectionOptionsV1 } from '../../artifacts/artifactListSelectionV1.js';
+import type { ArtifactKindCoverageV1 } from '../../artifacts/artifactKindV1.js';
 import { artifactSavedByFromActionContextV1, type ArtifactBodyV1, type ArtifactRevisionProvenanceV1, type ArtifactSavedByV1 } from '../../artifacts/artifactBinaryV1.js';
 import { workflowDefinitionArtifactSharingAdapterV1 } from '../../artifacts/artifactSharingV1.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -49,6 +50,7 @@ export type WorkflowDefinitionArtifactOperations = Readonly<{
   list: (options: ArtifactListSelectionOptionsV1) => Promise<Readonly<{
     items: readonly WorkflowDefinitionArtifactHeaderRow[]; nextCursor?: string;
     coverage?: 'complete' | 'partial';
+    kindCoverage?: ArtifactKindCoverageV1;
   }>>;
   create: (input: Readonly<{ artifactId: string; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal }>) => Promise<unknown>;
   update: (input: Readonly<{ artifactId: string; expectedRevision: WorkflowArtifactRevisionV1; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal }>) => Promise<
