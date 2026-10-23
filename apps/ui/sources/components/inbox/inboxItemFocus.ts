@@ -8,6 +8,7 @@ import { inboxNoticeFocusKeyV1 } from '@happier-dev/protocol/activity/usageNotic
 import { machineVitalsNoticeHref } from '@/components/machines/page/machinePageHref';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 import type { InboxItemView } from './inboxItemProjection';
+import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
 
 /** The selected Inbox view travels with its destination, including phone Back. */
 export function readInboxView(raw: string | string[] | undefined): InboxItemView | null {
@@ -27,6 +28,7 @@ export type InboxItemFocus = Readonly<{ serverId: string; id: string } & (
     | { kind: 'session'; jumpSeq?: number }
     | { kind: 'approval' | 'notice' }
     | { kind: 'workflow_run'; invocationId?: string }
+    | { kind: 'execution_run'; sessionId: string }
     | { kind: 'automation_run'; automationId: string }
     | { kind: 'discussion'; messageId: string }
 )>;
@@ -35,6 +37,10 @@ export type InboxItemDetailContext = Readonly<{ notice?: AccountNoticeArtifactHe
 
 /** Source kinds choose one detail adapter and their real page here; plugins use the existing page host. */
 export const INBOX_ITEM_DETAIL_REGISTRY = {
+    execution_run: { prefix: 'execution:', detail: 'page', openLabel: 'inbox.work.groups.openRun',
+        route: (focus: InboxItemFocus) => focus.kind === 'execution_run' ? buildSessionExecutionRunRouteHref({
+            serverId: focus.serverId, sessionId: focus.sessionId, runId: focus.id,
+        }) ?? '/inbox' : '/inbox' },
     discussion: { prefix: 'discussion:', detail: 'page', openLabel: 'common.open',
         route: (focus: InboxItemFocus) => focus.kind === 'discussion' ? buildDiscussionRouteHref({ target: {
             kind: 'discussion', address: { serverId: focus.serverId }, discussionId: focus.id, messageId: focus.messageId,
@@ -77,7 +83,7 @@ export function resolveInboxNoticeOwnPageRoute(notice?: InboxItemDetailContext['
 export function createInboxItemRoute(focus: InboxItemFocus, view?: InboxItemView) {
     return { pathname: '/inbox', params: {
         item: focus.kind === 'notice' ? inboxNoticeFocusKeyV1(focus.serverId, focus.id)
-            : `${INBOX_ITEM_DETAIL_REGISTRY[focus.kind].prefix}${encodeURIComponent(focus.serverId)}:${encodeURIComponent(focus.id)}${focus.kind === 'automation_run' ? `:${encodeURIComponent(focus.automationId)}` : focus.kind === 'discussion' ? `:${encodeURIComponent(focus.messageId)}` : ''}`,
+            : `${INBOX_ITEM_DETAIL_REGISTRY[focus.kind].prefix}${encodeURIComponent(focus.serverId)}:${encodeURIComponent(focus.id)}${focus.kind === 'automation_run' ? `:${encodeURIComponent(focus.automationId)}` : focus.kind === 'discussion' ? `:${encodeURIComponent(focus.messageId)}` : focus.kind === 'execution_run' ? `:${encodeURIComponent(focus.sessionId)}` : ''}`,
         ...(focus.kind === 'workflow_run' && focus.invocationId ? { invocationId: focus.invocationId } : {}),
         ...(focus.kind === 'session' && readInboxJumpSeq(focus.jumpSeq) !== null ? { jumpSeq: String(focus.jumpSeq) } : {}),
         ...(view ? { view } : {}),
@@ -102,7 +108,7 @@ export function readInboxItemFocus(raw: string | string[] | undefined, rawInvoca
         const prefix = INBOX_ITEM_DETAIL_REGISTRY[kind].prefix;
         if (!value.startsWith(prefix)) continue;
         const parts = value.slice(prefix.length).split(':');
-        if (parts.length !== (kind === 'automation_run' || kind === 'discussion' ? 3 : 2)) return null;
+        if (parts.length !== (kind === 'automation_run' || kind === 'discussion' || kind === 'execution_run' ? 3 : 2)) return null;
         try {
             const serverId = decodeURIComponent(parts[0]!).trim();
             const id = decodeURIComponent(parts[1]!).trim();
@@ -114,6 +120,10 @@ export function readInboxItemFocus(raw: string | string[] | undefined, rawInvoca
             if (kind === 'discussion') {
                 const messageId = decodeURIComponent(parts[2]!).trim();
                 return messageId ? { kind, serverId, id, messageId } : null;
+            }
+            if (kind === 'execution_run') {
+                const sessionId = decodeURIComponent(parts[2]!).trim();
+                return sessionId ? { kind, serverId, id, sessionId } : null;
             }
             const invocationId = kind === 'workflow_run' ? readWorkflowInvocationId(rawInvocationId) : null;
             const jumpSeq = kind === 'session' ? readInboxJumpSeq(rawJumpSeq) : null;

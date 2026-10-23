@@ -11,6 +11,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import type { StorageState } from '@/sync/store/types';
 import { countInboxDiscussionItems, countInboxItems } from '@/components/inbox/inboxCounts';
 import { useInboxDiscussionAttention } from './useInboxDiscussionSource';
+import { InboxExecutionRunSourceBoundary, useInboxExecutionRunCount } from './useInboxExecutionRunSource';
 
 import { useAutomationAttentionSource, useWorkflowAttentionSource, WorkflowAttentionSourceBoundary } from './useWorkflowAttentionSource';
 
@@ -24,22 +25,35 @@ export function createOpenApprovalInboxCountSelector(): (state: StorageState) =>
     let previousIsDataReady = false;
     let previousAccountId: string | null | undefined;
     let previousCount = 0;
+    let previousCountedIds = new Set<string>();
 
     return (state) => {
         if (state.artifacts === previousArtifacts && state.isDataReady === previousIsDataReady
             && state.profileScope?.accountId === previousAccountId) {
             return previousCount;
         }
+        const accountId = state.profileScope?.accountId;
+        const retainClassification = previousIsDataReady && previousAccountId === accountId;
+        const countedIds = new Set<string>();
+        if (state.isDataReady) {
+            for (const artifact of Object.values(state.artifacts)) {
+                // The Artifact store retains unchanged immutable rows. Carry this
+                // snapshot's classification forward; changed bodies still enter
+                // the strict reader, and removed rows leave the projection.
+                if (retainClassification && artifact === previousArtifacts?.[artifact.id]) {
+                    if (previousCountedIds.has(artifact.id)) countedIds.add(artifact.id);
+                    continue;
+                }
+                const notice = readAccountNoticeArtifactHeader(artifact, accountId);
+                if (isOpenApprovalInboxArtifact(artifact)
+                    || (notice && isUnreadAccountNotice(notice))) countedIds.add(artifact.id);
+            }
+        }
         previousArtifacts = state.artifacts;
         previousIsDataReady = state.isDataReady;
-        previousAccountId = state.profileScope?.accountId;
-        previousCount = 0;
-        if (!state.isDataReady) return previousCount;
-        for (const artifact of Object.values(state.artifacts)) {
-            const notice = readAccountNoticeArtifactHeader(artifact, previousAccountId);
-            if (isOpenApprovalInboxArtifact(artifact)
-                || (notice && isUnreadAccountNotice(notice))) previousCount += 1;
-        }
+        previousAccountId = accountId;
+        previousCountedIds = countedIds;
+        previousCount = countedIds.size;
         return previousCount;
     };
 }
@@ -59,6 +73,7 @@ export function useInboxSummary(): InboxSummary {
     // Workflow attention is 03's window membership; the Inbox folds a step session's request
     // under its run, so a run is counted once here and its step rows are presentation.
     const workflowAttention = useWorkflowAttentionSource();
+    const executionRuns = useInboxExecutionRunCount();
     const automationAttention = useAutomationAttentionSource();
     const discussionAttention = useInboxDiscussionAttention(serverId);
     const discussionCount = React.useMemo(() => countInboxDiscussionItems(discussionAttention.source), [discussionAttention.source]);
@@ -70,6 +85,7 @@ export function useInboxSummary(): InboxSummary {
     const count = countInboxItems({
         sessions: activity.inboxContentCount,
         workflowRuns: workflowAttention.runIds.length,
+        executionRuns,
         automationRuns: automationAttention.runIds.length,
         approvalsAndNotices: openApprovalCount,
         operations: actionOperations.count,
@@ -95,7 +111,7 @@ function InboxSummaryContextProvider(props: Readonly<{ children: React.ReactNode
 export function InboxSummaryProvider(props: Readonly<{ children: React.ReactNode }>) {
     return (
         <WorkflowAttentionSourceBoundary>
-            <InboxSummaryContextProvider>{props.children}</InboxSummaryContextProvider>
+            <InboxExecutionRunSourceBoundary><InboxSummaryContextProvider>{props.children}</InboxSummaryContextProvider></InboxExecutionRunSourceBoundary>
         </WorkflowAttentionSourceBoundary>
     );
 }

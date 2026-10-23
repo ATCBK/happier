@@ -2,7 +2,15 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { ExecutionRunPublicStateSchema, ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+import { notifyExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
@@ -72,6 +80,7 @@ const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const discussionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const artifactReadBoundary = vi.hoisted(() => ({ request: vi.fn() }));
+const executionRunBoundary = vi.hoisted(() => ({ list: vi.fn(), follows: vi.fn() }));
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let disposeActionLoader: (() => void) | undefined;
@@ -132,17 +141,39 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         collectionBoundary.request.mockReset().mockResolvedValue(null);
         discussionBoundary.request.mockReset().mockResolvedValue(null);
         artifactReadBoundary.request.mockReset().mockResolvedValue(null);
+        executionRunBoundary.list.mockReset().mockResolvedValue({ runs: [] });
+        executionRunBoundary.follows.mockReset().mockResolvedValue({ follows: [] });
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
         const base = createRootLayoutFeaturesResponse();
         const features = FeaturesResponseSchema.parse({
             ...base, features: { ...base.features, workflows: { enabled: true }, automations: { ...base.features.automations, enabled: true },
+                sessions: { ...base.features.sessions, enabled: true, following: { enabled: true } },
                 social: { ...base.features.social, friends: { enabled: false } } },
         });
-        connection = await restoreServerAccountForTest({ serverUrl: 'http://inbox-home.test', accountId: 'account-a', request: async (url, init) => {
+        connection = await restoreServerAccountForTest({ serverUrl: 'http://inbox-home.test', accountId: 'account-a',
+            configureSocket: socket => {
+                configureConnectedServerSocketBoundary(socket);
+                socket.emitWithAck = vi.fn(async (event: string, payload: unknown) => {
+                    if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object'
+                        || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
+                        throw new Error('Expected Session RPC wire request');
+                    }
+                    const request = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, payload.params, payload.method);
+                    if (!payload.method.endsWith(SESSION_RPC_METHODS.EXECUTION_RUN_LIST)) throw new Error('Unexpected Session RPC');
+                    return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' },
+                        ExecutionRunListResponseSchema.parse(await executionRunBoundary.list(payload.method)), request.callId) };
+                });
+            }, request: createSessionReadBatchFetchBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/session-follows') return Response.json(
+                ListAccountSessionFollowsResponseV1Schema.parse(await executionRunBoundary.follows()));
+            if (path === '/v2/account/session-follow-rules') return Response.json({ rules: [] });
+            if (path === '/v2/sessions/run-session') return Response.json({
+                session: createPlainSessionCurrentProjectionRecordFixture({ id: 'run-session', active: true }),
+            });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
                 experiments: true, featureToggles: { automations: true },
             } }, version: 1 });
@@ -175,7 +206,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             if (path.startsWith('/v1/discussions')) return discussionBoundary.request(path, init);
             if (path === '/v1/artifacts/read') return artifactReadBoundary.request(path, init);
             return null;
-        } });
+        }) });
         publishAppliedActiveServerSnapshot(appliedSnapshot());
         primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features } });
         storage.setState({
@@ -202,6 +233,62 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         deleteServerFeaturesSnapshot();
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
         (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
+    });
+
+    it('derives one followed Execution Run row from live Run facts and clears it on settle without notices', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const base = createRootLayoutFeaturesResponse();
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ ...base,
+            features: { ...base.features, sessions: { ...base.features.sessions, enabled: true, following: { enabled: true } } },
+        }) } });
+        const serverId = appliedSnapshot().serverId;
+        const run = ExecutionRunPublicStateSchema.parse({ runId: 'followed-run', callId: 'call', sidechainId: 'sidechain',
+            intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, display: { title: 'Review the changes' },
+            permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+            status: 'running', startedAtMs: 100 });
+        executionRunBoundary.follows.mockResolvedValue({ follows: [{ source: { kind: 'execution_run', sessionId: 'run-session', runId: run.runId },
+            following: true, persistent: true, policy: { preset: 'important' } }] });
+        executionRunBoundary.list.mockResolvedValue({ runs: [run, { ...run, runId: 'unfollowed-run' }] });
+        const summary: { current: InboxSummary | null } = { current: null };
+        let summaryRenders = 0;
+        function SummaryProbe() { summary.current = useSharedInboxSummary(); summaryRenders += 1; return null; }
+        await renderScreen(<InboxSummaryProvider><SummaryProbe /><InboxModelProvider><Probe /></InboxModelProvider></InboxSummaryProvider>);
+        await vi.waitFor(() => expect(executionRunBoundary.follows).toHaveBeenCalled());
+        await vi.waitFor(() => expect(executionRunBoundary.list).toHaveBeenCalled());
+        await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toHaveLength(1));
+        const row = model!.items.find(item => item.source.kind === 'execution_run')!;
+        expect(row).toMatchObject({ producer: 'live', type: 'update', view: 'updates', title: 'Review the changes',
+            focus: { kind: 'execution_run', serverId, id: run.runId, sessionId: 'run-session' } });
+        expect(row.pageRoute).toContain('/session/run-session/runs/followed-run');
+        expect(model!.accountNotices).toEqual([]);
+        expect(await readInbox()).toMatchObject({ ok: true, result: { items: [expect.objectContaining({
+            focus: { kind: 'execution_run', serverId, id: run.runId, sessionId: 'run-session' }, producer: 'live',
+        })] } });
+        expect(countInbox(model!)).toBe(1);
+        expect(summary.current!.count).toBe(1);
+        expect(executionRunBoundary.follows).toHaveBeenCalledTimes(1);
+        const rendersBeforePermission = summaryRenders;
+        executionRunBoundary.list.mockResolvedValue({ runs: [{ ...run,
+            attention: { kind: 'permission_required', requestIds: ['permission-a'] } }] });
+        await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }, { runId: run.runId }));
+        await vi.waitFor(() => expect(model!.items.find(item => item.source.kind === 'execution_run')).toMatchObject({
+            type: 'approval', view: 'needs_you', key: row.key,
+        }));
+        expect(summary.current!.count).toBe(1);
+        expect(summaryRenders).toBe(rendersBeforePermission);
+        executionRunBoundary.list.mockResolvedValue({ runs: [{ ...run, status: 'succeeded', finishedAtMs: 200 }] });
+        await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }, { runId: run.runId }));
+        await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toEqual([]));
+        expect(model!.accountNotices).toEqual([]);
+        expect(countInbox(model!)).toBe(0);
+        expect(summary.current!.count).toBe(0);
+        executionRunBoundary.list.mockResolvedValue({ runs: [run] });
+        await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }, { runId: run.runId }));
+        await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toHaveLength(1));
+        executionRunBoundary.follows.mockResolvedValue({ follows: [] });
+        await act(async () => publishHomeAccountChange(serverId, undefined, { source: 'catch-up-pending' }));
+        await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toEqual([]));
+        expect(summary.current!.count).toBe(0);
     });
 
     it.each(['retirement', 'unmount'] as const)('quietly cancels an Inbox Discussion refresh on %s', async reason => {
@@ -243,13 +330,23 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(hook.getCurrent().coverage).toBe('partial');
     });
 
-    it.each(['mention', 'decision'] as const)('keeps the unopened badge and opened %s row in agreement until its owner settles it', async type => {
+    it.each([
+        { type: 'mention', producer: 'agent' },
+        { type: 'decision', producer: 'agent' },
+        { type: 'mention', producer: 'workflow' },
+    ] as const)('keeps the unopened badge and opened $type row from $producer in agreement until its owner settles it', async ({ type, producer }) => {
         listRuns.mockResolvedValue(page([]));
         let lastReadSeq = 0;
         let proposalOpen = true;
         let message = DiscussionMessageV1Schema.parse({ id: 'mention-1', discussionId: 'doc-comments', localId: null,
-            seq: 1, authorAccountId: null, accountActor: null, producerV1: { v: 1, kind: 'agent', sessionId: 'inbox-bot' },
-            content: { t: 'plain', v: type === 'decision' ? { kind: 'doc_edit_proposal', proposal: {
+            seq: 1, authorAccountId: null, accountActor: null,
+            producerV1: producer === 'workflow' ? { v: 1, kind: 'workflow', runId: 'workflow-run',
+                invocationRecordId: 'workflow-invocation', invocationAttempt: '1',
+                execution: { kind: 'action', actionId: 'session.status.get' }, outcome: 'answer' }
+                : { v: 1, kind: 'agent', sessionId: 'inbox-bot' },
+            content: { t: 'plain', v: producer === 'workflow' ? { kind: 'workflow_result', value: { complete: true },
+                summary: 'Review this passage', source: { runId: 'workflow-run', invocationRecordId: 'workflow-invocation', invocationAttempt: '1' } }
+                : type === 'decision' ? { kind: 'doc_edit_proposal', proposal: {
                 target: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
                     revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 6 }, quote: 'Before' },
                 baseRevision: { headerVersion: 1, bodyVersion: 1 }, before: 'Before', after: 'After', reason: 'Clarify',
@@ -304,7 +401,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             pageRoute: `/discussions/doc-comments?serverId=${encodeURIComponent(scope.serverId)}&messageId=mention-1`,
             focus: { kind: 'discussion', serverId: scope.serverId,
             id: 'doc-comments', messageId: 'mention-1' }, discussion: { anchor: summary().anchor },
-            source: { displayName: 'Plan comments' }, author: { name: 'Payments coordinator' } });
+            source: { displayName: 'Plan comments' }, author: producer === 'agent' ? { name: 'Payments coordinator' } : null });
+        expect([...model!.discussionAttention.source!.sessionDisplayNames!.keys()]).toEqual(producer === 'agent' ? ['inbox-bot'] : []);
         expect(countInbox(model!)).toBe(1);
         expect(countInboxNeedsYou(model!)).toBe(type === 'decision' ? 1 : 0);
         expect(model!.discussionAttention.coverage).toBe('complete');

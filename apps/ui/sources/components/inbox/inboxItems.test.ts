@@ -14,6 +14,9 @@ import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
 import { countInbox, countInboxNeedsYou } from './inboxCounts';
+import { ExecutionRunPublicStateSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createInboxItemRoute, readInboxItemFocus } from './inboxItemFocus';
+import { projectInboxReadItemV1 } from '@happier-dev/protocol/actions/appShellActionFamily';
 
 const emptyInput: InboxItemsInput = { sessionPresentation: { sessionsNeedingAttention: [], readySessions: [],
     markAllReadTargets: [], pendingRequestHydrationTargets: [] }, workGroups: [], workflowServerId: 'home-a',
@@ -35,6 +38,27 @@ async function input(overrides: Partial<Session> = {}): Promise<InboxItemsInput>
 }
 
 describe('one Inbox row projection', () => {
+    it('projects live Execution Runs once and removes settled Runs instead of retaining notices', () => {
+        const run = ExecutionRunPublicStateSchema.parse({ runId: 'run-review', callId: 'call', sidechainId: 'sidechain',
+            intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, display: { title: 'Review changes' },
+            permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+            status: 'running', startedAtMs: 100 });
+        const entry = { address: { serverId: 'home-a', sessionId: 'source-session' }, run };
+        const initial = buildInboxItems({ ...emptyInput, executionRuns: [entry] });
+        expect(initial).toHaveLength(1);
+        expect(initial[0]).toMatchObject({ producer: 'live', type: 'update', view: 'updates', title: 'Review changes',
+            source: { kind: 'execution_run', id: run.runId, serverId: 'home-a' },
+            focus: { kind: 'execution_run', id: run.runId, serverId: 'home-a', sessionId: 'source-session' } });
+        expect(readInboxItemFocus(createInboxItemRoute(initial[0]!.focus).params.item)).toEqual(initial[0]!.focus);
+        expect(projectInboxReadItemV1(initial[0]!)).toMatchObject({ focus: initial[0]!.focus, producer: 'live' });
+        expect(buildInboxItems({ ...emptyInput, executionRuns: [entry] }, initial)).toBe(initial);
+        const waiting = buildInboxItems({ ...emptyInput, executionRuns: [{ ...entry,
+            run: { ...run, attention: { kind: 'permission_required', requestIds: ['permission-a'] } } }] }, initial);
+        expect(waiting).toHaveLength(1);
+        expect(waiting[0]).toMatchObject({ key: initial[0]!.key, type: 'approval', view: 'needs_you' });
+        expect(buildInboxItems({ ...emptyInput, executionRuns: [{ ...entry,
+            run: { ...run, status: 'succeeded', finishedAtMs: 200 } }] }, waiting)).toEqual([]);
+    });
     it('keeps cached Session names unavailable when only status is readable', async () => {
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
         const session = createSessionFixture({ id: 'locked-source', serverId: 'home-a', encryptionMode: 'e2ee',

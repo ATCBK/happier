@@ -58,6 +58,7 @@ import type { SessionActivityAttention } from '@/activity/attention/activityAtte
 
 import { useInboxFriendRequests } from './useInboxFriendRequests';
 import { useInboxDiscussionSource } from './useInboxDiscussionSource';
+import { InboxExecutionRunSourceBoundary, useInboxExecutionRunSource } from './useInboxExecutionRunSource';
 import {
     useFullWorkflowAttentionSource,
     useAutomationAttentionSource,
@@ -171,6 +172,7 @@ function useCreateInboxModel(): InboxModel {
     const pluginDisplayNames = React.useMemo(() => new Map(Object.values(pluginPackages ?? {})
         .map(plugin => [plugin.id, plugin.displayName] as const)), [pluginPackages]);
     const discussionAttention = useInboxDiscussionSource(profileScope?.serverId ?? null);
+    const executionRuns = useInboxExecutionRunSource();
     const pluginAvailability = useActivePluginAccountAvailabilityReader();
     const pullRequestReadAvailable = pluginAvailability?.readCurrentCollectionContract({
         pluginId: 'happier.channels', collectionId: 'channel-state',
@@ -316,10 +318,11 @@ function useCreateInboxModel(): InboxModel {
     const items = React.useMemo(() => {
         const next = buildInboxItems({ workGroups, sessionPresentation, workflowServerId: workflowAttention.serverId,
             accountServerId: profileScope?.serverId ?? null, notices: openAccountNotices,
+            executionRuns: executionRuns.entries,
             discussions: discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames }, previousItems.current);
         previousItems.current = next;
         return next;
-    }, [workGroups, sessionPresentation, workflowAttention.serverId, profileScope?.serverId, openAccountNotices, discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames]);
+    }, [workGroups, sessionPresentation, workflowAttention.serverId, profileScope?.serverId, openAccountNotices, executionRuns.entries, discussionAttention.source, pluginDisplayNames, approvalSourceDisplayNames]);
 
     const spansHomes = React.useMemo(
         () => new Set(overview.candidates.map((candidate) => candidate.address?.serverId ?? candidate.serverId ?? '')).size > 1,
@@ -334,6 +337,7 @@ function useCreateInboxModel(): InboxModel {
     const isLoading = (
         (friends.visible && !friendsLoaded)
         || discussionAttention.loading
+        || executionRuns.loading
         || (!source.isDataReady && overview.candidates.length === 0)
         || (workflowAttention.available && workflowAttention.phase === 'loading')
         || (automationAttention.available && automationAttention.phase === 'loading')
@@ -350,6 +354,7 @@ function useCreateInboxModel(): InboxModel {
         || friends.requests.length > 0
         || actionOperationEntries.length > 0;
     const showCaughtUp = !isLoading && !hasPrimaryAttention
+        && !executionRuns.failed
         && (!discussionAttention.available || discussionAttention.coverage === 'complete')
         && currentPullRequestRead?.phase !== 'failed'
         && ![workflowAttention, automationAttention].some((attention) => attention.available
@@ -544,7 +549,7 @@ function useCreateInboxModel(): InboxModel {
 export function InboxModelProvider(props: Readonly<{ children: React.ReactNode }>) {
     return (
         <WorkflowAttentionSourceBoundary>
-            <InboxModelContextProvider>{props.children}</InboxModelContextProvider>
+            <InboxExecutionRunSourceBoundary><InboxModelContextProvider>{props.children}</InboxModelContextProvider></InboxExecutionRunSourceBoundary>
         </WorkflowAttentionSourceBoundary>
     );
 }

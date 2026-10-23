@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
-import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
 import { sessionExecutionRunList, type SessionExecutionRunListResult } from '@/sync/ops/sessionExecutionRuns';
 import {
@@ -16,6 +16,12 @@ export function resolveRunningExecutionRunsFromListResult(
 ): readonly ExecutionRunPublicState[] {
     if (!('runs' in result)) return [];
     return result.runs.filter((run) => run.status === 'running');
+}
+
+/** Every demanded roster uses the same admitted list reader, including Inbox Follow sources. */
+export async function readSessionRunningExecutionRuns(address: SessionAddress): Promise<readonly ExecutionRunPublicState[] | null> {
+    const result = await sessionExecutionRunList(address.sessionId, {}, { serverId: address.serverId });
+    return result.ok === false ? null : resolveRunningExecutionRunsFromListResult(result);
 }
 
 export function useSessionRunningExecutionRuns(params: Readonly<{
@@ -39,10 +45,7 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
     );
     const subscribe = React.useCallback((listener: () => void) => {
         if (!address) return () => {};
-        return subscribeRunningExecutionRunRoster(address, listener, async () => {
-            const result = await sessionExecutionRunList(address.sessionId, {}, { serverId: address.serverId });
-            return result.ok === false ? null : resolveRunningExecutionRunsFromListResult(result);
-        });
+        return subscribeRunningExecutionRunRoster(address, listener, () => readSessionRunningExecutionRuns(address));
     }, [address]);
     const read = React.useCallback(() => readRunningExecutionRunRoster(address), [address]);
     const runningRuns = React.useSyncExternalStore(subscribe, read, read);

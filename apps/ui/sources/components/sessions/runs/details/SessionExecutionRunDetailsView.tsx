@@ -89,6 +89,7 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { useSetting } from '@/sync/domains/state/storage';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { sendExecutionRunResultToSession } from './sendExecutionRunResultToSession';
+import { resolveExecutionRunVisibleMessages } from '@/sync/domains/session/subagents/visibleMessages/resolveSessionSubagentVisibleMessages';
 
 type LoadState =
     | { status: 'loading' }
@@ -456,7 +457,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // projection and renders them through the same shared list, including the
     // pending-to-committed crossover for this exact target.
     const runSidechainMessages = useSessionSidechainMessages(props.sessionId ?? '', props.sessionId === null ? null : transcriptToolId);
-    const runTranscriptMessages = React.useMemo(() => [...runSidechainMessages], [runSidechainMessages]);
+    const runTranscriptMessages = React.useMemo(() => [...resolveExecutionRunVisibleMessages({
+        runId: props.runId, messages: sessionMessages, focusedMessages: runSidechainMessages,
+    })], [props.runId, sessionMessages, runSidechainMessages]);
     // The Run can be admitted before its transcript marker is materialized. Keep
     // this brief state visible until the canonical sidechain/pending projections
     // provide content; do not infer a timer, queue, or producer-owned lifecycle.

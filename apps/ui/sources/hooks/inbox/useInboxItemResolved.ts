@@ -84,6 +84,9 @@ export function useInboxItemResolved(
             const run = record !== true && 'summary' in record ? record : null;
             return run?.summary != null && presentInboxWorkflowRun(run.summary).view !== 'needs_you';
         }
+        case 'execution_run':
+            // An absent running-roster row is not positive evidence of a resolved permission.
+            return false;
         case 'automation_run':
             // Automation rows are Updates at their canonical Inbox projection.
             return false;

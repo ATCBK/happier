@@ -103,12 +103,12 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
         try { await dismissNotice(item); }
         catch { Modal.alert(t('common.error'), t('errors.unknownError')); }
     }, [dismissNotice, item]);
-    return <InboxWorkRow testID={`inbox.item.${item.key}`} title={item.title} facts={fact ? [fact] : []}
+    return <InboxWorkRow testID={item.focus.kind === 'execution_run' ? `inbox.run.${item.focus.id}` : `inbox.item.${item.key}`} title={item.title} facts={fact ? [fact] : []}
         source={item.source.displayName ?? null} byline={byline}
         selected={props.selected} showDivider={props.showDivider} narrow={props.narrow}
-        phase={item.view === 'needs_you' ? 'attention' : 'finished'}
+        phase={item.phase ?? (item.view === 'needs_you' ? 'attention' : 'finished')} status={item.workStatus}
         time={<InboxRelativeTime timestamp={item.createdAt} />}
-        mark={<Icon name={ITEM_MARKS[item.type]} size={18}
+        mark={<Icon name={item.focus.kind === 'execution_run' ? item.type === 'approval' ? 'hand' : 'play-circle' : ITEM_MARKS[item.type]} size={18}
             color={item.view === 'needs_you' ? theme.colors.state.attention.foreground : theme.colors.text.secondary} />}
         trailingAccessory={item.producer === 'notice' ? (
             <IconButton testID={`inbox.item.${item.key}.dismiss`} accessibilityLabel={t('inbox.actionOperations.dismiss')}

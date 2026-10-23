@@ -15,6 +15,7 @@ import { admittedInboxDiscussionOccurrences, inboxItemView, type InboxDiscussion
 export type InboxCountParts = Readonly<{
     sessions: number;
     workflowRuns: number;
+    executionRuns?: number;
     automationRuns: number;
     approvalsAndNotices: number;
     operations: number;
@@ -23,7 +24,7 @@ export type InboxCountParts = Readonly<{
 }>;
 
 export function countInboxItems(parts: InboxCountParts): number {
-    return parts.sessions + parts.workflowRuns + parts.automationRuns + parts.approvalsAndNotices + parts.operations + parts.friendRequests + (parts.discussions ?? 0);
+    return parts.sessions + parts.workflowRuns + (parts.executionRuns ?? 0) + parts.automationRuns + parts.approvalsAndNotices + parts.operations + parts.friendRequests + (parts.discussions ?? 0);
 }
 
 /** Read is not disposition: a live request remains attention until its owning source removes it. */
