@@ -3848,6 +3848,10 @@ describe("Automation Event admission", () => {
             keyPair: publisherKeyPair,
             definitions,
         });
+        const committed = await db.account.findUniqueOrThrow({
+            where: { id: ACCOUNT_ID },
+            select: { seq: true },
+        });
 
         expect(execution.admitRouteCalls).toBe(1);
         expect(execution.witnessVersions).toEqual([
@@ -3858,11 +3862,12 @@ describe("Automation Event admission", () => {
                 kind: "ready",
                 accountCurrentness: {
                     mode: "plain",
-                    version: Number(initial.seq) + 31,
+                    version: Number(committed.seq),
                     contentKeyFingerprint: null,
                 },
             },
         ]);
+        expect(Number(committed.seq)).toBe(Number(initial.seq) + 31);
         expect(execution.result.results).toHaveLength(31);
         expect(execution.result.results).toEqual(expect.arrayContaining(
             Array.from({ length: 31 }, () => expect.objectContaining({

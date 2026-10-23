@@ -18,7 +18,7 @@ import {
     type PluginWebhookInvocationReferenceValidationResultV1,
 } from "@/app/plugins/webhooks/claimStore";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 
 import {
     assertCurrentAutomationEventCallerMaterializationTx,
@@ -30,7 +30,7 @@ import {
     type AutomationEventCallerV1,
     type CurrentAutomationEventContributionV1,
 } from "./automationEventCurrentness";
-import { fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
+import { captureAutomationAccountCurrentnessAfterPublication } from "./automationAccountCurrentness";
 import {
     classifyPlainAutomationOccurrenceEvidence,
     encodePlainAutomationOccurrenceEvidence,
@@ -300,19 +300,22 @@ function assertAllResults(
     return AutomationEventAdmitHttpResultV1Schema.parse({ results, continuation });
 }
 
-async function assertAllResultsWithReadyContinuationTx(params: Readonly<{
-    tx: Parameters<typeof fetchAutomationAccountCurrentnessWitnessTx>[0];
+function assertAllResultsWithReadyContinuationTx(params: Readonly<{
+    tx: Tx;
     accountId: string;
     results: ReadonlyArray<AutomationEventAdmitItemResultV1 | undefined>;
-}>): Promise<AutomationEventAdmitHttpResultV1> {
-    const accountCurrentness = await fetchAutomationAccountCurrentnessWitnessTx(
+}>): TransactionResult<AutomationEventAdmitHttpResultV1> {
+    const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(
         params.tx,
         params.accountId,
     );
-    if (accountCurrentness === null) {
-        throw new Error("Automation Event admission lost Account currentness before response");
-    }
-    return assertAllResults(params.results, { kind: "ready", accountCurrentness });
+    return transactionResult(() => {
+        const accountCurrentness = terminalCurrentness.resolveResult();
+        if (accountCurrentness === null) {
+            throw new Error("Automation Event admission lost Account currentness before response");
+        }
+        return assertAllResults(params.results, { kind: "ready", accountCurrentness });
+    });
 }
 
 function existingEvidenceDisposition(params: Readonly<{
