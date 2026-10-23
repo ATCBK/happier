@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProviderContributionV1Schema } from '@happier-dev/protocol';
+import { ProviderContributionV1Schema, ProviderInstallationRuntimeStateRecordV1Schema } from '@happier-dev/protocol';
 
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 import type { ProviderContributionRegistryView } from '@/providers/registry';
@@ -54,6 +55,35 @@ function registry(options: Readonly<{ managedRuntime?: boolean }> = {}): Provide
 }
 
 describe('createProviderLocalInstallationReader', () => {
+  it('reads one persisted installation snapshot per inventory, independently of contribution count', async () => {
+    const store = await runtimeStore();
+    const original = registry().providersByContributionKey.get(key)!;
+    const providersByContributionKey = new Map(Array.from({ length: 128 }, (_, index) => [
+      `acme.local${index}/lmstudio`,
+      { ...original, pluginId: `acme.local${index}`, identity: { pluginId: `acme.local${index}`, localId: 'lmstudio' } },
+    ]));
+    const descriptorFingerprint = createHash('sha256')
+      .update(JSON.stringify(original.definition.discovery!.installedCheck)).digest('hex').slice(0, 32);
+    await store.update(state => ({ ...state, installationChecks: [...providersByContributionKey.keys()].map(contributionKey =>
+      ProviderInstallationRuntimeStateRecordV1Schema.parse({
+        key: { machineId: 'machine-a', contributionKey, checkId: `installed-${descriptorFingerprint}` },
+        state: { status: 'absent', observedAt: 100 }, lastAccessedAt: 100,
+      })),
+    }));
+    // Persistence is the actual filesystem boundary; retain its real locking,
+    // decoding and projection instead of replacing internal installation logic.
+    const read = vi.spyOn(store, 'read');
+    const resolveSystemTool = vi.fn<ProviderLocalToolResolver['resolveSystemTool']>();
+    const reader = createProviderLocalInstallationReader({ runtimeStore: store, resolveSystemTool,
+      runSystemTool: vi.fn(), now: () => 100 });
+    const request = { machineId: 'machine-a', registry: { providersByContributionKey }, candidates: [] };
+    await expect(reader.read(request)).resolves.toEqual({ status: 'complete', installations: [] });
+    expect(read).toHaveBeenCalledTimes(1);
+    await reader.read(request);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(resolveSystemTool).not.toHaveBeenCalled();
+  });
+
   it('reports app-running/server-off only from the verified presence command', async () => {
     const resolveSystemTool = vi.fn(async () => ({ ok: true as const, command: '/usr/bin/lms', args: [], source: 'system' }));
     const runSystemTool = vi.fn(async () => ({
@@ -98,13 +128,16 @@ describe('createProviderLocalInstallationReader', () => {
   it('does not execute installation or presence checks for an already listening contribution', async () => {
     const resolveSystemTool = vi.fn();
     const runSystemTool = vi.fn();
-    const reader = createProviderLocalInstallationReader({ resolveSystemTool, runSystemTool, runtimeStore: await runtimeStore(), now: () => 100 });
+    const store = await runtimeStore();
+    const read = vi.spyOn(store, 'read');
+    const reader = createProviderLocalInstallationReader({ resolveSystemTool, runSystemTool, runtimeStore: store, now: () => 100 });
     await expect(reader.read({
       machineId: 'machine-a', registry: registry(),
       candidates: [{ contributionKey: 'happier.provider.lmstudio/lmstudio' }],
     })).resolves.toEqual({ status: 'complete', installations: [] });
     expect(resolveSystemTool).not.toHaveBeenCalled();
     expect(runSystemTool).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('caches settled command evidence on its own cadence instead of the inventory tick', async () => {

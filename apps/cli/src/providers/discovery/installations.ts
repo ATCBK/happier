@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { canonicalizeProviderContributionKeyV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import { ProviderInstallationRuntimeStateRecordV1Schema, serializeProviderInstallationRuntimeStateKeyV1 } from '@happier-dev/protocol/providers/runtimeState/v1';
 import { ProviderLocalInstallationSummaryV1Schema } from '@happier-dev/protocol/providers/detection/v1';
-import type { ProviderLocalInstallationSummaryV1 } from '@happier-dev/protocol';
+import type { ProviderLocalInstallationSummaryV1, ProviderRuntimeStateFileV1 } from '@happier-dev/protocol';
 
 import type { ProviderContributionRegistryView } from '@/providers/registry';
 import { awaitWithinProviderOperation, createProviderOperationLifetime, ProviderOperationAbandonedError } from '@/providers/operationLifetime';
@@ -65,6 +65,7 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
     machineId: string;
     contributionKey: string;
     installedCheck: Readonly<{ lookupNames: readonly string[] }>;
+    installationChecks: ProviderRuntimeStateFileV1['installationChecks'];
     signal?: AbortSignal;
   }>): Promise<boolean> => {
     const descriptorFingerprint = createHash('sha256')
@@ -77,9 +78,8 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
       checkId: `installed-${descriptorFingerprint}`,
     };
     const serializedKey = serializeProviderInstallationRuntimeStateKeyV1(key);
-    const state = await input.runtimeStore.read();
     if (params.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
-    const cached = state.installationChecks.find((record) =>
+    const cached = params.installationChecks.find((record) =>
       serializeProviderInstallationRuntimeStateKeyV1(record.key) === serializedKey);
     if (cached && now() < cached.state.observedAt + ttlMs) return cached.state.status === 'present';
     const persistPresence = async (present: boolean): Promise<void> => {
@@ -136,6 +136,7 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
       const serving = new Set(params.candidates.map((candidate) =>
         canonicalizeProviderContributionKeyV1(candidate.contributionKey)));
       const reads: Promise<ProviderLocalInstallationSummaryV1 | null>[] = [];
+      let installationSnapshot: ReturnType<ProviderRuntimeStateStore['read']> | undefined;
       for (const [contributionKey, contribution] of params.registry.providersByContributionKey) {
         const descriptor = contribution.definition.discovery;
         const installedCheck = descriptor?.installedCheck;
@@ -143,11 +144,17 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
           !installedCheck
           || serving.has(canonicalizeProviderContributionKeyV1(contributionKey))
         ) continue;
+        // All checks in this inventory observe the same persisted advisory
+        // evidence. Presence commands still run freshly and later inventories
+        // reopen the store; no evidence is retained beyond this read.
+        installationSnapshot ??= input.runtimeStore.read();
+        const snapshot = installationSnapshot;
         reads.push((async () => {
           const installed = await readInstalled({
             machineId: params.machineId,
             contributionKey,
             installedCheck,
+            installationChecks: (await snapshot).installationChecks,
             signal: params.signal,
           });
           if (params.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
