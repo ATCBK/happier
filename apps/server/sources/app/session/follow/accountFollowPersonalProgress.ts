@@ -17,7 +17,6 @@ import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/ac
 import { readRunFollowOccurrenceInTx } from './sessionFollowEdgeService';
 import { readAccountRunFollowDeliveryInTx } from './accountFollowService';
 import type { ExecutionRunFollowFrontierWitness } from './executionRunFollowSource';
-import { markSessionFollowsChangedInTx } from './changes';
 import { observeAccountDiscussionFollowOccurrenceInTx } from './discussionFollowSource';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
@@ -35,6 +34,8 @@ const unrepresented = { ok: true, value: { accepted: false, alreadyRepresented: 
  * The full-Account source executor opens encrypted request identities. The
  * Home binds that trusted full-map witness to the current state version; its
  * aggregate request counters include other sources and cannot prove this map.
+ * Run/Discussion delivery progress is private custody, not a configuration
+ * change. Publishing it as one would re-demand every unrelated Run source.
  */
 export async function acceptAccountFollowPersonalProgress(input: Readonly<{
     accountId: string; authentication: SessionAccessAuthentication; occurrence: SessionFollowPersonalProgressRequestV1;
@@ -64,7 +65,6 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
                 sourceKey: sourceKeyForSessionFollowSourceV1(current.source), following: true,
                 deliveredDiscussionSeq: { lt: current.seq } }, data: { deliveredDiscussionSeq: current.seq } });
             if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-rule-progress-conflict');
-            await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
             return { ok: true, value: { accepted: true, alreadyRepresented: false } };
         }
         if ('original' in occurrence) {
@@ -85,7 +85,6 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
                     ? { deliveredExecutionRunPermissionKey: deriveSessionFollowOriginalOccurrenceKeyV1(occurrence.original) }
                     : { deliveredWorkflowRunRevision: occurrence.original.revision } });
             if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-rule-progress-conflict');
-            await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
             return { ok: true, value: { accepted: true, alreadyRepresented: false } };
         }
         const source = await tx.session.findUnique({ where: { id: occurrence.sourceSessionId }, select: {
