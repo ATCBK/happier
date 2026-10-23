@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { useServerScopedMachine } from './useServerScopedMachine';
+import { useServerScopedMachine } from '@/sync/domains/state/storage';
 
 it('keeps exact Home/Machine consumers quiet for fleet arrivals while publishing selected changes and removal', async () => {
     const store = getStorage();

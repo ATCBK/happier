@@ -145,7 +145,7 @@ import {
   resolveSessionListRuntimePriorityRowNextFreshnessAtMs,
 } from '../domains/session/listing/sessionListRuntimePriorityRows';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, selectActiveServerAccountScopeForServer, type ActiveServerAccountScopeLifetime } from '../domains/scope/activeServerAccountScope';
 import {
   subscribeAppliedActiveServer,
@@ -157,6 +157,7 @@ import {
   getServerProfileById,
   getServerProfilesGeneration,
   resolveServerProfileScopeIdForIdentifier,
+  subscribeServerProfiles,
 } from '../domains/server/serverProfiles';
 import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '../domains/machines/resolveServerScopedMachines';
 import {
@@ -2720,7 +2721,7 @@ export function useMachineCliDetectionTargets(machineIds: readonly string[]): Ma
   return getStorage()(useShallow(selectTargets));
 }
 
-export function useServerScopedMachine(serverId: string | null | undefined, machineId: string): Machine | null {
+export function useServerScopedMachine(serverId: string | null | undefined, machineId: string | null | undefined): Machine | null {
   const store = getStorage();
   const normalizedMachineId = typeof machineId === 'string' ? machineId.trim() : '';
   const enabled = normalizedMachineId.length > 0;
@@ -2729,22 +2730,22 @@ export function useServerScopedMachine(serverId: string | null | undefined, mach
     [store, serverId, normalizedMachineId],
   );
   const subscribe = React.useCallback((listener: () => void) => {
-    let profilesGeneration = getServerProfilesGeneration();
-    let activeServerId = getActiveServerSnapshot().serverId;
-    return store.subscribe((state, previous) => {
-      const nextProfilesGeneration = getServerProfilesGeneration();
-      const nextActiveServerId = getActiveServerSnapshot().serverId;
+    const unsubscribeStore = store.subscribe((state, previous) => {
       // These are the exact resolver's inputs. Unrelated Session/Artifact
       // publications must not search a Machine inventory for each mounted row.
       if (state.machines === previous.machines
         && state.machineListByServerId === previous.machineListByServerId
-        && state.machineListStatusByServerId === previous.machineListStatusByServerId
-        && profilesGeneration === nextProfilesGeneration
-        && activeServerId === nextActiveServerId) return;
-      profilesGeneration = nextProfilesGeneration;
-      activeServerId = nextActiveServerId;
+        && state.machineListStatusByServerId === previous.machineListStatusByServerId) return;
       listener();
     });
+    // Home/profile changes are resolver inputs even without a store publication.
+    const unsubscribeHome = subscribeActiveServer(listener);
+    const unsubscribeProfiles = subscribeServerProfiles(listener);
+    return () => {
+      unsubscribeStore();
+      unsubscribeHome();
+      unsubscribeProfiles();
+    };
   }, [store]);
   return React.useSyncExternalStore(
     enabled ? subscribe : noopMachineSubscribe,

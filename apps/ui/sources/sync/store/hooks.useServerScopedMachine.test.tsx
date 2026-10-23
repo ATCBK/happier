@@ -5,6 +5,7 @@ import { act } from 'react-test-renderer';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { removeServerProfile, setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 
 import { useServerScopedMachine } from './hooks';
@@ -32,7 +33,7 @@ describe('useServerScopedMachine demand', () => {
         syncPerformanceTelemetry.configure({ enabled: true });
         const subscribe = vi.spyOn(storage, 'subscribe'); // Instrument the real store; no replacement logic.
         function ApprovalMachineReader() {
-            expect(useServerScopedMachine('home', '')).toBeNull();
+            expect(useServerScopedMachine('home', null)).toBeNull();
             return null;
         }
         await renderHook(() => null, {
@@ -67,6 +68,14 @@ describe('useServerScopedMachine demand', () => {
         const replacement = createMachineFixture({ id: machine.id, metadata: { ...machine.metadata!, host: 'renamed' } });
         await act(async () => storage.setState({ machineListByServerId: { [serverId]: [replacement], foreign: [] } }));
         expect(hook.getCurrent()).toBe(replacement);
+        for (const active of [false, true]) {
+            const presence = { ...replacement, active, activeAt: active ? 2 : 1 };
+            await act(async () => storage.setState({ machineListByServerId: { [serverId]: [presence], foreign: [] } }));
+            expect(hook.getCurrent()).toBe(presence);
+        }
+        await hook.rerender({ home: serverId, id: 'different-machine' });
+        expect(hook.getCurrent()).toBeNull();
+        await act(async () => storage.setState({ machineListByServerId: { [serverId]: [replacement], foreign: [] } }));
         await hook.rerender({ home: 'foreign', id: machine.id });
         expect(hook.getCurrent()).toBeNull();
         await hook.rerender({ home: serverId, id: machine.id });
@@ -115,5 +124,35 @@ describe('useServerScopedMachine demand', () => {
         expect(hook.getCurrent()).toBe(machine);
         await act(async () => storage.setState({ machineListStatusByServerId: { [serverId]: 'idle' } }));
         expect(hook.getCurrent()).toBeNull();
+    });
+
+    it('follows Home selection and profile identity without a storage publication', async () => {
+        const previousHome = getActiveServerSnapshot().serverId;
+        const first = await upsertServerProfile({ serverUrl: 'https://fix210-first.example.test' });
+        const second = await upsertServerProfile({ serverUrl: 'https://fix210-second.example.test' });
+        const a = createMachineFixture({ id: 'same-machine', metadata: { ...createMachineFixture().metadata!, host: 'first' } });
+        const b = { ...a, metadata: { ...a.metadata!, host: 'second' } };
+        try {
+            await setActiveServerId(first.id);
+            storage.setState({ machines: {}, machineListByServerId: { [first.id]: [a], [second.id]: [b] },
+                machineListStatusByServerId: { [first.id]: 'idle', [second.id]: 'idle' } });
+            const implicit = await renderHook(() => useServerScopedMachine(null, a.id));
+            const portable = await renderHook(() => useServerScopedMachine('srv_fix210_second', b.id));
+            expect(implicit.getCurrent()).toBe(a);
+            expect(portable.getCurrent()).toBeNull();
+            const inventory = storage.getState().machineListByServerId;
+            await act(async () => { await setActiveServerId(second.id); });
+            expect(storage.getState().machineListByServerId).toBe(inventory);
+            expect(implicit.getCurrent()).toBe(b);
+            await act(async () => { await setServerProfileIdentityForUrl(second.serverUrl, 'srv_fix210_second'); });
+            expect(storage.getState().machineListByServerId).toBe(inventory);
+            expect(portable.getCurrent()).toBe(b);
+            await implicit.unmount();
+            await portable.unmount();
+        } finally {
+            await setActiveServerId(previousHome);
+            await removeServerProfile(first.id);
+            await removeServerProfile(second.id);
+        }
     });
 });

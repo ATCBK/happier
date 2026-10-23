@@ -5,8 +5,7 @@ import type { WorkflowAuthoringTarget } from '@/sync/domains/workflows/workflowP
 import type { AuthoringComposerScope } from '@/components/sessions/authoring/ScopedAuthoringComposer';
 import type { SessionAuthoringControlFacts } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 import { useSessionAuthoringControlFacts } from '@/components/sessions/authoring/controls/useSessionAuthoringControlFacts';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { useServerScopedMachine } from '@/sync/domains/machines/useServerScopedMachine';
+import { useActiveServerAccountScope, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 import type { EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { WorkflowExistingSessionOption } from '@/sync/domains/workflows/workflowAuthoring';
