@@ -540,9 +540,10 @@ describe('default Action executor mode and catalog contracts', () => {
         status: { observedRevision: 'session-message-row-revision:v1:8' } });
     } finally { held.release(); held.restore(); await hook.unmount(); }
   });
-  it.each(['ui', 'voice', 'legacy', 'schema_legacy', 'extended_send', 'native_command', 'schema_nested_legacy', 'schema_nested_legacy_none', 'review_send'] as const)('keeps an Ask on the canonical daemon send owner with its exact input and observation intent (%s)', async client => {
+  it.each(['ui', 'human_return', 'voice', 'legacy', 'schema_legacy', 'extended_send', 'native_command', 'schema_nested_legacy', 'schema_nested_legacy_none', 'review_send'] as const)('keeps an Ask on the canonical daemon send owner with its exact input and observation intent (%s)', async client => {
     const surface = client === 'voice' ? 'voice' : 'ui';
-    const reply = client === 'extended_send' || client === 'native_command' || client === 'schema_nested_legacy_none' || client === 'review_send' ? 'none' : 'wait';
+    const reply = client === 'human_return' ? 'return' : client === 'extended_send' || client === 'native_command' || client === 'schema_nested_legacy_none' || client === 'review_send' ? 'none' : 'wait';
+    const humanReturn = client === 'human_return' ? { returnToSessionId: 'origin-session' } : {};
     const withReview = client === 'schema_nested_legacy' || client === 'schema_nested_legacy_none' || client === 'review_send';
     const withStructuredInput = client === 'ui' || client === 'schema_legacy' || withReview;
     const overrides = client === 'extended_send' ? { modelOverride: 'provider/claude-sonnet',
@@ -605,6 +606,7 @@ describe('default Action executor mode and catalog contracts', () => {
         localId: 'ask-input', idempotencyKey: 'native-command-1',
       } : {
         sessionId: 'ask-session', message: 'What did you find?', reply, localId: 'ask-input', timeoutSeconds: 61,
+        ...humanReturn,
         requestedAction: { v: 1, kind: 'send_now' },
         ...overrides,
         ...(withStructuredInput ? { structuredInput } : {}),
@@ -621,6 +623,7 @@ describe('default Action executor mode and catalog contracts', () => {
       localId: 'ask-input', idempotencyKey: 'native-command-1',
     } as const : {
       sessionId: 'ask-session', message: 'What did you find?', reply, localId: 'ask-input', timeoutSeconds: 61,
+      ...humanReturn,
       requestedAction: { v: 1, kind: 'send_now' },
       ...overrides,
       ...(withStructuredInput ? { structuredInput } : {}),
@@ -926,6 +929,90 @@ describe('default Action executor mode and catalog contracts', () => {
     daemonAnswer = () => ({ status: 'stopped' });
     expect(await executeSessionLifecycleAction('session.stop', sessionId, { serverId })).toEqual({ success: true });
   });
+  it.each([
+    { reason: 'socket-reconnect', change: 'unchanged' },
+    { reason: 'app-foreground', change: 'unchanged' },
+    { reason: 'server-reachable', change: 'unchanged' },
+    { reason: 'manual', change: 'unchanged' },
+    { reason: 'socket-reconnect', change: 'mode' },
+    { reason: 'socket-reconnect', change: 'denied' },
+  ] as const)(
+    'revalidates the gentle Stop hold across a same-Home $reason refresh ($change)', async ({ reason, change }) => {
+    const sessionId = 'stop-across-resume';
+    const read = installSession(sessionId, { path: '/repo', machineId: 'machine-a', flavor: 'codex' });
+    const { sync } = await import('@/sync/sync');
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    // Finish restoration before capturing this operation's own HTTP witness.
+    await sync.resumeSync('manual');
+    const body = holdSessionResponseBody(sessionId);
+    daemonAnswer = () => {
+      const envelope = SessionOwnerMetadataEnvelopeV1Schema.parse(read().ownerMetadata);
+      if (envelope.t !== 'plain') throw new Error('Expected plain owner metadata');
+      expect(readSessionExplicitStopV1FromMetadata(envelope.v.runtime)).toMatchObject({ cause: 'explicit_stop' });
+      return { status: 'stopped' };
+    };
+    const stopping = executeSessionLifecycleAction('session.stop', sessionId, { serverId });
+    try {
+      await Promise.race([body.reading, stopping.then(() => { throw new Error('Stop completed before the held metadata read'); })]);
+      const before = homes.requestsFor('/v1/account/encryption/currentness').length;
+      const currentness = createPlainAccountEncryptionCurrentnessFixture();
+      if (change !== 'unchanged') homes.answer(serverId, '/v1/account/encryption/currentness', change === 'denied'
+        ? { status: 403, body: { error: 'forbidden' } }
+        : { body: { ...currentness,
+          ...(change === 'mode' ? { mode: 'e2ee', signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content',
+            recipientEnvelopeReadiness: { status: 'available' } } : {}),
+        } });
+      await sync.resumeSync(reason);
+      body.release();
+      const result = await stopping;
+      if (change !== 'unchanged') {
+        expect(result).toMatchObject({ success: false, code: 'session_stop_control_unavailable' });
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}`).filter(request => request.input !== null)).toHaveLength(0);
+        expect(outgoing).toEqual([]);
+        return;
+      }
+      expect(result).toEqual({ success: true });
+      expect(homes.requestsFor('/v1/account/encryption/currentness').length).toBeGreaterThan(before);
+      expect(outgoing.filter(request => request.method.endsWith(`:${RPC_METHODS.STOP_SESSION}`)))
+        .toEqual([{ method: `machine-a:${RPC_METHODS.STOP_SESSION}`, params: { sessionId } }]);
+    } finally {
+      body.release();
+      await stopping;
+      body.restore();
+    }
+  });
+  it('retires the old Stop capture and admits a fresh Stop after an Account switch on the same Home', async () => {
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const oldSessionId = 'previous-account-stop';
+    installSession(oldSessionId, { machineId: 'machine-a', flavor: 'codex' });
+    const body = holdSessionResponseBody(oldSessionId);
+    const stopping = executeSessionLifecycleAction('session.stop', oldSessionId, { serverId });
+    try {
+      await Promise.race([body.reading, stopping.then(() => { throw new Error('Stop completed before the held metadata read'); })]);
+      await homes.switchAccount(serverId, 'bob', { currentAccount: true });
+      body.release();
+      expect(await stopping).toMatchObject({ success: false });
+      expect(outgoing).toEqual([]);
+      expect(homes.requestsFor(`/v2/sessions/${oldSessionId}`).filter(request => request.input !== null)).toHaveLength(0);
+      body.restore();
+      storage.getState().activateProfileScope({ serverId, accountId: 'bob' });
+      await storage.getState().activateSettingsScope({ serverId, accountId: 'bob' });
+      const sessionId = 'restored-account-stop';
+      installSession(sessionId, { machineId: 'machine-a', flavor: 'codex' });
+      const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'bob' });
+      const machine = createMachineFixture({ id: machineRow.id, activeAt: machineRow.activeAt });
+      storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
+      homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
+      daemonAnswer = () => ({ status: 'stopped' });
+      expect(await executeSessionLifecycleAction('session.stop', sessionId, { serverId })).toEqual({ success: true });
+      expect(outgoing.filter(request => request.method.endsWith(`:${RPC_METHODS.STOP_SESSION}`)))
+        .toEqual([{ method: `machine-a:${RPC_METHODS.STOP_SESSION}`, params: { sessionId } }]);
+    } finally {
+      body.release();
+      await stopping;
+      body.restore();
+    }
+  });
   it('renames a shared admin Session through the declared shared-editor intent without owner metadata', async () => {
     const sessionId = 'admin-renamed-session';
     const access = createSessionAccessFixture('admin');
@@ -955,6 +1042,22 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(await executeSessionLifecycleAction('session.title.set', sessionId, { serverId }, 'Shared rename')).toEqual({ success: true });
     expect(JSON.parse(row.metadata!).summary.text).toBe('Shared rename');
     expect(row).not.toHaveProperty('ownerMetadata');
+  });
+  it('keeps an issued Stop with a lost native ACK pending through the real lifecycle Action', async () => {
+    const sessionId = 'stop-lost-ack';
+    installSession(sessionId, { path: '/repo', machineId: 'machine-a', flavor: 'codex' });
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    daemonAnswer = request => {
+      expect(request.method).toBe(`machine-a:${RPC_METHODS.STOP_SESSION}`);
+      // This is the native Socket.IO boundary, after the real request was emitted.
+      throw new Error('socket has been disconnected');
+    };
+
+    expect(await executeSessionLifecycleAction('session.stop', sessionId, { serverId })).toMatchObject({
+      success: false, code: 'session_stop_requested', recovery: 'wait_for_inactive',
+    });
+    expect(outgoing).toEqual([{ method: `machine-a:${RPC_METHODS.STOP_SESSION}`, params: { sessionId } }]);
+    expect(storage.getState().sessions[sessionId]?.active).toBe(true);
   });
   it('preserves current daemon stop confirmation and failure detail through the real Action adapter', async () => {
     const readRow = installSession('stop-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });

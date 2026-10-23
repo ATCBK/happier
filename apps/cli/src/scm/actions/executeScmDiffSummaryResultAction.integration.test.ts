@@ -9,6 +9,8 @@ import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { configuration } from '@/configuration';
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { readMessageDisplayText } from '@happier-dev/session-core/messages';
+import { SessionMessageMetaSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
 
 const cwd = '/saved/repository';
 beforeEach(() => {
@@ -55,26 +57,36 @@ describe('saved SCM result Action boundary', () => {
     const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output: ScmDiffSummaryGenerateOutputSchema.parse({
       ...output, outputs: { ...output.outputs, walkthrough: { state: 'complete', value: reading } },
     }) });
-    const messages: Array<{ recipient: unknown; message: string }> = [];
+    const messages: Array<{ recipient: unknown; message: string; displayText?: string }> = [];
     const executor = createScmResultActionExecutor(({ actionId, input, context, executeCanonicalAction }) =>
       executeScmActionOperation({ actionId, input, actionContext: context, executeCanonicalAction,
         workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] } }), {
       executionRunGet: async () => ({ run }),
       sessionSendMessage: async request => {
-        messages.push({ recipient: request.recipient, message: request.message });
+        messages.push({ recipient: request.recipient, message: request.message, displayText: request.displayText });
         return { status: 'accepted', localId: request.localId };
       },
     });
     expect(await executor.execute('scm.diffSummary.discuss', { cwd, resultId: saved.resultId, expectedRevision: saved.revision,
       stopIds: ['selection'], message: question }, { surface: 'cli', bypassApprovals: true }))
       .toMatchObject({ ok: true, result: { success: true, runId: run.runId } });
-    expect(messages).toEqual([{ recipient: { kind: 'execution_run', runId: run.runId }, message: expect.stringContaining(question) }]);
+    expect(messages).toEqual([{ recipient: { kind: 'execution_run', runId: run.runId },
+      message: expect.stringContaining(question), displayText: question }]);
+    const displayedMeta = SessionMessageMetaSchema.parse({ displayText: messages[0]!.displayText });
+    expect(readMessageDisplayText({ text: messages[0]!.message, displayText: displayedMeta.displayText })).toBe(question);
     expect(messages[0]!.message).toContain('The selected change survives refresh.');
     expect(messages[0]!.message).toContain('Answer the user in prose');
     expect(messages[0]!.message).not.toContain('For each finding');
     expect(messages[0]!.message).not.toContain('verdict');
     expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
       result: { revision: saved.revision, output: { outputs: { walkthrough: { value: reading } } } } });
+    expect(await executor.execute('session.message.send', { sessionId: 'session', message: 'A separate question',
+      localId: 'separate-input' }, { surface: 'cli', bypassApprovals: true })).toMatchObject({ ok: true });
+    expect(messages.at(-1)).toEqual({ recipient: undefined, message: 'A separate question', displayText: undefined });
+    expect(await executor.execute('session.message.send', { sessionId: 'session', message: 'Agent-only text',
+      displayText: 'Caller-supplied display' }, { surface: 'cli', bypassApprovals: true }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(messages).toHaveLength(2);
   });
   it.each(['scm.diffSummary.refine', 'scm.diffSummary.addOutputs', 'scm.diffSummary.discuss'] as const)(
     'admits %s to the recoverable original through Pending without awaiting native provisioning', async actionId => {
@@ -450,9 +462,11 @@ describe('saved SCM result Action boundary', () => {
   it('binds revision before sending a targeted retained input to the generator participant', async () => {
     ExecutionRunGetResponseSchema.parse({ run });
     const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
-    const executeCanonicalAction = vi.fn<Parameters<ScmActionExecute>[0]['executeCanonicalAction']>(async (id, input) => {
+    const executeCanonicalAction: Parameters<ScmActionExecute>[0]['executeCanonicalAction'] = async (id, input) => {
       if (id === 'execution.run.get') return { ok: true, result: { run } };
       if (id !== 'session.message.send') throw new Error('Detached or replacement dispatch is incorrect');
+      expect(input).toMatchObject({ sessionId: 'session', recipient: { kind: 'execution_run', runId: run.runId },
+        localId: expect.any(String) });
       const message = input as { localId: string };
       await scmDiffSummaryResultStore.edit({ cwd, resultId: created.resultId, expectedRevision: 0,
         edit: { kind: 'renameWalkthrough', title: 'Other device title' } });
@@ -460,13 +474,10 @@ describe('saved SCM result Action boundary', () => {
         modelOutput: { walkthrough: { title: 'Stale', intro: '', stops: [], otherChangeRefs: [] } } }))
         .toMatchObject({ success: false, errorCode: 'revision_conflict', latestRevision: 1 });
       return { ok: true, result: { status: 'accepted', localId: message.localId } };
-    });
+    };
     const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.refine',
       input: { cwd, resultId: created.resultId, expectedRevision: 0, output: 'walkthrough', instructions: 'Clarify the rationale' },
       workingDirectory: cwd, executeCanonicalAction });
     expect(response).toEqual(expect.objectContaining({ success: true, runId: run.runId, inputId: expect.any(String) }));
-    expect(executeCanonicalAction).toHaveBeenCalledWith('session.message.send', expect.objectContaining({
-      sessionId: 'session', recipient: { kind: 'execution_run', runId: run.runId }, localId: expect.any(String),
-    }));
   });
 });

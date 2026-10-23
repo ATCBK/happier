@@ -1035,6 +1035,50 @@ describe('scoped Account workflow Artifact operations', () => {
             }
         } finally { account.dispose(); }
     });
+    it.each(['updated', 'changed-kind', 'missing', 'refused', 'locked'] as const)('readmits selected Artifact bodies and their fresh projection (%s)', async outcome => {
+        const home = await upsertAndActivateServer({ serverUrl: `https://selected-artifact-${outcome}.test`, scope: 'tab' });
+        const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const stored: Artifact = { id: 'selected-role', kind: 'other', ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent({ kind: 'role.v1', title: 'Original' }),
+            body: encodePlainArtifactStoredContent({ body: 'Original body' }),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 2 };
+        const currentHeader = { kind: outcome === 'changed-kind' ? 'memory_doc.v1' : 'role.v1', title: 'Current' };
+        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+            const target = new URL(String(url));
+            if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
+            if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if (target.pathname === '/v1/artifacts') {
+                expect(target.searchParams.has('includeBody')).toBe(false);
+                const { body: _body, ...head } = stored;
+                return json([head]);
+            }
+            if (target.pathname === '/v1/artifacts/read') return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)), artifactId => {
+                expect(artifactId).toBe(stored.id);
+                if (outcome === 'missing') return { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+                if (outcome === 'refused') return { artifactId, ok: false, error: 'artifact_content_unavailable', status: 409, retryable: false };
+                return { artifactId, ok: true, recipientCensus: null, artifact: { ...stored,
+                    header: encodePlainArtifactStoredContent(currentHeader), body: encodePlainArtifactStoredContent({ body: 'Current body' }),
+                    headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 5, updatedAt: 6,
+                    ...(outcome === 'locked' ? { provenance: 'unreadable attribution' } : {}) } };
+            });
+            return json({ error: 'unexpected_route' }, 404);
+        });
+        const account = await captureLazyActionAccountContext(home.id);
+        try {
+            const pending = account.workflowArtifacts.list({ kind: 'role.v1', includeBody: true });
+            if (outcome === 'refused') await expect(pending).rejects.toMatchObject({ code: 'artifact_content_unavailable' });
+            else if (outcome === 'locked') await expect(pending).resolves.toMatchObject({ coverage: 'partial', items: [] });
+            else if (outcome === 'missing' || outcome === 'changed-kind') await expect(pending).resolves.toMatchObject({ coverage: 'complete', items: [] });
+            else await expect(pending).resolves.toMatchObject({ coverage: 'complete', items: [{ artifactId: stored.id,
+                header: currentHeader, body: 'Current body', headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 5, updatedAt: 6 }] });
+        } finally { account.dispose(); }
+    });
     it.each(['plain', 'e2ee'] as const)('runs ordinary %s Artifact CRUD through the front door on the captured Home', async mode => {
         const home = await upsertAndActivateServer({ serverUrl: `https://ordinary-artifacts-${mode}.test`, scope: 'tab' });
         await upsertAndActivateServer({ serverUrl: `https://ordinary-focused-${mode}.test`, scope: 'tab' });

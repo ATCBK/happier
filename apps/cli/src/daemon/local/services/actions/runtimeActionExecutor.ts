@@ -10,6 +10,7 @@ import { ProjectServiceRelocateInputV1Schema, type ProjectServiceRelocateInputV1
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol';
 import type { RpcHandlerContext } from '@/api/rpc/types';
+import { resolveLocalServicePublicPreviewCreateFailureV1 } from '@happier-dev/protocol/local/services/public/v1';
 
 import type { LocalServiceActionRoutes } from './routes';
 import type { LocalServiceActionExecutionContext } from './executor';
@@ -18,7 +19,7 @@ import type { LocalServiceInventoryRoutes } from '../inventory/routes';
 import { projectLocalServiceInventorySnapshotV1 } from '../inventory/wire';
 import type { LocalServiceLauncherRoutes } from '../launch/routes';
 import type { LocalServicePreviewRoutes } from '../preview/routes';
-import type { LocalServicePublicPreviewRoutes } from '../public/routes';
+import { LocalServicePublicPreviewCreateRefusal, type LocalServicePublicPreviewRoutes } from '../public/routes';
 
 export type LocalServicesRuntimeActionRoutes = Readonly<{
     inventoryRoutes?: Pick<LocalServiceInventoryRoutes, 'getSnapshot' | 'refreshSnapshot'>;
@@ -329,10 +330,18 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
             if (!isLocalServicePublicPreviewCreateConfirmed(request.data)) {
                 return disabledResult('local_services_public_preview_confirmation_required');
             }
-            const response = await routes.createExposure(request.data, input.ingress);
-            return requiresAgentEgressRedaction(args.context)
-                ? redactLocalServicePublicPreviewCreateResponseForAgentEgress(response)
-                : response;
+            try {
+                const response = await routes.createExposure(request.data, input.ingress);
+                return requiresAgentEgressRedaction(args.context)
+                    ? redactLocalServicePublicPreviewCreateResponseForAgentEgress(response)
+                    : response;
+            } catch (error) {
+                if (!(error instanceof LocalServicePublicPreviewCreateRefusal)) throw error;
+                // Older development servers used 403 for unavailable prerequisites too.
+                const failure = resolveLocalServicePublicPreviewCreateFailureV1(error.reasonCode);
+                return { ok: false, errorCode: failure.error, error: `${failure.error}:${failure.reasonCode}`,
+                    details: { reasonCode: failure.reasonCode, httpStatus: error.httpStatus } };
+            }
         }
 
         if (args.actionId === 'localServices.publicPreview.revoke') {

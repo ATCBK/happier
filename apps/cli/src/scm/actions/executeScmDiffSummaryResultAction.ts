@@ -169,7 +169,8 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
     ...(explanationRequest ? { reviewExplanation: explanationRequest } : {}) });
   if (!begun.success) return begun;
   const sent = await (sessionId
-    ? execute('session.message.send', { sessionId, recipient: { kind: 'execution_run', runId: previousRunId }, message, localId: inputId })
+    ? execute('session.message.send', { sessionId, recipient: { kind: 'execution_run', runId: previousRunId }, message, localId: inputId },
+      discuss ? { sessionMessageDisplayText: discuss.message } : undefined)
     : execute('execution.run.send', { ...runTarget, runId: previousRunId, message, localInputId: inputId,
       ...(affordances.canResume ? { resume: true } : {}) })).catch(() => null);
   if (!sent) return { success: false, errorCode: 'admission_unknown', error: 'The generator input admission is unconfirmed.' };

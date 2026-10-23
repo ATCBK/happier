@@ -21,6 +21,7 @@ import type { WidgetDefinitionV1 } from '@happier-dev/protocol/widgets/widgetDef
 import NativeAbortController from 'abort-controller';
 import { createArtifact as createArtifactApi, fetchArtifact as fetchArtifactApi } from '@/sync/api/artifacts/apiArtifacts';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 
 // Collect the real Action graph outside the finite operation's deadline.
 const { withDefaultActionExecuteContext } = await import('./defaultActionExecutor');
@@ -58,9 +59,49 @@ it('retains original Account-only cleanup custody after user cancellation, but n
         expect(account.accountLifetime.isCurrent()).toBe(false);
         expect(account.accountOnlyLifetime.isCurrent()).toBe(true);
         expect(() => account.assertAccountCurrent()).not.toThrow();
-        retireActiveServerAccountScopeLifetime();
+        await TokenStorage.removeCredentialsForServerUrl(homes.homes.a!.serverUrl, { serverId: homes.homes.a!.id });
         expect(account.accountOnlyLifetime.isCurrent()).toBe(false);
         expect(() => account.assertAccountCurrent()).toThrow('action_account_scope_changed');
+    } finally { account.dispose(); }
+});
+
+it.each(['a', 'e'] as const)('retains captured Account authority through a same-Account bearer refresh (%s)', async homeKey => {
+    const home = homes.homes[homeKey]!;
+    const account = await captureLazyActionAccountContext(home.id);
+    const retired = vi.fn();
+    account.accountLifetime.onRetire(retired);
+    const refreshed = { ...account.credentials, token: `e30.${Buffer.from(JSON.stringify({ sub: account.accountId,
+        jti: 'newer-account-bearer' })).toString('base64url')}.signature` };
+    try {
+        expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, account.credentials)).toBe(true);
+        expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, refreshed)).toBe(true);
+        expect({ current: account.accountLifetime.isCurrent(), cleanup: account.accountOnlyLifetime.isCurrent(),
+            retired: retired.mock.calls.length }).toEqual({ current: true, cleanup: true, retired: 0 });
+        // Prepared approvals release listeners while idle. Their re-admission must
+        // use the same credential-continuity rule as the live lifetime watcher.
+        account.dispose();
+        await expect(account.runPrepared(async () => (await account.request('/v1/account/encryption')).status)).resolves.toBe(200);
+        expect(account.credentials).not.toEqual(refreshed);
+    } finally { account.dispose(); }
+});
+
+it.each(['account', 'keys', 'authority', 'removed'] as const)('retires captured authority for a genuine credential change: %s', async change => {
+    const home = homes.homes.e!;
+    const account = await captureLazyActionAccountContext(home.id);
+    const retired = vi.fn();
+    account.accountLifetime.onRetire(retired);
+    try {
+        if (change === 'removed') {
+            await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+        } else {
+            const next = change === 'keys' ? { ...account.credentials, secret: Buffer.alloc(32, 8).toString('base64url') }
+                : { ...account.credentials, token: `e30.${Buffer.from(JSON.stringify(change === 'account'
+                    ? { sub: 'account-b' } : { sub: 'account-a', session: 'restricted-terminal' })).toString('base64url')}.signature` };
+            expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, next)).toBe(true);
+        }
+        expect({ current: account.accountLifetime.isCurrent(), cleanup: account.accountOnlyLifetime.isCurrent(),
+            retired: retired.mock.calls.length }).toEqual({ current: false, cleanup: false, retired: 1 });
+        await expect(account.runPrepared(async () => 'forbidden')).rejects.toMatchObject({ code: 'action_account_scope_changed' });
     } finally { account.dispose(); }
 });
 
@@ -260,7 +301,7 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
             pending = Promise.allSettled([first.readArtifact(artifactId), sibling.readArtifact(artifactId)]);
             void pending.then(() => { settled = true; });
             const physicalSignal = await started.promise;
-            retireActiveServerAccountScopeLifetime();
+            await TokenStorage.removeCredentialsForServerUrl(homes.homes.a!.serverUrl, { serverId: homes.homes.a!.id });
             await vi.waitFor(() => expect(settled).toBe(true));
             expect(physicalSignal.aborted).toBe(true);
             expect(reads).toBe(1);
@@ -405,7 +446,7 @@ describe('captureActionAccountContext transport authority', () => {
         const response = Response.json({ committed: true });
         network.mockImplementation(async (url, init) => {
             if (url.pathname !== '/v1/artifacts' || init?.method !== 'POST') return homes.fetch(url, init);
-            retireActiveServerAccountScopeLifetime();
+            await TokenStorage.removeCredentialsForServerUrl(homes.homes.a!.serverUrl, { serverId: homes.homes.a!.id });
             return response;
         });
         const context = await captureLazyActionAccountContext(homes.homes.a!.id);
@@ -419,7 +460,7 @@ describe('captureActionAccountContext transport authority', () => {
         const path = '/v1/artifacts/11111111-1111-4111-8111-111111111111';
         network.mockImplementation(async (url, init) => {
             if (url.pathname !== path) return homes.fetch(url, init);
-            retireActiveServerAccountScopeLifetime();
+            await TokenStorage.removeCredentialsForServerUrl(homes.homes.a!.serverUrl, { serverId: homes.homes.a!.id });
             return Response.json({ private: true });
         });
         const context = await captureLazyActionAccountContext(homes.homes.a!.id);
@@ -442,6 +483,8 @@ describe('captureActionAccountContext transport authority', () => {
                 await setActiveServer({ serverId: homes.homes.a!.id });
                 expect(() => establishedB.assertCurrent()).not.toThrow();
                 publishAppliedActiveServerRuntimeAvailability(false);
+                expect(() => establishedB.assertCurrent()).not.toThrow();
+                await TokenStorage.removeCredentialsForServerUrl(homes.homes.b!.serverUrl, { serverId: homes.homes.b!.id });
                 expect(() => establishedB.assertCurrent()).toThrow('action_account_scope_changed');
             } finally { establishedB.dispose(); }
         } finally { stagedB.dispose(); appliedA.dispose(); }

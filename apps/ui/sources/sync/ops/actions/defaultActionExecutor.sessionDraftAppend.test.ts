@@ -58,9 +58,9 @@ describe('Session draft append through the real Action executor', () => {
         } });
         const writes = homes.requestsFor('/v2/sessions/lead').filter(request => request.input != null);
         expect(writes).toHaveLength(1);
-        expect(writes[0]).toMatchObject({ serverId, input: { mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: {
+        expect(writes[0]).toMatchObject({ serverId, input: { mode: 'owner', ownerMetadata: { t: 'plain', v: {
             history: { sessionInitialPromptV1: { v: 1, text: 'From reviewer:\nUse checkpoints.', mode: 'append', sourceSessionId: 'lead', createdAtMs: expect.any(Number) } },
-        } } } } });
+        } } } });
         expect(homes.requests.some(request => request.path.includes('/messages') && request.input != null)).toBe(false);
     });
 

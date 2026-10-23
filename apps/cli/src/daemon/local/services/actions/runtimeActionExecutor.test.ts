@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
@@ -62,6 +63,44 @@ async function gateWith(overrides: Partial<Record<LocalServicesDaemonFeatureGate
     return gate;
 }
 const enabledFeatureGate = await gateWith();
+
+it.each([403, 503])('preserves a public exposure audit refusal through real HTTP routes and Action dispatch (HTTP %s)', async (status) => {
+    const { createLocalServicesDaemonRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+    const routes = createLocalServicePublicPreviewServerRoutes({ token: 'fixture-token', http: {
+        async post() {
+            throw new AxiosError('Request refused', undefined, undefined, undefined, {
+                data: { error: status === 403 ? 'public_preview_denied' : 'public_preview_unavailable', reasonCode: 'audit_sink_unavailable' },
+                status, statusText: 'Refused', headers: new AxiosHeaders(), config: { headers: new AxiosHeaders() },
+            });
+        },
+        async delete() { throw new Error('unexpected delete'); },
+    } });
+    const execute = createLocalServicesDaemonRuntimeActionExecutor({ routes: { publicPreviewRoutes: routes }, featureGate: enabledFeatureGate });
+    await expect(execute(runtimeArgs({ actionId: 'localServices.publicPreview.create', context: { surface: 'cli' }, input: {
+        machineId: 'machine_1', sessionId: 'session_1', previewId: 'preview_1', mode: 'secret_link', ttlMs: 600_000,
+        confirmation: { acknowledged: true },
+    } }))).resolves.toEqual({ ok: false, errorCode: 'public_preview_unavailable', error: 'public_preview_unavailable:audit_sink_unavailable',
+        details: { reasonCode: 'audit_sink_unavailable', httpStatus: status } });
+});
+
+it('does not report creation refusal when creation succeeded and its status read failed', async () => {
+    const { createLocalServicesDaemonRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+    const statusError = new AxiosError('Status refused', undefined, undefined, undefined, {
+        data: { error: 'public_preview_denied', reasonCode: 'session_not_authorized' }, status: 403,
+        statusText: 'Refused', headers: new AxiosHeaders(), config: { headers: new AxiosHeaders() },
+    });
+    const routes = createLocalServicePublicPreviewServerRoutes({ token: 'fixture-token', http: {
+        async post(url) {
+            if (url.endsWith('/status')) throw statusError;
+            return { data: { exposure: publicExposure } };
+        }, async delete() { throw new Error('unexpected delete'); },
+    } });
+    const execute = createLocalServicesDaemonRuntimeActionExecutor({ routes: { publicPreviewRoutes: routes }, featureGate: enabledFeatureGate });
+    await expect(execute(runtimeArgs({ actionId: 'localServices.publicPreview.create', input: {
+        machineId: 'machine_1', sessionId: 'session_1', previewId: 'preview_1', mode: 'secret_link', ttlMs: 600_000,
+        confirmation: { acknowledged: true },
+    } }))).rejects.toBe(statusError);
+});
 
 const inventorySnapshot: NormalizedLocalServiceInventorySnapshot = {
     v: 1,

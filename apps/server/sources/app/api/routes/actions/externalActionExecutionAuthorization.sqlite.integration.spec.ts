@@ -3009,6 +3009,32 @@ describe("external Action execution authorization", () => {
             ] as const) expect(await verify(method, path, body, routeInput), path).not.toBeNull();
             expect(await verify('GET', sourcesPath, undefined, { destinationSessionId: session.id }, scope)).not.toBeNull();
             expect(await verify('GET', followersPath, undefined, { sourceSessionId: session.id }, scope)).not.toBeNull();
+            const preview = await mint(app, fixture, 'session.targets.resolve', { ...fixture.envelope,
+                requestId: crypto.randomUUID(), input: { actionId: 'session.goal.get',
+                    target: { selector: 'workers', of: session.id } } });
+            // Inspection prepares the same canonical selection under its own
+            // signed read root; the described Action grants no effect authority.
+            expect(await verify('GET', '/v1/account/encryption/currentness', undefined, {}, undefined, preview)).not.toBeNull();
+            expect(await verify('POST', '/v2/sessions/query', query, query, undefined, preview)).not.toBeNull();
+            expect(await verify('GET', '/v1/account/encryption/currentness', undefined, {}, undefined,
+                preview, 'session.goal.get')).toBeNull();
+            expect(await verify('GET', '/v2/account/settings', undefined, {}, undefined, preview)).toBeNull();
+            const goalSelection = await mint(app, fixture, 'session.goal.set', { ...fixture.envelope,
+                requestId: crypto.randomUUID(), input: { objective: 'Selected child goal',
+                    sessionId: { selector: 'self', of: session.id } } });
+            const detailPath = `/v2/sessions/${session.id}`;
+            const detailProof = (path: string) => ({ authorizationToken: goalSelection.token, effectActionId: goalSelection.binding.actionId,
+                encodedTarget: encodeExternalActionResolvedTargetV1(goalSelection.binding.target), method: 'GET', path,
+                routeInput: { sessionId: session.id, ...(path.includes('?') ? { accessProjectionVersion: 1 } : {}) },
+                sessionRouteTarget: { kind: 'session' as const, sessionId: session.id, actionId: 'session.transcript.get' as const },
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: goalSelection.token,
+                    effectActionId: goalSelection.binding.actionId, target: goalSelection.binding.target,
+                    installationId: fixture.machine.installationId!, requestId: goalSelection.binding.requestId,
+                    method: 'GET', path, privateKey: fixture.keyPair.secretKey }) });
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(detailPath))).not.toBeNull();
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(`${detailPath}?accessProjectionVersion=1`))).not.toBeNull();
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(`${detailPath}?includeMessages=true`))).toBeNull();
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(`/v1/sessions/${session.id}/messages`))).toBeNull();
             const census = await app.inject({ method: 'GET', url: censusPath, headers: machineHeaders({
                 authorizationToken: authorization.token, effectActionId: actionId, method: 'GET', path: censusPath,
                 body: undefined, privateKey: fixture.keyPair.secretKey }) });
@@ -6014,6 +6040,27 @@ describe("external Action execution authorization", () => {
                 workspaceSyncSourceRouting: releaseRouting, callerAuthority: 'account_automation', callerInputConstraints });
             expect(effect.mock.calls[1]?.[1]).not.toHaveProperty('callerInputAuthorization');
             expect(effect).toHaveBeenCalledTimes(2);
+        } finally { await app.close(); }
+    });
+
+    it.each(['action.spec.get', 'action.spec.search'] as const)('admits original Account discovery without inventing a Session origin (%s)', async actionId => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const input = actionId === 'action.spec.get'
+            ? { id: 'session.message.send', includeOutputSchema: true }
+            : { query: 'session.message.send' };
+        const envelope = { ...fixture.envelope, input };
+        const { app } = await createApp(fixture.team.id);
+        try {
+            const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            expect(authorization.binding).toMatchObject({ accountId: fixture.account.id, actionId,
+                machineId: fixture.machine.id, target: envelope.target, authentication: { kind: 'account' } });
+            expect(authorization.binding).not.toHaveProperty('sessionActionOrigin');
+            expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toMatchObject({
+                accountId: fixture.account.id, authority: 'present_user' });
         } finally { await app.close(); }
     });
 

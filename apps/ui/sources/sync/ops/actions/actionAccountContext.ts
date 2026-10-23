@@ -1,6 +1,6 @@
 import { pick } from 'zod/mini';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
-import { TokenStorage, subscribeHomeCredentialMutations, areCredentialsEqual } from '@/auth/storage/tokenStorage';
+import { TokenStorage, subscribeHomeCredentialMutations, areCredentialsEqual, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
 import { ArtifactAccessRecipientCensusResponseV1Schema, type ArtifactAccessGrantMutationResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
@@ -17,7 +17,6 @@ import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
-import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent, buildHomeConnectionDescriptorForProfile, getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { storage } from '@/sync/domains/state/storage';
@@ -29,7 +28,6 @@ import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/clien
 import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome, readAccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedTransport';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
-import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
 import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, fetchArtifactsWithBodiesFromApi, updateArtifactWithHeaderViaApi,
@@ -37,7 +35,7 @@ import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifact
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import { HappyError } from '@/utils/errors/errors';
-import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import type { Artifact, ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { resolveHomeTarget as resolveCapturedHomeTarget, resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
 
@@ -70,6 +68,19 @@ export type RawSettingsMutationOptions = Readonly<{
     capture?: (transition: AccountSettingsMutationCapture) => unknown;
 }>;
 const isEffectResult = (effectClass: ActionEffectClass) => effectClass === 'write' || effectClass === 'external' || effectClass === 'danger';
+
+/** A refreshed Account bearer keeps authority; replacement identity, keys and restricted credentials do not. */
+function retainsActionAccountCredential(original: AuthCredentials | null, next: AuthCredentials | null | undefined): boolean {
+    if (!original || !next) return false;
+    if (areCredentialsEqual(original, next)) return true;
+    if (readCredentialAuthorityKind(original.token) !== 'account' || readCredentialAuthorityKind(next.token) !== 'account') return false;
+    try {
+        return parseToken(original.token) === parseToken(next.token)
+            && areCredentialsEqual({ ...original, token: next.token }, next);
+    } catch {
+        return false;
+    }
+}
 
 function requireArtifactAccessProjection(artifact: DecryptedArtifact) {
     const projection = artifactAccessProjectionSchema.safeParse({ ownerAccountId: artifact.ownerAccountId, access: artifact.access });
@@ -170,24 +181,21 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 readSavedProfile: async () => savedProfile });
     };
     const serverIdentityId = profile.serverIdentityId?.trim() || undefined;
-    const applied = getAppliedActiveServerSnapshot();
-    const currentness = areServerProfileIdentifiersEquivalent(applied.serverId, serverId)
-        ? captureActiveServerAccountScopeCurrentness() : null;
     const controller = new AbortController();
     const abort = () => controller.abort();
+    let admittedCredentials: AuthCredentials | null = null;
     const watch = () => {
-        const retirement = currentness?.onRetire(abort);
+        // Actions retain their explicit Home/Account, including while focused
+        // Sync reauthenticates. Transport availability is not Account retirement.
         const unsubscribe = subscribeHomeCredentialMutations((event) => {
-            if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)) abort();
+            if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)
+                && (event.kind === 'credentials_removed' || !retainsActionAccountCredential(admittedCredentials, event.credentials))) abort();
         });
-        return () => {
-            retirement?.dispose();
-            unsubscribe();
-        };
+        return unsubscribe;
     };
     const dispose = watch();
     const assertAccountCurrent = () => {
-        if (controller.signal.aborted || (currentness && !currentness.isCurrent())) {
+        if (controller.signal.aborted) {
             throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
         }
     };
@@ -208,6 +216,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             const { AccountStorageCurrentnessUnavailableError } = await import('@/sync/encryption/accountStorageContext');
             throw new AccountStorageCurrentnessUnavailableError(undefined, 'unauthorized', 'action_home_signed_out');
         }
+        admittedCredentials = credentials;
         const credentialAuthorityKind = readCredentialAuthorityKind(credentials.token);
         const accountId = parseToken(credentials.token);
         const scope = { serverId, accountId };
@@ -392,6 +401,16 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             set: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.set(input, operationSignal), operationSignal),
             remove: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.remove(input, operationSignal), operationSignal),
         };
+        const projectArtifactListItem = (artifact: Pick<Artifact, 'id' | 'bodyVersion' | 'headerVersion' | 'seq' | 'createdAt' | 'updatedAt' | 'ownerAccountId' | 'access'>,
+            opened: DecryptedArtifact | null | undefined, includeBody?: boolean) => ({
+                artifactId: artifact.id, header: opened?.isDecrypted && opened.rawHeader ? opened.rawHeader : {},
+                ...(artifact.bodyVersion !== undefined ? { bodyVersion: artifact.bodyVersion } : {}),
+                ...(includeBody && opened?.isDecrypted ? { body: opened.body, bodyVersion: opened.bodyVersion,
+                    provenance: opened.provenance } : {}),
+                headerVersion: artifact.headerVersion, seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
+                ownerAccountId: artifact.ownerAccountId, access: artifact.access,
+                publicAudience: opened?.publicAudience,
+            });
         const listArtifacts = async (options: Parameters<WorkflowDefinitionArtifactOperations['list']>[0]) => {
                 // Only the background inventory yields to the routed Session.
                 // Exact reads and user writes (including Approve) have their
@@ -416,16 +435,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     const opened = openedArtifacts[index] ?? null;
                     // Unopened headers cannot be classified; body failures keep
                     // their readable header for the owning document's typed result.
-                    const header = opened?.isDecrypted && opened.rawHeader ? opened.rawHeader : {};
                     if (!opened?.isDecrypted || !opened.rawHeader) coverage = 'partial';
-                    items.push({ artifactId: artifact.id, header,
-                        ...(artifact.bodyVersion !== undefined ? { bodyVersion: artifact.bodyVersion } : {}),
-                        ...(options.includeBody && opened?.isDecrypted ? { body: opened.body, bodyVersion: opened.bodyVersion,
-                            provenance: opened.provenance } : {}),
-                        headerVersion: artifact.headerVersion, seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
-                        ownerAccountId: artifact.ownerAccountId, access: artifact.access,
-                        publicAudience: opened?.publicAudience,
-                    });
+                    items.push(projectArtifactListItem(artifact, opened, options.includeBody));
                 }
                 const last = artifacts.at(-1);
                 const nextCursor = options.limit !== undefined && artifacts.length === options.limit && last
@@ -504,10 +515,27 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         };
         const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
             read: (...args) => readArtifactDocument(true, ...args),
-            // A coarse-kind read is one filtered request while every row is classified; the shared selector
-            // restarts from the full inventory when the server reports unclassified rows.
-            list: (options) => options.coarseKind === undefined ? listArtifacts(options)
-                : listArtifactHeadersV1({ options, readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor }),
+            list: async options => {
+                let bodyCoveragePartial = false;
+                const page = await listArtifactHeadersV1({ options,
+                    readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor,
+                    // Exact-kind selection opens only matching headers. Ordinary structural
+                    // lists retain their existing page/body coverage contract.
+                    ...(options.kind && options.includeBody ? { readBodies: async (items: readonly ReturnType<typeof projectArtifactListItem>[]) => {
+                        const results = await withArtifactReadSignal(options.signal, async borrowerSignal =>
+                            fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds: items.map(item => item.artifactId), signal: borrowerSignal }));
+                        assertCurrent();
+                        return results.flatMap(result => {
+                            if (result.status === 'rejected') throw result.reason;
+                            const artifact = result.value;
+                            if (!artifact) return [];
+                            if (!artifact.isDecrypted || !artifact.rawHeader) bodyCoveragePartial = true;
+                            return [projectArtifactListItem({ ...artifact, ...requireArtifactAccessProjection(artifact) }, artifact, true)];
+                        });
+                    } } : {}),
+                });
+                return bodyCoveragePartial ? { ...page, coverage: 'partial' as const } : page;
+            },
             create: async (input) => (await createArtifactDocument(input)).artifactId,
             update: updateArtifactDocument,
             delete: async (artifactId, options) => {
@@ -635,7 +663,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     assertCurrent();
                     throwIfAborted(signal);
                     const current = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId });
-                    if (current?.token !== credentials.token) abort();
+                    if (!retainsActionAccountCredential(credentials, current)) abort();
                     assertCurrent();
                     throwIfAborted(signal);
                     const result = await run();
@@ -751,7 +779,7 @@ export async function captureApprovalSettlementAccount(original: LazyActionAccou
     if (!intentEnded && !homeOpenAck) return null;
     const settlement = await captureLazyActionAccountContext(original.serverId, intentEnded ? undefined : original.invocationSignal);
     if (settlement.accountId !== original.accountId || settlement.endpointUrl !== original.endpointUrl
-        || settlement.serverIdentityId !== original.serverIdentityId || !areCredentialsEqual(settlement.credentials, original.credentials)) {
+        || settlement.serverIdentityId !== original.serverIdentityId || !retainsActionAccountCredential(original.credentials, settlement.credentials)) {
         settlement.dispose();
         throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
     }
