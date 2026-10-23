@@ -13,27 +13,31 @@ import React from 'react';
  * one `nowMs` value and register the wake time they need; the clock keeps a
  * single timer at the earliest requested wake. When it fires, every
  * subscriber can read the same timestamp, so placement and row indicators
- * cannot disagree about "now". Status-only surfaces retain their snapshot
- * until their own freshness boundary instead of rendering for unrelated wakes.
+ * cannot disagree about "now". Deadline-only surfaces are notified only for
+ * their own freshness boundary, not for unrelated subscribers' wakes.
  */
 export type SessionListRuntimeClock = Readonly<{
     getNowMs: () => number;
     subscribe: (listener: () => void) => () => void;
+    subscribeWake: (token: object, listener: () => void) => () => void;
     requestWake: (token: object, wakeAtMs: number) => void;
     clearWake: (token: object) => void;
 }>;
 
+type ClockSubscription = Readonly<{ listener: () => void; wakeToken?: object }>;
+
 export function createSessionListRuntimeClock(): SessionListRuntimeClock {
     let nowMs = Date.now();
     let needsIdleRefresh = true;
-    const listeners = new Set<() => void>();
-    const wakeAtMsByToken = new Map<object, number>();
+    const listeners = new Set<ClockSubscription>();
+    const wakeRequests = new Map<object, { wakeAtMs: number | null; subscription?: ClockSubscription }>();
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let scheduledWakeAtMs: number | null = null;
 
     function resolveEarliestWakeAtMs(): number | null {
         let earliest: number | null = null;
-        for (const wakeAtMs of wakeAtMsByToken.values()) {
+        for (const { wakeAtMs } of wakeRequests.values()) {
+            if (wakeAtMs === null) continue;
             earliest = earliest === null ? wakeAtMs : Math.min(earliest, wakeAtMs);
         }
         return earliest;
@@ -46,11 +50,20 @@ export function createSessionListRuntimeClock(): SessionListRuntimeClock {
         // Wake requests are one-shot: consumers recompute their next horizon
         // from the new nowMs and re-register. Dropping satisfied requests here
         // prevents a stale past-time request from re-firing in a tight loop.
-        for (const [token, wakeAtMs] of wakeAtMsByToken) {
-            if (wakeAtMs <= nowMs) wakeAtMsByToken.delete(token);
+        const due = new Set<ClockSubscription>();
+        for (const [token, request] of wakeRequests) {
+            if (request.wakeAtMs === null || request.wakeAtMs > nowMs) continue;
+            if (request.subscription) {
+                request.wakeAtMs = null;
+                due.add(request.subscription);
+            } else {
+                wakeRequests.delete(token);
+            }
         }
-        for (const listener of [...listeners]) {
-            listener();
+        // One subscription order and one canonical instant serve both kinds of
+        // reader. Unrelated date leaves do not receive a callback/getSnapshot.
+        for (const subscription of [...listeners]) {
+            if (subscription.wakeToken === undefined || due.has(subscription)) subscription.listener();
         }
         reschedule();
     }
@@ -70,6 +83,25 @@ export function createSessionListRuntimeClock(): SessionListRuntimeClock {
         timeoutId = setTimeout(fire, delayMs);
     }
 
+    function subscribeToClock(subscription: ClockSubscription): () => void {
+        if (listeners.size === 0) {
+            // Both global and local subscriptions count as active. The mount
+            // read already refreshed nowMs; subscribing must not change it.
+            needsIdleRefresh = false;
+            if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+            scheduledWakeAtMs = null;
+            reschedule();
+        }
+        listeners.add(subscription);
+        return () => {
+            listeners.delete(subscription);
+            if (listeners.size === 0) needsIdleRefresh = true;
+        };
+    }
+
     return {
         getNowMs: () => {
             // While no surface is subscribed the timestamp can go arbitrarily
@@ -85,34 +117,31 @@ export function createSessionListRuntimeClock(): SessionListRuntimeClock {
             }
             return nowMs;
         },
-        subscribe: (listener: () => void) => {
-            if (listeners.size === 0) {
-                // First subscriber after an idle period: drop any stale
-                // schedule left over from the previous surface. nowMs itself
-                // was already refreshed by the mount render's read.
-                needsIdleRefresh = false;
-                if (timeoutId !== null) {
-                    clearTimeout(timeoutId);
-                    timeoutId = null;
-                }
-                scheduledWakeAtMs = null;
-                reschedule();
-            }
-            listeners.add(listener);
+        subscribe: listener => subscribeToClock({ listener }),
+        subscribeWake: (token, listener) => {
+            const subscription: ClockSubscription = { listener, wakeToken: token };
+            const request = wakeRequests.get(token) ?? { wakeAtMs: null, subscription };
+            request.subscription = subscription;
+            wakeRequests.set(token, request);
+            const unsubscribe = subscribeToClock(subscription);
             return () => {
-                listeners.delete(listener);
-                if (listeners.size === 0) {
-                    needsIdleRefresh = true;
-                }
+                unsubscribe();
+                if (wakeRequests.get(token)?.subscription === subscription) wakeRequests.delete(token);
+                reschedule();
             };
         },
         requestWake: (token: object, wakeAtMs: number) => {
-            if (wakeAtMsByToken.get(token) === wakeAtMs) return;
-            wakeAtMsByToken.set(token, wakeAtMs);
+            const request = wakeRequests.get(token);
+            if (request?.wakeAtMs === wakeAtMs) return;
+            if (request) request.wakeAtMs = wakeAtMs;
+            else wakeRequests.set(token, { wakeAtMs });
             reschedule();
         },
         clearWake: (token: object) => {
-            if (!wakeAtMsByToken.delete(token)) return;
+            const request = wakeRequests.get(token);
+            if (!request) return;
+            if (request.subscription) request.wakeAtMs = null;
+            else wakeRequests.delete(token);
             reschedule();
         },
     };
@@ -121,6 +150,12 @@ export function createSessionListRuntimeClock(): SessionListRuntimeClock {
 export const sessionListRuntimeClock: SessionListRuntimeClock = createSessionListRuntimeClock();
 
 const noopSubscribe = () => () => {};
+
+function useWakeToken(): object {
+    const tokenRef = React.useRef<object | null>(null);
+    if (tokenRef.current === null) tokenRef.current = {};
+    return tokenRef.current;
+}
 
 /**
  * Read the shared session-list runtime timestamp.
@@ -148,23 +183,23 @@ export function useSessionListRuntimeDeadlineNowMs(
     enabled = true,
     clock: SessionListRuntimeClock = sessionListRuntimeClock,
 ): number {
+    const token = useWakeToken();
     const snapshot = React.useMemo(() => {
         let nowMs = Math.max(clock.getNowMs(), Date.now());
         let nextRefreshAtMs = readNextRefreshAtMs(nowMs);
         return {
-            get: () => {
-                const sharedNowMs = clock.getNowMs();
-                if (enabled && nextRefreshAtMs !== null && sharedNowMs >= nextRefreshAtMs) {
-                    nowMs = sharedNowMs;
-                    nextRefreshAtMs = readNextRefreshAtMs(nowMs);
-                }
-                return nowMs;
+            get: () => nowMs,
+            advance: () => {
+                nowMs = clock.getNowMs();
+                nextRefreshAtMs = readNextRefreshAtMs(nowMs);
             },
             nextRefresh: () => nextRefreshAtMs,
         };
     }, [clock, enabled, readNextRefreshAtMs]);
-    const nowMs = React.useSyncExternalStore(enabled ? clock.subscribe : noopSubscribe, snapshot.get, snapshot.get);
-    useSessionListRuntimeWake(snapshot.nextRefresh(), enabled, clock);
+    const subscribe = React.useCallback((listener: () => void) => enabled
+        ? clock.subscribeWake(token, () => { snapshot.advance(); listener(); }) : noopSubscribe(), [clock, enabled, snapshot, token]);
+    const nowMs = React.useSyncExternalStore(subscribe, snapshot.get, snapshot.get);
+    useClockWake(snapshot.nextRefresh(), enabled, clock, token);
     return nowMs;
 }
 
@@ -178,16 +213,17 @@ export function useSessionListRuntimeWake(
     enabled = true,
     clock: SessionListRuntimeClock = sessionListRuntimeClock,
 ): void {
-    const tokenRef = React.useRef<object | null>(null);
-    if (tokenRef.current === null) tokenRef.current = {};
+    useClockWake(wakeAtMs, enabled, clock, useWakeToken());
+}
+
+function useClockWake(wakeAtMs: number | null, enabled: boolean, clock: SessionListRuntimeClock, token: object): void {
     React.useEffect(() => {
         if (!enabled || wakeAtMs === null) return undefined;
-        const token = tokenRef.current as object;
         clock.requestWake(token, wakeAtMs);
         return () => {
             clock.clearWake(token);
         };
-    }, [clock, enabled, wakeAtMs]);
+    }, [clock, enabled, token, wakeAtMs]);
 }
 
 export const SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS = 60_000;

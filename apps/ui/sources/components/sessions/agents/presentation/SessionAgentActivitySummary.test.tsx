@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { StyleSheet } from 'react-native';
 import { HappierWorkSummary } from '@happier-dev/plugin-ui/presentation';
 import { describe, expect, it, vi } from 'vitest';
@@ -42,6 +43,30 @@ async function stateWordStyle(status: AgentActivityEntry['status']) {
 }
 
 describe('SessionAgentActivitySummary', () => {
+    it('keeps a finished age on its display deadline while the genuine live elapsed leaf advances', async () => {
+        const now = Date.parse('2026-09-30T12:00:00.000Z');
+        vi.useFakeTimers({ now });
+        const finished = resolveSessionAgentActivityPresentation({ entry: { ...entry('succeeded'), endedAtMs: now - 3_570_000 } });
+        const live = resolveSessionAgentActivityPresentation({ entry: { ...entry('running'), startedAtMs: now - 2_000, endedAtMs: null } });
+        const screen = await renderScreen(<><SessionAgentActivitySummary presentation={finished} showTime testID="finished" />
+            <SessionAgentActivitySummary presentation={live} testID="live" /></>);
+        try {
+            expect(screen.getTextContent()).toContain('59m');
+            const elapsed = screen.findByTestId('live:elapsed')?.props.children;
+            expect(elapsed).toBeDefined();
+            await act(async () => { vi.advanceTimersByTime(1_000); });
+            expect(screen.findByTestId('live:elapsed')?.props.children).not.toBe(elapsed);
+            expect(screen.getTextContent()).toContain('59m');
+            await act(async () => { vi.advanceTimersByTime(28_999); });
+            expect(screen.getTextContent()).toContain('59m');
+            await act(async () => { vi.advanceTimersByTime(1); });
+            expect(screen.getTextContent()).toContain('1h');
+        } finally {
+            await act(async () => screen.tree.unmount());
+            expect(vi.getTimerCount()).toBe(0);
+            vi.useRealTimers();
+        }
+    });
     it('words an ended unit in the one work-status treatment: a timeout asks for attention, a failure is trouble', async () => {
         // Ended work reads the same here as on the Work row, the run row and the worker card (INT T4).
         expect(await stateWordStyle('timedOut')).toMatchObject(StyleSheet.flatten(workStatusWordStyle('attention')));

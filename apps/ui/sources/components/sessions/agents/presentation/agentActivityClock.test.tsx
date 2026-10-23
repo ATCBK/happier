@@ -87,7 +87,7 @@ describe('shared Work clock', () => {
             await act(async () => { vi.advanceTimersByTime(step); });
         }
         expect(fires()).toBe(10);
-        expect(screen.getTextContent()).toContain('5m5m');
+        expect(screen.getTextContent()).toMatch(/5m\s+5m$/);
         expect(rowRenders).toBe(before);
         expect(vi.getTimerCount()).toBe(1);
         await screen.update(<InboxRelativeTime timestamp={NOW - 40 * DAY - 3_600_000} />);
