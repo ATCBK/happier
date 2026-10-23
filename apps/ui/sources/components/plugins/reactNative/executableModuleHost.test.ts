@@ -64,7 +64,7 @@ describe('PluginUiExecutableModuleHost', () => {
         await host.invalidatePlugin(identity.pluginId);
         expect(await host.activate(input)).toEqual({ ok: true });
         expect(evaluations).toHaveBeenCalledTimes(2);
-        const replacement = { ...identity, artifactDigest: 'sha256:replacement' };
+        const replacement: PluginReactNativeBundleCacheIdentity = { ...identity, artifactDigest: 'sha256:replacement' };
         cache.putInstalledArtifact({ identity: replacement, format: 'plainJs',
             bytes: new TextEncoder().encode('exports.activateClientRuntime = function () {};') });
         expect(await host.activate({ ...input, identity: replacement })).toEqual({ ok: true });
