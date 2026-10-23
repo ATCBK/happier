@@ -100,6 +100,16 @@ function readServiceKeyIngress(value: unknown): ConnectedAccountServiceKey | nul
   return readBuiltInLegacyConnectedAccountServiceKeyIngress(normalized);
 }
 
+/** Report admission only: daemon intake may separately enrich an account binding. */
+export function isConnectedServiceRuntimeFailureReportApplicable(value: unknown): boolean {
+  if (!isRecord(value)) return true;
+  const kind = readKind(value.kind);
+  const needsConnectedAccount = kind === 'usage_limit' || kind === 'auth_expired'
+    || kind === 'refresh_failed' || kind === 'account_changed' || kind === 'account_disabled'
+    || kind === 'permission_denied';
+  return !needsConnectedAccount || Boolean(readNullableString(value.profileId) || readNullableString(value.groupId));
+}
+
 function readLimitCategory(value: unknown): ConnectedServiceRuntimeLimitCategory | undefined {
   return readConnectedServiceLimitCategoryV1(value) ?? undefined;
 }

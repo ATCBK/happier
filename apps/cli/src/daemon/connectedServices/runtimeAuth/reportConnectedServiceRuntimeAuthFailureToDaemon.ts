@@ -1,3 +1,4 @@
+import { isConnectedServiceRuntimeFailureReportApplicable } from './sanitizeConnectedServiceRuntimeFailureClassification';
 import { randomUUID } from 'node:crypto';
 
 import { SessionUsageLimitRecoveryResumePromptModeV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
@@ -175,6 +176,9 @@ export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Re
   nowMs?: () => number;
   createReportId?: () => string;
 }>): Promise<ConnectedServiceRuntimeAuthFailureDaemonReport> {
+  if (!isConnectedServiceRuntimeFailureReportApplicable(input.classification)) {
+    return { handled: false, report: null, statusCode: null, statusMessage: null };
+  }
   const notify = input.notify ?? notifyDaemonConnectedServiceRuntimeAuthFailure;
   const logger = input.logger ?? defaultLogger;
   const logPrefix = input.logPrefix ?? '[connected-services]';

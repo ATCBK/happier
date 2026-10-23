@@ -28,6 +28,18 @@ const classification = {
 } satisfies ConnectedServiceRuntimeFailureClassification;
 
 describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
+  it.each(['usage_limit', 'auth_expired', 'refresh_failed', 'account_changed', 'account_disabled', 'permission_denied'] as const)('keeps native %s failures with their session without creating a Connected Account report', async (kind) => {
+    const outboxDir = await createTempDir('happier-native-quota-report-');
+    const notify = vi.fn(async () => ({ ok: true, result: { status: 'recovery_action_required', action: { kind: 'connected_service_required' } } }));
+    try {
+      const result = await reportConnectedServiceRuntimeAuthFailureToDaemon({ sessionId: 'native-quota-session',
+        classification: { ...classification, kind, profileId: null, groupId: null },
+        notify, reportOutboxDir: outboxDir });
+      expect(result).toMatchObject({ handled: false, report: null, statusMessage: null });
+      expect(notify).not.toHaveBeenCalled();
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally { await removeTempDir(outboxDir); }
+  });
   it('distinguishes fresh accepted failures while coalescing duplicate observations', async () => {
     const reportIds: string[] = [];
     const outboxDir = await createTempDir('accepted-failure-occurrences');
