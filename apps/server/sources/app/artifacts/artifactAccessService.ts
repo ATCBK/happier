@@ -407,9 +407,10 @@ async function captureArtifactBatchInTx(tx: Tx, input: Readonly<{
         body: includeContent && input.projection !== 'headers', bodyVersion: true, provenance: includeContent,
     } });
     const rows: Awaited<ReturnType<typeof readRows>> = [];
-    // One id binding per row; Prisma's unbounded findMany also binds OFFSET.
+    // One id binding per row plus OFFSET; header relations also bind the caller.
     // Chunks stay inside this capture's snapshot, including its final readmission.
-    for (const ids of portableQueryChunks({ values: input.artifactIds, bindingsPerValue: 1, fixedBindings: 1 })) {
+    for (const ids of portableQueryChunks({ values: input.artifactIds, bindingsPerValue: 1,
+        fixedBindings: input.projection === 'headers' ? 2 : 1 })) {
         rows.push(...await readRows(ids));
     }
     // Header admission already carries the caller's envelope readiness. Only a
