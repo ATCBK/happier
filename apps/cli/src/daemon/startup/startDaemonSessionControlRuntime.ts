@@ -178,6 +178,7 @@ import { assessProviderEndpoint } from '@happier-dev/protocol/providers/safety/u
 import { ProviderErrorV1Schema, ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
 import { projectProviderRuntimeBindingBasis } from '@/providers/spawn/runtimeBindingBasis';
 import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
+import { createRequesterConnectedAccountPurposeBindingRuntime } from '@/daemon/connectedServices/purposeBindings/createRequesterConnectedAccountPurposeBindingRuntime';
 import { bindInactiveSessionControlLaunchScope } from '../spawn/inactiveSessionControlLaunchScope';
 import { prepareInactiveSessionControlLaunchScope } from '../spawn/prepareInactiveSessionControlLaunchScope';
 import type { ExecutionRunProviderLaunchRequest } from '@/agent/runtime/bridges/executionRun/runtime/providerLaunch';
@@ -2451,6 +2452,7 @@ export async function startDaemonSessionControlRuntime(
     externalActionAccountId?: string | null;
     openAccountConnectionProviderBrokerAccess?: import('@/providers/broker/accountConnectionClient').OpenAccountConnectionProviderBrokerAccess;
     openAccountConnectionManagedConsumerSource?: import('@/agent/runtime/bridges/executionRun/runtime/managedProvider').ExecutionRunManagedProviderSourceOpener;
+    projectProviderModelsForAccount?: import('@/providers/modelManagement/runtimeServices').RuntimeProviderModelManagementServices['projectModelsForAccount'];
     /** Profile identity paired with `serverBaseUrl` for this daemon lifecycle. */
     serverId: string;
     /** C52's single composed inventory; requester recovery must include sessionless native work. */
@@ -15661,6 +15663,17 @@ export async function startDaemonSessionControlRuntime(
         ? createDaemonExternalActionContributedApprovalReplay({ credentials,
             isApprovalExecutionOriginCurrent: invocationApprovalCurrentness })
         : externalActionContributedApprovalReplay;
+      const providerProjectionAccount = requesterAccountContext ? {
+        operationContext: requesterAccountContext.savedSecretOperationContext,
+        accountId: requesterAccountContext.authorization.binding.accountId,
+        custodianAccountId: requesterAccountContext.authorization.binding.custodianAccountId,
+        isCurrent: requesterAccountContext.isCurrent,
+      } : requesterRuntime ? {
+        operationContext: requesterRuntime.bootstrap.savedSecretOperationContext,
+        accountId: requesterRuntime.bootstrap.attribution.accountId,
+        custodianAccountId: requesterRuntime.bootstrap.savedSecretOperationContext.machineAdmission?.custodianAccountId,
+        isCurrent: () => requesterRuntime.isCurrent(),
+      } : null;
       const executor: ReturnType<
         typeof createCliActionExecutorFromCredentials
       > = await trace('daemon.cli_factory', () => createCliActionExecutorFromCredentials({
@@ -15751,6 +15764,33 @@ export async function startDaemonSessionControlRuntime(
           },
         } : {}),
         ...(requesterAccountContext ? { savedSecretOperationContext: requesterAccountContext.savedSecretOperationContext } : {}),
+        ...(providerProjectionAccount && params.projectProviderModelsForAccount
+          && providerProjectionAccount.custodianAccountId
+          && providerProjectionAccount.accountId !== providerProjectionAccount.custodianAccountId ? {
+            projectModelsForAccount: async (request, actionContext) => {
+              const signal = actionContext.signal ?? new AbortController().signal;
+              const isCurrent = async () => !signal.aborted && !isRuntimePublicationQuiescing()
+                && await providerProjectionAccount.isCurrent()
+                && await providerProjectionAccount.operationContext.isCurrent(signal);
+              if (!await isCurrent()) return { status: 'error', error: createForegroundProviderError('provider_authorization_changed') };
+              const { purposes } = createRequesterConnectedAccountPurposeBindingRuntime({
+                operationContext: providerProjectionAccount.operationContext,
+                accountId: providerProjectionAccount.accountId, machineId: params.machineId,
+                reloadController: pluginRuntimeController, isCurrent,
+                getAccountEncryptionMode: async options => (await fetchAccountEncryptionCurrentness({ token: providerProjectionAccount.operationContext.credentials.token,
+                  serverBaseUrl: providerProjectionAccount.operationContext.serverHttpBaseUrl, ...(options?.signal ? { signal: options.signal } : {}) })).mode,
+                subscribe: () => ({ dispose() {} }),
+                allowNativeAccountCredentials: false,
+                resolveQualifiedConnectedAccountV4Support: () => params.resolveQualifiedConnectedAccountV4Support?.() ?? 'indeterminate',
+              });
+              return await params.projectProviderModelsForAccount!(request, {
+                getAccountSettingsSnapshot: providerProjectionAccount.operationContext.readSnapshot,
+                resolveManagedPurposeBindingIntent: purposes.resolveBindingIntent,
+                resolveManagedPurposeBindingIntentSelection: purposes.resolveBindingIntentSelection,
+                signal, isCurrent,
+              });
+            },
+          } : {}),
         ...(requesterRuntime
           ? { requesterSessionBootstrap: requesterRuntime.bootstrap }
           : {}),

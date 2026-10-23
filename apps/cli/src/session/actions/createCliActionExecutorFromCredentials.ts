@@ -689,6 +689,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   requesterSessionBootstrap?: Parameters<typeof createCliActionDeps>[0]['requesterSessionBootstrap'];
   savedSecretOperationContext?: Parameters<typeof createCliActionDeps>[0]['savedSecretOperationContext'];
   providerPreparedSavedSecret?: Parameters<typeof createCliActionDeps>[0]['providerPreparedSavedSecret'];
+  projectModelsForAccount?: Parameters<typeof createCliActionDeps>[0]['projectModelsForAccount'];
   sessionMessageReplyPublisher?: Parameters<typeof createCliActionDeps>[0]['sessionMessageReplyPublisher'];
   postAgentDiscussionMessage?: Parameters<typeof createCliActionDeps>[0]['postAgentDiscussionMessage'];
   postWorkflowDiscussionMessage?: Parameters<typeof createCliActionDeps>[0]['postWorkflowDiscussionMessage'];
@@ -1056,6 +1057,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.requesterSessionBootstrap ? { requesterSessionBootstrap: params.requesterSessionBootstrap } : {}),
       ...(savedSecretOperationContext ? { savedSecretOperationContext } : {}),
       ...(params.providerPreparedSavedSecret ? { providerPreparedSavedSecret: params.providerPreparedSavedSecret } : {}),
+      ...(params.projectModelsForAccount ? { projectModelsForAccount: params.projectModelsForAccount } : {}),
       resolveServerFeaturesSnapshot,
       ...(params.resolvePluginNotifications ? { resolvePluginNotifications: params.resolvePluginNotifications } : {}),
       ...(params.readPluginVoiceProviders ? { readPluginVoiceProviders: params.readPluginVoiceProviders } : {}),

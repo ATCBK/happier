@@ -2315,6 +2315,11 @@ export async function startDaemon(
           .hardRevokeRunningSessionsForGenerationIntegrityFailure,
       resolveManagedPurposeBindingIntent:
         connectedAccountPurposeBindingRuntime.resolveBindingIntent,
+      projectProviderModelsForAccount: async (request, context) => {
+        const producer = providerOperationsProducer;
+        if (!producer) throw new Error('provider_source_projection_unavailable');
+        return await producer.machineServices.projectModelsForAccount(request, context);
+      },
       activateSessionPurposeBindings:
         connectedAccountPurposeBindingRuntime.activateSessionPurposeBindings,
       resolveCurrentSessionPurposeBindingSnapshot:

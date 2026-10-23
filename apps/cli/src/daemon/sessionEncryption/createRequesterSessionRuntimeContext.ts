@@ -3,14 +3,10 @@ import { randomBytes } from 'node:crypto';
 import { ApiClient } from '@/api/api';
 import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { listQualifiedConnectedAccountsV4, listQualifiedConnectedAccountGroupsV4, readQualifiedConnectedAccountGroupV4, writeQualifiedProviderAccountUsageV4 } from '@/api/client/qualifiedConnectedAccountApi';
+import { writeQualifiedProviderAccountUsageV4 } from '@/api/client/qualifiedConnectedAccountApi';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { createAccountSettingsConnectedAccountSecrets, createQualifiedConnectedAccountDaemonPersistence } from '../connectedServices/qualifiedConnectedAccountDaemonPersistence';
-import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
-import { createConnectedAccountDaemonConfigurationOwner } from '../connectedServices/ConnectedAccountDaemonRuntime';
-import { createDaemonConnectedAccountPurposeBindingRuntime } from '../connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
-import { createActiveAccountSettingsConnectedAccountPurposeBindingStore } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import type { createDaemonConnectedAccountPurposeBindingRuntime } from '../connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { createRequesterConnectedAccountPurposeBindingRuntime } from '../connectedServices/purposeBindings/createRequesterConnectedAccountPurposeBindingRuntime';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { createHttpTeamCredentialDirectMaterialClient } from '../connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createDaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
@@ -162,28 +158,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     return { ...readProfilesFromAccountSettings(readProfileSettingsFromAccountSnapshot(current), projection.artifactsById,
       { lastUsedProfile }, projection.catalog), artifactsById: projection.artifactsById };
   };
-  const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials: bootstrap.credentials,
-    operationContext: savedSecrets,
-    subscribe: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener); } }; },
-  });
-  const persistence = createQualifiedConnectedAccountDaemonPersistence({ credentials: bootstrap.credentials,
-    getAccountEncryptionMode: async options => await withHome(() => api.getAccountEncryptionMode(options)),
-    operationContext: savedSecrets,
-    secrets: createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: resolveAccountSettingsScopeKey(bootstrap.credentials), operationContext: savedSecrets }),
-  });
-  const configurationOwner = createConnectedAccountDaemonConfigurationOwner({ reloadController: pluginReloadController, persistence: persistence.configuration });
-  const established = createQualifiedConnectedAccountEstablishedRuntimeOwner({ reloadController: pluginReloadController,
-    credentials: bootstrap.credentials, getAccountEncryptionMode: async (signal, options) => await withHome(() => api.getAccountEncryptionMode({ ...options, signal })),
-    isAccountRuntimeCurrent: isCurrent,
-    runAccountOperation: withHome,
-    configuration: persistence.configuration, configurationOwner });
   const token = bootstrap.credentials.token;
-  const qualifiedConnectedAccountApi: RequesterSessionRuntimeContext['qualifiedConnectedAccountApi'] = {
-    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
-      return await withHome(() => readQualifiedConnectedAccountGroupV4({ token, group: { service, groupId }, ...(signal ? { signal } : {}) })); },
-    listAccounts: async ({ service, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
-      return await withHome(() => listQualifiedConnectedAccountsV4({ token, service, ...(signal ? { signal } : {}) })); },
-  };
   const directMaterial = createHttpTeamCredentialDirectMaterialClient({ token, serverUrl: bootstrap.serverHttpBaseUrl,
     readRecipientEncryptionMaterial: async signal => { if (!await isCurrent(signal)) return { mode: 'e2ee_unavailable' };
       const mode = await withHome(() => api.getAccountEncryptionMode({ signal }));
@@ -192,18 +167,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         ? { mode: 'e2ee', secretKeyOrSeed: encryption.type === 'dataKey' ? encryption.machineKey : encryption.secret }
         : { mode: 'e2ee_unavailable' }; },
   });
-  const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: established,
-    credentialOwnerAccountId: bootstrap.attribution.accountId,
-    workerMachineId: bootstrap.attribution.machineId, store, reloadController: pluginReloadController,
+  const { store, established, qualifiedConnectedAccountApi, purposes } = createRequesterConnectedAccountPurposeBindingRuntime({
+    operationContext: savedSecrets, accountId: bootstrap.attribution.accountId, machineId: bootstrap.attribution.machineId,
+    reloadController: pluginReloadController,
+    getAccountEncryptionMode: async options => await withHome(() => api.getAccountEncryptionMode(options)),
+    isCurrent, subscribe: listener => { listeners.add(listener); return { dispose: () => { listeners.delete(listener); } }; },
     allowNativeAccountCredentials: bootstrap.allowNativeAccountCredentials === true, openTeamDirect: directMaterial.open,
     resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
-    resolveConnectedAccountEndpoints: async request => await withHome(() => established.readConfiguredEndpoints(request)),
-    qualifiedApi: { listAccounts: async (service, signal) => await qualifiedConnectedAccountApi.listAccounts({ service, signal }),
-      listGroups: async (service, signal) => {
-        if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
-        return await withHome(() => listQualifiedConnectedAccountGroupsV4({ token, service, signal }));
-      },
-      readGroup: async (group, signal) => await qualifiedConnectedAccountApi.readGroup({ ...group, signal }) },
   });
   const providerAccountUsageStore = createProviderAccountUsageStore();
   const providerAccountUsagePersistence = createProviderAccountUsagePersistenceScheduler({

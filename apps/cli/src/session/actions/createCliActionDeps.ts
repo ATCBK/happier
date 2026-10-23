@@ -796,6 +796,7 @@ export function createCliActionDeps(params: Readonly<{
   getSessionRoleContext?: () => SessionRoleContext;
   /** Memory-only prompted Provider credential, promoted only by the admitted connection owner. */
   providerPreparedSavedSecret?: Parameters<typeof createCliProviderActionExecuteV1>[0]['preparedSavedSecret'];
+  projectModelsForAccount?: Parameters<typeof createCliProviderActionExecuteV1>[0]['projectModelsForAccount'];
   /** Installed exact-target Project producer; absent hosts retain Trust-only behavior. */
   projectAction?: ActionExecutorDeps['projectAction'];
   /** Receiving daemon's target-local Activity Undo owner; clients retain exact Machine transport. */
@@ -4248,6 +4249,7 @@ export function createCliActionDeps(params: Readonly<{
       serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
       ...(params.savedSecretOperationContext ? { operationContext: params.savedSecretOperationContext } : {}),
       ...(params.providerPreparedSavedSecret ? { preparedSavedSecret: params.providerPreparedSavedSecret } : {}),
+      ...(params.projectModelsForAccount ? { projectModelsForAccount: params.projectModelsForAccount } : {}),
       ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
       callMachineAction,
     }) : undefined,
