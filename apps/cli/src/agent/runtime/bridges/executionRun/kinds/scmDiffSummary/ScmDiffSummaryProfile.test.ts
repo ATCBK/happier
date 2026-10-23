@@ -58,6 +58,17 @@ async function admitInitial(params: ExecutionRunProfileStartParams) {
 }
 
 describe('initial generation context', () => {
+  it('withholds incomplete structured output from the first streamed character while retaining prose discussion', () => {
+    const project = (fullText: string) => ScmDiffSummaryProfile.computeSidechainStreamText!({ fullText });
+    for (const text of ['{', '{\n  "', '{\n  "walkthrough"', '`', '``', '```j', '```json\n', '```json\n{', '{"walkthrough":{"title":"Saved"}}']) {
+      expect(project(text)).toBe('');
+    }
+    expect(project('The before side retains the deleted code.')).toBe('The before side retains the deleted code.');
+    expect(project('The config uses {"allow":true} exactly.')).toBe('The config uses {"allow":true} exactly.');
+    expect(project('I updated the explanation: {"walkthrough":')).toBe('I updated the explanation:');
+    expect(project('```typescript\nconst retained = true;\n```')).toBe('```typescript\nconst retained = true;\n```');
+    expect(project('I updated the explanation.\n{"walkthrough":')).toBe('I updated the explanation.');
+  });
   it('keeps seeded stop discussion prose-only and preserves the edited story even when the model returns JSON', async () => {
     await withTempDir('happier-scm-seeded-discussion-', async cwd => {
       execFileSync('git', ['init', '-q'], { cwd });

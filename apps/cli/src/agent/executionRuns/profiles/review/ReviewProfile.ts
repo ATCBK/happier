@@ -1,6 +1,7 @@
 import { REVIEW_SCM_SCOPE_INPUT_KEY } from '@happier-dev/protocol/reviews/reviewStart';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
+import { ScmDiffSummaryModelOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmDiffSummaryReviewProvenance } from '@happier-dev/protocol';
 
 import type { ExecutionRunIntentProfile } from '../ExecutionRunIntentProfile';
@@ -118,22 +119,11 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
   },
   onTurnFailed: (params) => requestsWalkthrough(params.start.intentInput) ? ScmDiffSummaryProfile.onTurnFailed!(params) : null,
   onTerminal: (params) => requestsWalkthrough(params.start.intentInput) ? ScmDiffSummaryProfile.onTerminal!(params) : null,
-  computeSidechainStreamText: ({ fullText }) => {
-    const stripped = stripTrailingJsonObjectFromText(fullText).trimEnd();
-    if (stripped !== String(fullText ?? '').trimEnd()) return stripped;
-
-    // If the model is currently emitting the final JSON object but it's not parseable yet,
-    // avoid streaming partial JSON fragments by cutting at the JSON start marker.
-    const t = String(fullText ?? '');
-    const start = t.trimStart().startsWith('{') ? t.indexOf('{') : t.lastIndexOf('\n{');
-    if (start >= 0) {
-      const tail = t.slice(start, Math.min(t.length, start + 400));
-      if (tail.includes('"summary"') || tail.includes('"findings"') || tail.includes('"walkthrough"')) {
-        return t.slice(0, start).trimEnd();
-      }
-    }
-    return t;
-  },
+  computeSidechainStreamText: ({ fullText }) => stripTrailingJsonObjectFromText(fullText, [
+    'reviewOutcome', 'status', 'summary', 'overviewMarkdown', 'findings', 'answerMarkdown',
+    'updatedFindings', 'questions', 'assumptions', 'proposedComments', 'limits',
+    ...Object.keys(ScmDiffSummaryModelOutputSchema.shape),
+  ]),
   buildInvalidOutputRepairPrompt: ({ start, rawText }) => readReviewNarration(start.intentInput)
     ? ScmDiffSummaryProfile.buildInvalidOutputRepairPrompt!({ start, rawText }) : [
     'Your previous response did not include the required final JSON object.',

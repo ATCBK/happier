@@ -196,21 +196,8 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
   intent: 'scm_diff_summary',
   supportsDetached: true,
   transcriptMaterialization: 'full',
-  computeSidechainStreamText: ({ fullText }) => {
-    const rawText = String(fullText ?? '');
-    const stripped = stripTrailingJsonObjectFromText(rawText).trimEnd();
-    if (stripped !== rawText.trimEnd()) return stripped;
-
-    const jsonStartIndex = rawText.trimStart().startsWith('{') ? rawText.indexOf('{') : rawText.lastIndexOf('\n{');
-    if (jsonStartIndex >= 0) {
-      const jsonTail = rawText.slice(jsonStartIndex, Math.min(rawText.length, jsonStartIndex + 800));
-      if (jsonTail.includes('"summaryMarkdown"') || jsonTail.includes('"walkthrough"') || jsonTail.includes('"commitPlan"') || jsonTail.includes('"risks"') || jsonTail.includes('"testImpact"')) {
-        return rawText.slice(0, jsonStartIndex).trimEnd();
-      }
-    }
-
-    return rawText;
-  },
+  computeSidechainStreamText: ({ fullText }) => stripTrailingJsonObjectFromText(fullText,
+    Object.keys(ScmDiffSummaryModelOutputSchema.shape)),
   prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens, captureScmCommitTarget }) => {
     const { cachedOutput: _callerCachedOutput, scmAnalysis: _callerAnalysis, scmContextWindowTokens: _callerCapacity, cacheScopeKey: _callerCacheScope,
       resolvedSelector: _callerSelector, requestedModelId: _callerModel,

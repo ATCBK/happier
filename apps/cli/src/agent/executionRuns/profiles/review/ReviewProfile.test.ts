@@ -55,7 +55,11 @@ describe('ReviewProfile', () => {
     expect(retainedContext).toContain('"findings"');
   });
   it.each(['', 'Findings are published.\n'])('does not stream unfinished walkthrough JSON after %j', (prefix) => {
-    expect(ReviewProfile.computeSidechainStreamText?.({ fullText: `${prefix}{"walkthrough":{"title":"Reading` })).toBe(prefix.trimEnd());
+    for (const output of ['{', '{"walk', '```json\n', '```json\n{"walkthrough":', '{"walkthrough":{"title":"Reading']) {
+      expect(ReviewProfile.computeSidechainStreamText?.({ fullText: `${prefix}${output}` })).toBe(prefix.trimEnd());
+    }
+    expect(ReviewProfile.computeSidechainStreamText?.({ fullText: 'The config uses {"allow":true} exactly.' }))
+      .toBe('The config uses {"allow":true} exactly.');
   });
   it.each([false, true])('does not accept model-authored persisted finding references (follow-up: %s)', (followUp) => {
     const finding = { id: 'finding', title: 'Issue', summary: 'Check this', severity: 'high', category: 'correctness',
