@@ -1,3 +1,4 @@
+import { renderWindowsScheduledTaskWrapperPs1 } from '../service/windows.js';
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 
@@ -497,7 +498,7 @@ describe('RelayHostEngine (local legacy service name compatibility)', () => {
         const actual = await vi.importActual<typeof import('node:os')>('node:os');
         return {
           ...actual,
-          homedir: () => 'C:\\Users\\tester',
+          homedir: () => 'C:\\Users\\tester$HOME`',
         };
       });
 
@@ -555,7 +556,7 @@ describe('RelayHostEngine (local legacy service name compatibility)', () => {
           ...actual,
           readFile: async (path: string) => {
             if (path.endsWith('happier-server.ps1')) {
-              return '$ErrorActionPreference = "Stop"\nSet-Location -LiteralPath "C:\\Users\\tester\\.happier\\self-host-preview"\n';
+              return renderWindowsScheduledTaskWrapperPs1({ workingDirectory: 'C:\\Users\\tester$HOME`\\.happier\\self-host-preview' });
             }
             if (path.endsWith('server.env')) {
               return 'PORT=3005\r\nHAPPIER_SERVER_HOST=127.0.0.1\r\n';
@@ -607,7 +608,7 @@ describe('RelayHostEngine (local legacy service name compatibility)', () => {
         const actual = await vi.importActual<typeof import('node:os')>('node:os');
         return {
           ...actual,
-          homedir: () => 'C:\\Users\\tester',
+          homedir: () => 'C:\\Users\\tester$HOME`',
         };
       });
 
@@ -669,7 +670,7 @@ describe('RelayHostEngine (local legacy service name compatibility)', () => {
               return 'PORT=3005\r\nHAPPIER_SERVER_HOST=127.0.0.1\r\n';
             }
             if (path.endsWith('happier-server.ps1')) {
-              return '$ErrorActionPreference = "Stop"\nSet-Location -LiteralPath "C:\\Users\\tester\\.happier\\self-host-preview"\n';
+              return renderWindowsScheduledTaskWrapperPs1({ workingDirectory: 'C:\\Users\\tester$HOME`\\.happier\\self-host-preview' });
             }
             return '';
           },

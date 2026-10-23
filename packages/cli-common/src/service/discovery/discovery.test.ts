@@ -140,32 +140,32 @@ describe('parseSystemdUnit', () => {
 describe('parseWindowsScheduledTaskWrapperPs1', () => {
   it('parses scheduled task wrapper service definition primitives', () => {
     const script = renderWindowsScheduledTaskWrapperPs1({
-      workingDirectory: 'C:\\Users\\me\\.happier',
-      programArgs: ['C:\\Users\\me\\.happier\\bin\\happier.exe', 'daemon', 'start-sync'],
+      workingDirectory: 'C:\\Users\\qa$HOME`\\.happier',
+      programArgs: ['C:\\Users\\qa$HOME`\\.happier\\bin\\happier.exe', 'daemon', 'start-sync'],
       env: {
-        PATH: 'C:\\Users\\me\\.happier\\bin;C:\\Windows\\System32',
+        PATH: 'C:\\Users\\qa$HOME`\\.happier\\bin;C:\\Windows\\System32',
         HAPPIER_SERVER_URL: 'https://api.happier.dev',
         HAPPIER_IROH_RELAY_URL: 'https://relay.example/$tenant/$()/back`tick/"quoted"',
       },
-      stdoutPath: 'C:\\Users\\me\\.happier\\logs\\out.log',
-      stderrPath: 'C:\\Users\\me\\.happier\\logs\\err.log',
+      stdoutPath: 'C:\\Users\\qa$HOME`\\.happier\\logs\\literal`$HOME.out.log',
+      stderrPath: 'C:\\Users\\qa$HOME`\\.happier\\logs\\literal`$HOME.err.log',
     });
 
     expect(parseWindowsScheduledTaskWrapperPs1({
       contents: script,
-      sourcePath: 'C:\\Users\\me\\.happier\\services\\happier-daemon.cloud.ps1',
+      sourcePath: 'C:\\Users\\qa$HOME`\\.happier\\services\\happier-daemon.cloud.ps1',
     })).toEqual({
       kind: 'windows-wrapper-ps1',
       label: 'happier-daemon.cloud',
-      workingDirectory: 'C:\\Users\\me\\.happier',
-      programArgs: ['C:\\Users\\me\\.happier\\bin\\happier.exe', 'daemon', 'start-sync'],
+      workingDirectory: 'C:\\Users\\qa$HOME`\\.happier',
+      programArgs: ['C:\\Users\\qa$HOME`\\.happier\\bin\\happier.exe', 'daemon', 'start-sync'],
       env: {
-        PATH: 'C:\\Users\\me\\.happier\\bin;C:\\Windows\\System32',
+        PATH: 'C:\\Users\\qa$HOME`\\.happier\\bin;C:\\Windows\\System32',
         HAPPIER_SERVER_URL: 'https://api.happier.dev',
         HAPPIER_IROH_RELAY_URL: 'https://relay.example/$tenant/$()/back`tick/"quoted"',
       },
-      stdoutPath: 'C:\\Users\\me\\.happier\\logs\\out.log',
-      stderrPath: 'C:\\Users\\me\\.happier\\logs\\err.log',
+      stdoutPath: 'C:\\Users\\qa$HOME`\\.happier\\logs\\literal`$HOME.out.log',
+      stderrPath: 'C:\\Users\\qa$HOME`\\.happier\\logs\\literal`$HOME.err.log',
     });
   });
 });
