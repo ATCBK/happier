@@ -80,6 +80,16 @@ the initiator Account need not equal the custodian Account. Home remains the
 resource, membership and consumer-currentness authority, and the source
 credential stays with its custodian.
 
+The initiator may be a foreign-owned Machine on which the recipient has current
+Machine Use admission and the exact Session/AccessKey binding. The Machine grant
+owner maps the stored `view` level to Use; broker admission does not require an
+Admin grant or create a separate execution grant. Presence and endpoint facts
+come from that Machine's actual custodian, while the signed initiator Account
+remains the recipient. Open, refresh, model disclosure and request admission
+recheck current authority; a retained AccessKey cannot preserve a revoked grant.
+The broker still requires distinct initiator and target Machine/endpoint
+identities, including for co-hosted daemons, and refuses self-custodian Team use.
+
 The development New Session catalog qualifies entitled model reads with the selected
 Agent's admitted Provider applications. Generic resource discovery and each application
 retain separate snapshots under the same Home/Account/Team loader; changing Agents
