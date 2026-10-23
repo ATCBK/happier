@@ -5,6 +5,7 @@ import { PublicProfileLayoutV1Schema } from '@happier-dev/protocol/widgets/widge
 import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { Tx } from '@/storage/inTx';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 
 export interface PublicProfileServerDependencies {
     readPublicationContext(tx: Tx, accountId: string, env: NodeJS.ProcessEnv): Promise<PublicProfileContextV1>;
@@ -12,6 +13,13 @@ export interface PublicProfileServerDependencies {
 }
 
 type ProfileRow = NonNullable<Awaited<ReturnType<Tx['accountPublicProfile']['findUnique']>>>;
+
+/** Publication, consent and withdrawal share the identity owner's Account exclusion. */
+export async function readPublicProfileForMutationInTx(tx: Tx, accountId: string): Promise<ProfileRow | null> {
+    await acquireAccountChangePublicationLocksInTx(tx, [accountId], { includeSingleAccount: true, intent: 'exclusive' });
+    return tx.accountPublicProfile.findUnique({ where: { accountId } });
+}
+
 const storedMetadataSchema = z.strictObject({ disclosure: PublicProfileMetadataV1Schema,
     projectSelections: PublicProfilePublishBodyV1Schema.shape.projectSelections });
 

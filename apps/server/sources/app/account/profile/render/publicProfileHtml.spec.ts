@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { transform } from 'esbuild';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfile } from '@happier-dev/protocol/account/projectPublicProfile';
 import { PublicProfileLayoutV1Schema, PublicProfileViewV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
@@ -78,11 +79,26 @@ describe('cold public-profile document', () => {
         expect(html).not.toContain('snapshot.facts.tokens');
     });
 
-    it('honors automatic appearance without hydration and uses only the one shared page for each selected edition', () => {
+    it('honors automatic appearance without hydration and emits a complete stylesheet', async () => {
         const html = renderPublicProfileHtml(published());
+        const stylesheet = html.match(/<style>([\s\S]*?)<\/style>/)?.[1];
+        if (!stylesheet) throw new Error('Expected the cold document stylesheet');
+        // CSS parsers recover an unclosed media block at EOF, silently changing
+        // the scope of the responsive rules appended after the theme rules.
+        const parsed = await transform(stylesheet, { loader: 'css' });
+        expect(parsed.warnings).toEqual([]);
         expect(html).toContain('@media(prefers-color-scheme:dark)');
         expect(html).toContain('public-profile-dark');
         expect(html).not.toContain('<script');
+    });
+
+    it('defines every atomic class the placed page uses, so its column, gutters and hero offsets paint without hydration', () => {
+        const html = renderPublicProfileHtml(published());
+        const [head, body] = html.split('</style>');
+        const defined = new Set([...(head ?? '').matchAll(/\.(r-[0-9a-z]+)\b/g)].map(match => match[1]));
+        const used = [...new Set(body?.match(/\br-[0-9a-z]+\b/g) ?? [])];
+        expect(used.length).toBeGreaterThan(0);
+        expect(used.filter(name => !defined.has(name))).toEqual([]);
     });
 
     it('draws the shared Usage portrait through the real Brand slot without inventing absent public facts', () => {

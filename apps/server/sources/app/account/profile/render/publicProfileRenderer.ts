@@ -27,6 +27,7 @@ export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup
         labels: { ...publicProfilePageLabels(input.result.view), ...(hero?.credit ? { heroCredit: hero.credit } : {}) },
         singleColumn: input.singleColumn ?? false,
         usage: {
+            cold: true,
             paint: { accent: createPublicProfileTheme(input.scheme).colors.accent, paper: palette.background, dark: input.scheme === 'dark' },
             agent: (id: string) => {
                 const metadata = readBundledAgentPresentation(id);
@@ -38,8 +39,7 @@ export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup
         },
         ...(hero ? { renderHero: (geometry: HappierPublicProfileHeroGeometry) => {
             const images = hero.editions[input.scheme][geometry.singleColumn ? 'phone' : 'wide'];
-            const source = (image: typeof images.one) => `data:${image.mimeType};base64,${image.base64}`;
-            return createElement('img', { src: source(images.one), srcSet: `${source(images.one)} 1x, ${source(images.two)} 2x`,
+            return createElement('img', { src: images.one.src, srcSet: `${images.one.src} 1x, ${images.two.src} 2x`,
                 alt: '', width: images.one.width, height: images.one.height,
                 style: { display: 'block', width: '100%', height: geometry.bandHeightPx, objectFit: 'cover' } });
         } } : {}),
@@ -65,7 +65,7 @@ function renderUsagePlanet(spec: UsagePlanetSpec, scheme: 'light' | 'dark') {
             .map(dot => ({ x: dot.x, y: dot.y, r: dot.radius, rgb: dot.rgb, opacity: dot.opacity }))
         : (() => {
             const scene = createPlanetScene({ theme: scheme, R: spec.radius, cx: spec.size / 2, cy: spec.size / 2,
-                view: { w: spec.size, h: spec.size }, rotate: spec.rotate, mirror: false, fullness: spec.meridians ? 1 : 0,
+                view: { w: spec.size, h: spec.size }, rotate: spec.rotate, mirror: false, fullness: spec.meridians ? 1 : spec.night ?? 0,
                 halo: spec.meridians ? 0 : spec.halo, tail: spec.meridians ? 0 : spec.tail, rise: spec.rise, style: spec.style,
                 field: { around: 0, over: 0 }, ...(light ? { light } : {}) });
             return spec.meridians ? scene.body.map(dot => ({ ...dot, opacity: dot.opacity * usagePlanetMeridianWeight(spec, dot.x) }))

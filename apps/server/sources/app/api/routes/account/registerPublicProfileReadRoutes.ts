@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod/mini';
 import { PublicProfileReadResultV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
-import { readPublicProfile, readPublicProfileDelivery, readPublicProfileRepresentation, readPublicProfileDeliveryRepresentation, type PublicProfileDelivery } from '@/app/account/profile/publicProfileRead';
+import { readPublicProfile, readPublicProfileRepresentation, readPublicProfileDeliveryRepresentation, type PublicProfileDelivery } from '@/app/account/profile/publicProfileRead';
 import type { PublicProfileServerDependencies } from '@/app/account/profile/publicProfileStorage';
 import { publicProfileServerDependencies } from '@/app/account/profile/publicProfileDependencies';
 import { renderPublicProfileHtml } from '@/app/account/profile/render/publicProfileHtml';
@@ -12,7 +12,7 @@ import { renderPublicProfileCardPng, renderPublicProfileOg } from '@/app/account
 import { PUBLIC_PROFILE_ASSET_LABELS } from '@/app/account/profile/render/publicProfileLabels';
 import { PUBLIC_PROFILE_PALETTES } from '@/app/account/profile/render/publicProfileEnvironment';
 import { publicProfileFontFaceForFilename, readPublicProfileFont } from '@/app/account/profile/render/publicProfileFonts';
-import { renderPublicProfileHero } from '@/app/account/profile/render/publicProfileHero';
+import { createPublicProfileHero, renderPublicProfileHeroImage } from '@/app/account/profile/render/publicProfileHero';
 
 /** Validators describe the currently admitted representation, never a stored snapshot timestamp. */
 export function publicProfileRepresentationEtag(bytes: string | Uint8Array): string {
@@ -97,18 +97,28 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
         } catch { return reply.header('Cache-Control', 'no-store').code(503).send({ kind: 'unavailable' }); }
     });
     }
-    app.get('/@:handle/background', { schema: { params: z.strictObject({ handle: z.string() }), querystring: z.strictObject({}) } }, async (request, reply) => {
+    app.get('/@:handle/background', { schema: { params: z.strictObject({ handle: z.string() }), querystring: z.union([
+        z.strictObject({}), z.strictObject({ theme: z.enum(['light', 'dark']), viewport: z.enum(['wide', 'phone']), density: z.enum(['1', '2']) }),
+    ]) } }, async (request, reply) => {
         reply.header('X-Content-Type-Options', 'nosniff').header('X-Robots-Tag', 'noindex').header('Referrer-Policy', 'no-referrer');
         try {
-            const delivery = await readPublicProfileDelivery(request.params.handle, await readRequestHomeEnv(request), deps);
-            const atmosphere = delivery.result.kind === 'published' ? delivery.result.view.appearance.atmosphere : null;
-            if (atmosphere?.source !== 'picture' || !delivery.picture) {
+            const { result, representation: image } = await readPublicProfileDeliveryRepresentation(request.params.handle,
+                await readRequestHomeEnv(request), deps, async delivery => {
+                    if (delivery.result.kind !== 'published') return undefined;
+                    if ('theme' in request.query) return renderPublicProfileHeroImage(delivery.result.view,
+                        { palette: PUBLIC_PROFILE_PALETTES, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) },
+                        { theme: request.query.theme, viewport: request.query.viewport, density: request.query.density === '2' ? 2 : 1 });
+                    return delivery.picture;
+                });
+            if (result.kind !== 'published' || !image) {
                 return reply.header('Cache-Control', 'public, no-cache, must-revalidate').code(404).send({ kind: 'unavailable' });
             }
-            const etag = publicProfileRepresentationEtag(Buffer.concat([Buffer.from(atmosphere.picture.ref.id), delivery.picture.bytes]));
-            reply.header('Cache-Control', 'public, no-cache, must-revalidate').header('ETag', etag).type(delivery.picture.mimeType);
+            const atmosphere = result.view.appearance.atmosphere;
+            const identity = atmosphere.source === 'picture' ? atmosphere.picture.ref.id : '';
+            const etag = publicProfileRepresentationEtag(Buffer.concat([Buffer.from(identity), image.bytes]));
+            reply.header('Cache-Control', 'public, no-cache, must-revalidate').header('ETag', etag).type(image.mimeType);
             if (matchesPublicProfileEtag(request.headers['if-none-match'], etag)) return reply.code(304).send();
-            return reply.send(delivery.picture.bytes);
+            return reply.send(image.bytes);
         } catch { return reply.header('Cache-Control', 'no-store').code(503).send({ kind: 'unavailable' }); }
     });
     app.get('/@:handle', { schema: { params: z.strictObject({ handle: z.string() }) } }, async (request, reply) => {
@@ -116,8 +126,7 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
             .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'");
         try {
             const { result, representation: body } = await readPublicProfileDeliveryRepresentation(request.params.handle, await readRequestHomeEnv(request), deps, async delivery => {
-                const hero = delivery.result.kind === 'published' ? await renderPublicProfileHero(delivery.result.view,
-                    { palette: PUBLIC_PROFILE_PALETTES, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) }) : undefined;
+                const hero = delivery.result.kind === 'published' ? createPublicProfileHero(delivery.result.view) : undefined;
                 return renderPublicProfileHtml(delivery.result, hero);
             });
             reply.header('X-Robots-Tag', result.kind === 'published' && result.view.indexable ? 'index, follow' : 'noindex, nofollow');

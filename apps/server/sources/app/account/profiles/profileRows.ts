@@ -341,7 +341,7 @@ export async function mutateProfileRows(input: Parameters<typeof mutateProfileRo
 }
 
 /** The Account fence covers local rows; declared shared resources retain SSI. */
-function profileMutationsCaptureSharedResources(mutations: readonly ProfileRowMutationV1[]): boolean {
+export function profileMutationsCaptureSharedResources(mutations: readonly ProfileRowMutationV1[]): boolean {
     return mutations.some(mutation => Boolean(mutation.artifactRevision || mutation.legacyCloneSource?.artifactRevision)
         || mutation.referencedSavedSecretIds.length > 0 || (mutation.savedSecretRevisions?.length ?? 0) > 0);
 }

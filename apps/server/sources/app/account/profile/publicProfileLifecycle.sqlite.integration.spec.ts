@@ -38,6 +38,32 @@ describe('Account public profile durable lifecycle', () => {
     afterAll(async () => { await harness?.close(); });
     afterEach(async () => { harness.restoreEnv(); await db.homeAdministrationEvent.deleteMany(); await db.account.deleteMany(); });
 
+    it.each([{ relative: '90days' }, { startMs: 1000, endMs: 2000 }, {}])('round-trips publication query period %j through HTTP read, refresh and resume', async period => {
+        const account = await db.account.create({ data: { publicKey: 'public-profile-period', username: 'period_owner' } });
+        const candidate = PublicProfilePublishBodyV1Schema.parse({ ...body(), query: { ...query, period } });
+        await withAuthenticatedTestApp(app => registerAccountPublicProfileRoutes(app), async app => {
+            const headers = { 'x-test-user-id': account.id };
+            const published = await app.inject({ method: 'POST', url: '/v1/account/public-profile/publish', headers, payload: candidate });
+            expect(published.statusCode).toBe(200);
+            const stored = await db.accountPublicProfile.findUniqueOrThrow({ where: { accountId: account.id } });
+            expect(JSON.parse(stored.queryJson!).period).toEqual(period);
+            expect(published.json()).toMatchObject({ kind: 'updated', record: { state: 'published' } });
+            expect(published.json().record.query.period).toEqual(period);
+            const owner = await app.inject({ method: 'GET', url: '/v1/account/public-profile', headers });
+            expect(owner.statusCode).toBe(200);
+            expect(owner.json().record.query.period).toEqual(period);
+            const payload = { query: owner.json().record.query, snapshot };
+            const refreshed = await app.inject({ method: 'PUT', url: '/v1/account/public-profile/snapshot', headers, payload });
+            expect(refreshed.json()).toMatchObject({ kind: 'updated', record: { state: 'published' } });
+            expect(refreshed.json().record.query.period).toEqual(period);
+            const paused = await app.inject({ method: 'POST', url: '/v1/account/public-profile/pause', headers, payload: {} });
+            expect(paused.json()).toMatchObject({ kind: 'updated', record: { state: 'paused' } });
+            const resumed = await app.inject({ method: 'POST', url: '/v1/account/public-profile/resume', headers, payload });
+            expect(resumed.json()).toMatchObject({ kind: 'updated', record: { state: 'published' } });
+            expect(resumed.json().record.query.period).toEqual(period);
+        });
+    });
+
     it.each(['plain', 'e2ee'])('stores explicit disclosure without changing %s Account encryption authority or keys', async encryptionMode => {
         const account = await db.account.create({ data: { publicKey: `public-profile-${encryptionMode}`, username: `owner_${encryptionMode}`, encryptionMode,
             ...(encryptionMode === 'e2ee' ? { contentPublicKey: new Uint8Array([1, 2, 3]), contentPublicKeySig: new Uint8Array([4, 5, 6]) } : {}) } });

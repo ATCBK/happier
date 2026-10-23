@@ -2,7 +2,7 @@ import { PublicProfileUpdateBodyV1Schema, PublicProfileAppearanceV1Schema, type 
 import { projectPublicProfileSnapshot, projectPublicProfileMetadata, validatePublicProfileLayout } from '@happier-dev/protocol/account/projectPublicProfile';
 import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { inTx } from '@/storage/inTx';
-import { parsePublicProfileRecord, publicProfileUnavailable, publicProfileUpdated } from './publicProfileStorage';
+import { parsePublicProfileRecord, publicProfileUnavailable, publicProfileUpdated, readPublicProfileForMutationInTx } from './publicProfileStorage';
 import { preparePublicProfilePicture, completePublicProfilePictureInTx, retirePublicProfilePictureInTx,
     discardPublicProfilePicture, cleanupPublicProfilePicturesAfterCommit } from './publicProfilePicture';
 import { log } from '@/utils/logging/log';
@@ -17,7 +17,7 @@ export async function updatePublicProfile(accountId: string, input: PublicProfil
     try {
         const appearance = prepared && PublicProfileAppearanceV1Schema.parse({ ...body.appearance, atmosphere: prepared.atmosphere });
         return await inTx(async tx => {
-            const row = await tx.accountPublicProfile.findUnique({ where: { accountId } });
+            const row = await readPublicProfileForMutationInTx(tx, accountId);
             if (!row || row.state === 'draft') return publicProfileUnavailable('not_published');
             if (row.removedAt) return publicProfileUnavailable('restricted');
             const current = parsePublicProfileRecord(row);
@@ -39,7 +39,7 @@ export async function updatePublicProfile(accountId: string, input: PublicProfil
                 queryJson: JSON.stringify(query), snapshotJson: queryChanged || !current.snapshot ? null : JSON.stringify(projectPublicProfileSnapshot(current.snapshot, policy)),
                 ...(layout ? { layoutJson: JSON.stringify(layout) } : {}), ...(appearance ? { appearanceJson: JSON.stringify(appearance) } : {}),
             } }));
-        }, { isolationLevel: 'Serializable' });
+        }, { isolationLevel: 'ReadCommitted' });
     } finally {
         if (prepared) await discardPublicProfilePicture(prepared).catch(() => {
             log({ module: 'api', level: 'warn', accountId }, 'Public-profile picture candidate cleanup failed');

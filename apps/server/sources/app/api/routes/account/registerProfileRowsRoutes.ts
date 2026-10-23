@@ -11,7 +11,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { listProfileRowsInTx, readProfileReferenceGuardInTx, readProfileRowInTx, mutateProfileRows, convertProfileProviders } from '@/app/account/profiles/profileRows';
 
 const invalidParams = z.strictObject({ error: z.literal('invalid-params') });
@@ -28,19 +28,19 @@ export function registerProfileRowsRoutes(app: Fastify): void {
     app.get(PROFILE_REFERENCE_GUARD_ROUTE_V1, {
         preHandler: app.authenticate, config,
         schema: { response: { 200: asServerProtocolZod(ProfileReferenceGuardReadResponseV1Schema) } },
-    }, async (request, reply) => reply.send(await inTx(tx => readProfileReferenceGuardInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
+    }, async (request, reply) => reply.send(await inReadSnapshot(tx => readProfileReferenceGuardInTx(tx, { accountId: request.userId }))));
     app.get(PROFILE_ROWS_ROUTE_V1, {
         preHandler: app.authenticate, config,
         schema: { querystring: z.strictObject({ cursor: z.optional(z.string().check(z.refine(value => parseProfilePhysicalKey(value) !== null, 'Invalid Profile cursor'))), limit: z.optional(z.coerce.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER))) }),
             response: { 200: asServerProtocolZod(ProfileRowsListResponseV1Schema), 400: invalidParams } },
-    }, async (request, reply) => reply.send(await inTx(tx => listProfileRowsInTx(tx, { accountId: request.userId,
+    }, async (request, reply) => reply.send(await inReadSnapshot(tx => listProfileRowsInTx(tx, { accountId: request.userId,
         ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),
         ...(request.query.limit === undefined ? {} : { limit: request.query.limit }),
-    }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
+    }))));
     app.post(PROFILE_RECORD_READ_ROUTE_V1, {
         preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ProfileRowReadRequestV1Schema), response: { 200: asServerProtocolZod(ProfileRowReadResponseV1Schema), 400: invalidParams } },
-    }, async (request, reply) => reply.send(await inTx(tx => readProfileRowInTx(tx, { accountId: request.userId, id: request.body.id }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
+    }, async (request, reply) => reply.send(await inReadSnapshot(tx => readProfileRowInTx(tx, { accountId: request.userId, id: request.body.id }))));
     app.post(PROFILE_RECORDS_ROUTE_V1, {
         preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ProfileRowMutationV1Schema),

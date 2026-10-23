@@ -19,7 +19,7 @@ const publicationEnv = { HAPPIER_PUBLIC_SERVER_URL: 'https://profiles.example/pr
 function body() {
     return PublicProfilePublishBodyV1Schema.parse({
         policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadata: {}, projectSelections: [],
-        query: normalizeUsageQuery({ period: { startMs: 1000, endMs: 2000 }, timeZoneOffsetMinutes: 0 }),
+        query: normalizeUsageQuery({ population: 'public_eligible_personal', period: { startMs: 1000, endMs: 2000 }, timeZoneOffsetMinutes: 0 }),
         snapshot: { v: 1, computedAtMs: 2000, period: { startMs: 1000, endMs: 2000, timeZoneOffsetMinutes: 0 },
             coverage: { status: 'partial', method: 'runtime' }, fieldCoverage: {}, facts: { tokens: 987654321 } },
         layout: { v: 1, items: [] }, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,

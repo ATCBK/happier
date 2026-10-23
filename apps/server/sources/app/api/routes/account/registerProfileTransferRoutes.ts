@@ -4,7 +4,7 @@ import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { mutateProfileTransfer } from '@/app/account/profiles/profileTransferRows';
 import { readProfileTransferControlInTx, profileTransferControlReadResponseV1 } from '@/app/account/profiles/profileTransferControl';
 
@@ -15,7 +15,7 @@ export function registerProfileTransferRoutes(app: Fastify): void {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') },
         schema: { response: { 200: asServerProtocolZod(ProfileTransferRowReadResponseV1Schema), 500: z.strictObject({ error: z.literal('internal') }) } },
     }, async (request, reply) => {
-        const result = await inTx(tx => readProfileTransferControlInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+        const result = await inReadSnapshot(tx => readProfileTransferControlInTx(tx, { accountId: request.userId }));
         return reply.send(profileTransferControlReadResponseV1(result));
     });
     app.post(PROFILE_TRANSFER_ROUTE_V1, {

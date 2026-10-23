@@ -23,11 +23,16 @@ import {
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
 import { readSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
-import { profileRecordDomain, mutateProfileRowsInTx } from './profileRows';
+import { profileRecordDomain, mutateProfileRowsInTx, profileMutationsCaptureSharedResources } from './profileRows';
 import { profileTransferDomain, readProfileTransferControlInTx, markProfileTransferChangedInTx } from './profileTransferControl';
 export { profileTransferDomain, readProfileTransferControlInTx, profileTransferControlReadResponseV1, markProfileTransferChangedInTx } from './profileTransferControl';
 
 type InventoryResult = Readonly<{ status: 'verified' }> | Exclude<ProfileTransferMutationResponseV1, { status: 'updated' | 'already-active' }>;
+
+function isAccountLocalProfileTransfer(mutation: ProfileTransferMutationV1): boolean {
+    return mutation.inventory.every(entry => entry.kind === 'account_row')
+        && (mutation.operation === 'activate' || !profileMutationsCaptureSharedResources(mutation.imports));
+}
 
 /** Complete raw destination census: partial page/list projections never establish transfer authority. */
 async function verifyProfileTransferInventoryInTx(tx: Tx, input: Readonly<{
@@ -118,7 +123,10 @@ export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
     | (Omit<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>, 'cursor'>
         & TransactionResult<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>>)> {
     const mutation = ProfileTransferMutationV1Schema.parse(input.mutation);
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
+    // Transfer certifies the complete Profile prefix. Exclude its content
+    // writers before scanning; a control-row CAS alone cannot cover new rows.
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId,
+        isAccountLocalProfileTransfer(mutation) ? "exclusive" : "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     const current = await readProfileTransferControlInTx(tx, input);
@@ -177,7 +185,11 @@ export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
 export async function mutateProfileTransfer(input: Readonly<{
     accountId: string; mutation: ProfileTransferMutationV1; authentication?: TeamOperationAuthenticationContext;
 }>): Promise<ProfileTransferMutationResponseV1> {
-    try { return await inTx(tx => mutateProfileTransferInTx(tx, input), { /* Profile transfer validates shared Artifact and Secret inventory before activation. */ isolationLevel: "Serializable" }); }
+    try { return await inTx(tx => mutateProfileTransferInTx(tx, input), {
+        // Local transfer owns its complete census under the existing Account
+        // exclusion. Shared inventory or imported resource captures retain SSI.
+        isolationLevel: isAccountLocalProfileTransfer(input.mutation) ? "ReadCommitted" : "Serializable",
+    }); }
     catch (error) {
         if (error instanceof ProfileTransferTransactionAbort) return error.result;
         const conflict = await readReservedAccountScopedKvRowMutationConflict(error);

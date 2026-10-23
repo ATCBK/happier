@@ -9,5 +9,5 @@ export async function unpublishPublicProfile(accountId: string): Promise<PublicP
         await withdrawPublicProfileInTx(tx, accountId);
         const row = await tx.accountPublicProfile.findUnique({ where: { accountId } });
         return row ? publicProfileUpdated(row) : { kind: 'updated', record: null };
-    }, { isolationLevel: 'Serializable' });
+    }, { isolationLevel: 'ReadCommitted' });
 }

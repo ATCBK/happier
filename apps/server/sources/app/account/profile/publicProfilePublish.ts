@@ -3,7 +3,7 @@ import { PublicProfilePublishBodyV1Schema, PublicProfileRefreshBodyV1Schema, Pub
 import { projectPublicProfileSnapshot, projectPublicProfileMetadata, validatePublicProfileLayout } from '@happier-dev/protocol/account/projectPublicProfile';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { inTx } from '@/storage/inTx';
-import { publicProfileUnavailable, publicProfileUpdated, readStoredPublicProfileAppearance, type PublicProfileServerDependencies } from './publicProfileStorage';
+import { publicProfileUnavailable, publicProfileUpdated, readStoredPublicProfileAppearance, readPublicProfileForMutationInTx, type PublicProfileServerDependencies } from './publicProfileStorage';
 import { replacePublicProfileSnapshotInTx } from './publicProfileRefresh';
 import { preparePublicProfilePicture, completePublicProfilePictureInTx, retirePublicProfilePictureInTx,
     discardPublicProfilePicture, cleanupPublicProfilePicturesAfterCommit } from './publicProfilePicture';
@@ -19,11 +19,11 @@ export async function publishPublicProfile(accountId: string, input: PublicProfi
     try {
         const appearance = PublicProfileAppearanceV1Schema.parse({ ...body.appearance, atmosphere: prepared.atmosphere });
         return await inTx(async tx => {
+            const row = await readPublicProfileForMutationInTx(tx, accountId);
             const context = await deps.readPublicationContext(tx, accountId, env);
             if (!context.handle) return publicProfileUnavailable('username_required');
             const prerequisite = deps.resolvePrerequisite(env);
             if (prerequisite) return publicProfileUnavailable(prerequisite);
-            const row = await tx.accountPublicProfile.findUnique({ where: { accountId } });
             if (row?.removedAt) return publicProfileUnavailable('restricted');
             const settled = await completePublicProfilePictureInTx(tx, prepared);
             if (!settled.ok) return publicProfileUnavailable('asset_unavailable');
@@ -37,7 +37,7 @@ export async function publishPublicProfile(accountId: string, input: PublicProfi
                 snapshotJson: JSON.stringify(projectPublicProfileSnapshot(body.snapshot, body.policy)), layoutJson: JSON.stringify(layout),
                 appearanceJson: JSON.stringify(appearance), publishedAt: row?.publishedAt ?? new Date() };
             return publicProfileUpdated(await tx.accountPublicProfile.upsert({ where: { accountId }, create: { accountId, ...data }, update: data }));
-        }, { isolationLevel: 'Serializable' });
+        }, { isolationLevel: 'ReadCommitted' });
     } finally {
         await discardPublicProfilePicture(prepared).catch(() => {
             log({ module: 'api', level: 'warn', accountId }, 'Public-profile picture candidate cleanup failed');
@@ -50,5 +50,5 @@ export async function publishPublicProfile(accountId: string, input: PublicProfi
 export async function resumePublicProfile(accountId: string, input: PublicProfileRefreshBodyV1,
     env: NodeJS.ProcessEnv, deps: PublicProfileServerDependencies): Promise<PublicProfileMutationResultV1> {
     const body = PublicProfileRefreshBodyV1Schema.parse(input);
-    return inTx(tx => replacePublicProfileSnapshotInTx(tx, accountId, body, env, deps, 'resume'), { isolationLevel: 'Serializable' });
+    return inTx(tx => replacePublicProfileSnapshotInTx(tx, accountId, body, env, deps, 'resume'), { isolationLevel: 'ReadCommitted' });
 }
