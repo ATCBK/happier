@@ -52,9 +52,10 @@ async function readTasks(context: TriageDataActionContext): Promise<TaskList | n
   } catch (error) { if (context.signal.aborted) throw error; return null; }
 }
 
-function observation(task: Task, list: TaskList): Extract<TriageGetResultV1, { kind: 'present' }> {
+function observation(task: Task, list: TaskList,
+  children: readonly Task[] = list.todos.filter(candidate => candidate.parentId === task.id),
+): Extract<TriageGetResultV1, { kind: 'present' }> {
   const title = projectTriageDisplayTextV1(task.title);
-  const children = list.todos.filter(candidate => candidate.parentId === task.id);
   const dueDate = taskDueDate(task);
   return {
     kind: 'present', localRef: internalTaskLocalRefV1(task.id), locator: { v: 1, displayPath: title.value || task.id, routingToken: task.id },
@@ -97,7 +98,16 @@ export async function scanInternalTasks(input: TriageScanInputV1, context: Triag
   });
   const start = after === undefined ? 0 : ids.indexOf(after) + 1;
   if (after !== undefined && start === 0) return { kind: 'failed', failure: { class: 'transient', code: 'taskOrderChanged' } };
-  const page = ids.slice(start, start + limit).flatMap(id => { const task = byId.get(id); return task ? [observation(task, list)] : []; });
+  const pageIds = ids.slice(start, start + limit);
+  const childrenByParent = new Map<string, Task[]>(pageIds.map(id => [id, []]));
+  if (pageIds.length > 0) for (const task of list.todos) {
+    const parentId = task.parentId;
+    if (parentId !== undefined) childrenByParent.get(parentId)?.push(task);
+  }
+  const page = pageIds.flatMap(id => {
+    const task = byId.get(id);
+    return task ? [observation(task, list, childrenByParent.get(id))] : [];
+  });
   return start + limit >= ids.length
     ? { kind: 'complete', observations: page, evidence: { kind: 'walkFinished' } }
     : { kind: 'page', observations: page, evidence: { kind: 'partial', reason: 'pageLimit' },
