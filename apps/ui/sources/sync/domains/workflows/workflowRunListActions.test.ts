@@ -5,7 +5,8 @@ import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protoco
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture, createWorkflowRunListStorageFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { WorkflowRunListRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -18,6 +19,7 @@ const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRu
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { buildWorkflowRunListFilter, listWorkflowRuns } = await import('./workflowRunListActions');
 const { WorkflowActionError } = await import('./workflowActionError');
+const { workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const route = '/v3/automations/runs/workflow-storage';
 const accountId = 'run-list-owner';
 const run = createWorkflowRunSummaryFixture({ id: 'run-1', ownerAccountId: accountId });
@@ -37,7 +39,10 @@ beforeEach(async () => {
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     home.answer(serverId, route, { body: { runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} } });
 });
-afterEach(async () => { await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
+afterEach(async () => {
+    (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
+    await home.reset(); storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available);
+});
 
 async function runPage(metadata?: { title: string }) {
     const materialized = await materializeWorkflowAcceptedSnapshotV1({
@@ -62,6 +67,119 @@ function requests() {
 }
 
 describe('workflow Run list Action client through the Account storage transport', () => {
+    it.each(['exhausted burst', 'non-exhausted burst', 'active removal'] as const)(
+        'authoritatively refreshes the loaded full-window frontier: %s', async (scenario) => {
+            const { Dimensions } = await import('react-native');
+            const { vi } = await import('vitest');
+            const { refreshRunWindow, loadMoreRunWindow } = await import('@/components/workflows/library/workflowLibraryReads');
+            const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1200, height: 68, scale: 1, fontScale: 1 });
+            storage.setState({ workflowRunsById: {}, workflowRunListWindows: {} });
+            const windowId = scenario === 'active removal' ? 'active' : 'all';
+            try {
+                const original = Array.from({ length: scenario === 'non-exhausted burst' ? 9 : 5 }, (_, index) => createWorkflowRunSummaryFixture({
+                    id: `frontier-${index}`, ownerAccountId: accountId, origin: { kind: 'direct' }, state: 'running',
+                    createdAt: new Date(Date.UTC(2026, 8, 8) - index * 1000).toISOString(),
+                }));
+                const additions = Array.from({ length: 3 }, (_, index) => createWorkflowRunSummaryFixture({
+                    id: `burst-${index}`, ownerAccountId: accountId, origin: { kind: 'direct' }, state: 'running',
+                    createdAt: new Date(Date.UTC(2026, 8, 8) + (3 - index) * 1000).toISOString(),
+                }));
+                const corpus = await createWorkflowRunListStorageFixture({ runs: [...additions, ...original],
+                    definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                        document: { text: 'Private frontier context', references: [], attachments: [] } }] }),
+                    metadata: { title: 'Private frontier title' },
+                });
+                let current = original;
+                home.answer(serverId, route, { select: input => {
+                    if (!input || typeof input !== 'object' || !('request' in input)) throw new Error('Unexpected storage request');
+                    const request = WorkflowRunListRequestV1Schema.parse(input.request);
+                    const start = request.cursor ? current.findIndex(row => row.id === request.cursor) + 1 : 0;
+                    const selected = current.slice(start, start + (request.limit ?? current.length));
+                    return { body: { runs: selected,
+                        acceptedEnvelopesByRunId: Object.fromEntries(selected.map(row => [row.id, corpus.acceptedEnvelopesByRunId[row.id]])),
+                        keyCensusByRunId: Object.fromEntries(selected.map(row => [row.id, corpus.keyCensusByRunId[row.id]])),
+                        ...(start + selected.length < current.length ? { nextCursor: selected.at(-1)!.id } : {}),
+                    } };
+                } });
+                await refreshRunWindow(windowId);
+                await loadMoreRunWindow(windowId);
+                if (scenario !== 'non-exhausted burst') {
+                    while (storage.getState().workflowRunListWindows[windowId]?.nextCursor) await loadMoreRunWindow(windowId);
+                }
+                expect(storage.getState().workflowRunListWindows[windowId]?.runIds).toEqual(
+                    (scenario === 'non-exhausted burst' ? original.slice(0, 4) : original).map(row => row.id));
+                current = scenario === 'active removal' ? original.filter(row => row.id !== 'frontier-3') : [...additions, ...original];
+                await refreshRunWindow(windowId, true);
+                const refreshed = storage.getState().workflowRunListWindows[windowId]!;
+                expect(refreshed.runIds).toEqual((scenario === 'non-exhausted burst' ? current.slice(0, 8) : current).map(row => row.id));
+                expect(refreshed.nextCursor !== null).toBe(scenario === 'non-exhausted burst');
+                while (storage.getState().workflowRunListWindows[windowId]?.nextCursor) await loadMoreRunWindow(windowId);
+                expect(storage.getState().workflowRunListWindows[windowId]?.runIds).toEqual(current.map(row => row.id));
+                for (const row of current) {
+                    expect(storage.getState().workflowRunsById[workflowRunStoreKey(row.id)]).toMatchObject({
+                        metadata: { kind: 'available', value: { title: 'Private frontier title' } },
+                        summary: { startedBy: 'user', where: { directory: '/repo' } }, callerAccess: { canEdit: true },
+                    });
+                }
+            } finally { viewport.mockRestore(); }
+        });
+
+    it.each([
+        { height: 340, expectedPages: [10, 10, 10, 7] },
+        { height: 680, expectedPages: [20, 17] },
+    ])('requests one visible full-row page and reaches the complete large corpus on demand ($height px)', async ({ height, expectedPages }) => {
+        const { Dimensions } = await import('react-native');
+        const { vi } = await import('vitest');
+        const { readRunWindowPage } = await import('@/components/workflows/library/workflowLibraryReads');
+        const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1200, height, scale: 1, fontScale: 1 });
+        try {
+            const runs = Array.from({ length: 37 }, (_, index) => createWorkflowRunSummaryFixture({
+                id: `viewport-run-${index}`, ownerAccountId: accountId, origin: { kind: 'direct' },
+                createdAt: new Date(Date.UTC(2026, 8, 8) - index * 1000).toISOString(),
+            }));
+            const corpus = await createWorkflowRunListStorageFixture({ runs,
+                definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                    document: { text: 'Accepted private context. '.repeat(8000), references: [], attachments: [] } }] }),
+                metadata: { title: 'Private accepted title' },
+            });
+            const transfers: { rows: number; bytes: number }[] = [];
+            home.answer(serverId, route, { select: input => {
+                if (!input || typeof input !== 'object' || !('operation' in input) || input.operation !== 'list' || !('request' in input)) {
+                    throw new Error('Unexpected Workflow storage operation');
+                }
+                const request = WorkflowRunListRequestV1Schema.parse(input.request);
+                const start = request.cursor ? runs.findIndex(run => run.id === request.cursor) + 1 : 0;
+                const selected = runs.slice(start, start + (request.limit ?? runs.length));
+                const body = { runs: selected,
+                    acceptedEnvelopesByRunId: Object.fromEntries(selected.map(run => [run.id, corpus.acceptedEnvelopesByRunId[run.id]])),
+                    keyCensusByRunId: Object.fromEntries(selected.map(run => [run.id, corpus.keyCensusByRunId[run.id]])),
+                    ...(start + selected.length < runs.length ? { nextCursor: selected.at(-1)!.id } : {}),
+                };
+                transfers.push({ rows: selected.length, bytes: Buffer.byteLength(JSON.stringify(body)) });
+                return { body };
+            } });
+            let page = await readRunWindowPage('all');
+            expect(page.runs).toHaveLength(expectedPages[0]!);
+            const received = [...page.runs];
+            const metadata = { ...page.metadataByRunId };
+            const callerAccess = { ...page.callerAccessByRunId };
+            while (page.nextCursor) {
+                page = await readRunWindowPage('all', page.nextCursor);
+                received.push(...page.runs);
+                Object.assign(metadata, page.metadataByRunId);
+                Object.assign(callerAccess, page.callerAccessByRunId);
+            }
+            expect(received.map(run => run.id)).toEqual(runs.map(run => run.id));
+            expect(transfers.map(page => page.rows)).toEqual(expectedPages);
+            for (const run of received) {
+                expect(metadata[run.id]).toEqual({ kind: 'available', value: { title: 'Private accepted title' } });
+                expect(run.where).toMatchObject({ machineId: run.machineId, directory: '/repo' });
+                expect(run.startedBy).toBe('user');
+                expect(callerAccess[run.id]).toEqual({ canEdit: true });
+            }
+        } finally { viewport.mockRestore(); }
+    });
+
     it('uses Automation history and active Session destinations in the paged reader', async () => {
         await listWorkflowRuns({ filter: buildWorkflowRunListFilter('automation:habit') });
         await listWorkflowRuns({ filter: buildWorkflowRunListFilter('destination:session-one') });
