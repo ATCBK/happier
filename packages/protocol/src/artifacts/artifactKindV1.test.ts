@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { deriveArtifactCoarseKindV1, deriveArtifactKindV1, deriveArtifactStoredKindV1, decodeArtifactKindV1, ArtifactStoredKindV1Schema,
-  frameArtifactKindWriteBatchesV1, ArtifactKindWriteBatchInputV1Schema, ArtifactKindWriteBatchResponseV1Schema } from './artifactKindV1.js';
+import { deriveArtifactCoarseKindV1, deriveArtifactKindV1, deriveArtifactStoredKindV1, tryDeriveArtifactStoredKindV1, decodeArtifactKindV1, ArtifactStoredKindV1Schema,
+  frameArtifactKindWriteBatchesV1, ArtifactKindWriteBatchInputV1Schema, ArtifactKindWriteBatchResponseV1Schema,
+  ArtifactKindCoverageV1Schema } from './artifactKindV1.js';
 
 describe('Artifact coarse kind', () => {
   it('indexes library families without disclosing private header fields', () => {
@@ -22,6 +23,24 @@ describe('Artifact coarse kind', () => {
   });
 });
 describe('Artifact exact kind hints', () => {
+  it('omits only an unrepresentable optional hint while preserving strict explicit writer admission', () => {
+    const header = { kind: 'x'.repeat(184) };
+    expect(tryDeriveArtifactStoredKindV1(header)).toBeUndefined();
+    expect(() => deriveArtifactStoredKindV1(header)).toThrow(RangeError);
+    expect(ArtifactStoredKindV1Schema.safeParse(`v1:other:${header.kind}`).success).toBe(false);
+    expect(tryDeriveArtifactStoredKindV1({})).toBe('v1:other:');
+    expect(tryDeriveArtifactStoredKindV1({ kind: 'workflow-definition.v1' })).toBe('v1:other:workflow-definition.v1');
+  });
+  it('distinguishes derived complete coverage from partial positive legacy demand', () => {
+    expect(ArtifactKindCoverageV1Schema.parse({ status: 'complete', unclassifiedCount: 0 })).toEqual({ status: 'complete', unclassifiedCount: 0 });
+    expect(ArtifactKindCoverageV1Schema.parse({ status: 'partial', unclassifiedCount: 35000, reason: 'unclassified_legacy_rows' }).unclassifiedCount).toBe(35000);
+    for (const coverage of [{ status: 'complete', unclassifiedCount: 1 },
+      { status: 'partial', unclassifiedCount: 0, reason: 'unclassified_legacy_rows' },
+      { status: 'partial', unclassifiedCount: 1.5, reason: 'unclassified_legacy_rows' },
+      { status: 'partial', unclassifiedCount: 1, reason: 'unclassified_legacy_rows', header: 'private' }]) {
+      expect(ArtifactKindCoverageV1Schema.safeParse(coverage).success).toBe(false);
+    }
+  });
   it('frames real inventory demand in one byte-budgeted batch without changing retained identities or ordered outcomes', () => {
     const items = Array.from({ length: 35000 }, (_, index) => ({ artifactId: `retained/${index}`,
       kind: 'v1:other:account_notice.v1', expectedHeaderVersion: 1 }));

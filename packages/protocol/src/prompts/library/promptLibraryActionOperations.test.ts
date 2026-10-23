@@ -548,14 +548,19 @@ describe('prompt library action operations', () => {
 
   it('lists headers only, excludes bundles and reports unreadable coverage', async () => {
     const read = vi.fn(async () => { throw new Error('inventory must not read bodies'); });
-    const result = await listPromptLibrary({ store: { read, organization: emptyOrganizationPort(), update: async () => {}, list: async () => ({
-      coverage: 'partial', items: [
-        { id: 'doc', owned: true, header: { v: 1, kind: 'prompt_doc.v2', title: 'Prompt', tags: ['topic'] }, updatedAtMs: 7 },
-        { id: 'bundle', header: { v: 1, kind: 'prompt_bundle.v2', title: 'Skill' }, updatedAtMs: 8 },
-      ],
-    }) }, request: { query: 'TOPIC', includeBundles: false } });
+    const selections: unknown[] = [];
+    const result = await listPromptLibrary({ store: { read, organization: emptyOrganizationPort(), update: async () => {}, list: async options => {
+      selections.push(options);
+      return {
+        coverage: 'partial', items: [
+          { id: 'doc', owned: true, header: { v: 1, kind: 'prompt_doc.v2', title: 'Prompt', tags: ['topic'] }, updatedAtMs: 7 },
+          { id: 'bundle', header: { v: 1, kind: 'prompt_bundle.v2', title: 'Skill' }, updatedAtMs: 8 },
+        ],
+      };
+    } }, request: { query: 'TOPIC' } });
     expect(result).toEqual({ items: [{ artifactId: 'doc', title: 'Prompt', folderId: null, tags: ['topic'], favorite: false, updatedAtMs: 7 }], coverage: 'partial' });
     expect(read).not.toHaveBeenCalled();
+    expect(selections).toEqual([{ limit: 500, kinds: ['prompt_doc.v2'] }]);
   });
 
   it('keeps update as an update, never creating a missing id', async () => {

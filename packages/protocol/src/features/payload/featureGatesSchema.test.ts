@@ -5,6 +5,13 @@ import { readServerEnabledBit } from '../serverEnabledBit.js';
 import { FeaturesResponseSchema } from './featuresResponseSchema.js';
 
 describe('FeatureGatesSchema', () => {
+  it('negotiates Artifact query hints only on an explicit valid support bit', () => {
+    const parse = (features: unknown) => FeaturesResponseSchema.parse({ features, capabilities: {} });
+    expect(readServerEnabledBit(parse({ artifacts: { queryHints: { enabled: true } } }), 'artifacts.queryHints')).toBe(true);
+    for (const features of [{}, { artifacts: { queryHints: { enabled: 'yes' } } }, { artifacts: false }]) {
+      expect(readServerEnabledBit(parse(features), 'artifacts.queryHints')).toBe(false);
+    }
+  });
   it('preserves the operation-scoped external Provider API deployment projection', () => {
     const parsed = FeaturesResponseSchema.parse({
       features: {

@@ -4,7 +4,7 @@ import {
     TeamMembershipStatus,
     type SessionHistoryAccess,
 } from "@/storage/enums.generated";
-import { isEffectiveTeamMembership } from "../memberships/effectiveMembership";
+import { EFFECTIVE_TEAM_MEMBERSHIP_WHERE, isEffectiveTeamMembership } from "../memberships/effectiveMembership";
 import { sessionHistoryAccessOf } from "../memberships/sessionHistory";
 
 /**
@@ -42,11 +42,7 @@ export type TeamGroupMembershipContextResolution =
  * lifecycle input is inactive.
  */
 export const EFFECTIVE_TEAM_GROUP_MEMBERSHIP_WHERE = {
-    teamMembership: {
-        status: TeamMembershipStatus.active,
-        account: { status: AccountStatus.active },
-        team: { archivedAt: null },
-    },
+    teamMembership: EFFECTIVE_TEAM_MEMBERSHIP_WHERE,
     group: { archivedAt: null },
 } as const;
 

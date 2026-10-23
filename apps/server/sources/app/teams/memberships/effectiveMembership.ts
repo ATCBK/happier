@@ -44,6 +44,12 @@ export type TeamMembershipContextResolution =
  * a Team that is not archived. Archival makes Team-derived access ineffective while
  * every row is retained for restoration.
  */
+export const EFFECTIVE_TEAM_MEMBERSHIP_WHERE = {
+    status: TeamMembershipStatus.active,
+    account: { status: AccountStatus.active },
+    team: { archivedAt: null },
+} as const;
+
 export function isEffectiveTeamMembership(
     input: Readonly<{
         accountStatus: AccountStatus;

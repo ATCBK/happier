@@ -1,4 +1,5 @@
 import type { FeaturesPayloadDelta, FeaturesResponse } from '../types';
+import { resolveArtifactQueryHintsFeature } from '../artifactQueryHintsFeature';
 
 import { resolveAutomationsFeature } from '../automationsFeature';
 import { resolveWorkflowsFeature } from '../workflowsFeature';
@@ -61,6 +62,7 @@ function register(
 }
 
 export const serverFeatureRegistry = Object.freeze([
+    register(['artifacts'], () => resolveArtifactQueryHintsFeature()),
     register(['account'], (env) => resolvePublicProfilesFeature(env)),
     register([], () => resolveAccountStoredContentCompatibilityFeature()),
     register([], (env) => resolveAccountDirectoryFeature(env)),

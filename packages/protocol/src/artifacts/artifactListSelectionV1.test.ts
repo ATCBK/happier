@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { listArtifactHeadersV1 } from './artifactListSelectionV1.js';
+import { createRoleSourceReaderV1 } from '../prompts/roles/accountRoleActions.js';
+import { BUILT_IN_ROLES_V1 } from '../prompts/roles/builtInRolesV1.js';
 
 const skill = { artifactId: 'skill', header: { kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' }, createdAt: 1, updatedAt: 3 };
 const legacy = { ...skill, artifactId: 'legacy', updatedAt: 2 };
@@ -8,6 +10,84 @@ type PageOptions = Readonly<{ cursor?: string; coarseKind?: string }>;
 const encodeCursor = (row: Readonly<{ artifactId: string }>) => row.artifactId;
 
 describe('Artifact coarse selection', () => {
+  it('finds legacy exact kinds beyond 500 using headers only and opens only the selected page', async () => {
+    const rows = Array.from({ length: 1001 }, (_, index) => ({ artifactId: `legacy-${index}`,
+      header: { kind: index === 700 || index === 1000 ? 'account_notice.v1' : 'document.v1' },
+      createdAt: 1, updatedAt: 2000 - index }));
+    const indexed = { ...rows[700]!, artifactId: 'indexed', updatedAt: 1400 };
+    const kindCoverage = { status: 'partial' as const, unclassifiedCount: rows.length,
+      reason: 'unclassified_legacy_rows' as const };
+    const requests: unknown[] = [];
+    const bodies: string[] = [];
+    const returned: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = await listArtifactHeadersV1({ options: { kinds: ['account_notice.v1'], includeBody: true, ownerAccountId: 'owner',
+        limit: 2, ...(cursor ? { cursor } : {}) }, encodeCursor,
+        readPage: async options => {
+          requests.push(options);
+          const source = options?.unclassified ? [...rows, indexed].sort((left, right) => right.updatedAt - left.updatedAt) : [indexed];
+          const after = options?.cursor === indexed.artifactId ? indexed : rows.find(row => row.artifactId === options?.cursor);
+          const remaining = source.filter(row => !after || row.updatedAt < after.updatedAt);
+          const items = remaining.slice(0, options?.limit ?? 500);
+          return { items, hasUnclassified: true, kindCoverage,
+            ...(remaining.length > items.length ? { nextCursor: items.at(-1)!.artifactId } : {}) };
+        },
+        readBodies: async items => { bodies.push(...items.map(row => row.artifactId)); return items; },
+      });
+      expect(result).toMatchObject({ coverage: 'complete', kindCoverage });
+      returned.push(...result.items.map(row => row.artifactId));
+      cursor = result.nextCursor;
+    } while (cursor);
+    expect(returned).toEqual(['indexed', 'legacy-700', 'legacy-1000']);
+    expect(bodies).toEqual(returned);
+    expect(requests.filter(value => typeof value === 'object' && value && Reflect.get(value, 'unclassified'))).toHaveLength(4);
+    expect(requests.every(value => typeof value === 'object' && value && Reflect.get(value, 'includeBody') !== true)).toBe(true);
+    expect(requests.every(value => typeof value === 'object' && value && Reflect.get(value, 'ownerAccountId') === 'owner')).toBe(true);
+  });
+
+  it.each(['readable', 'unreadable'] as const)('keeps a legacy Role catalog %s through the real shared Role reader', async availability => {
+    const row = { artifactId: 'legacy-role', header: { kind: 'role.v1' }, headerVersion: 1,
+      bodyVersion: 1, createdAt: 1, updatedAt: 1, ownerAccountId: 'account', access: 'owner' as const };
+    const kindCoverage = { status: 'partial' as const, unclassifiedCount: 1,
+      reason: 'unclassified_legacy_rows' as const };
+    const bodyIds: string[] = [];
+    const read = createRoleSourceReaderV1({ artifactStore: {
+      read: async () => { throw new Error('Catalog must use the selected list body'); },
+      list: options => listArtifactHeadersV1({ options, encodeCursor,
+        readPage: async selection => ({ items: selection?.unclassified && availability === 'readable' ? [row] : [],
+          coverage: selection?.unclassified && availability === 'unreadable' ? 'partial' : 'complete',
+          hasUnclassified: true, kindCoverage }),
+        readBodies: async items => { bodyIds.push(...items.map(item => item.artifactId));
+          return items.map(item => ({ ...item, body: JSON.stringify(BUILT_IN_ROLES_V1.builder) })); },
+      }),
+    } });
+    const result = await read();
+    expect(result.status).toBe(availability === 'readable' ? 'ready' : 'partial');
+    expect(result.entries.some(entry => entry.roleId === row.artifactId)).toBe(availability === 'readable');
+    expect(bodyIds).toEqual(availability === 'readable' ? [row.artifactId] : []);
+  });
+
+  it('keeps complete exact coverage indexed-only and carries its derived count', async () => {
+    let queries = 0;
+    const kindCoverage = { status: 'complete' as const, unclassifiedCount: 0 as const };
+    const result = await listArtifactHeadersV1({ options: { kinds: ['account_notice.v1'] }, encodeCursor,
+      readPage: async options => {
+        queries++;
+        expect(options).toEqual({ limit: 500, kinds: ['account_notice.v1'] });
+        return { items: [], hasUnclassified: false, kindCoverage };
+      } });
+    expect(result).toEqual({ items: [], coverage: 'complete', kindCoverage });
+    expect(queries).toBe(1);
+  });
+
+  it('does not confuse complete kind classification with readable content coverage', async () => {
+    const kindCoverage = { status: 'complete' as const, unclassifiedCount: 0 as const };
+    const result = await listArtifactHeadersV1({ options: { kinds: ['account_notice.v1'] }, encodeCursor,
+      readPage: async () => ({ items: [], coverage: 'partial', kindCoverage }) });
+    expect(result).toEqual({ items: [], coverage: 'partial', kindCoverage });
+  });
+
   it('keeps exact selection query-only and reports unresolved legacy membership', async () => {
     const requests: unknown[] = [];
     const page = await listArtifactHeadersV1({ options: { kinds: ['role.v1'], includeBody: true }, encodeCursor,

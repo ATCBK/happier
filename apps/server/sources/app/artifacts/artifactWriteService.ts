@@ -6,7 +6,7 @@ import { isPrismaErrorCode } from '@/storage/prisma';
 import { readArtifactStorageEnv } from '@/app/features/catalog/readFeatureEnv';
 import { deletePrivateFile } from '@/storage/blob/files';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import { deriveArtifactStoredKindV1, ArtifactStoredKindV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { tryDeriveArtifactStoredKindV1, ArtifactStoredKindV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupArtifactOrphanBlobsAfterCommit, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
 import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
@@ -55,8 +55,7 @@ function artifactWriteKind(header: Uint8Array, dataEncryptionKey: Uint8Array, ki
     if (!isPlainArtifactDataKeyBytes(dataEncryptionKey)) return { kind: kind ?? null };
     const value: unknown = decodePlainArtifactStoredContent(privacyKit.encodeBase64(new Uint8Array(header)));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: kind ?? null };
-    try { return { kind: deriveArtifactStoredKindV1(value as Record<string, unknown>) }; }
-    catch (error) { if (error instanceof RangeError) return null; throw error; }
+    return { kind: tryDeriveArtifactStoredKindV1(value as Record<string, unknown>) ?? null };
 }
 
 /** Metadata CAS opens the header only; content writes retain their complete conflict projection. */

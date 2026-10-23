@@ -1,6 +1,6 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import { deriveArtifactKindV1, deriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { deriveArtifactKindV1, tryDeriveArtifactStoredKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -1203,8 +1203,9 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
     const privateMetadata = await prepareArtifactProvenanceWrite({ ...params, mode: artifact.encryptionMode,
         existingArtifact: current, bodyVersion: params.expectedRevision.bodyVersion + 1,
         provenance: artifactRevisionProvenance(params.credentials, params.savedBy, params.bodyVersion, selected.provenance?.source) });
+    const kind = tryDeriveArtifactStoredKindV1(rawHeader);
     const revision = await restoreArtifactRevision(params.credentials, { artifactId: artifact.id,
-        kind: deriveArtifactStoredKindV1(rawHeader),
+        ...(kind === undefined ? {} : { kind }),
         bodyVersion: params.bodyVersion, expectedRevision: params.expectedRevision, header, body, ...privateMetadata.write }, params);
     await acknowledgeArtifactProvenanceWrite(params, privateMetadata);
     const restored = await fetchArtifactWithBodyFromApi({ ...params, fresh: true });
@@ -1323,8 +1324,9 @@ export async function createArtifactWithHeaderViaApi(params: {
 
         // Create the request
         const privateMetadata = await prepareArtifactProvenanceWrite({ ...params, artifactId, bodyVersion: 1, mode: accountMode, provenance });
+        const kind = tryDeriveArtifactStoredKindV1(rawHeader);
         const request: ArtifactCreateRequest = {
-            kind: deriveArtifactStoredKindV1(rawHeader),
+            ...(kind === undefined ? {} : { kind }),
             id: artifactId,
             header: storedHeader,
             body: storedBody,
@@ -1546,7 +1548,8 @@ export async function updateArtifactWithHeaderViaApi(params: {
     }
 
     // Send update to server
-    updateRequest.kind = deriveArtifactStoredKindV1(rawHeader);
+    const kind = tryDeriveArtifactStoredKindV1(rawHeader);
+    if (kind !== undefined) updateRequest.kind = kind;
     if (params.memoryDecisionSource) updateRequest.memoryDecisionSource = params.memoryDecisionSource;
     throwIfAborted(params.signal);
     const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, readTransport: params.readTransport,

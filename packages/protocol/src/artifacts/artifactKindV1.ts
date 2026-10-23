@@ -10,6 +10,14 @@ export interface ArtifactKindV1 {
   kindHint: string | null;
 }
 
+/** Derived from the same authorized inventory snapshot as an indexed kind query. */
+export const ArtifactKindCoverageV1Schema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('complete'), unclassifiedCount: z.literal(0) }),
+  z.strictObject({ status: z.literal('partial'), unclassifiedCount: z.number().check(z.int(), z.minimum(1)),
+    reason: z.literal('unclassified_legacy_rows') }),
+]);
+export type ArtifactKindCoverageV1 = z.infer<typeof ArtifactKindCoverageV1Schema>;
+
 /** Existing MySQL Artifact.kind storage is VARCHAR(191), shared with the other providers. */
 function fitsArtifactKindStorage(value: string): boolean {
   return Array.from(value).length <= 191;
@@ -76,6 +84,12 @@ export function deriveArtifactKindV1(header: Readonly<Record<string, unknown>>):
 
 export function deriveArtifactStoredKindV1(header: Readonly<Record<string, unknown>>): string {
   return encodeArtifactKindV1(deriveArtifactKindV1(header));
+}
+
+/** An optional public index hint must not narrow the private header's valid type string. */
+export function tryDeriveArtifactStoredKindV1(header: Readonly<Record<string, unknown>>): string | undefined {
+  try { return deriveArtifactStoredKindV1(header); }
+  catch (error) { if (error instanceof RangeError) return undefined; throw error; }
 }
 
 export function deriveArtifactCoarseKindV1(header: Readonly<Record<string, unknown>>): ArtifactCoarseKindV1 {

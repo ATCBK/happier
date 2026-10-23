@@ -20,6 +20,10 @@ import { observePrismaReads } from '@/testkit/observePrismaReads';
 import { withSqliteReadSnapshot } from '@/storage/prisma';
 import { buildWidgetSurfaceArtifactHeaderV1, buildWidgetSurfaceArtifactIdV1, readWidgetSurfaceArtifactHeaderV1 } from '@happier-dev/protocol/widgets';
 import { ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { featuresRoutes } from '@/app/api/routes/features/featuresRoutes';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
+import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 
 describe("Artifact document grants (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -45,6 +49,194 @@ describe("Artifact document grants (real SQLite)", () => {
     }
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+
+    it.each(['create', 'update'] as const)('preserves private content with an oversized optional kind during plain %s', async operation => {
+        const owner = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        const id = operation === 'create' ? crypto.randomUUID() : artifact.id;
+        const exactKind = 'long.type.'.repeat(24);
+        const header = encodePlainArtifactStoredContent({ kind: exactKind, title: 'retained private content' });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const response = await app.inject({ method: 'POST', url: operation === 'create' ? '/v1/artifacts' : `/v1/artifacts/${id}`,
+                headers, payload: operation === 'create' ? { id, header, body: encodePlainArtifactStoredContent({ value: 'original' }),
+                    dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER } : { header, expectedHeaderVersion: 1 } });
+            expect(response.statusCode, response.body).toBe(200);
+            const read = await app.inject({ method: 'GET', url: `/v1/artifacts/${id}`, headers });
+            expect(read.statusCode, read.body).toBe(200);
+            expect(read.json().kind).toBeNull();
+            expect(decodePlainArtifactStoredContent(read.json().header)).toEqual({ kind: exactKind, title: 'retained private content' });
+            expect(decodePlainArtifactStoredContent(read.json().body)).toEqual({ value: 'original' });
+            const refused = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}`, headers,
+                payload: { kind: `v1:other:${exactKind}`, expectedHeaderVersion: read.json().headerVersion } });
+            expect(refused.statusCode).toBe(400); // Explicit invalid public hints remain strict.
+        });
+        expect(await db.artifact.findUniqueOrThrow({ where: { id } })).toMatchObject({ kind: null,
+            headerVersion: operation === 'create' ? 1 : 2, bodyVersion: 1 });
+    });
+
+    it('counts scoped legacy rows for empty exact demand without opening private bytes', async () => {
+        const owner = await plainAccount();
+        const foreign = await plainAccount();
+        const own = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: own.id }, data: { header: new Uint8Array([0xff]), body: new Uint8Array([0xff]) } });
+        const shared = await plainArtifact(foreign.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: shared.id, accountId: owner.id,
+            accessLevel: 'view', createdByAccountId: foreign.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            for (const [suffix, count] of [['', 2], [`&ownerAccountId=${owner.id}`, 1]] as const) {
+                const response = await app.inject({ method: 'GET', url: `/v1/artifacts?kinds=%5B%5D&includeBody=true${suffix}`, headers });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json()).toEqual({ items: [], hasUnclassified: true,
+                    coverage: { status: 'partial', unclassifiedCount: count, reason: 'unclassified_legacy_rows' } });
+            }
+        });
+    });
+
+    it('counts exact coverage across authorized legacy rows without opening unrelated content', async () => {
+        const owner = await plainAccount();
+        const foreign = await plainAccount();
+        const nullKind = await plainArtifact(owner.id);
+        const coarse = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: coarse.id }, data: { kind: 'other' } });
+        const noExact = await plainArtifact(owner.id);
+        await db.artifact.update({ where: { id: noExact.id }, data: { kind: 'v1:other:' } });
+        const shared = await plainArtifact(foreign.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: shared.id, accountId: owner.id,
+            accessLevel: 'view', createdByAccountId: foreign.id } });
+        await plainArtifact(foreign.id);
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const exact = () => app.inject({ method: 'GET', url: '/v1/artifacts?kinds=%5B%22account_notice.v1%22%5D', headers });
+            const discovery = () => app.inject({ method: 'GET', url: `/v1/artifacts?unclassified=true&ownerAccountId=${owner.id}`, headers });
+            const initial = await exact();
+            expect(initial.statusCode, initial.body).toBe(200);
+            const allAuthorized = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=true', headers });
+            expect(allAuthorized.statusCode, allAuthorized.body).toBe(200);
+            expect(allAuthorized.json().items.map((row: { id: string }) => row.id).sort()).toEqual([nullKind.id, coarse.id, shared.id].sort());
+            expect(allAuthorized.json()).toMatchObject({ coverage: { status: 'partial', unclassifiedCount: 3 } });
+            expect(initial.json()).toEqual({ items: [], hasUnclassified: true,
+                coverage: { status: 'partial', unclassifiedCount: 3, reason: 'unclassified_legacy_rows' } });
+            expect((await discovery()).json()).toMatchObject({ coverage: { status: 'partial', unclassifiedCount: 2 } });
+            // Completeness is an authorization/index fact even when private bytes are unreadable.
+            await db.artifact.update({ where: { id: shared.id }, data: { header: new Uint8Array([0xff]) } });
+            expect((await exact()).json()).toMatchObject({ coverage: { status: 'partial', unclassifiedCount: 3 } });
+            const repaired = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch', headers,
+                payload: { items: [nullKind, coarse].map(row => ({ artifactId: row.id,
+                    kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: row.headerVersion })) } });
+            expect(repaired.statusCode, repaired.body).toBe(200);
+            expect(repaired.json().items.every((item: { success: boolean }) => item.success)).toBe(true);
+            expect((await discovery()).json()).toEqual({ items: [], hasUnclassified: false,
+                coverage: { status: 'complete', unclassifiedCount: 0 } });
+            expect((await exact()).json()).toMatchObject({ coverage: { status: 'partial', unclassifiedCount: 1 } });
+            await db.artifactAccountGrant.deleteMany({ where: { artifactId: shared.id } });
+            expect((await exact()).json()).toEqual({ items: [], hasUnclassified: false,
+                coverage: { status: 'complete', unclassifiedCount: 0 } });
+        });
+    });
+
+    it('counts only effective direct Team and Group grants through access lifecycle changes', async () => {
+        const owner = await plainAccount();
+        const reader = await plainAccount();
+        const rows = await Promise.all([plainArtifact(owner.id), plainArtifact(owner.id), plainArtifact(owner.id)]);
+        const team = await db.team.create({ data: { name: 'Coverage Team' } });
+        const member = await db.teamMembership.create({ data: { teamId: team.id, accountId: reader.id, role: 'member' } });
+        const other = await plainAccount();
+        const otherMember = await db.teamMembership.create({ data: { teamId: team.id, accountId: other.id, role: 'member' } });
+        const group = await db.teamGroup.create({ data: { teamId: team.id, name: 'Coverage Group', nameKey: crypto.randomUUID() } });
+        await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id,
+            teamMembershipId: member.id, nativeContribution: true } });
+        await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id,
+            teamMembershipId: otherMember.id, nativeContribution: true } });
+        await db.artifactAccountGrant.create({ data: { artifactId: rows[0].id, accountId: reader.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        await db.artifactTeamGrant.create({ data: { artifactId: rows[1].id, teamId: team.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        await db.artifactGroupGrant.create({ data: { artifactId: rows[2].id, teamGroupId: group.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const read = async () => {
+                const response = await app.inject({ method: 'GET', url: '/v1/artifacts?kinds=%5B%22absent.v1%22%5D',
+                    headers: { 'x-test-user-id': reader.id, ...protocolHeaders } });
+                expect(response.statusCode, response.body).toBe(200);
+                return response.json().coverage;
+            };
+            expect(await read()).toMatchObject({ status: 'partial', unclassifiedCount: 3 });
+            await db.teamGroup.update({ where: { id: group.id }, data: { archivedAt: new Date() } });
+            expect(await read()).toMatchObject({ unclassifiedCount: 2 });
+            await db.teamGroup.update({ where: { id: group.id }, data: { archivedAt: null } });
+            await db.teamMembership.update({ where: { id: member.id }, data: { status: 'suspended' } });
+            expect(await read()).toMatchObject({ unclassifiedCount: 1 });
+            await db.teamMembership.update({ where: { id: member.id }, data: { status: 'active' } });
+            await db.team.update({ where: { id: team.id }, data: { archivedAt: new Date() } });
+            expect(await read()).toMatchObject({ unclassifiedCount: 1 });
+            await db.team.update({ where: { id: team.id }, data: { archivedAt: null } });
+            await db.artifactAccountGrant.deleteMany({ where: { accountId: reader.id } });
+            expect(await read()).toMatchObject({ unclassifiedCount: 2 });
+            await db.account.update({ where: { id: reader.id }, data: { status: 'suspended' } });
+            expect(await read()).toEqual({ status: 'complete', unclassifiedCount: 0 });
+        });
+    });
+
+    it('negotiates query-hint support and refuses its batch transport under build denial', async () => {
+        const owner = await plainAccount();
+        await withAuthenticatedTestApp(app => { artifactsRoutes(app); featuresRoutes(app); }, async app => {
+            const supported = await app.inject({ method: 'GET', url: '/v1/features' });
+            expect(supported.statusCode, supported.body).toBe(200);
+            const previous = process.env.HAPPIER_BUILD_FEATURES_DENY;
+            try {
+                process.env.HAPPIER_BUILD_FEATURES_DENY = 'artifacts.queryHints';
+                const denied = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch',
+                    headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { items: [] } });
+                expect(denied.statusCode, denied.body).toBe(404);
+                expect(denied.json()).toEqual({ error: 'not_found' });
+            } finally {
+                if (previous === undefined) delete process.env.HAPPIER_BUILD_FEATURES_DENY;
+                else process.env.HAPPIER_BUILD_FEATURES_DENY = previous;
+            }
+            expect(readServerEnabledBit(FeaturesResponseSchema.parse(supported.json()), 'artifacts.queryHints')).toBe(true);
+        });
+    });
+
+    it('classifies 1001 owner headers in one real HTTP batch without reading bodies', async () => {
+        const owner = await plainAccount();
+        const ids = Array.from({ length: 1001 }, () => crypto.randomUUID());
+        const header = privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'account_notice.v1' }));
+        await db.artifact.createMany({ data: ids.map(id => ({ id, accountId: owner.id, header,
+            body: new Uint8Array([0xff]), dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            headerVersion: 1, bodyVersion: 1 })) });
+        let bodyReads = 0;
+        const transaction = db.$transaction;
+        // Observe the genuine Prisma boundary without replacing any admission/query logic.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Parameters<typeof updateArtifactTx>[0]) => callback(new Proxy(tx, {
+                get(inner, property, innerReceiver) {
+                    const delegate = Reflect.get(inner, property, innerReceiver);
+                    if (property !== 'artifact') return typeof delegate === 'function' ? delegate.bind(inner) : delegate;
+                    return new Proxy(inner.artifact, { get(model, operation, modelReceiver) {
+                        const method = Reflect.get(model, operation, modelReceiver);
+                        if (typeof operation !== 'string' || !operation.startsWith('find')) return method;
+                        return async (...queryArgs: Parameters<typeof inner.artifact.findMany>) => {
+                            const result = await Reflect.apply(method, model, queryArgs);
+                            if (!queryArgs[0]?.select || queryArgs[0].select.body) bodyReads += Array.isArray(result) ? result.length : result ? 1 : 0;
+                            return result;
+                        };
+                    } });
+                },
+            })), ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(artifactsRoutes, async app => {
+                const response = await app.inject({ method: 'POST', url: '/v1/artifacts/query-hints/batch',
+                    headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { items: ids.map(artifactId => ({
+                        artifactId, kind: 'v1:other:account_notice.v1', expectedHeaderVersion: 1 })) } });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json().items).toEqual(ids.map(artifactId => ({ artifactId, success: true })));
+            }, { bodyLimit: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 });
+            expect(bodyReads).toBe(0);
+            expect(await db.artifact.count({ where: { accountId: owner.id, kind: 'v1:other:account_notice.v1' } })).toBe(1001);
+        } finally { db.$transaction = transaction; }
+    }, 180_000);
 
     it('preserves content recency while publishing a kind-only index change', async () => {
         const owner = await plainAccount();
@@ -155,9 +347,9 @@ describe("Artifact document grants (real SQLite)", () => {
         expect(await classify(owner.id, 1)).toEqual({ ok: true, recipientUpdates: [] });
         expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toEqual(after);
         await db.artifact.update({ where: { id: artifact.id }, data: {
-            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'x'.repeat(183) })), headerVersion: 2 } });
+            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'x'.repeat(183) })), headerVersion: 2, kind: null } });
         const oversized = await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } });
-        expect(await classify(owner.id, 2)).toMatchObject({ ok: false, error: 'invalid-params' });
+        expect(await classify(owner.id, 2)).toMatchObject({ ok: true });
         expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toEqual(oversized);
         expect(bodies).toBe(0);
     });
@@ -202,14 +394,15 @@ describe("Artifact document grants (real SQLite)", () => {
                 expect(selected.json().items.map((row: { id: string }) => row.id).sort()).toEqual([notice.id, bundle.id].sort());
                 expect(new Set(reads)).toEqual(new Set([notice.id, bundle.id]));
                 reads.length = 0;
-                const legacy = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=true&limit=1', headers });
+                const legacy = await app.inject({ method: 'GET', url: `/v1/artifacts?unclassified=true&ownerAccountId=${owner.id}&limit=1`, headers });
                 expect(legacy.statusCode, legacy.body).toBe(200);
                 expect(legacy.json()).toMatchObject({ items: [{ id: ownLegacy.id }], hasUnclassified: true });
                 expect(new Set(reads)).toEqual(new Set([ownLegacy.id]));
                 expect(bodies).toBe(0);
                 reads.length = 0;
-                const coarseLegacy = await app.inject({ method: 'GET', url: '/v1/artifacts?unclassified=coarse', headers });
-                expect(coarseLegacy.json()).toEqual({ items: [], hasUnclassified: true });
+                const coarseLegacy = await app.inject({ method: 'GET', url: `/v1/artifacts?unclassified=coarse&ownerAccountId=${owner.id}`, headers });
+                expect(coarseLegacy.json()).toEqual({ items: [], hasUnclassified: false,
+                    coverage: { status: 'complete', unclassifiedCount: 0 } });
                 expect(reads).toEqual([]);
                 const coarse = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=other&limit=1', headers });
                 expect(coarse.json().hasUnclassified).toBe(true); // the authorized shared null row remains unknown
@@ -485,6 +678,48 @@ describe("Artifact document grants (real SQLite)", () => {
         });
     });
 
+    it.each(['revoked', 'classified'] as const)('readmits an empty exact page and legacy count when its last witness is %s', async transition => {
+        const owner = await plainAccount();
+        const reader = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: reader.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
+            const original = delegate.count.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let paused = false;
+            Object.defineProperty(delegate, 'count', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const count = await original(...args);
+                    if (!paused) { paused = true; enter(); await release; }
+                    return count;
+                } });
+            const response = app.inject({ method: 'GET', url: '/v1/artifacts?kinds=%5B%22workflow-definition.v1%22%5D',
+                headers: { 'x-test-user-id': reader.id, ...protocolHeaders } });
+            try {
+                expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+                if (transition === 'revoked') {
+                    await db.artifactAccountGrant.deleteMany({ where: { artifactId: artifact.id, accountId: reader.id } });
+                } else {
+                    expect(await inTx(tx => updateArtifactTx(tx, { actorUserId: owner.id, artifactId: artifact.id,
+                        kind: 'v1:other:workflow-definition.v1', expectedHeaderVersion: 1 }))).toMatchObject({ ok: true });
+                }
+                resume();
+                const result = await response;
+                expect(result.statusCode, result.body).toBe(200);
+                expect(result.json()).toMatchObject({ hasUnclassified: false, coverage: { status: 'complete', unclassifiedCount: 0 } });
+                expect(result.json().items.map((row: { id: string }) => row.id)).toEqual(transition === 'revoked' ? [] : [artifact.id]);
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'count', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
     it('keeps completeness conservative when the first unclassified grant is revoked and another remains', async () => {
         const owner = await plainAccount();
         const recipient = await plainAccount();
@@ -494,45 +729,44 @@ describe("Artifact document grants (real SQLite)", () => {
             accountId: recipient.id, accessLevel: 'view' as const, createdByAccountId: owner.id })) });
         await withAuthenticatedTestApp(artifactsRoutes, async app => {
             const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
-            const original = delegate.findMany.bind(delegate);
+            const original = delegate.count.bind(delegate);
             let enter!: () => void;
             let resume!: () => void;
-            let witnessId = '';
             const reached = new Promise<void>(resolve => { enter = resolve; });
             const release = new Promise<void>(resolve => { resume = resolve; });
             let paused = false;
-            // Revoke the actual selected DB witness after capture, preserving the second live grant.
-            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+            // Revoke a grant after the real aggregate snapshot, preserving a second live grant.
+            Object.defineProperty(delegate, 'count', { configurable: true, writable: true,
                 value: async (...args: Parameters<typeof original>) => {
-                    const rows = await original(...args);
-                    if (!paused && args[0]?.where?.kind === null && args[0]?.take === 1 && rows[0]) {
-                        paused = true; witnessId = rows[0].id; enter(); await release;
+                    const count = await original(...args);
+                    if (!paused && args[0]?.where?.kind === null) {
+                        paused = true; enter(); await release;
                     }
-                    return rows;
+                    return count;
                 } });
             const response = app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill',
                 headers: { 'x-test-user-id': recipient.id, ...protocolHeaders } });
             try {
                 expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
-                await db.artifactAccountGrant.deleteMany({ where: { artifactId: witnessId, accountId: recipient.id } });
+                await db.artifactAccountGrant.deleteMany({ where: { artifactId: first.id, accountId: recipient.id } });
                 resume();
                 const result = await response;
                 expect(result.statusCode, result.body).toBe(200);
                 expect(result.json()).toEqual({ items: [], hasUnclassified: true });
             } finally {
                 resume(); await response;
-                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+                Object.defineProperty(delegate, 'count', { configurable: true, writable: true, value: original });
             }
         });
     });
 
-    it('invalidates an opaque old-writer kind when its header changes', async () => {
+    it.each(['prompt', 'v1:prompt:prompt_doc.v2'])('invalidates an opaque stored kind %s when its header changes without an optional hint', async storedKind => {
         const ownerKeys = tweetnacl.box.keyPair();
         const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
         const key = tweetnacl.randomBytes(32);
         const header = await sealSessionDataKeyBundleV0({ kind: 'prompt_doc.v2', title: 'Old prompt' }, key);
         const body = await sealSessionDataKeyBundleV0({ body: 'Old body' }, key);
-        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id, kind: 'prompt',
+        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id, kind: storedKind,
             header, body, headerVersion: 1, bodyVersion: 1,
             dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ recipientPublicKey: ownerKeys.publicKey, dataKey: key, randomBytes: tweetnacl.randomBytes })) } });
         await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
@@ -546,9 +780,9 @@ describe("Artifact document grants (real SQLite)", () => {
             const bodyOnly = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
                 payload: { body: privacyKit.encodeBase64(await sealSessionDataKeyBundleV0({ body: 'Edited body' }, key)), expectedBodyVersion: 1 } });
             expect(bodyOnly.json()).toMatchObject({ success: true, bodyVersion: 2 });
-            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: 'prompt' });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: storedKind });
             const response = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
-                payload: { header: privacyKit.encodeBase64(await sealSessionDataKeyBundleV0({ kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' }, key)), expectedHeaderVersion: 1 } });
+                payload: { header: privacyKit.encodeBase64(await sealSessionDataKeyBundleV0({ kind: 'long.type.'.repeat(24) }, key)), expectedHeaderVersion: 1 } });
             expect(response.statusCode, response.body).toBe(200);
             expect(response.json()).toMatchObject({ success: true, headerVersion: 2 });
             expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: null, bodyVersion: 2 });

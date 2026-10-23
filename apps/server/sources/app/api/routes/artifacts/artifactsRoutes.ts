@@ -1,7 +1,8 @@
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
 import { registerArtifactUploadRoutes } from './registerArtifactUploadRoutes';
 import { ArtifactCoarseKindV1Schema, ArtifactStoredKindV1Schema, ArtifactKindWriteBatchInputV1Schema,
-    ArtifactKindWriteBatchResponseV1Schema, type ArtifactKindWriteBatchResponseV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+    ArtifactKindWriteBatchResponseV1Schema, ArtifactKindCoverageV1Schema, type ArtifactKindWriteBatchResponseV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { createServerFeatureGatedRouteApp } from '@/app/features/catalog/serverFeatureGate';
 import { registerArtifactEditProposalRoutes } from './artifactEditProposalRoutes';
 import { readArtifactAccountEncryptionMigrationInventoryInTx } from '@/app/artifacts/artifactAccountEncryptionMigrationInventory';
 import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
@@ -248,18 +249,21 @@ export function artifactsRoutes(app: Fastify) {
                 limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))),
                 cursor: z.optional(z.string().check(z.minLength(1))),
                 includeBody: z.optional(z.literal('true')),
+                ownerAccountId: z.optional(z.string()),
                 kind: z.optional(ArtifactCoarseKindV1Schema),
                 kinds: z.optional(z.string()),
                 unclassified: z.optional(z.enum(['true', 'coarse'])),
             }),
             response: {
-                200: z.union([z.array(artifactListItemSchema), z.object({ items: z.array(artifactListItemSchema), hasUnclassified: z.boolean() })]),
+                200: z.union([z.array(artifactListItemSchema), z.object({ items: z.array(artifactListItemSchema), hasUnclassified: z.boolean(),
+                    coverage: z.optional(ArtifactKindCoverageV1Schema) })]),
                 400: z.object({ error: z.literal('Failed to get artifacts') }),
             }
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true'; kind?: ArtifactCoarseKindV1; kinds?: string; unclassified?: 'true' | 'coarse' };
+        const query = request.query as { limit?: number; cursor?: string; includeBody?: 'true'; ownerAccountId?: string;
+            kind?: ArtifactCoarseKindV1; kinds?: string; unclassified?: 'true' | 'coarse' };
         const listLimit = typeof query.limit === "number" ? query.limit : DEFAULT_ARTIFACT_LIST_LIMIT;
         const cursor = parseArtifactListCursor(query.cursor);
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
@@ -275,18 +279,20 @@ export function artifactsRoutes(app: Fastify) {
         }
 
         const page = await listArtifactHeaderPageForCaller({ actorAccountId: userId, limit: listLimit, cursor,
-            includeBody: query.includeBody === 'true', kind: query.kind, kinds,
+            includeBody: query.includeBody === 'true', ownerAccountId: query.ownerAccountId, kind: query.kind, kinds,
             unclassified: query.unclassified === 'coarse' ? 'coarse' : query.unclassified === 'true' });
 
         const projected = page.items.map(projectArtifactListItem);
         if (query.kind === undefined && kinds === undefined && query.unclassified === undefined) return reply.send(projected);
-        return reply.send({ items: projected, hasUnclassified: page.hasUnclassified });
+        return reply.send({ items: projected, hasUnclassified: page.hasUnclassified,
+            ...(kinds !== undefined || query.unclassified !== undefined ? { coverage: page.coverage } : {}) });
     });
 
     // A transport batch reuses independent canonical CAS transactions and publication.
-    app.post('/v1/artifacts/query-hints/batch', {
+    createServerFeatureGatedRouteApp(app, 'artifacts.queryHints').post('/v1/artifacts/query-hints/batch', {
         preHandler: app.authenticate,
-        schema: { body: ArtifactKindWriteBatchInputV1Schema, response: { 200: ArtifactKindWriteBatchResponseV1Schema } },
+        schema: { body: ArtifactKindWriteBatchInputV1Schema, response: { 200: ArtifactKindWriteBatchResponseV1Schema,
+            404: z.object({ error: z.literal('not_found') }) } },
     }, async (request, reply) => {
         const items: ArtifactKindWriteBatchResponseV1['items'] = [];
         for (const item of request.body.items) {

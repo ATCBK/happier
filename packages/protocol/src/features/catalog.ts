@@ -9,6 +9,12 @@ function defineFeatureCatalog<
 }
 
 const FEATURE_CATALOG_DEFINITION = {
+  'artifacts.queryHints': {
+    description: 'Exact Artifact kind queries, derived coverage, and authorized hint batches.',
+    defaultFailMode: 'fail_closed',
+    dependencies: [],
+    representation: 'server',
+  },
   'account.publicProfiles': {
     description: 'Opt-in public Account profiles and usage sharing.',
     defaultFailMode: 'fail_closed',

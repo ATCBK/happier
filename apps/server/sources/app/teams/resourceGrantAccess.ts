@@ -9,8 +9,8 @@ import { deriveAccountRecipientEnvelopeReadinessFromRow, type AccountRecipientEn
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT, type RecipientReadinessRow } from '@/app/session/encryption/sessionDataKeyRecipientProjection';
 import type { Tx } from '@/storage/inTx';
 import type { AccountStatus, TeamMembershipStatus } from '@/storage/enums.generated';
-import { isEffectiveTeamMembership } from './memberships/effectiveMembership';
-import { isEffectiveTeamGroupMembership } from './groups/effectiveGroupMembership';
+import { EFFECTIVE_TEAM_MEMBERSHIP_WHERE, isEffectiveTeamMembership } from './memberships/effectiveMembership';
+import { EFFECTIVE_TEAM_GROUP_MEMBERSHIP_WHERE, isEffectiveTeamGroupMembership } from './groups/effectiveGroupMembership';
 
 type Member = Readonly<{ accountId: string; status: TeamMembershipStatus; account: Readonly<{ status: AccountStatus }> }>;
 
@@ -54,6 +54,22 @@ export function resourceGrantRelationsSelect(actorAccountId?: string) {
 }
 
 const accessRank = { view: 1, edit: 2, admin: 3, owner: 4 } as const;
+
+/** Database projection of the same grant policy below, for candidate lists and aggregate counts.
+ * The actor and lifecycle predicates must match the SAME membership row.
+ * Resource adapters still own visibility and final private-content admission.
+ */
+export function resourceGrantAccessWhere(actorAccountId: string) {
+    const member = { ...EFFECTIVE_TEAM_MEMBERSHIP_WHERE, accountId: actorAccountId };
+    return { OR: [
+        { accountId: actorAccountId },
+        { accountGrants: { some: { accountId: actorAccountId, account: { status: 'active' as const } } } },
+        { teamGrants: { some: { team: { memberships: { some: member } } } } },
+        { groupGrants: { some: { teamGroup: { memberships: { some: {
+            ...EFFECTIVE_TEAM_GROUP_MEMBERSHIP_WHERE, teamMembership: member,
+        } } } } } },
+    ] };
+}
 
 /** Ownership or the highest live direct/Team/Group grant, independent of key readiness. */
 export function resolveResourceGrantAccessFromFacts(row: ResourceGrantAccessFacts, actorAccountId: string): ResourceGrantAccess | null {

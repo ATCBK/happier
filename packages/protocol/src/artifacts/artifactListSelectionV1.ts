@@ -1,22 +1,24 @@
-import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from './artifactKindV1.js';
+import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1, type ArtifactKindCoverageV1 } from './artifactKindV1.js';
 import { throwIfAborted } from '../abortSignal.js';
 
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
   kinds?: readonly string[];
   coarseKind?: ArtifactCoarseKindV1;
+  ownerAccountId?: string;
   /** Keyholding host selection over admitted private headers; never a wire filter. */
   headerFilter?: (header: Readonly<Record<string, unknown>>) => boolean;
   sort?: 'updated_desc' | 'created_desc' | 'title_asc'; includeBody?: boolean; signal?: AbortSignal;
 }>;
 
 export type ArtifactListPageOptionsV1 = Readonly<Pick<ArtifactListSelectionOptionsV1,
-  'limit' | 'cursor' | 'includeBody' | 'coarseKind' | 'kinds' | 'signal'> & { unclassified?: boolean | 'coarse' }>;
+  'limit' | 'cursor' | 'includeBody' | 'coarseKind' | 'kinds' | 'ownerAccountId' | 'signal'> & { unclassified?: boolean | 'coarse' }>;
 
 type ArtifactListHeader = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; createdAt: number; updatedAt: number;
 }>;
-type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; coverage?: 'complete' | 'partial'; hasUnclassified?: boolean }>;
+type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; coverage?: 'complete' | 'partial';
+  kindCoverage?: ArtifactKindCoverageV1; hasUnclassified?: boolean }>;
 
 /** Decrypted selection shared by keyholding hosts; transport pages retain their own codecs and custody. */
 export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params: Readonly<{
@@ -25,7 +27,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   readPage: (options?: ArtifactListPageOptionsV1) => Promise<ArtifactListPage<T>>;
   readBodies?: (items: readonly T[]) => Promise<readonly T[]>;
   encodeCursor: (item: T) => string;
-}>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> {
+}>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial'; kindCoverage?: ArtifactKindCoverageV1 }>> {
   const options = params.options;
   throwIfAborted(options?.signal);
   const requestedKinds = options?.kinds ?? (options?.kind ? [options.kind] : undefined);
@@ -42,6 +44,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   }
   const all: T[] = [];
   let coverage: 'complete' | 'partial' = 'complete';
+  let kindCoverage: ArtifactKindCoverageV1 | undefined;
   // The transport keyset is updatedAt-desc / id-desc. Only other orderings
   // need a complete header view before applying their logical cursor.
   const updatedOrder = options.sort === undefined || options.sort === 'updated_desc';
@@ -58,16 +61,40 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
       ...(kinds !== undefined ? { kinds } : options.coarseKind ? { coarseKind: options.coarseKind } : {}),
+      ...(options.ownerAccountId !== undefined ? { ownerAccountId: options.ownerAccountId } : {}),
       ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     throwIfAborted(options.signal);
     if (page.hasUnclassified === true) coverage = 'partial';
     if (page.coverage === 'partial') coverage = 'partial';
+    if (page.kindCoverage) {
+      kindCoverage = page.kindCoverage;
+      if (kindCoverage.status === 'partial') coverage = 'partial';
+    }
     all.push(...page.items.filter(matches));
     cursor = page.nextCursor;
     hasMorePhysicalRows = cursor !== undefined;
     if (updatedOrder && options.limit !== undefined && all.length >= options.limit) break;
     if (!cursor) break;
   } while (true);
+  // Legacy membership is resolved only under the server's current typed witness.
+  // This same header reader never repairs hints or opens unrelated bodies.
+  if (kinds !== undefined && kindCoverage?.status === 'partial') {
+    let legacyCursor = updatedOrder ? options.cursor : undefined;
+    const selectedIds = new Set(all.map(item => item.artifactId));
+    do {
+      const page = await params.readPage({ limit: 500, unclassified: true,
+        ...(legacyCursor ? { cursor: legacyCursor } : {}),
+        ...(options.ownerAccountId !== undefined ? { ownerAccountId: options.ownerAccountId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}) });
+      throwIfAborted(options.signal);
+      if (page.coverage === 'partial') coverage = 'partial';
+      for (const item of page.items) if (!selectedIds.has(item.artifactId) && matches(item)) {
+        all.push(item);
+        selectedIds.add(item.artifactId);
+      }
+      legacyCursor = page.nextCursor;
+    } while (legacyCursor);
+  }
   const compare = (left: T, right: T) => {
     const primary = options.sort === 'title_asc' ? title(left).localeCompare(title(right))
       : options.sort === 'created_desc' ? right.createdAt - left.createdAt : right.updatedAt - left.updatedAt;
@@ -84,6 +111,6 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   throwIfAborted(options.signal);
   const items = selected.filter(matches).sort(compare);
   const last = pageItems.at(-1);
-  return { items, coverage, ...(last && (hasMorePhysicalRows || index + 1 + pageItems.length < all.length)
+  return { items, coverage, ...(kindCoverage ? { kindCoverage } : {}), ...(last && (hasMorePhysicalRows || index + 1 + pageItems.length < all.length)
     ? { nextCursor: params.encodeCursor(last) } : {}) };
 }

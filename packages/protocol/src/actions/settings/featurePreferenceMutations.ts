@@ -19,6 +19,9 @@ type FeaturePreferenceDefinition = Readonly<{
 }>;
 
 export const UI_FEATURE_REGISTRY = {
+    'artifacts.queryHints': {
+        settingsToggle: undefined,
+    },
     'account.publicProfiles': {
         settingsToggle: undefined,
     },

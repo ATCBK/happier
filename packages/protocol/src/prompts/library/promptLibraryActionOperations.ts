@@ -53,7 +53,7 @@ export type PromptLibraryStoredArtifact = Readonly<{
 export type PromptLibraryArtifactStore = Readonly<{
   organization?: ArtifactFolderActionPortV1;
   /** Header inventory only. Unreadable ranges must not be reported as complete. */
-  list?(options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
+  list?(options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; kinds?: readonly string[]; signal?: AbortSignal }>): Promise<Readonly<{
     items: readonly Readonly<{ id: string; header: Readonly<Record<string, unknown>> | null; updatedAtMs: number; owned?: boolean }>[];
     coverage: 'complete' | 'partial' | 'unavailable';
     nextCursor?: string;
@@ -561,7 +561,7 @@ export async function listPromptLibrary(params: Readonly<{
   do {
     // The Artifact API admits pages of at most 500 rows. This is a transport
     // page, never a limit on the user's library.
-    const inventory = await params.store.list({ limit: 500, ...(cursor ? { cursor } : {}),
+    const inventory = await params.store.list({ limit: 500, kinds: ['prompt_doc.v2'], ...(cursor ? { cursor } : {}),
       ...(params.signal ? { signal: params.signal } : {}) });
     throwIfAborted(params.signal);
     if (inventory.coverage === 'partial') coverage = 'partial';
