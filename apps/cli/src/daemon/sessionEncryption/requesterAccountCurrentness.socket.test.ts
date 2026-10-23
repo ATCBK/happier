@@ -31,6 +31,9 @@ import { createProviderAccountUsagePersistenceScheduler } from '@/daemon/connect
 import { buildProviderAccountUsageRecordId, openSealedProviderAccountUsageSnapshot,
     type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import { QualifiedProviderAccountUsageWriteV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { createAccountSessionFollowRuleCache } from '@/agent/runtime/session/follow/accountSessionFollowRuleCache';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { SessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 
 const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
     accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -41,6 +44,65 @@ const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('requester Account currentness over the installed socket wiring', () => {
+    it('reloads receiver rules and preferences changed elsewhere through the real Account feed before the next arrival', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        let rules: SessionFollowRuleV1[] = [];
+        let preferences = { assigned: false, direct: false, team: false, group: false };
+        let cursor = 0;
+        let invalidations = 0;
+        const reads: string[] = [];
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
+            const path = new URL(url).pathname;
+            reads.push(path);
+            if (path.endsWith('/currentness')) return { status: 200, data: fact };
+            if (path.endsWith('/session-follow-rules')) return { status: 200, data: { rules } };
+            if (path.endsWith('/session-follow-preferences')) return { status: 200, data: preferences };
+            if (path === '/v2/changes') {
+                const after = config?.params?.after ?? 0;
+                return { status: 200, data: { changes: cursor > after ? [{ cursor, kind: 'account',
+                    entityId: 'session-follows', changedAt: cursor, hint: buildSessionFollowChangeHintV1() }] : [], nextCursor: cursor } };
+            }
+            throw new Error(`Unexpected Follow request ${path}`);
+        });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token,
+            serverBaseUrl: 'https://receiver-feed.example' });
+        const lifetime = new AbortController();
+        const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+            serverHttpBaseUrl: 'https://receiver-feed.example', signal: lifetime.signal,
+            isCurrent: async () => (await observation.read())?.mode === 'plain',
+            subscribeInvalidation: listener => observation.subscribeSessionFollowRules(() => { invalidations++; listener(); }) });
+        try {
+            await observation.read();
+            await vi.waitFor(() => expect(reads).toContain('/v2/changes'));
+            expect(await cache.read()).toMatchObject({ status: 'available', rules: [], defaultPreferences: preferences });
+            const beforeChange = invalidations;
+            preferences = { ...preferences, assigned: true };
+            rules = [{ ruleId: 'new-receiver-rule', version: 1, receiver: { kind: 'session', sessionId: 'receiver' },
+                content: { t: 'plain', v: { v: 1, enabled: true, filter: normalizeSessionListFilterV1({}),
+                    policy: { preset: 'everything' } } } }];
+            cursor++;
+            await channel.hintAccountChange();
+            await vi.waitFor(() => expect(invalidations).toBeGreaterThan(beforeChange));
+            expect(await cache.read({ refreshForSessionReceiver: 'receiver' })).toMatchObject({ status: 'available',
+                rules: [{ ruleId: 'new-receiver-rule', definition: { enabled: true } }], defaultPreferences: preferences });
+            const beforeRemoval = invalidations;
+            rules = [];
+            preferences = { ...preferences, assigned: false };
+            cursor++;
+            await channel.hintAccountChange();
+            await vi.waitFor(() => expect(invalidations).toBeGreaterThan(beforeRemoval));
+            expect(await cache.read({ refreshForSessionReceiver: 'receiver' })).toMatchObject({ status: 'available',
+                rules: [], defaultPreferences: preferences });
+            const ruleReads = reads.filter(path => path.endsWith('/session-follow-rules')).length;
+            expect(await cache.read({ refreshForSessionReceiver: 'receiver' })).toMatchObject({ status: 'available', rules: [] });
+            expect(reads.filter(path => path.endsWith('/session-follow-rules'))).toHaveLength(ruleReads);
+            lifetime.abort();
+            expect(await cache.read({ refreshForSessionReceiver: 'receiver' })).toMatchObject({ status: 'unavailable' });
+        } finally { lifetime.abort(); cache.dispose(); await observation.dispose(); await channel.close(); }
+    });
     it('shares an already-demanded changes feed across new subscribers and catches up after demand resumes', async () => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
