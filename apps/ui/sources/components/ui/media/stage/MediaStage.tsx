@@ -44,7 +44,7 @@ import type { MediaPlayerBodyProps } from '@/components/workspaces/files/file/Me
 import type { PdfViewerProps } from '../pdf/PdfViewerStates';
 import type { PdfZoom } from '../pdf/pdfZoom';
 
-import { ImageWellCheckerboard, useImageBacking } from '../ImageWell';
+import { ImageWellCheckerboard, useImageBacking } from '../imageBacking';
 import { MediaPicture, type MediaPictureSize } from '../MediaPicture';
 import { useFilePreviewSource, type FilePreviewSourceState } from '../useFilePreviewSource';
 import { useWheelZoom } from '../zoom/useWheelZoom';

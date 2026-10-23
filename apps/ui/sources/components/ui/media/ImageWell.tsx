@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
-import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -9,12 +8,10 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { previewUnavailableCard, resolvePreviewUnavailable } from './previewUnavailable';
 import type { ImageBackground } from '@/sync/domains/settings/registry/local/localSettingDefinitions.files';
-import {
-  useLocalSetting,
-  useLocalSettingMutable,
-} from '@/sync/domains/state/storage';
+import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
+import { ImageWellCheckerboard, useImageBacking, type ImageBackingKind } from './imageBacking';
 import { MediaPicture, type MediaPictureSize } from './MediaPicture';
 import { resolveImageWellFit } from './resolveImageWellFit';
 import {
@@ -22,10 +19,8 @@ import {
   type UseFilePreviewSourceInput,
 } from './useFilePreviewSource';
 
-/** One checker square of the transparency board (lab files FV4a: 8 px ink squares). */
-const CHECKER_PX = 8;
 
-export type ImageWellKind = 'image' | 'svg';
+export type ImageWellKind = ImageBackingKind;
 
 export type ImageWellInfo = Readonly<{
   width: number;
@@ -70,28 +65,6 @@ export function useImageWellBackground(
   return [value, set] as const;
 }
 
-/**
- * What sits behind a picture wherever it is shown (well, Media stage): the manual `⋯ > Background`
- * paper, or the ink checkerboard for alpha-capable kinds (lab FV4a; O-P2-1: no automatic paper).
- */
-export function useImageBacking(
-  kind: ImageWellKind,
-  alphaCapable: boolean,
-): Readonly<{ paper: string | null; checkerboard: boolean }> {
-  const { theme } = useUnistyles();
-  const background =
-    useLocalSetting('filesImageBackgroundByKind')[kind] ?? 'checkerboard';
-  return {
-    paper:
-      background === 'light'
-        ? theme.colors.overlay.mediaPaper
-        : background === 'dark'
-          ? theme.colors.overlay.stageImmersive
-          : null,
-    checkerboard: alphaCapable && background === 'checkerboard',
-  };
-}
-
 /** The web picture of held SVG text: one `image/svg+xml` Blob URL, revoked by this hook (P2-I3, I4). */
 function useSvgTextObjectUrl(text: string | null): string | null {
   const [uri, setUri] = React.useState<string | null>(null);
@@ -105,50 +78,6 @@ function useSvgTextObjectUrl(text: string | null): string | null {
     return () => URL.revokeObjectURL(next);
   }, [text]);
   return uri;
-}
-
-/** The transparency board of every image well; image compare layers draw on the same one. */
-export function ImageWellCheckerboard(props: Readonly<{ color: string; testID?: string }>) {
-  return (
-    <Svg
-      {...(props.testID ? { testID: props.testID } : {})}
-      width="100%"
-      height="100%"
-      style={StyleSheet.absoluteFill}
-      pointerEvents="none"
-    >
-      <Defs>
-        <Pattern
-          id="image-well-checker"
-          width={CHECKER_PX * 2}
-          height={CHECKER_PX * 2}
-          patternUnits="userSpaceOnUse"
-        >
-          <Rect
-            width={CHECKER_PX * 2}
-            height={CHECKER_PX * 2}
-            fill={props.color}
-            fillOpacity={0.04}
-          />
-          <Rect
-            width={CHECKER_PX}
-            height={CHECKER_PX}
-            fill={props.color}
-            fillOpacity={0.08}
-          />
-          <Rect
-            x={CHECKER_PX}
-            y={CHECKER_PX}
-            width={CHECKER_PX}
-            height={CHECKER_PX}
-            fill={props.color}
-            fillOpacity={0.08}
-          />
-        </Pattern>
-      </Defs>
-      <Rect width="100%" height="100%" fill="url(#image-well-checker)" />
-    </Svg>
-  );
 }
 
 function ImageWellPicture(

@@ -7,10 +7,8 @@ import {
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import {
-  ImageWell,
-  ImageWellCheckerboard,
-} from '@/components/ui/media/ImageWell';
+import { ImageWell } from '@/components/ui/media/ImageWell';
+import { ImageWellCheckerboard } from '@/components/ui/media/imageBacking';
 import {
   MediaPicture,
   type MediaPictureSize,
