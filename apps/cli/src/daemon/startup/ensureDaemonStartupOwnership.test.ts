@@ -10,6 +10,7 @@ describe('ensureDaemonStartupOwnership', () => {
   const envScope = createEnvKeyScope([
     'HAPPIER_HOME_DIR',
     'HAPPIER_ACTIVE_SERVER_ID',
+    'HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID',
     'HAPPIER_PUBLIC_RELEASE_CHANNEL',
     'HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK',
     'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
@@ -24,11 +25,12 @@ describe('ensureDaemonStartupOwnership', () => {
     vi.resetModules();
   });
 
-  it('fails closed when daemon state is missing but a relay process is still alive', async () => {
+  it('fails closed when daemon state is missing but a relay process has proven current scope', async () => {
     await withTempDir('happier-daemon-startup-process-only-owner-', async (homeDir) => {
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+        HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'cloud',
         HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
         HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
         HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: homeDir,
@@ -42,6 +44,10 @@ describe('ensureDaemonStartupOwnership', () => {
             pid: 4242,
             command: daemonCommand,
             type: 'daemon',
+            daemonOwnershipEnvironmentVariables: {
+              HAPPIER_HOME_DIR: homeDir,
+              HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'cloud',
+            },
           },
         ]),
       }));
@@ -68,17 +74,22 @@ describe('ensureDaemonStartupOwnership', () => {
     });
   });
 
-  it('fails closed instead of force-stopping a state-less relay process when takeover is requested', async () => {
+  it('fails closed instead of force-stopping a state-less relay process with proven current scope when takeover is requested', async () => {
     await withTempDir('happier-daemon-startup-process-only-takeover-', async (homeDir) => {
       const daemonCommand = `${process.execPath} ${join(process.cwd(), 'package-dist/index.mjs')} daemon start-sync`;
       const processOnlyOwner = {
         pid: 4242,
         command: daemonCommand,
         type: 'daemon',
+        daemonOwnershipEnvironmentVariables: {
+          HAPPIER_HOME_DIR: homeDir,
+          HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'cloud',
+        },
       };
       envScope.patch({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+        HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: 'cloud',
         HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
         HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
         HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: homeDir,
