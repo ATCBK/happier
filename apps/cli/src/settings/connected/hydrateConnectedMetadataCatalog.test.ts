@@ -106,3 +106,25 @@ it('does not demand metadata for an Account wake before any consumer requested i
   await refreshDemandedActiveConnectedMetadataCatalog({ token: credentials.token });
   expect(http).not.toHaveBeenCalled();
 });
+
+it('reobserves demanded metadata rows without retained Settings or historical cleanup', async () => {
+  const credentials = publish('metadata-current-demand');
+  const reads: string[] = [];
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path.startsWith('/v1/account/entity-rows/connected-metadata/')) return { status: 200, data: {
+      status: 'deleted', revision: 2 } };
+    return { status: 404, data: {} };
+  });
+  await refreshActiveConnectedMetadataCatalog({ credentials });
+  reads.length = 0;
+  await refreshDemandedActiveConnectedMetadataCatalog({ token: credentials.token });
+  expect(getActiveAccountSettingsSnapshot()?.connectedPresentationCatalog).toMatchObject({ status: 'ready', revision: 2 });
+  expect(getActiveAccountSettingsSnapshot()?.connectedAcknowledgementsCatalog).toMatchObject({ status: 'ready', revision: 2 });
+  expect(reads.filter(path => !path.startsWith('/v1/account/entity-rows/connected-metadata/')
+    && path !== '/v1/account/encryption/currentness')).toEqual([]);
+});

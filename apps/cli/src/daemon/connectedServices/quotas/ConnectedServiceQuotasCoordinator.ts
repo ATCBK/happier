@@ -1,5 +1,8 @@
 import type { ProviderAccountUsageUsageIdentityResolver } from '../accountUsage/hydration';
 import type { ConnectedServiceRefreshCoordinator } from '../refresh/ConnectedServiceRefreshCoordinator';
+import type { ScheduledQualifiedAccountHealth } from '../refresh/ConnectedServiceRefreshCoordinator';
+import { isUsageQuotaNotificationEnabled } from '@happier-dev/protocol/account/settings/usagePacingPreferencesV1';
+import type { AccountSettings } from '@happier-dev/protocol';
 import { logger } from '@/ui/logger';
 import { matchesCurrentQuotaObservationCredential } from './proof/quotaProbeFreshProof';
 import type { SingleFlightLoopSchedule } from '@/daemon/lifecycle/singleFlightIntervalLoop';
@@ -32,6 +35,7 @@ import type {
   ConnectedServiceCredentialSealedResponse,
 } from '@/api/client/connectedServiceCredentialApi';
 import type { StoredCredentials } from '@/persistence';
+import type { RequesterConnectedAccountObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import {
   AccountEncryptionMaterialUnavailableError,
 } from '@/api/client/encryptionKey';
@@ -174,8 +178,9 @@ function quotaObservationProbeAt(input: Readonly<{
   fetchedAt: number;
   staleAfterMs: number;
   resetsAt: readonly (number | null | undefined)[];
+  refreshWhenStale?: boolean;
 }>): number {
-  return Math.min(input.fetchedAt + input.staleAfterMs, ...input.resetsAt.filter(
+  return Math.min(...(input.refreshWhenStale === false ? [] : [input.fetchedAt + input.staleAfterMs]), ...input.resetsAt.filter(
     (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > input.fetchedAt,
   ));
 }
@@ -195,7 +200,7 @@ export type QualifiedConnectedAccountQuotaRuntime = Readonly<{
   }>): QualifiedConnectedAccountPeerOperationTransport;
   establishedRuntimeOwner: Pick<
     QualifiedConnectedAccountEstablishedRuntimeOwner,
-    'invokeWithReceipt' | 'readQuotaSourceSnapshot'
+    'invokeWithReceipt' | 'invokeScheduledWithReceipts' | 'readQuotaSourceSnapshot'
   >;
   listScheduledAccounts(): Promise<
     readonly QualifiedConnectedAccountProfileV4[]
@@ -1094,8 +1099,17 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly runtimeRegistry: ConnectedServiceRuntimeRegistry;
   private readonly qualifiedConnectedAccountRuntime:
     QualifiedConnectedAccountQuotaRuntime | null;
+  private readonly qualifiedHealth: Pick<ConnectedServiceRefreshCoordinator,
+    'prepareScheduledQualifiedHealth' | 'retainScheduledQualifiedHealthAccounts'> | null;
+  private readonly accountSettingsProvider: (() => AccountSettings | null | undefined) | undefined;
   private readonly runtimeAccountIdentities: RuntimeAccountIdentityIndex;
   private readonly failureStateByBindingKey = new Map<string, FailureState>();
+  private readonly qualifiedQuotaScheduleByKey = new Map<string, Readonly<{
+    basis: string; at: number | null; recordId: string | null;
+    credentialRevision: QualifiedConnectedAccountProfileV4['credentialRevision'];
+    configurationRevision: QualifiedConnectedAccountProfileV4['configurationRevision'];
+    providerAccountId: string | null; providerOrganizationId: string | null;
+  }>>();
   private readonly groupSwitchCheckAtByKey = new Map<string, number>();
   private readonly sameAccountFanoutAtByKey = new Map<string, number>();
   private readonly liveIdentityProbeUnsupportedSessionIds = new Set<string>();
@@ -1109,8 +1123,14 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly legacyDiscoveredProfileIdsByServiceId = new Map<ConnectedServiceId, ReadonlySet<string>>();
   private lastDiscoveryAt = 0;
 
-  public invalidateInventory(): void {
+  public invalidateInventory(event?: RequesterConnectedAccountObservation): void {
     this.lastDiscoveryAt = 0;
+    for (const [key, schedule] of this.qualifiedQuotaScheduleByKey) {
+      if (event?.resetQuotaSchedule || (event?.quotaRefreshRecordIds?.length
+        && (schedule.recordId === null || event.quotaRefreshRecordIds.includes(schedule.recordId)))) {
+        this.qualifiedQuotaScheduleByKey.set(key, { ...schedule, at: -Infinity });
+      }
+    }
   }
 
   public constructor(params: Readonly<{
@@ -1171,8 +1191,13 @@ export class ConnectedServiceQuotasCoordinator {
     runtimeRegistry?: ConnectedServiceRuntimeRegistry;
     qualifiedConnectedAccountRuntime?:
       QualifiedConnectedAccountQuotaRuntime | null;
+    qualifiedHealth?: Pick<ConnectedServiceRefreshCoordinator,
+      'prepareScheduledQualifiedHealth' | 'retainScheduledQualifiedHealthAccounts'> | null;
+    accountSettingsProvider?: () => AccountSettings | null | undefined;
   }>) {
     this.api = params.api;
+    this.qualifiedHealth = params.qualifiedHealth ?? null;
+    this.accountSettingsProvider = params.accountSettingsProvider;
     this.credentials = params.credentials;
     this.now = params.now;
     this.randomBytes = params.randomBytes;
@@ -4653,6 +4678,7 @@ export class ConnectedServiceQuotasCoordinator {
     afterConfirmedReset?: boolean;
     expectedCredentialRevision?: string;
     signal?: AbortSignal;
+    scheduledHealth?: Readonly<{ work: ScheduledQualifiedAccountHealth; dispatched(): void }>;
   }>) {
     const runtime = this.qualifiedConnectedAccountRuntime;
     if (!runtime) return null;
@@ -4698,17 +4724,31 @@ export class ConnectedServiceQuotasCoordinator {
         signal.addEventListener('abort', abortListener, { once: true });
         if (signal.aborted) abortListener();
       });
-      const pending = runtime.establishedRuntimeOwner.invokeWithReceipt({
-        account: input.profile.ref, operation: { kind: 'quota' as const },
+      const quotaRequest = {
         expectedCredentialRevision: input.expectedCredentialRevision, signal,
-        beforeInvoke: async (basis) => {
+        beforeInvoke: async (basis: Pick<QualifiedConnectedAccountEstablishedInvocationBasis,
+          'credentialRevision' | 'credentialConfigurationRevision' | 'isCurrent'>) => {
           signal?.throwIfAborted();
           if (!previousSnapshot && !await this.persistQualifiedConnectedAccountQuota({
             accountMode: input.accountMode, profile: input.profile, snapshot: empty, basis,
           })) throw new Error('Qualified quota source could not be initialized');
           admittedBasis = basis;
         },
-      });
+      };
+      const pending = input.scheduledHealth ? (async () => {
+        input.scheduledHealth!.dispatched();
+        const receipts = await runtime.establishedRuntimeOwner.invokeScheduledWithReceipts({
+          account: input.profile.ref, status: {}, quota: quotaRequest,
+        });
+        if (receipts.status) {
+          try { await input.scheduledHealth!.work.settle(receipts.status); }
+          catch { logger.warn('[DAEMON RUN] Qualified Connected Account health deadline failed'); }
+        }
+        if (!receipts.quota) throw new Error('Scheduled quota invocation did not return its receipt');
+        if (receipts.quota.status === 'rejected') throw receipts.quota.reason;
+        return receipts.quota.value;
+      })() : runtime.establishedRuntimeOwner.invokeWithReceipt({ account: input.profile.ref,
+        operation: { kind: 'quota' as const }, ...quotaRequest });
       const invocation = await (signal ? Promise.race([pending, aborted]) : pending);
       signal?.throwIfAborted();
       if (invocation.result && invocation.basis.isCurrent()) this.failureStateByBindingKey.delete(key);
@@ -4913,6 +4953,7 @@ export class ConnectedServiceQuotasCoordinator {
       input.scheduleAt(input.now + this.failureBackoffMinMs);
       return;
     }
+    this.qualifiedHealth?.retainScheduledQualifiedHealthAccounts(profiles);
 
     // Canonical qualified target view: current session targets grouped deterministically by
     // qualified service + group. The legacy scalar projection is intentionally not consulted
@@ -4994,14 +5035,67 @@ export class ConnectedServiceQuotasCoordinator {
     }
 
     const switchEvaluationTargets: ActiveGroupQuotaSwitchTarget[] = [];
+    const settings = this.accountSettingsProvider?.();
+    const preferences = settings?.usageQuotaNotificationsV1 ?? null;
+    // Unknown Settings preserve existing observation behavior. Only a known
+    // opt-out with no live group consumer may stop freshness-driven acquisition.
+    const usageNoticeDemand = preferences === null || (['pace', 'depletion', 'almost_out', 'reset', 'ending', 'unused', 'credit_expiry'] as const)
+      .some(kind => isUsageQuotaNotificationEnabled(preferences, kind));
+    const currentKeys = new Set(profiles.map(profile => `qualified:${qualifiedAccountQuotaKey(profile.ref)}`));
+    for (const key of this.qualifiedQuotaScheduleByKey.keys()) {
+      if (!currentKeys.has(key)) this.qualifiedQuotaScheduleByKey.delete(key);
+    }
     for (const listedProfile of profiles) {
       let profile = listedProfile;
+      const health = this.qualifiedHealth?.prepareScheduledQualifiedHealth(profile, input.now);
+      let healthDispatched = false;
+      const settleHealth = async () => {
+        if (health?.due && !healthDispatched) {
+          healthDispatched = true;
+          try {
+            const receipt = await runtime.establishedRuntimeOwner.invokeScheduledWithReceipts({ account: profile.ref, status: {} });
+            if (receipt.status) await health.settle(receipt.status);
+          } catch { logger.warn('[DAEMON RUN] Qualified Connected Account health deadline failed'); }
+        }
+        const deadline = health?.nextDeadline();
+        if (deadline !== null && deadline !== undefined) input.scheduleAt(deadline);
+      };
       if (!isConnectedServiceCredentialHealthStatusUsable(profile.status)) {
+        await settleHealth();
         continue;
       }
       const key =
         `qualified:${qualifiedAccountQuotaKey(profile.ref)}`;
+      const refreshWhenStale = usageNoticeDemand
+        || (groupContextsByAccountKey.get(qualifiedAccountQuotaKey(profile.ref))?.length ?? 0) > 0;
+      const basis = JSON.stringify([profile.credentialRevision, profile.configurationRevision,
+        profile.authenticationModeId, profile.status, profile.kind, profile.expiresAt,
+        profile.providerIdentity?.accountId, profile.providerIdentity?.organizationId,
+        groupContextsByAccountKey.get(qualifiedAccountQuotaKey(profile.ref)) ?? [],
+        this.shouldRunQualifiedQuotaOperation(profile, 'quota_read'),
+        this.shouldRunQualifiedQuotaOperation(profile, 'quota_poll'), refreshWhenStale]);
+      let schedule = this.qualifiedQuotaScheduleByKey.get(key);
+      if (!schedule || schedule.basis !== basis) {
+        const identity = { credentialRevision: profile.credentialRevision, configurationRevision: profile.configurationRevision,
+          providerAccountId: profile.providerIdentity?.accountId ?? null,
+          providerOrganizationId: profile.providerIdentity?.organizationId ?? null };
+        if (schedule && (schedule.credentialRevision !== identity.credentialRevision
+          || schedule.configurationRevision !== identity.configurationRevision
+          || schedule.providerAccountId !== identity.providerAccountId
+          || schedule.providerOrganizationId !== identity.providerOrganizationId)
+          && !this.failureStateByBindingKey.get(key)?.providerDirected) {
+          this.failureStateByBindingKey.delete(key);
+        }
+        schedule = { basis, ...identity, at: -Infinity, recordId: null };
+        this.qualifiedQuotaScheduleByKey.set(key, schedule);
+      }
+      if (schedule.at === null || schedule.at > input.now) {
+        if (schedule.at !== null) input.scheduleAt(schedule.at);
+        await settleHealth();
+        continue;
+      }
       let nextProbeAt: number | null = null;
+      let recordId = schedule.recordId;
       try {
         const usageIdentity = await this.qualifiedConnectedAccountRuntime?.resolveUsageIdentity?.(profile.ref.service);
         if (usageIdentity) this.retainQualifiedAccountUsageContext(profile, usageIdentity);
@@ -5017,10 +5111,10 @@ export class ConnectedServiceQuotasCoordinator {
           continue;
         }
         const canProbe = this.shouldRunQualifiedQuotaOperation(profile, 'quota_poll');
-        if (canProbe) nextProbeAt = input.now + this.probeIntervalMs;
         const { response: existing, snapshot: existingSnapshot, localSnapshot } = await this.readQualifiedAccountQuota(profile);
+        recordId = existing?.sourceResolution.recordId ?? recordId;
         const localProbeAt = localSnapshot ? quotaObservationProbeAt({ fetchedAt: localSnapshot.fetchedAt,
-          staleAfterMs: localSnapshot.staleAfterMs, resetsAt: localSnapshot.meters.map(meter => meter.resetsAt) }) : null;
+          staleAfterMs: localSnapshot.staleAfterMs, resetsAt: localSnapshot.meters.map(meter => meter.resetsAt), refreshWhenStale }) : null;
         if (localSnapshot && localSnapshot.fetchedAt > 0 && localProbeAt !== null && localProbeAt > input.now
           && isConnectedServiceQuotaObservationFresh({ observedAtMs: localSnapshot.fetchedAt, nowMs: input.now,
             maxAgeMs: localSnapshot.staleAfterMs })
@@ -5032,6 +5126,7 @@ export class ConnectedServiceQuotasCoordinator {
         const existingProbeAt = existing && existingSnapshot ? quotaObservationProbeAt({
           fetchedAt: existing.metadata.fetchedAt, staleAfterMs: existing.metadata.staleAfterMs,
           resetsAt: existingSnapshot.meters.map(meter => meter.resetsAt),
+          refreshWhenStale,
         }) : null;
         if (
           existing
@@ -5079,6 +5174,7 @@ export class ConnectedServiceQuotasCoordinator {
         const invocation =
           await this.invokeQualifiedAccountQuota({
             profile, accountMode: input.accountMode,
+            ...(health?.due ? { scheduledHealth: { work: health, dispatched: () => { healthDispatched = true; } } } : {}),
             previousSnapshot: existingSnapshot ? buildProviderAccountUsageSnapshotFromQualifiedQuotaRow({
               ref: profile.ref, quota: existingSnapshot,
             }) : null,
@@ -5107,8 +5203,9 @@ export class ConnectedServiceQuotasCoordinator {
           ...incomingSnapshot,
           ...(subscription ? { subscription } : {}),
         };
+        recordId = snapshot.recordId;
         const observedProbeAt = quotaObservationProbeAt({ fetchedAt: snapshot.observedAtMs,
-          staleAfterMs: snapshot.staleAfterMs, resetsAt: snapshot.meters.map(meter => meter.resetsAt) });
+          staleAfterMs: snapshot.staleAfterMs, resetsAt: snapshot.meters.map(meter => meter.resetsAt), refreshWhenStale });
         if (observedProbeAt > input.now) nextProbeAt = observedProbeAt;
         const written = await this.persistQualifiedConnectedAccountQuota({
           accountMode: input.accountMode,
@@ -5134,7 +5231,13 @@ export class ConnectedServiceQuotasCoordinator {
           this.applyFailureBackoff({ now: failedAt, key, error });
         }
       } finally {
+        await settleHealth();
         const deadline = this.failureStateByBindingKey.get(key)?.nextAllowedAt ?? nextProbeAt;
+        // A Refresh arriving during the async probe replaces this schedule. Do not
+        // overwrite that pending demand with the completed probe's deadline.
+        if (this.qualifiedQuotaScheduleByKey.get(key) === schedule) {
+          this.qualifiedQuotaScheduleByKey.set(key, { ...schedule, at: deadline, recordId });
+        }
         if (deadline !== null) input.scheduleAt(deadline);
       }
     }

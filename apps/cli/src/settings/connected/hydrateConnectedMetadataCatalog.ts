@@ -10,6 +10,7 @@ import {
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; serverHttpBaseUrl?: string;
+  readMode?: 'admitted';
   authorizeRequest?: Parameters<(typeof import('./connectedMetadataStore'))['createCliConnectedMetadataStore']>[0]['authorizeRequest'];
   isCredentialCurrent?: () => boolean | Promise<boolean> }>;
 type CapturedAccount = Readonly<{ scopeKey: string; lifetimeToken: number }>;
@@ -48,6 +49,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
   let work!: Promise<ConnectedMetadataCatalogV1>;
   work = (async () => {
     const uncancelledInput = { credentials: input.credentials, ...(input.serverHttpBaseUrl ? { serverHttpBaseUrl: input.serverHttpBaseUrl } : {}),
+      ...(input.readMode ? { readMode: input.readMode } : {}),
       ...(input.authorizeRequest ? { authorizeRequest: input.authorizeRequest } : {}),
       ...(input.isCredentialCurrent ? { isCredentialCurrent: input.isCredentialCurrent } : {}) };
     let requestInput: RefreshInput = afterChange ? uncancelledInput : input;
@@ -56,7 +58,8 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
       let catalog: ConnectedMetadataCatalogV1;
       try {
         const { createCliConnectedMetadataStore } = await import('./connectedMetadataStore');
-        catalog = await createCliConnectedMetadataStore(requestInput).readCatalog(ready => {
+        const store = createCliConnectedMetadataStore(requestInput);
+        catalog = requestInput.readMode === 'admitted' ? await store.readAdmittedCatalog() : await store.readCatalog(ready => {
           if (current() && !refreshAfterInFlight.has(key)) commit(ready);
         });
       } catch (error) {
@@ -99,5 +102,7 @@ export async function refreshDemandedActiveConnectedMetadataCatalog(input: Reado
   if (!credentials || credentials.token !== input.token) return;
   input.signal?.throwIfAborted();
   await refreshActiveConnectedMetadataCatalogAfterChange({ credentials, scopeKey: active.scopeKey, lifetimeToken,
+    ...(active.connectedPresentationCatalog?.status === 'ready' && active.connectedAcknowledgementsCatalog?.status === 'ready'
+      ? { readMode: 'admitted' } : {}),
     ...(input.serverHttpBaseUrl ? { serverHttpBaseUrl: input.serverHttpBaseUrl } : {}) });
 }

@@ -135,8 +135,10 @@ export async function readActiveConnectedAccountCatalog(input: Parameters<typeof
   if (current?.scopeKey !== expectedScope) return { status: 'unavailable' as const, reason: 'scope-retired' as const };
   // Explicit Actions can follow another client's write before its Account
   // change hint reaches this daemon (or a captured invocation snapshot).
-  // Reuse the refresh owner, including its pending-read reobservation.
-  return refreshActiveConnectedAccountCatalog(input, true);
+  // Reobserve an active destination without repeating source/history maintenance;
+  // initial or unavailable destinations still use the same activation owner.
+  return refreshActiveConnectedAccountCatalog({ ...input,
+    ...(readConnectedAccountCatalogFromSnapshot(current, input.key)?.status === 'ready' ? { readMode: 'admitted' } : {}) }, true);
 }
 
 /** Existing Account observer only refreshes domains already demanded by a live consumer. */
@@ -146,8 +148,9 @@ export async function refreshDemandedActiveConnectedAccountCatalogs(input: Reado
     ...(snapshot?.connectedConfigurationCatalog ? ['configurations' as const] : []),
     ...(snapshot?.connectedPurposeCatalog ? ['purposes' as const] : []),
   ];
-  if (keys.length === 0) return;
+  if (!snapshot || keys.length === 0) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await Promise.all(keys.map(key => refreshActiveConnectedAccountCatalog({ ...input, credentials, key }, true)));
+  await Promise.all(keys.map(key => refreshActiveConnectedAccountCatalog({ ...input, credentials, key,
+    ...(readConnectedAccountCatalogFromSnapshot(snapshot, key)?.status === 'ready' ? { readMode: 'admitted' } : {}) }, true)));
 }

@@ -41,6 +41,7 @@ import {
   type QualifiedConnectedAccountRefreshRuntime,
 } from './ConnectedServiceRefreshCoordinator';
 import { ConnectedServiceQuotasCoordinator } from '../quotas/ConnectedServiceQuotasCoordinator';
+import { createBuiltInQualifiedRefreshHarness } from './ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit';
 
 const service = Object.freeze({
   pluginId: 'happier.agent.codex',
@@ -82,6 +83,19 @@ afterEach(async () => {
 });
 
 describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () => {
+  it('parks a healthy bound V4 OAuth account without expiry instead of polling its credential', async () => {
+    const harness = await createBuiltInQualifiedRefreshHarness();
+    createdRegistries.push(harness);
+    harness.coordinator.registerSpawnTarget({ pid: 123, agentId: 'codex',
+      materializationKey: 'deadline-bound', connectedServicesBindingsRaw: { v: 1,
+        bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'work' } } } });
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
+    const initialReads = harness.readCredential.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
+    expect(harness.readCredential).toHaveBeenCalledTimes(initialReads);
+  });
+
   it('rejects a failed revision that becomes stale while the qualified status probe awaits', async () => {
     const credentials: Credentials = {
       token: 'happier-token',
@@ -212,6 +226,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
 
   it.each([
     ['happier.agent.codex', 'openai-codex', 'quota', 200],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_metadata_retry', 503],
+    ['happier.agent.codex', 'openai-codex', 'scheduled_bound_metadata_retry', 503],
     ['happier.agent.claude', 'claude-subscription', 'scheduled', 200],
     ['happier.agent.claude', 'claude-subscription', 'enrich_known_private', 200],
     ['happier.agent.claude', 'claude-subscription', 'enrich_unknown_public', 200],
@@ -246,7 +262,8 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
     const foregroundRead = new Promise<void>((resolve) => { foregroundCredentialRead = resolve; });
     let foregroundStarted = false;
     let clock = now;
-    let profileStatus: QualifiedConnectedAccountProfileV4['status'] = 'refresh_failed_retryable';
+    let profileStatus: QualifiedConnectedAccountProfileV4['status'] = entryPoint.endsWith('metadata_retry')
+      ? 'connected' : 'refresh_failed_retryable';
     let accountRuntimeCurrent = true;
     const effectAdmissions: boolean[] = [];
     const tokenExchangeRequests = () => vi.mocked(fetch).mock.calls.filter(([request, init]) => {
@@ -509,6 +526,43 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       },
     });
 
+    if (entryPoint.endsWith('metadata_retry')) {
+      const bound = entryPoint === 'scheduled_bound_metadata_retry';
+      if (bound) coordinator.registerSpawnTarget({
+        pid: 123, agentId: 'codex', materializationKey: 'metadata-retry',
+        connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {
+          'openai-codex': { source: 'connected', profileId: 'work' },
+        } },
+      });
+      const failedRefresh = async () => {
+        if (bound) await expect(coordinator.tickOnce()).rejects.toMatchObject({
+          errors: [expect.objectContaining({ message: expect.stringContaining('Connected services refresh failed') })],
+        });
+        else expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
+      };
+      await failedRefresh();
+      expect(profileStatus).toBe('refresh_failed_retryable');
+      expect(tokenExchangeRequests()).toHaveLength(1);
+      clock += 1;
+      // The failed refresh's own health write changes listing metadata, not
+      // credential authority, and cannot shorten the existing recovery delay.
+      expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 59_999 });
+      expect(tokenExchangeRequests()).toHaveLength(1);
+      profileStatus = 'connected';
+      expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 59_999 });
+      expect(tokenExchangeRequests()).toHaveLength(1);
+      clock += 59_999;
+      await failedRefresh();
+      expect(tokenExchangeRequests()).toHaveLength(2);
+      // Reconnection replaces the admitted credential rather than inheriting
+      // the old credential's health failure suppression.
+      qualifiedRevision = secondRevision;
+      profileStatus = 'connected';
+      await failedRefresh();
+      expect(tokenExchangeRequests()).toHaveLength(3);
+      return;
+    }
+
     if (contextEnrichment) {
       const before = parseQualifiedConnectedAccountCredentialPlaintextV1({
         ref: account, authenticationModeId: 'oauth', metadata: qualifiedMetadata,
@@ -541,7 +595,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       expect(tokenExchangeRequests()).toHaveLength(1);
       clock += 60_001;
       if (entryPoint === 'scheduled_rejected_retry') {
-        await coordinator.tickOnce();
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
       } else {
         await expect(coordinator.refreshConnectedServiceCredentialForQuota({
           serviceId, profileId: 'work', force: true,
@@ -1021,7 +1075,7 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       },
     });
 
-    await expect(coordinator.tickOnce()).resolves.toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    await expect(coordinator.tickOnce()).resolves.toEqual({ nextAutomaticRunAfterMs: null });
 
     expect(mutateCredential).toHaveBeenCalledWith(expect.objectContaining({
       mutation: expect.objectContaining({

@@ -1983,7 +1983,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       materializationKey: 'session-claude',
     });
 
-    await expect(coordinator.tickOnce()).resolves.toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    await expect(coordinator.tickOnce()).resolves.toEqual({ nextAutomaticRunAfterMs: 3_540_000 });
 
     expect(onAuthUpdated).toHaveBeenCalledWith(expect.objectContaining({
       binding: { serviceId: 'claude-subscription', profileId: 'work' },
@@ -4897,8 +4897,10 @@ describe('ConnectedServiceRefreshCoordinator', () => {
 
     expect(forcedResult.status).toBe('refreshed');
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
-    // Current status reads credential material locally, not a fabricated provider GET.
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'GET')).toHaveLength(0);
+    // Status is local. The real Claude token exchange performs one profile
+    // enrichment because this boundary response omits organization metadata.
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'GET').map(([request]) => String(request)))
+      .toEqual(['https://api.anthropic.com/api/oauth/profile']);
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
     expect(materializerCalls).toBe(1);
     expect(onAuthUpdated).toHaveBeenCalledTimes(1);

@@ -42,6 +42,7 @@ afterEach(async () => {
 async function createHarness(input: Readonly<{
   clock?: () => number;
   onCredentialRead?: () => void;
+  profile?: () => Partial<QualifiedConnectedAccountProfileV4>;
   noScheduledAccounts?: boolean;
   retireRegistry?: boolean;
   pluginEnabled?: boolean;
@@ -161,6 +162,7 @@ async function createHarness(input: Readonly<{
               expiresAt: null,
               displayName: 'work',
               scopes: [],
+              ...input.profile?.(),
             }],
             acquireRefreshLease: vi.fn(async () => ({
               acquired: false,
@@ -189,40 +191,40 @@ async function createHarness(input: Readonly<{
 }
 
 describe('ConnectedServiceRefreshCoordinator qualified status integration', () => {
-  it('starts the existing health interval after a slow credential observation settles, including inventory wakes', async () => {
+  it('parks healthy non-expiring credentials across unrelated wakes and rechecks a replaced revision', async () => {
     let clock = now;
+    let revision = credentialRevision;
     const harness = await createHarness({ clock: () => clock,
+      profile: () => ({ credentialRevision: revision }),
       // Advance the real clock boundary while the credential HTTP response is in flight.
       onCredentialRead: () => { clock = Math.max(clock, now + 40_000); } });
-    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
     const reads = harness.readQualifiedCredential.mock.calls.length;
     expect(reads).toBeGreaterThan(0);
     for (let wake = 0; wake < 3; wake++) {
       harness.coordinator.registerSpawnTarget({ pid: 120 + wake, agentId: 'codex',
         materializationKey: `inventory-wake-${wake}`, connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {} } });
-      expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+      expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
     }
-    clock += 29_999;
-    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+    clock += 300_000;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
     expect(harness.readQualifiedCredential).toHaveBeenCalledTimes(reads);
-    clock += 1;
-    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    revision = 'csr_bcdefghijklmnopqrstuvw';
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
     expect(harness.readQualifiedCredential.mock.calls.length).toBeGreaterThan(reads);
     expect(harness.mutateCredentialHealth).toHaveBeenCalledTimes(2);
   });
 
-  it('parks with no scheduled work and preserves actual health-probe deadlines for null-expiry accounts', async () => {
+  it('schedules the real OAuth refresh window rather than a health polling interval', async () => {
     const empty = await createHarness({ noScheduledAccounts: true });
     expect(await empty.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
     let clock = now;
-    const harness = await createHarness({ clock: () => clock });
-    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
-    clock += 29_999;
+    const harness = await createHarness({ clock: () => clock,
+      profile: () => ({ kind: 'oauth', expiresAt: now + 360_000 }) });
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 300_000 });
+    clock += 299_999;
     expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
     expect(harness.mutateCredentialHealth).toHaveBeenCalledOnce();
-    clock += 1;
-    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
-    expect(harness.mutateCredentialHealth).toHaveBeenCalledTimes(2);
   });
 
   it('returns the existing credential-health recovery deadline when a null-expiry account is unavailable', async () => {
@@ -240,6 +242,18 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
     expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
     expect(harness.readQualifiedCredential).toHaveBeenCalledTimes(reads);
     expect(harness.mutateCredentialHealth).not.toHaveBeenCalled();
+  });
+  it('rearms a replaced credential without inheriting the old revision recovery deadline', async () => {
+    let revision = credentialRevision;
+    const harness = await createHarness({ credentialAvailable: false,
+      profile: () => ({ credentialRevision: revision }) });
+    await expect(harness.coordinator.tickOnce()).rejects.toBeInstanceOf(AggregateError);
+    const reads = harness.readQualifiedCredential.mock.calls.length;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
+    expect(harness.readQualifiedCredential).toHaveBeenCalledTimes(reads);
+    revision = 'csr_bcdefghijklmnopqrstuvw';
+    await expect(harness.coordinator.tickOnce()).rejects.toBeInstanceOf(AggregateError);
+    expect(harness.readQualifiedCredential.mock.calls.length).toBeGreaterThan(reads);
   });
   it('runs a real current plugin status leaf from the existing scheduled trigger and settles exact-revision health', async () => {
     const harness = await createHarness({});

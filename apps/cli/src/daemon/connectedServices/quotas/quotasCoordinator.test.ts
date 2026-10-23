@@ -33,6 +33,7 @@ import {
   projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4,
   QualifiedConnectedAccountCredentialSnapshotV4Schema,
   QualifiedProviderAccountUsageWriteV4Schema,
+  QualifiedConnectedAccountGroupV4Schema,
   sealAccountScopedBlobCiphertext,
   sealProviderAccountUsageSnapshot,
   sealQualifiedConnectedAccountContentEnvelope,
@@ -97,6 +98,8 @@ import {
 } from '../accountUsage/fromConnectedServiceQuotaObservation';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, selectConnectedServiceAuthGroupCandidate } from '../accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
+import { createDaemonConnectedAccountPurposeBindingRuntime } from '../purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { projectProviderAccountUsageSnapshotToAuthGroupRuntimeState } from '../accountGroups/quotas/projection';
 import { ConnectedServiceAuthGroupSwitchCoordinator, InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry, type ConnectedServiceAuthGroupSwitchState } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import { buildQualifiedConnectedAccountAuthGroupSwitchState } from '../accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
@@ -945,6 +948,8 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     await coordinator.tickOnce();
     expect(await readFile(fixture.marker, 'utf8').catch(() => '')).toBe(attemptsWhileUnavailable);
     currentToken = 'access-b';
+    // A real credential replacement advances the listed credential revision.
+    profile.credentialRevision = 'csr_bcdefghijklmnopqrstuvw';
     now += 1_000;
     await coordinator.tickOnce();
     expect(runtimeQuotaSnapshots.getSnapshot({ serviceId: local.serviceId, profileId: 'account-a' })).toBeNull();
@@ -1752,7 +1757,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     expect(loadQuota).not.toHaveBeenCalled();
   });
 
-  it.each(['persistence_timeout', 'persistence_unchanged_plain', 'persistence_unchanged_e2ee', 'deadline_no_quota', 'deadline_fresh', 'deadline_reset', 'usage_notice_requester', 'settlement_init_plain', 'settlement_init_e2ee', 'settlement_init_existing', 'settlement_init_no_quota', 'settlement_init_stale', 'settlement_init_failed', 'quota_error', 'quota_error_cold', 'quota_family', 'unusable_spare', 'enumerated', 'enumerated_no_expiry', 'aggregate', 'aggregate_timeout', 'aggregate_network', 'read_failure', 'not_available', 'nothing_to_reset', 'already_consumed', 'manual_selected', 'manual_next', 'manual_not_available', 'manual_missing', 'manual_codex_alias', 'manual_claude_alias', 'manual_stale_basis', 'manual_persistence_failed', 'discovery_inventory', 'discovery_inventory_e2ee', 'discovery_malformed', 'discovery_unavailable', 'discovery_no_facet', 'automatic_target_then_manual', 'automatic_without_context_then_manual', 'automatic_pending_then_manual', 'automatic_pending_then_target', 'manual_distinct', 'manual_same_selector', 'manual_aggregate_selected', 'manual_known_no_effect_error', 'manual_unknown_error', 'manual_predecessor_error', 'manual_reset_after_quota_error', 'manual_reset_after_provider_backoff', 'quota_future', 'quota_refresh_marker', 'quota_all_unavailable', 'quota_profile_separator', 'quota_data_key', 'quota_no_provider_identity', 'quota_timeout_configured', 'quota_timeout_absent', 'quota_stale_basis', 'quota_error_network', 'quota_error_refresh_marker', 'quota_inventory_retry'] as const)('schedules a qualified account through the plugin quota leaf and canonical V4 usage writer (%s recovery)', async (recoveryMode) => {
+  it.each(['deadline_idle', 'deadline_notice', 'deadline_unknown', 'deadline_active', 'persistence_timeout', 'persistence_unchanged_plain', 'persistence_unchanged_e2ee', 'deadline_no_quota', 'deadline_fresh', 'deadline_reset', 'usage_notice_requester', 'settlement_init_plain', 'settlement_init_e2ee', 'settlement_init_existing', 'settlement_init_no_quota', 'settlement_init_stale', 'settlement_init_failed', 'quota_error', 'quota_error_cold', 'quota_family', 'unusable_spare', 'enumerated', 'enumerated_no_expiry', 'aggregate', 'aggregate_timeout', 'aggregate_network', 'read_failure', 'not_available', 'nothing_to_reset', 'already_consumed', 'manual_selected', 'manual_next', 'manual_not_available', 'manual_missing', 'manual_codex_alias', 'manual_claude_alias', 'manual_stale_basis', 'manual_persistence_failed', 'discovery_inventory', 'discovery_inventory_e2ee', 'discovery_malformed', 'discovery_unavailable', 'discovery_no_facet', 'automatic_target_then_manual', 'automatic_without_context_then_manual', 'automatic_pending_then_manual', 'automatic_pending_then_target', 'manual_distinct', 'manual_same_selector', 'manual_aggregate_selected', 'manual_known_no_effect_error', 'manual_unknown_error', 'manual_predecessor_error', 'manual_reset_after_quota_error', 'manual_reset_after_provider_backoff', 'quota_future', 'quota_refresh_marker', 'quota_all_unavailable', 'quota_profile_separator', 'quota_data_key', 'quota_no_provider_identity', 'quota_timeout_configured', 'quota_timeout_absent', 'quota_stale_basis', 'quota_error_network', 'quota_error_refresh_marker', 'quota_inventory_retry'] as const)('schedules a qualified account through the plugin quota leaf and canonical V4 usage writer (%s recovery)', async (recoveryMode) => {
     let now = 1_000_000;
     const service = recoveryMode === 'manual_codex_alias'
       ? { pluginId: 'happier.agent.codex', localId: 'openai-codex' }
@@ -1917,7 +1922,8 @@ describe('ConnectedServiceQuotasCoordinator', () => {
               ${recoveryMode === 'quota_family' ? "providerLimitId: 'codex_spark'," : ''}
               used: ${recoveryMode.startsWith('persistence_unchanged_') ? 'quotaReadCount > 11 ? 30 : 25' : recoveryMode === 'usage_notice_requester' ? 'quotaReadCount === 1 ? 40 : 70' : 'consumed ? 0 : 25'},
               remaining: ${recoveryMode.startsWith('persistence_unchanged_') ? 'quotaReadCount > 11 ? 70 : 75' : recoveryMode === 'usage_notice_requester' ? 'quotaReadCount === 1 ? 60 : 30' : 'consumed ? 100 : 75'},
-              resetsAtMs: ${recoveryMode === 'usage_notice_requester' ? '1000000, windowDurationMs: 1000000' : now + 60_000}
+              resetsAtMs: ${recoveryMode === 'usage_notice_requester' ? '1000000, windowDurationMs: 1000000'
+                : ['deadline_idle', 'deadline_notice', 'deadline_unknown', 'deadline_active'].includes(recoveryMode) ? now + 3_600_000 : now + 60_000}
             }]
           };
         },`}
@@ -2090,6 +2096,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       randomBytes: (length) => new Uint8Array(length).fill(3),
     }) : null;
     let committedSourceWrite: QualifiedProviderAccountUsageWriteArgs['write'] | null = null;
+    let manualRefreshRequested = false;
     const readQuota = vi.fn(async () => {
       const committed = recoveryMode.startsWith('persistence_unchanged_') ? committedSourceWrite : null;
       let snapshot = committed?.snapshot ?? previous;
@@ -2118,7 +2125,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         }),
       },
       metadata: { fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs, status: 'ok' as const,
-        ...(recoveryMode === 'quota_refresh_marker' || recoveryMode === 'quota_error_refresh_marker' ? { refreshRequestedAt: now } : {}),
+        ...(manualRefreshRequested || recoveryMode === 'quota_refresh_marker' || recoveryMode === 'quota_error_refresh_marker' ? { refreshRequestedAt: now } : {}),
       },
     });
     });
@@ -2130,17 +2137,30 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       committedSourceWrite = QualifiedProviderAccountUsageWriteV4Schema.parse(params.write);
       return { success: true as const };
     });
+    const activeGroup = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: { service, groupId: 'group-1' },
+      incarnation: 'active-group-lifetime', displayName: 'Active group', activeConnectedAccountId: profile.ref.accountId,
+      generation: 4, runtimeStateRevision: 0, policy: DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+      state: {}, members: [{ v: 1, connectedAccountId: profile.ref.accountId, priority: 0, enabled: true,
+        state: {}, createdAt: now, updatedAt: now }], createdAt: now, updatedAt: now });
+    const groupTargetController = recoveryMode === 'deadline_active' ? createPluginReloadController({ happyHomeDir }) : null;
+    const groupTargets = groupTargetController ? createDaemonConnectedAccountPurposeBindingRuntime({
+      establishedRuntimeOwner, reloadController: groupTargetController, resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+      // The canonical group-target owner consumes its HTTP response ports; no
+      // group-membership or runtime target decision is mocked.
+      qualifiedApi: { listAccounts: async () => ({ service, accounts: [profile] }),
+        listGroups: async () => ({ groups: [activeGroup] }), readGroup: async () => activeGroup },
+    }) : null;
     const qualifiedConnectedAccountRuntime = {
       resolvePeerClass: () => 'advertised_v4' as const,
       establishedRuntimeOwner,
       listScheduledAccounts,
       listAccounts: async () => [profile],
-      listGroupQuotaTargets: async () => [
+      listGroupQuotaTargets: groupTargets?.listGroupQuotaTargets ?? (async () => [
         { profile, groupGeneration: 4 },
         ...(recoveryMode === 'unusable_spare' ? [{ profile: {
           ...profile, ref: { ...profile.ref, accountId: 'dead' }, status: 'needs_reauth' as const,
         }, groupGeneration: 4 }] : []),
-      ],
+      ]),
       readQuota,
       writeProviderAccountUsage,
     } as unknown as QualifiedConnectedAccountQuotaRuntime;
@@ -2164,6 +2184,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       },
     });
     const quotaDiagnostics: unknown[] = [];
+    let demandSettings = accountSettingsParse({ usageQuotaNotificationsV1: recoveryMode === 'deadline_notice' ? { pace: true } : {} });
     const coordinator = new ConnectedServiceQuotasCoordinator({
       api,
       credentials,
@@ -2173,6 +2194,8 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       discoveryEnabled: false,
       accountUsageStore,
       qualifiedConnectedAccountRuntime,
+      ...(['deadline_idle', 'deadline_notice', 'deadline_unknown', 'deadline_active', 'quota_error'].includes(recoveryMode)
+        ? { accountSettingsProvider: () => recoveryMode === 'deadline_unknown' ? null : demandSettings } : {}),
       recordDiagnostic: (event) => { quotaDiagnostics.push(event); },
       quotaPersistenceMinFreshnessMs: 60_000,
       failureBackoffJitterPct: recoveryMode === 'quota_error_network' ? 0 : undefined,
@@ -2191,6 +2214,13 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     });
 
     try {
+      if (recoveryMode === 'deadline_active') coordinator.registerSpawnTarget({ pid: 123, sessionId: 'active-group',
+        connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {
+          [serviceKey]: { source: 'connected', selection: 'group', groupId: 'group-1' },
+        } }, connectedServiceSelectionsEnv: { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group', serviceId: serviceKey, groupId: 'group-1', activeProfileId: profile.ref.accountId,
+          fallbackProfileId: profile.ref.accountId, generation: 4,
+        }]) } });
       if (recoveryMode === 'usage_notice_requester') {
         const { startDaemonConnectedServiceRuntime } = await import('../../startup/startDaemonRuntimeBootstrap');
         const { createRequesterSessionControlRuntimeFixture } = await import('../../testkit/requesterSessionControlRuntimeFixture');
@@ -2395,6 +2425,21 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         return;
       }
       const schedule = await coordinator.tickOnce();
+      if (['deadline_idle', 'deadline_notice', 'deadline_unknown', 'deadline_active'].includes(recoveryMode)) {
+        expect(schedule).toEqual({ nextAutomaticRunAfterMs: recoveryMode === 'deadline_idle' ? 3_600_000 : 60_000 });
+        const initialCredentialReads = readCredential.mock.calls.length;
+        const initialUsageReads = readQuota.mock.calls.length;
+        now += 61_000;
+        await coordinator.tickOnce();
+        if (recoveryMode === 'deadline_idle') {
+          expect(readCredential).toHaveBeenCalledTimes(initialCredentialReads);
+          expect(readQuota).toHaveBeenCalledTimes(initialUsageReads);
+        } else {
+          expect(readCredential.mock.calls.length).toBeGreaterThan(initialCredentialReads);
+          expect(readQuota.mock.calls.length).toBeGreaterThan(initialUsageReads);
+        }
+        return;
+      }
       if (recoveryMode === 'quota_inventory_retry') {
         expect(schedule).toEqual({ nextAutomaticRunAfterMs: 30_000 });
         expect(writeProviderAccountUsage).not.toHaveBeenCalled();
@@ -2418,9 +2463,15 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       }
       if (recoveryMode.startsWith('persistence_unchanged_')) {
         expect(writeProviderAccountUsage).toHaveBeenCalledTimes(1);
-        for (let index = 0; index < 10; index++) await coordinator.tickOnce();
+        // Connection/cursor recovery re-observes quotas without a user Refresh
+        // marker, which independently requires a server acknowledgement write.
+        for (let index = 0; index < 10; index++) {
+          coordinator.invalidateInventory({ resetQuotaSchedule: true });
+          await coordinator.tickOnce();
+        }
         expect(writeProviderAccountUsage).toHaveBeenCalledTimes(1);
         // A genuinely new provider reading changes the meter once.
+        coordinator.invalidateInventory({ resetQuotaSchedule: true });
         await coordinator.tickOnce();
         expect(writeProviderAccountUsage).toHaveBeenCalledTimes(2);
         return;
@@ -2433,11 +2484,26 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       if (recoveryMode.startsWith('deadline_')) {
         const deadline = recoveryMode === 'deadline_reset' ? 2_000 : 300_000;
         expect(schedule).toEqual({ nextAutomaticRunAfterMs: deadline });
+        const initialQuotaReads = readQuota.mock.calls.length;
         expect(readCredential).not.toHaveBeenCalled();
         expect(writeProviderAccountUsage).not.toHaveBeenCalled();
         now += deadline - 1;
         expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+        expect(readQuota).toHaveBeenCalledTimes(initialQuotaReads);
         expect(readCredential).not.toHaveBeenCalled();
+        coordinator.invalidateInventory();
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+        expect(readQuota).toHaveBeenCalledTimes(initialQuotaReads);
+        expect(readCredential).not.toHaveBeenCalled();
+        if (recoveryMode === 'deadline_fresh') {
+          manualRefreshRequested = true;
+          coordinator.invalidateInventory({ quotaRefreshRecordIds: [previous.recordId] });
+          await coordinator.tickOnce();
+          expect(readQuota).toHaveBeenCalledTimes(initialQuotaReads + 1);
+          expect(readCredential).toHaveBeenCalled();
+          expect(writeProviderAccountUsage).toHaveBeenCalled();
+          return;
+        }
         now += 1;
         expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: recoveryMode === 'deadline_reset' ? 58_000 : 60_000 });
         expect(readCredential).toHaveBeenCalled();
@@ -2490,6 +2556,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         const first = writeProviderAccountUsage.mock.calls.length;
         expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
         expect(writeProviderAccountUsage.mock.calls).toHaveLength(first);
+        const readsBeforeReplacement = readCredential.mock.calls.length;
+        profile.credentialRevision = 'csr_bcdefghijklmnopqrstuvw';
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+        expect(readCredential.mock.calls.length).toBeGreaterThan(readsBeforeReplacement);
         now += 30_000;
         expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
         expect(writeProviderAccountUsage.mock.calls.at(-1)?.[0].write).toMatchObject({ snapshot: {
@@ -2514,6 +2584,20 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         const writeCount = writes.length;
         expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 120_000 });
         expect(writeProviderAccountUsage.mock.calls).toHaveLength(writeCount);
+        if (recoveryMode === 'quota_error') {
+          const credentialReads = readCredential.mock.calls.length;
+          demandSettings = accountSettingsParse({ usageQuotaNotificationsV1: { pace: true } });
+          coordinator.invalidateInventory();
+          expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 120_000 });
+          expect(readCredential).toHaveBeenCalledTimes(credentialReads);
+          profile.status = 'refresh_failed_retryable';
+          coordinator.invalidateInventory({ quotaRefreshRecordIds: [previous.recordId] });
+          expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 120_000 });
+          expect(readCredential).toHaveBeenCalledTimes(credentialReads);
+          profile.credentialRevision = 'csr_bcdefghijklmnopqrstuvw';
+          expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 120_000 });
+          expect(readCredential).toHaveBeenCalledTimes(credentialReads);
+        }
         return;
       }
 
@@ -2786,6 +2870,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     } finally {
       clearActiveAccountSettingsSnapshot();
       if (previousAccountSnapshot) setActiveAccountSettingsSnapshot(previousAccountSnapshot);
+      await groupTargetController?.shutdown();
       await runtimeRegistry.dispose();
       await Promise.all([
         rm(happyHomeDir, { recursive: true, force: true }),
