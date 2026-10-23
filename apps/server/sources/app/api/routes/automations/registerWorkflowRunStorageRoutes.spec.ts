@@ -150,6 +150,8 @@ describe("registerWorkflowRunStorageRoutes", () => {
         expect(bodySchema.body.safeParse(exact).success).toBe(true);
         expect(bodySchema.body.safeParse({ ...exact, memberOrdinal: "-1" }).success).toBe(false);
         expect(bodySchema.body.safeParse({ ...exact, cursor: "page-scan" }).success).toBe(false);
+        expect(bodySchema.body.safeParse({ operation: "invocations.list", runId: "run-1", parentRecordId: null,
+            memberOrdinal: "0", progressEnvelopes: true, pageByteLimit: 4096 }).success).toBe(true);
     });
 
     it("admits the internal progress-envelope sidecar request only as a literal opt-in", () => {

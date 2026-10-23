@@ -1596,7 +1596,7 @@ export async function completeWorkflowInvocationReview(input: WorkflowReviewMuta
  * its members count
  * against the same response-byte boundary and it is part of the cursor binding.
  */
-export async function listWorkflowRunInvocations(params: PageOptions & Readonly<{ accountId: string; runId: string; invocationId?: string; parentRecordId?: string; parentRecordIds?: readonly string[]; memberOrdinal?: string; lifecycles?: readonly WorkflowInvocationLifecycleV1[]; progressEnvelopes?: true }>) {
+export async function listWorkflowRunInvocations(params: PageOptions & Readonly<{ accountId: string; runId: string; invocationId?: string; parentRecordId?: string | null; parentRecordIds?: readonly string[]; memberOrdinal?: string; lifecycles?: readonly WorkflowInvocationLifecycleV1[]; progressEnvelopes?: true }>) {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) throw new WorkflowRunServiceError("invalid_input");
     if (params.invocationId !== undefined && (!params.invocationId || params.parentRecordId !== undefined
         || params.parentRecordIds !== undefined || params.memberOrdinal !== undefined || params.lifecycles !== undefined)) throw new WorkflowRunServiceError("invalid_input");
@@ -1605,6 +1605,7 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
     if (params.memberOrdinal !== undefined && (params.parentRecordId === undefined
         || !/^(0|[1-9][0-9]*)$/.test(params.memberOrdinal) || BigInt(params.memberOrdinal) > MAX_DATABASE_BIGINT)) throw new WorkflowRunServiceError("invalid_input");
     const queryKey = JSON.stringify({ runId: params.runId, parentRecordId: params.parentRecordId ?? null, lifecycles: [...(params.lifecycles ?? [])].sort(),
+        ...(params.parentRecordId === null ? { rootOnly: true } : {}),
         ...(params.invocationId !== undefined ? { invocationId: params.invocationId } : {}),
         ...(params.parentRecordIds !== undefined ? { parentRecordIds: [...new Set(params.parentRecordIds)].sort() } : {}),
         ...(params.memberOrdinal !== undefined ? { memberOrdinal: params.memberOrdinal } : {}),
@@ -1786,7 +1787,7 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
 
 /** One greatest-attempt query shared by current detail and exact member lists. */
 async function readCurrentWorkflowRunInvocationRowInTx(tx: Tx, params: Readonly<{
-    runId: string; parentRecordId: string; memberOrdinal: bigint;
+    runId: string; parentRecordId: string | null; memberOrdinal: bigint;
 }>): Promise<InvocationRow | null> {
     return await tx.workflowRunInvocation.findFirst({
         where: { runId: params.runId, parentRecordId: params.parentRecordId, memberOrdinal: params.memberOrdinal },

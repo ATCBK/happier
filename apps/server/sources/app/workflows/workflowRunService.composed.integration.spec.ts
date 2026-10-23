@@ -2951,6 +2951,15 @@ describe("workflowRunService (integration)", () => {
 
         await expect(getCurrentWorkflowRunInvocation({ accountId: seeded.accountId, runId, parentRecordId: rootId, memberOrdinal: 499n }))
             .resolves.toMatchObject({ invocation: { index: { id: newestId, memberOrdinal: "499", attempt: "1", lifecycle: "running" } } });
+        const replacementRoot = randomUUID();
+        await db.workflowRunInvocation.update({ where: { id: rootId }, data: { lifecycle: "superseded" } });
+        const contentEnvelope = progressEnvelope({ ...seeded, runId, id: replacementRoot, sequence: 502n, parentRecordId: null,
+            memberOrdinal: 0n, attempt: 1n, previousAttemptRecordId: rootId, logicalInvocationRecordId: rootId, blockKind: "root", blockId: "$root" });
+        await db.workflowRunInvocation.create({ data: { id: replacementRoot, runId, sequence: 502n, parentRecordId: null,
+            memberOrdinal: 0n, attempt: 1n, lifecycle: "pending", contentEnvelope } });
+        await expect(listWorkflowRunInvocations({ accountId: seeded.accountId, runId, parentRecordId: null,
+            memberOrdinal: "0", progressEnvelopes: true, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES }))
+            .resolves.toMatchObject({ invocations: [{ id: replacementRoot }], progressEnvelopesByInvocationId: { [replacementRoot]: contentEnvelope } });
     });
 
     it("keeps multibyte Run and invocation continuation pages inside the incumbent 24 MB Action boundary", () => {

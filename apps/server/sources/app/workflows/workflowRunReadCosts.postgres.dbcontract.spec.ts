@@ -99,6 +99,22 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Workflow narrow
         expect(slot.progressEnvelopesByInvocationId).toEqual({ [latestId]: envelopes.get(latestId) });
         expect(exactCosts.invocationSelects).toBe(1);
         expect(slotCosts.invocationSelects).toBe(1);
+        const replacementRoot = randomUUID();
+        const rootEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: "plain",
+            binding: { v: 1, purpose: "invocation_progress", accountId: ownerId, runId, recordId: replacementRoot,
+                sequence: "502", parentRecordId: null, memberOrdinal: "0", attempt: "1" },
+            progress: { kind: "happier.workflow-progress.v1", blockKind: "root", invocationPath: { blockId: "$root", scope: [] },
+                attempt: "1", logicalInvocationRecordId: rootId, previousAttemptRecordId: rootId } }));
+        await db.workflowRunInvocation.create({ data: { id: replacementRoot, runId, sequence: 502n, parentRecordId: null,
+            memberOrdinal: 0n, attempt: 1n, lifecycle: "pending", contentEnvelope: rootEnvelope } });
+        try {
+            statements.length = 0;
+            const roots = await listWorkflowRunInvocations({ ...base, parentRecordId: null, memberOrdinal: "0" });
+            const rootCosts = costs();
+            expect(roots.invocations.map(row => row.id)).toEqual([replacementRoot]);
+            expect(roots.progressEnvelopesByInvocationId).toEqual({ [replacementRoot]: rootEnvelope });
+            expect(rootCosts.invocationSelects).toBe(1);
+        } finally { await db.workflowRunInvocation.delete({ where: { id: replacementRoot } }); }
         await expect(listWorkflowRunInvocations({ ...base, invocationId: randomUUID() })).resolves.toMatchObject({ invocations: [], progressEnvelopesByInvocationId: {} });
         await db.workflowRunInvocation.update({ where: { id: children[7] }, data: { lifecycle: "waiting_for_review" } });
         try {
@@ -131,6 +147,12 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Workflow narrow
             const secondPage: Awaited<ReturnType<typeof listWorkflowRunInvocations>> = second.json();
             expect(secondPage.invocations[0]!.id).not.toBe(page.invocations[0]!.id);
             expect((await read({ parentRecordId: rootId, memberOrdinal: "7", progressEnvelopes: true })).json()).toMatchObject({ invocations: [{ id: latestId }] });
+            const rootResponse = await read({ parentRecordId: null, memberOrdinal: "0", progressEnvelopes: true });
+            expect(rootResponse.statusCode, rootResponse.body).toBe(200);
+            const rootPage: Awaited<ReturnType<typeof listWorkflowRunInvocations>> = rootResponse.json();
+            expect(rootPage.invocations.map(row => row.id)).toEqual([rootId]);
+            expect(rootPage.progressEnvelopesByInvocationId).toEqual({ [rootId]: envelopes.get(rootId) });
+            expect(rootPage.nextCursor).toBeUndefined();
             expect((await read({ invocationId: children[7], progressEnvelopes: true })).json()).toMatchObject({ invocations: [{ id: children[7] }] });
             expect((await read({ parentRecordIds: [rootId], progressEnvelopes: true, limit: 1 })).json()).toMatchObject({ invocations: [{ id: children[0] }] });
             // A selector cannot be silently dropped or reused as a broad history cursor.
