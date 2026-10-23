@@ -1166,6 +1166,7 @@ async function enqueuePendingMessageWithAdmission(
                     ? existingReceipt.data.followDeliveryV1 : undefined;
                 const currentFollow = inputAdmissionReceipt.issuer === 'authenticatedAccount'
                     ? inputAdmissionReceipt.followDeliveryV1 : undefined;
+                let frozenAccountFollowReplay = false;
                 if (existingReceipt?.success && retainedFollow && currentFollow) {
                     const retainedKey = deriveSessionFollowOriginalOccurrenceKeyV1(retainedFollow.original);
                     const currentKey = deriveSessionFollowOriginalOccurrenceKeyV1(currentFollow.original);
@@ -1174,26 +1175,18 @@ async function enqueuePendingMessageWithAdmission(
                         : 'requestEvents' in retainedFollow && 'requestEvents' in currentFollow
                             && isDeepStrictEqual(retainedFollow.requestEvents, currentFollow.requestEvents);
                     if (!retainedKey || retainedKey !== currentKey || !sameEvent) return identityConflict;
-                    if (existing.status === 'queued'
+                    frozenAccountFollowReplay = existing.status === 'queued'
                         && (existing.messageRole === null || existing.messageRole === messageRole)
                         && existing.content.t === content.t
                         && isDeepStrictEqual(existingReceipt.data, inputAdmissionReceipt)
-                        && await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true } })) {
-                        // Host admission replaces the request with settled authority
-                        // before provider acceptance. Freshly authorized retries of
-                        // this same original rejoin its frozen custody in either
-                        // storage mode; they cannot replace its admitted content.
-                        return { ok: true, didWrite: false, pending: (await projectPendingMessageRows(tx, [existing]))[0]!,
-                            pendingCount: session.pendingCount, pendingBlockedCount: session.pendingBlockedCount,
-                            pendingVersion: session.pendingVersion, badgeAttentionChanged: false, recipientCursors: [] } as const;
-                    }
+                        && await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true } }) !== null;
                     // A complete, freshly admitted fanout can change while its
                     // ordinary original is still an editable draft. Replace
                     // that draft atomically, including reasons-only changes;
                     // never treat changed sealed bytes as generic equality.
                     const changed = !isDeepStrictEqual(existingReceipt.data, inputAdmissionReceipt)
                         || !isDeepStrictEqual(existing.content, content);
-                    if (changed) {
+                    if (!frozenAccountFollowReplay && changed) {
                         if (admission.kind !== 'account' || requestedAction.kind !== 'enqueue' || targetExecutionRunId !== null
                             || params.reply !== undefined || existing.replyProgress !== null || existing.status !== 'queued'
                             || existing.providerAction !== null || isOrdinaryPendingMutationFenced(existing)
@@ -1231,6 +1224,13 @@ async function enqueuePendingMessageWithAdmission(
                 const matchedOpaqueEquality = requestEqualityEvidenceV1?.kind === "e2eeTag"
                     && existingEqualityEvidence !== null
                     && isDeepStrictEqual(existingEqualityEvidence.data, requestEqualityEvidenceV1);
+                // Account Follow content is derived from the source original;
+                // re-encryption need not reproduce its ciphertext. Without a
+                // supplied tag, exact original/event/receipt identity above
+                // permits only a no-op rejoin of frozen custody. Plaintext and
+                // tagged retries must still match their retained evidence.
+                const matchedFrozenAccountFollowIdentity = frozenAccountFollowReplay
+                    && content.t === "encrypted" && requestEqualityEvidenceV1 === undefined;
                 const matchedAccountRetryAfterHostEquality = requestEqualityEvidenceV1 === undefined
                     && isAuthenticatedAccountRetryOfHostVerifiedEncryptedBytes({
                         admission,
@@ -1247,7 +1247,9 @@ async function enqueuePendingMessageWithAdmission(
                         && existingEqualityEvidence !== null
                         && !matchedPlainEquality
                         && !matchedAccountRetryAfterHostEquality
-                    || !matchedPlainEquality && !matchedOpaqueEquality && !isDeepStrictEqual(existing.content, content)
+                        && !matchedFrozenAccountFollowIdentity
+                    || !matchedPlainEquality && !matchedOpaqueEquality && !matchedFrozenAccountFollowIdentity
+                        && !isDeepStrictEqual(existing.content, content)
                     || existing.messageRole !== null && existing.messageRole !== messageRole
                 ) {
                     return identityConflict;
@@ -1263,7 +1265,8 @@ async function enqueuePendingMessageWithAdmission(
                 }
                 let pending: PendingMessageRowRaw = existing;
                 if (
-                    existing.messageRole === null
+                    !frozenAccountFollowReplay
+                    && existing.messageRole === null
                     && messageRole !== null
                     && (matchedOpaqueEquality || isDeepStrictEqual(existing.content, content))
                 ) {

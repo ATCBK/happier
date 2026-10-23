@@ -377,8 +377,15 @@ describe('requester Session input through the custodian Machine socket', () => {
                     content: { type: 'text', text: 'different original content' } } };
             const changedRetry = await enqueueLate({ ...payload(important), followSources: sources, content: changedContent });
             expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } })).toEqual(settled);
-            expect(changedRetry.statusCode, changedRetry.body).toBe(400);
-            expect(changedRetry.json()).toMatchObject({ admissionRejectionCode: 'session_input_idempotency_conflict' });
+            if (mode === 'e2ee') {
+                // Account Follow retries carry no equality tag. Re-encryption
+                // of the same source original rejoins immutable custody only.
+                expect(changedRetry.statusCode, changedRetry.body).toBe(200);
+                expect(changedRetry.json()).toMatchObject({ didWrite: false });
+            } else {
+                expect(changedRetry.statusCode, changedRetry.body).toBe(400);
+                expect(changedRetry.json()).toMatchObject({ admissionRejectionCode: 'session_input_idempotency_conflict' });
+            }
             expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: destination.id, publisherAuthority,
                 localId, acceptedTurn: { kind: 'followUp', turnId: 'accepted-original' },
                 // As with the encrypted input above, Home preserves this
