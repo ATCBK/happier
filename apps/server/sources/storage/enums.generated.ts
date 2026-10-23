@@ -134,14 +134,6 @@ export const AccountIdentityEligibilityStatus = {
 
 export type AccountIdentityEligibilityStatus = (typeof AccountIdentityEligibilityStatus)[keyof typeof AccountIdentityEligibilityStatus];
 
-export const SessionFollowNotificationLevel = {
-    none: "none",
-    important: "important",
-    all_messages: "all_messages",
-} as const;
-
-export type SessionFollowNotificationLevel = (typeof SessionFollowNotificationLevel)[keyof typeof SessionFollowNotificationLevel];
-
 export const SessionFollowDeliveredTurnStatus = {
     completed: "completed",
     failed: "failed",

@@ -2104,12 +2104,6 @@ model DiscussionParticipant {
     @@index([sessionId, discussionId])
 }
 
-enum SessionFollowNotificationLevel {
-    none
-    important
-    all_messages
-}
-
 model AccountSessionFollow {
     id String @id @default(cuid())
     accountId String
@@ -2126,11 +2120,10 @@ model AccountSessionFollow {
     deliveredExecutionRunPermissionKey String?
     deliveredWorkflowRunRevision Int?
     following Boolean @default(true)
-    notificationLevel SessionFollowNotificationLevel @default(important)
     hasPersistentFollow Boolean @default(true)
     includeInVoice Boolean @default(false)
     voiceDeliveredFrontier String?
-    /// Canonical personal event policy; legacy notificationLevel is read ingress only.
+    /// Canonical personal event and Voice policy.
     followPolicy String?
     /// Armed or fulfilled one-shot custody, with original source identity and intent frontier.
     notifyOnce String?
