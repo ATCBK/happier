@@ -615,8 +615,13 @@ describe('authenticated finite Project Action owner', () => {
         const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
         const h = await harness(undefined, null, 'machine', ownerToken);
         const credentials = h.runtime.credentials!;
-        h.get.mockResolvedValue({ status: 200, data: { mode: 'plain', version: 1,
-            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        h.get.mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            throw new Error('Unexpected Home GET request');
+        });
         const observation = await import('@/api/client/accountEncryptionCurrentnessObservation');
         const currentness = observation.acquireRequesterAccountEncryptionCurrentness({ accountId: 'owner',
             token: credentials.token, serverBaseUrl: h.runtime.serverHttpBaseUrl });
@@ -663,16 +668,18 @@ describe('authenticated finite Project Action owner', () => {
             await h.firstSpawn;
             // Acceptance, dequeue and final native admission remain separate decisions.
             // A no-effect setup and a primary Sync no-op introduce no new decision.
-            expect.soft(requestsAtAcceptance).toBe(1);
+            // Currentness is descriptive; each decision still reads fresh mode authority.
+            expect.soft(requestsAtAcceptance).toBe(2);
             expect.soft(requests.filter(path => path.endsWith('/read'))).toHaveLength(3);
             const projectReads = h.post.mock.calls.filter(([url]) => String(url).endsWith('/v1/account/project-rows/list'));
             expect.soft(projectReads).toHaveLength(2);
             expect.soft(h.post.mock.calls).toHaveLength(2);
-            expect.soft(h.get.mock.calls).toHaveLength(getCallsAtStart);
+            expect.soft(h.get.mock.calls.slice(getCallsAtStart).map(([url]) => new URL(String(url)).pathname))
+                .toEqual(['/v1/account/encryption', '/v1/account/encryption']);
             expect.soft(phaseReads['project.placement.review']).toEqual([{ config: 1, project: 0 }, { config: 1, project: 0 }]);
             expect.soft(phaseReads['project.command.review']).toEqual([{ config: 0, project: 0 }, { config: 1, project: 0 }]);
             expect.soft(phaseReads['project.sync.prepare']).toEqual([{ config: 0, project: 0 }]);
-            expect(requests.filter(path => path === '/v1/account/encryption')).toEqual([]);
+            expect(requests.filter(path => path === '/v1/account/encryption')).toHaveLength(3);
             console.info('FX89d finite Home request counts', { requestsAtAcceptance, requestsAtNative: requests.length,
                 projectReads: projectReads.length,
                 phaseReads,
