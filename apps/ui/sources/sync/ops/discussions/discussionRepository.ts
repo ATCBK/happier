@@ -316,6 +316,8 @@ export function createDiscussionRepository(options: Readonly<{
     address: Readonly<{ serverId: string }>;
     client: DiscussionRepositoryClient;
 }>) {
+    const findOwnMessage = (messages: readonly DiscussionOpenedMessageV1[], localId: string) => messages.find(row =>
+        row.localId === localId && row.authorAccountId === options.scope.accountId);
     const listeners = new Set<() => void>();
     const listPages: Record<'active' | 'archived', ListPage[]> = { active: [], archived: [] };
     const anchorPages = new Map<string, { anchor: ListAnchor; pages: Record<'active' | 'archived', ListPage[]> }>();
@@ -769,7 +771,7 @@ export function createDiscussionRepository(options: Readonly<{
         for (const intent of intents.values()) {
             if (intent.kind === 'post'
                 && intent.discussionId === discussionId
-                && merged.some((row) => row.localId === intent.localId)) {
+                && findOwnMessage(merged, intent.localId)) {
                 markMutationObservedSuccess(intent.localId);
             }
         }
@@ -946,8 +948,8 @@ export function createDiscussionRepository(options: Readonly<{
             }
             return false;
         }
-        const firstMessage = messages.value.messages.find((row) => row.localId === intent.messageLocalId);
-        if (!firstMessage) return false;
+        const firstMessage = findOwnMessage(messages.value.messages, intent.messageLocalId);
+        if (!firstMessage || firstMessage.seq !== 1) return false;
         completeCreate(intent, {
             v: 1,
             serverId: options.address.serverId,
@@ -960,7 +962,7 @@ export function createDiscussionRepository(options: Readonly<{
     const reconcilePost = async (intent: PostIntent, signal?: AbortSignal): Promise<boolean> => {
         const operationEpoch = captureOperation(intent.discussionId);
         const retained = snapshot.threads[intent.discussionId] ?? emptyThread();
-        const alreadyPublished = retained.messages.find((row) => row.localId === intent.localId);
+        const alreadyPublished = findOwnMessage(retained.messages, intent.localId);
         if (alreadyPublished) {
             completePost(intent, {
                 v: 1,
@@ -976,7 +978,7 @@ export function createDiscussionRepository(options: Readonly<{
             if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeDiscussion(intent.discussionId, outcome.errorCode);
             return false;
         }
-        const found = outcome.value.messages.find((row) => row.localId === intent.localId);
+        const found = findOwnMessage(outcome.value.messages, intent.localId);
         if (!found) return false;
         completePost(intent, { v: 1, serverId: options.address.serverId, message: found, messageSeq: outcome.value.messageSeq });
         return true;

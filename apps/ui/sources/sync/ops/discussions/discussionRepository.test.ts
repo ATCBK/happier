@@ -774,7 +774,7 @@ describe('Discussion repository', () => {
         expect(repository.getSnapshot().threads['discussion-a']).toMatchObject({ status: 'revoked', summary: null });
     });
 
-    it('reconciles a lost create through the creator-qualified lookup instead of a foreign local-ID collision', async () => {
+    it.each([1, 2])('reconciles a lost create through its creator-qualified atomic first message, never a later message at seq %i', async firstMessageSeq => {
         const creationLocalId = 'same-creator-local-id';
         const messageLocalId = 'same-message-local-id';
         const own = { ...storedSummary('discussion-a'), creationLocalId };
@@ -792,16 +792,16 @@ describe('Discussion repository', () => {
             const discussionId = url.pathname.split('/')[3]!;
             if (url.pathname.endsWith('/messages')) {
                 messageReads.push(url);
-                return response({ messages: [{ ...storedMessage(discussionId, 1), localId: messageLocalId }],
-                    hasMoreOlder: false, messageSeq: 1 });
+                return response({ messages: [{ ...storedMessage(discussionId, firstMessageSeq), localId: messageLocalId }],
+                    hasMoreOlder: false, messageSeq: firstMessageSeq });
             }
             return response({ discussion: discussionId === own.id ? own : foreign });
         }) });
         expect(await repository.create({ creationLocalId, messageLocalId, title: 'Mine',
             content: { v: 1, parts: [{ t: 'text', text: 'Mine' }] }, draftSubmission: draftSubmission() })).toMatchObject({ kind: 'checking' });
-        await vi.waitFor(() => expect(repository.getSnapshot().mutations[creationLocalId]?.status).toBe('observed_success'));
+        await vi.waitFor(() => expect(repository.getSnapshot().mutations[creationLocalId]?.status).toBe(firstMessageSeq === 1 ? 'observed_success' : 'outcome_unknown'));
         expect(messageReads.map(url => url.search)).toEqual([`?localId=${messageLocalId}`]);
-        expect(repository.getSnapshot().mutations[creationLocalId]?.discussionId).toBe(own.id);
+        expect(repository.getSnapshot().mutations[creationLocalId]?.discussionId).toBe(firstMessageSeq === 1 ? own.id : undefined);
         expect(repository.getSnapshot().threads[foreign.id]).toBeUndefined();
     });
 
