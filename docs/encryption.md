@@ -99,6 +99,33 @@ locked/inconsistent/migration-required result before content disclosure or mutat
 while preserving the stored value; it must not become absence, defaults, or a
 fallback to the other branch.
 
+### UI material-opening ownership (0.3 development)
+
+`apps/ui/sources/sync/encryption/scopedAccountEncryption.ts` retains one current
+`Encryption` owner per Home for focused, concurrent and explicitly scoped Account
+readers. Equal credentials recaptured from storage reuse that owner and its
+existing successful envelope openings. The original captured credential and the
+new credential must both match the full material snapshot; a bearer, material,
+Account or captured-endpoint change replaces the owner. Credential withdrawal
+retires its generation/readers and cancels pending key openings. Plain credentials
+remain keyless. Authentication/provisioning and transient domain-local
+inventory/settings/action or sealing operations can still construct standalone
+encryption instances. Those instances do not supply the installed Home or scoped
+Machine-RPC material owner.
+
+An opened key is pure crypto work, not an access grant. Machine acquisition still
+reads and admits the current row, access, envelope and version before reusing that
+work. Account currentness and Session tuple read/CAS checks also remain required.
+
+The web crypto adapter separates explicitly interactive Machine-RPC openings from
+bulk hydration in the existing queue and stateless Worker transport. Each demand
+class lazily reuses its own Worker; recipient keys travel per request and are
+wiped by the canonical Worker handler. Cancellation or a transport fault retires
+only its own class. No queue timeout or retry is introduced. Opt-in
+`sync.crypto.worker.web` telemetry records queue wait, elapsed transport service
+and queue/in-flight counts without key material. Elapsed service includes Worker
+startup and renderer delivery; it is not a Worker CPU measurement.
+
 ### Public-profile disclosure boundary (development integration)
 
 The [public-profile development contract](../apps/docs/content/docs/accounts/public-profiles.mdx)
