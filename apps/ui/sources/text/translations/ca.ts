@@ -2923,6 +2923,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         secretKeyInputLabel: 'Clau de recuperació',
         linkNewDeviceTitle: 'Vincular Nou Dispositiu',
         linkNewDeviceSubtitle: 'Escaneja el codi QR que es mostra al teu nou dispositiu per vincular-lo a aquest compte',
+        pairingConnectionWarningTitle: "Servidor desconnectat",
+        pairingConnectionWarningBody: "L’aparellament necessita un servidor accessible. Comprova la connexió o escaneja un codi d’un altre servidor.",
         scanQrCodeOnDevice: 'Escanejar codi QR',
         unsupported: {
             connectTitle: ({ name }: { name: string }) => `Connecta ${name}`,

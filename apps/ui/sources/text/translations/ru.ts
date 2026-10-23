@@ -2835,6 +2835,8 @@ export const ru: TranslationStructure = {
     secretKeyInputLabel: "Ключ восстановления",
     linkNewDeviceTitle: "Привязать новое устройство",
     linkNewDeviceSubtitle: "Отсканируйте QR-код, отображаемый на новом устройстве, чтобы привязать его к этой учетной записи",
+    pairingConnectionWarningTitle: "Нет подключения к серверу",
+    pairingConnectionWarningBody: "Для сопряжения сервер должен быть доступен. Проверьте подключение или отсканируйте код другого сервера.",
     scanQrCodeOnDevice: "Сканировать QR-код",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `Подключить ${name}`,

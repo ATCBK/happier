@@ -3279,6 +3279,8 @@ const enConnect = {
   linkNewDeviceTitle: 'Link new device',
   linkNewDeviceSubtitle:
     'Scan the QR code shown on your new device to link it to this account',
+  pairingConnectionWarningTitle: "Server disconnected",
+  pairingConnectionWarningBody: "Pairing needs a reachable server. Check your connection, or scan a code for another server.",
   scanQrCodeOnDevice: 'Scan QR code',
   unsupported: {
     connectTitle: ({ name }: { name: string }) => `Connect ${name}`,

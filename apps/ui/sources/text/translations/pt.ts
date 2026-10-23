@@ -3142,6 +3142,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     secretKeyInputLabel: "Chave de recuperação",
     linkNewDeviceTitle: "Vincular Novo Dispositivo",
     linkNewDeviceSubtitle: "Escaneie o código QR exibido no seu novo dispositivo para vinculá-lo a esta conta",
+    pairingConnectionWarningTitle: "Sem ligação ao servidor",
+    pairingConnectionWarningBody: "O emparelhamento requer um servidor acessível. Verifique a ligação ou leia um código de outro servidor.",
     scanQrCodeOnDevice: "Escanear Código QR",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `Conectar ${name}`,

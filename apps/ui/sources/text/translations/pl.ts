@@ -2944,6 +2944,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     secretKeyInputLabel: "Klucz odzyskiwania",
     linkNewDeviceTitle: "Połącz nowe urządzenie",
     linkNewDeviceSubtitle: "Zeskanuj kod QR wyświetlony na nowym urządzeniu, aby połączyć go z tym kontem",
+    pairingConnectionWarningTitle: "Brak połączenia z serwerem",
+    pairingConnectionWarningBody: "Parowanie wymaga dostępnego serwera. Sprawdź połączenie lub zeskanuj kod innego serwera.",
     scanQrCodeOnDevice: "Zeskanuj kod QR",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `Połącz ${name}`,

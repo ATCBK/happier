@@ -3288,6 +3288,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     secretKeyInputLabel: "Chiave di recupero",
     linkNewDeviceTitle: "Collega nuovo dispositivo",
     linkNewDeviceSubtitle: "Scansiona il codice QR mostrato sul nuovo dispositivo per collegarlo a questo account",
+    pairingConnectionWarningTitle: "Server disconnesso",
+    pairingConnectionWarningBody: "Per associare un dispositivo, il server deve essere raggiungibile. Controlla la connessione o scansiona un codice per un altro server.",
     scanQrCodeOnDevice: "Scansiona codice QR",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `Connetti ${name}`,

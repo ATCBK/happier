@@ -2942,6 +2942,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     secretKeyInputLabel: "Clé de récupération",
     linkNewDeviceTitle: "Lier un nouvel appareil",
     linkNewDeviceSubtitle: "Scanne le QR code affiché sur ton nouvel appareil pour le lier à ce compte",
+    pairingConnectionWarningTitle: "Serveur déconnecté",
+    pairingConnectionWarningBody: "Pour associer un appareil, le serveur doit être accessible. Vérifie ta connexion ou scanne un code pour un autre serveur.",
     scanQrCodeOnDevice: "Scanner le QR code",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `Connecter ${name}`,

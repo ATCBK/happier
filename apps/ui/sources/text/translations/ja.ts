@@ -3452,6 +3452,8 @@ export const ja: TranslationStructure = {
     secretKeyInputLabel: "復旧キー",
     linkNewDeviceTitle: "新しいデバイスをリンク",
     linkNewDeviceSubtitle: "新しいデバイスに表示されているQRコードをスキャンしてこのアカウントにリンクしてください",
+    pairingConnectionWarningTitle: "サーバー未接続",
+    pairingConnectionWarningBody: "ペアリングにはサーバーへの接続が必要です。接続を確認するか、別のサーバーのコードをスキャンしてください。",
     scanQrCodeOnDevice: "QRコードをスキャン",
     unsupported: {
       connectTitle: ({ name }: { name: string }) => `${name} を接続`,
