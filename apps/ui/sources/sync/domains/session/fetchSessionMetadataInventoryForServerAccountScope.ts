@@ -63,7 +63,9 @@ async function fetchSessionMetadataInventoryWithAuthority(params: Readonly<{
             sessionDataKeys,
             sessionDataKeyEnvelopes,
             request: (path, init) => params.authority.request(path, { ...init, signal: params.signal }),
-            getCurrentSessionListRenderable: (sessionId) => renderablesBySessionId.get(sessionId) ?? null,
+            // Collected rows win across pages; the captured baseline supplies
+            // prior owner provenance without retaining absent inventory members.
+            getCurrentSessionListRenderable: (sessionId) => renderablesBySessionId.get(sessionId) ?? params.baseline[sessionId] ?? null,
             shouldContinue,
             applySessions: () => {},
             applySessionListRenderables: (sessions) => {
