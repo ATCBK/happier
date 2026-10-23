@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -43,6 +44,7 @@ import {
   ensureWorkspacePackagesBuiltByName,
   defaultWorkspaceBuildBoundary,
   ensureWorkspacePackagesBuiltForComponent,
+  syncWorkspaceComponentBundledDependencies,
   hasUsableWorkspaceLastGreen,
   readWorkspaceBuildFileDigest,
   readWorkspacePackageInputFingerprint,
@@ -74,14 +76,19 @@ function readFixturePackageName(packageDir) {
   return JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')).name;
 }
 
+function writePnpmWorkspaceFixture(root, { workspaces, ...manifest }) {
+  const packageManager = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).packageManager;
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ ...manifest, packageManager }));
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), `packages:\n${workspaces.map(pattern => `  - ${JSON.stringify(pattern)}`).join('\n')}\n`);
+}
+
 for (const preparation of ['named', 'remote-validation']) test(`${preparation} workspace preparation releases dependency and dist custody while compiler capacity is unavailable`, { skip: process.platform !== 'linux', timeout: 30_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-capacity-order-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root });
   const repoRoot = join(root, 'native-owner');
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['ui', 'cli', 'server']) {
     mkdirSync(join(repoRoot, 'apps', app), { recursive: true });
     writeFileSync(join(repoRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}`,
@@ -101,7 +108,7 @@ case "$*" in
 esac
 ` });
   writeFakeBin({ root: repoRoot, binDirName: 'node_modules/.bin', name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  // Yarn/compiler are process boundaries. The real native admission, package
+  // Package manager/compiler are process boundaries. The real native admission, package
   // graph, fingerprints, lock ownership and staged publisher remain intact.
   const compiler = join(root, 'compiler.mjs');
   writeFileSync(compiler, `import { mkdirSync, writeFileSync } from 'node:fs';
@@ -109,12 +116,12 @@ import { join } from 'node:path';
 mkdirSync(process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, { recursive: true });
 writeFileSync(join(process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export const ready = true;\\n');
 `);
-  const yarn = join(root, 'yarn.mjs');
-  writeFileSync(yarn, `import { spawnSync } from 'node:child_process';
+  const pnpm = join(root, 'pnpm.mjs');
+  writeFileSync(pnpm, `import { spawnSync } from 'node:child_process';
 const result = spawnSync('/bin/sh', [${JSON.stringify(launcher)}, '--heavyweight-admission', '--class=package-dist', '--machine=worker', '--', process.execPath, ${JSON.stringify(compiler)}], { stdio: 'inherit', env: process.env });
 process.exitCode = result.status ?? 1;
 `);
-  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:/usr/bin:/bin`, npm_execpath: yarn, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:/usr/bin:/bin`, npm_execpath: pnpm, CI: '',
     FIXTURE_MEMORY: memory, HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '',
     HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
@@ -153,7 +160,7 @@ test('finite workspace worker streams active-package progress before compiler co
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-worker-progress-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(root, { private: true, workspaces: ['apps/*', 'packages/*'] });
   for (const app of ['server', 'cli', 'ui']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -219,7 +226,7 @@ test('unchanged workspace admission shares graph observations without retaining 
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-graph-observation-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(root, { private: true, workspaces: ['apps/*', 'packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -292,7 +299,7 @@ test('strict workspace admission checks QA emit output before reusing it', async
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-qa-emit-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(root, { private: true, workspaces: ['apps/*', 'packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -378,7 +385,7 @@ test('captured package admission uses the caller identity environment on every r
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-caller-identity-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(root, { private: true, workspaces: ['apps/*', 'packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -415,7 +422,7 @@ test('source-dev entry points build captured inputs with coherent materialized r
     const root = mkdtempSync(join(tmpdir(), 'workspace-source-dev-inputs-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+    writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*'] });
     mkdirSync(join(root, 'packages/plugins'), { recursive: true });
     for (const app of ['cli', 'ui', 'server']) {
       mkdirSync(join(root, 'apps', app), { recursive: true });
@@ -489,7 +496,7 @@ test(`source-dev cold admission recovers through server, CLI and UI owners after
       const root = mkdtempSync(join(tmpdir(), 'happier-source-dev-last-green-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
       withPatchedProcessEnv(t, { HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: null });
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
+      writePnpmWorkspaceFixture(root, { private: true, workspaces: ['apps/*', 'packages/*'] });
       mkdirSync(join(root, 'packages/plugins'), { recursive: true });
       for (const app of ['server', 'cli', 'ui']) {
         mkdirSync(join(root, 'apps', app), { recursive: true });
@@ -638,7 +645,7 @@ test('workspace input identity includes excluded config files reached through ex
 test('generated first-party plugin manifests do not invalidate compilation while authored plugin source does', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'workspace-plugin-derived-inputs-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/plugins/*', 'apps/*'] }));
+  writePnpmWorkspaceFixture(root, { workspaces: ['packages/plugins/*', 'apps/*'] });
   for (const name of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', name), { recursive: true });
     writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}` }));
@@ -694,7 +701,7 @@ test('CLI plugin preparation preserves package-owner shared failures and optiona
   for (const failedName of ['plugin-sdk', 'plugins-failed']) await t.test(failedName, async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'workspace-plugin-preparation-owner-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] }));
+    writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'] });
     for (const app of ['cli', 'ui', 'server']) {
       mkdirSync(join(root, 'apps', app), { recursive: true });
       writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -783,7 +790,7 @@ test('component startup admits intact last-green before a failed refresh, but bl
         if (publisherExit) await publisherExit;
         rmSync(root, { recursive: true, force: true });
       });
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+      writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*'] });
       for (const name of ['server', 'ui', 'cli']) {
         mkdirSync(join(root, 'apps', name), { recursive: true });
         writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}`,
@@ -872,7 +879,7 @@ test('QA runtime builds use coherent last-green package outputs only for compile
     await t.test(scenario, async (t) => {
       const root = mkdtempSync(join(tmpdir(), 'happier-qa-last-green-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+      writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*'] });
       for (const name of ['cli', 'ui', 'server']) {
         mkdirSync(join(root, 'apps', name), { recursive: true });
         writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}` }));
@@ -998,7 +1005,7 @@ const { build: buildUiBundle } = createRequire(new URL('../../packages/plugin-sd
 test('Stack runtime-only refresh uses its selected package manager without entering the compiler', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-stack-workspace-refresh-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { workspaces: ['apps/*', 'packages/*'] });
   for (const name of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', name);
     mkdirSync(dir, { recursive: true });
@@ -1015,17 +1022,17 @@ test('Stack runtime-only refresh uses its selected package manager without enter
       ...(name === 'consumer' ? { dependencies: { '@fixture/dependency': '0.0.0' } } : {}),
     }));
   }
-  const entrypointPath = join(repoRoot, 'fixture-yarn.cjs');
+  const entrypointPath = join(repoRoot, 'fixture-pnpm.cjs');
   const callsPath = join(repoRoot, 'calls.jsonl');
   writeFileSync(entrypointPath, [
     "const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');",
     "const { join, basename } = require('node:path');",
     'const args = process.argv.slice(2);',
     "if (args.length === 1 && args[0] === '--version') process.exit(0);",
-    "if (args[0] !== '-s') process.exit(91);",
-    `appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify([basename(process.cwd()), args[1]]) + '\\n');`,
+    "if (args[0] !== 'run' || args[1] !== '--silent') process.exit(91);",
+    `appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify([basename(process.cwd()), args[2]]) + '\\n');`,
     'const output = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;',
-    "if (args[1] === 'build') {",
+    "if (args[2] === 'build') {",
     '  mkdirSync(output, { recursive: true });',
     "  writeFileSync(join(output, 'index.js'), readFileSync(join(process.cwd(), 'src', 'index.ts')));",
     "  writeFileSync(join(output, 'index.d.ts'), 'export declare const value: string;\\n');",
@@ -1039,11 +1046,11 @@ test('Stack runtime-only refresh uses its selected package manager without enter
   ].join('\n'));
   const binDir = join(repoRoot, 'bin');
   mkdirSync(binDir);
-  const yarnCommandPath = join(binDir, process.platform === 'win32' ? 'yarn.cmd' : 'yarn');
-  writeFileSync(yarnCommandPath, process.platform === 'win32'
+  const pnpmCommandPath = join(binDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+  writeFileSync(pnpmCommandPath, process.platform === 'win32'
     ? `@${JSON.stringify(process.execPath)} ${JSON.stringify(entrypointPath)} %*\r\n`
     : `#!${process.execPath}\nrequire(${JSON.stringify(entrypointPath)});\n`);
-  chmodSync(yarnCommandPath, 0o755);
+  chmodSync(pnpmCommandPath, 0o755);
   const native = await installWorkspaceAdmissionProcessFixture(t, repoRoot);
   const options = { quiet: true, env: { ...native.env, PATH: `${binDir}${delimiter}${native.env.PATH ?? ''}`, npm_execpath: '' } };
   await ensureStackWorkspacePackagesBuiltByName(repoRoot, ['@fixture/consumer'], options);
@@ -1060,9 +1067,8 @@ test('Stack runtime-only refresh uses its selected package manager without enter
 test('declaration admission refreshes embedded runtime bytes without recompiling references', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-declaration-admission-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -1166,9 +1172,8 @@ test('declaration admission refreshes embedded runtime bytes without recompiling
 test('declaration-only packages require a current build record instead of bypassing admission', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-declaration-only-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -1240,12 +1245,11 @@ test('dependency declarations include membership, module variants and the packag
 test('component publication retains a valid plugin when another plugin has a missing staged export', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-plugin-isolated-publication-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({
+  writePnpmWorkspaceFixture(repoRoot, {
     private: true,
     workspaces: ['apps/*', 'packages/plugins/*'],
-  }));
+  });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   const uiDir = join(repoRoot, 'apps', 'ui');
   mkdirSync(uiDir, { recursive: true });
   for (const name of ['cli', 'server']) {
@@ -1322,9 +1326,8 @@ test('component builds remain strict unless a caller opts in to plugin failure p
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@happier-dev/${name}` }));
   }
   mkdirSync(join(pluginDir, 'src'), { recursive: true });
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/plugins/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { workspaces: ['apps/*', 'packages/plugins/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(join(componentDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/ui',
     dependencies: { '@happier-dev/plugins-broken': '0.0.0' },
@@ -1362,13 +1365,8 @@ test('component admission can defer bundled copies until shared preparation comp
   mkdirSync(join(protocolDir, 'src'), { recursive: true });
   mkdirSync(join(protocolDir, 'dist'), { recursive: true });
   mkdirSync(join(bundledProtocolDir, 'dist'), { recursive: true });
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1446,6 +1444,172 @@ test('component admission can defer bundled copies until shared preparation comp
   );
 });
 
+test('component completion refreshes physical hosts once and leaves unchanged bodies untouched', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'happier-host-copy-completion-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'packages', 'protocol', 'dist'), { recursive: true });
+  writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*'] });
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  const source = join(root, 'packages', 'protocol');
+  for (const name of ['ui', 'server']) {
+    mkdirSync(join(root, 'apps', name), { recursive: true });
+    writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}` }));
+  }
+  writeFileSync(join(source, 'package.json'), JSON.stringify({
+    name: '@happier-dev/protocol', version: '0.0.0', type: 'module',
+    exports: { '.': './dist/index.js' },
+    files: ['dist', 'resource.txt'],
+    dependencies: { 'fixture-copy-runtime': '1.0.0' },
+  }));
+  writeFileSync(join(source, 'dist', 'index.js'), 'export { metadata } from "fixture-copy-runtime";\n');
+  writeFileSync(join(source, 'resource.txt'), 'first resource\n');
+  const runtime = join(source, 'node_modules', 'fixture-copy-runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeFileSync(join(runtime, 'package.json'), JSON.stringify({
+    name: 'fixture-copy-runtime', version: '1.0.0', type: 'module', main: './index.js',
+  }));
+  writeFileSync(join(runtime, 'index.js'), 'export const metadata = "current";\n');
+  const receipt = join(source, 'dist', '.happier-build-inputs.json');
+  writeFileSync(receipt, JSON.stringify({ version: 2, outputs: [], builtAt: 'before' }));
+  const hosts = ['stack', 'cli'].map(name => join(root, 'apps', name));
+  for (const host of hosts) {
+    const bundled = join(host, 'node_modules', '@happier-dev', 'protocol');
+    mkdirSync(join(bundled, 'dist'), { recursive: true });
+    writeFileSync(join(host, 'package.json'), JSON.stringify({
+      name: `@happier-dev/${host.split('/').at(-1)}`,
+      bundledDependencies: ['@happier-dev/protocol'],
+      dependencies: { '@happier-dev/protocol': '0.0.0' },
+    }));
+    writeFileSync(join(bundled, 'package.json'), readFileSync(join(source, 'package.json')));
+    writeFileSync(join(bundled, 'dist', 'index.js'), 'export const metadata = "previous";\n');
+  }
+  for (const host of hosts) {
+    await syncWorkspaceComponentBundledDependencies(host);
+    const loaded = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval',
+      'process.stdout.write((await import("@happier-dev/protocol")).metadata)'], { cwd: host });
+    assert.equal(loaded.stdout, 'current');
+  }
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalCopy = fs.copyFileSync;
+  const originalWrite = fs.writeFileSync;
+  const originalRename = fs.renameSync;
+  const originalRead = fs.readFileSync;
+  let stagedBodies = 0;
+  let destinationWrites = 0;
+  let bodyReads = 0;
+  const isHostPath = path => hosts.some(host => String(path).startsWith(join(host, 'node_modules')));
+  fs.copyFileSync = (...args) => { stagedBodies += 1; return originalCopy(...args); };
+  fs.writeFileSync = (...args) => { if (isHostPath(args[0])) destinationWrites += 1; return originalWrite(...args); };
+  fs.renameSync = (...args) => { if (isHostPath(args[1])) destinationWrites += 1; return originalRename(...args); };
+  fs.readFileSync = (...args) => {
+    if (String(args[0]).startsWith(root) && String(args[0]).endsWith('index.js')) bodyReads += 1;
+    return originalRead(...args);
+  };
+  syncBuiltinESMExports();
+  const before = hosts.map(host => statSync(join(host, 'node_modules', '@happier-dev', 'protocol', 'dist', 'index.js'), { bigint: true }));
+  try {
+    writeFileSync(receipt, JSON.stringify({ version: 2, outputs: [], builtAt: 'after' }));
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      for (const host of hosts) await syncWorkspaceComponentBundledDependencies(host);
+    }
+  } finally {
+    fs.copyFileSync = originalCopy;
+    fs.writeFileSync = originalWrite;
+    fs.renameSync = originalRename;
+    fs.readFileSync = originalRead;
+    syncBuiltinESMExports();
+  }
+  assert.equal(stagedBodies, 0, 'unchanged component completion must stage zero package bodies');
+  assert.equal(destinationWrites, 0, 'unchanged component completion must write no destination files');
+  assert.equal(bodyReads, 0, 'warm verification must reuse recorded output-body digests');
+  hosts.forEach((host, index) => {
+    const after = statSync(join(host, 'node_modules', '@happier-dev', 'protocol', 'dist', 'index.js'), { bigint: true });
+    assert.equal(after.ino, before[index].ino);
+    assert.equal(after.ctimeNs, before[index].ctimeNs);
+  });
+  const freshProcess = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const counts = { copies: 0, writes: 0, bodyReads: 0 };
+    const hosts = ${JSON.stringify(hosts)};
+    const root = ${JSON.stringify(root)};
+    for (const name of ['copyFileSync', 'writeFileSync', 'renameSync', 'readFileSync']) {
+      const original = fs[name];
+      fs[name] = (...args) => {
+        if (name === 'copyFileSync') counts.copies += 1;
+        if (name === 'readFileSync' && String(args[0]).startsWith(root) && String(args[0]).endsWith('index.js')) counts.bodyReads += 1;
+        if ((name === 'writeFileSync' || name === 'renameSync') && hosts.some(host => String(args[name === 'renameSync' ? 1 : 0]).startsWith(host))) counts.writes += 1;
+        return original(...args);
+      };
+    }
+    syncBuiltinESMExports();
+    const { syncWorkspaceComponentBundledDependencies } = await import(${JSON.stringify(new URL('./ensureWorkspacePackagesBuilt.mjs', import.meta.url).href)});
+    for (const host of hosts) await syncWorkspaceComponentBundledDependencies(host);
+    process.stdout.write(JSON.stringify(counts));
+  `]);
+  assert.deepEqual(JSON.parse(freshProcess.stdout), { copies: 0, writes: 0, bodyReads: 0 });
+  for (const host of hosts) {
+    const bundled = join(host, 'node_modules', '@happier-dev', 'protocol');
+    rmSync(join(bundled, 'dist', 'index.js'));
+    await syncWorkspaceComponentBundledDependencies(host);
+    assert.equal(readFileSync(join(bundled, 'dist', 'index.js'), 'utf8'),
+      'export { metadata } from "fixture-copy-runtime";\n');
+    const vendorFile = join(bundled, 'node_modules', 'fixture-copy-runtime', 'index.js');
+    const prior = statSync(vendorFile);
+    writeFileSync(vendorFile, 'export const metadata = "corrupt";\n');
+    utimesSync(vendorFile, prior.atime, prior.mtime);
+    await syncWorkspaceComponentBundledDependencies(host);
+    assert.equal(readFileSync(vendorFile, 'utf8'), 'export const metadata = "current";\n');
+  }
+  writeFileSync(join(source, 'resource.txt'), 'changed resource\n');
+  writeFileSync(join(runtime, 'index.js'), 'export const metadata = "updated";\n');
+  for (const host of hosts) {
+    await syncWorkspaceComponentBundledDependencies(host);
+    const bundled = join(host, 'node_modules', '@happier-dev', 'protocol');
+    assert.equal(readFileSync(join(bundled, 'resource.txt'), 'utf8'), 'changed resource\n');
+    const loaded = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval',
+      'process.stdout.write((await import("@happier-dev/protocol")).metadata)'], { cwd: host });
+    assert.equal(loaded.stdout, 'updated');
+  }
+  // A producer can publish again while a live component is copying. Never
+  // persist a clean-looking proof of bytes that were copied between versions.
+  const firstBundleFile = join(hosts[0], 'node_modules', '@happier-dev', 'protocol', 'dist', 'index.js');
+  const sourceFile = join(source, 'dist', 'index.js');
+  const sourceContents = readFileSync(sourceFile, 'utf8');
+  rmSync(firstBundleFile);
+  let interruptedCopy = false;
+  fs.copyFileSync = (...args) => {
+    if (String(args[0]) !== sourceFile || interruptedCopy) return originalCopy(...args);
+    interruptedCopy = true;
+    writeFileSync(sourceFile, 'export const metadata = "racing";\n');
+    try { return originalCopy(...args); } finally { writeFileSync(sourceFile, sourceContents); }
+  };
+  syncBuiltinESMExports();
+  try {
+    await syncWorkspaceComponentBundledDependencies(hosts[0]);
+  } finally {
+    fs.copyFileSync = originalCopy;
+    syncBuiltinESMExports();
+  }
+  assert.equal(interruptedCopy, true);
+  await syncWorkspaceComponentBundledDependencies(hosts[0]);
+  assert.equal(readFileSync(firstBundleFile, 'utf8'), sourceContents);
+  const linkedHost = join(root, 'apps', 'linked-host');
+  const linkedPackage = join(linkedHost, 'node_modules', '@happier-dev', 'protocol');
+  mkdirSync(join(linkedHost, 'node_modules', '@happier-dev'), { recursive: true });
+  writeFileSync(join(linkedHost, 'package.json'), readFileSync(join(hosts[0], 'package.json')));
+  fs.symlinkSync(source, linkedPackage, process.platform === 'win32' ? 'junction' : 'dir');
+  const sourceManifest = readFileSync(join(source, 'package.json'), 'utf8');
+  await syncWorkspaceComponentBundledDependencies(linkedHost);
+  assert.equal(fs.lstatSync(linkedPackage).isSymbolicLink(), true);
+  assert.equal(readFileSync(join(source, 'package.json'), 'utf8'), sourceManifest);
+  assert.equal(existsSync(join(source, '.happier-bundle-inputs.json')), false);
+  await syncWorkspaceComponentBundledDependencies(linkedHost, { publicationMode: 'artifact' });
+  assert.equal(fs.lstatSync(linkedPackage).isSymbolicLink(), false,
+    'explicit artifact publication must materialize a physical package');
+  assert.equal(readFileSync(join(source, 'package.json'), 'utf8'), sourceManifest);
+});
+
 test('source-dev runtime preparation admits SDK outputs without deriving Action declarations', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-source-dev-action-declarations-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
@@ -1458,9 +1622,8 @@ test('source-dev runtime preparation admits SDK outputs without deriving Action 
       ...(app === 'cli' ? { bundledDependencies: ['@happier-dev/plugin-sdk'] } : {}),
     }));
   }
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*', 'apps/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - apps/*\n');
   const sdkScripts = JSON.parse(readFileSync(new URL('../../packages/plugin-sdk/package.json', import.meta.url))).scripts;
   mkdirSync(join(packageDir, 'src'), { recursive: true });
   mkdirSync(join(packageDir, 'scripts'), { recursive: true });
@@ -1513,9 +1676,8 @@ test('source-dev refresh observes root UI config inputs through workspace build 
     mkdirSync(join(repoRoot, 'apps', appName), { recursive: true });
     writeFileSync(join(repoRoot, 'apps', appName, 'package.json'), JSON.stringify({ name: `@fixture/${appName}` }));
   }
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*', 'apps/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   writeFileSync(join(cliDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/cli', bundledDependencies: ['@happier-dev/ui-component'],
   }));
@@ -1565,16 +1727,11 @@ test('workspace build admission includes dev dependencies by default and exclude
     for (const packageDir of [protocolDir, peerMediationDir, testsDir]) {
       mkdirSync(packageDir, { recursive: true });
     }
-    writeFileSync(
-      join(repoRoot, 'package.json'),
-      JSON.stringify({
+    writePnpmWorkspaceFixture(repoRoot, {
         private: true,
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
-      }),
-      'utf8',
-    );
+      });
     writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -1707,13 +1864,8 @@ test('workspace build admission rebuilds a consumer after a dependency output ch
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1777,13 +1929,8 @@ test('workspace build admission publishes an admitted peer before its dependent 
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1876,13 +2023,8 @@ test('workspace build admission overlaps independent packages within a bounded s
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -1957,13 +2099,8 @@ test('workspace build admission queues bundled siblings before they enter the sh
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2083,13 +2220,8 @@ test('unchanged workspace package admission preserves the published dist directo
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2141,12 +2273,190 @@ test('unchanged workspace package admission preserves the published dist directo
   assert.equal(await readFile(join(packageDir, 'dist', 'index.js'), 'utf8'), 'export const value = true;\n');
 });
 
+test('fresh-process publisher verifies final output identities without hashing unchanged output bodies', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'happier-workspace-output-proof-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writePnpmWorkspaceFixture(root, { private: true, workspaces: ['packages/*'] });
+  writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  for (const app of ['cli', 'ui', 'server']) {
+    mkdirSync(join(root, 'apps', app), { recursive: true });
+    writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
+  }
+  const names = ['producer', 'consumer', 'unrelated'];
+  for (const name of names) {
+    const dir = join(root, 'packages', name);
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src/index.ts'), 'export const value = 1;\n');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${name}`, type: 'module',
+      main: './dist/index.js', types: './dist/index.d.ts', scripts: { build: 'fixture-compiler' },
+      ...(name === 'consumer' ? { dependencies: { '@fixture/producer': 'workspace:*' } } : {}) }));
+  }
+  // Fresh processes discard the digest helper's in-memory cache. Instrument
+  // only filesystem/process boundaries; all freshness and publication is real.
+  const ownerUrl = new URL('./ensureWorkspacePackagesBuilt.mjs', import.meta.url).href;
+  const code = `
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import {join, sep} from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+const {ensureWorkspacePackagesBuiltByName} = await import(${JSON.stringify(ownerUrl)});
+const root = process.argv[1];
+const outputRoot = root.split(sep).join('/');
+const builds = [];
+let outputBodyBytes = 0, outputBodyReads = 0, outputStats = 0;
+const read = fs.readFileSync;
+fs.readFileSync = (...args) => {
+  const value = read(...args);
+  const path = String(args[0]).split(sep).join('/');
+  if (path.startsWith(outputRoot + '/') && !path.endsWith('/.happier-build-inputs.json')
+    && (path.includes('/dist/') || path.includes('/.tmp.'))) {
+    outputBodyReads++; outputBodyBytes += Buffer.byteLength(value);
+  }
+  return value;
+};
+for (const method of ['lstatSync', 'statSync']) {
+  const original = fs[method];
+  fs[method] = (...args) => {
+    const path = String(args[0]).split(sep).join('/');
+    if (path.startsWith(outputRoot + '/') && path.includes('/dist')) outputStats++;
+    return original(...args);
+  };
+}
+const rename = fsPromises.rename;
+let rejectFinalRecord = process.argv[2] === 'fail-final-record';
+fsPromises.rename = async (...args) => {
+  if (rejectFinalRecord && args[1] === join(root, 'packages/producer/dist/.happier-build-inputs.json')) {
+    rejectFinalRecord = false;
+    throw Object.assign(new Error('fixture final publication failure'), {code:'EIO'});
+  }
+  return await rename(...args);
+};
+const renameSync = fs.renameSync;
+let rejectMountedOutput = process.argv[2] === 'fail-mounted-output';
+fs.renameSync = (...args) => {
+  if (rejectMountedOutput && args[1] === join(root, 'packages/producer/dist/index.js')) {
+    rejectMountedOutput = false;
+    throw Object.assign(new Error('fixture mounted publication failure'), {code:'EIO'});
+  }
+  return renameSync(...args);
+};
+syncBuiltinESMExports();
+const workspaceBuildBoundary = {
+  prepareEnv: async (_dir, env) => ({...env}),
+  async runPackageBuild(dir, {env}) {
+    builds.push(JSON.parse(read(join(dir, 'package.json'))).name);
+    fs.mkdirSync(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, {recursive:true});
+    fs.writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), read(join(dir, 'src/index.ts')));
+    fs.writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), read(join(dir, 'src/index.ts'), 'utf8').includes('value = "')
+      ? 'export declare const value: string;\\n' : 'export declare const value: number;\\n');
+    if (process.argv[2] === 'cancel') {
+      process.kill(process.pid, 'SIGINT');
+      await new Promise(() => {});
+    }
+    if (process.argv[2] === 'fail') throw new Error('fixture publication failure');
+  }
+};
+try {
+  const result = await ensureWorkspacePackagesBuiltByName(root, ['@fixture/consumer', '@fixture/unrelated'], {
+    workspaceBuildBoundary, buildMode:'strict', env:{...process.env, HAPPIER_STACK_REPO_DIR:root,
+      HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR:''}
+  });
+  console.log(JSON.stringify({built:result.built, builds, outputBodyBytes, outputBodyReads, outputStats}));
+} catch (error) { console.log(JSON.stringify({error:error.message, builds, outputBodyBytes, outputBodyReads, outputStats})); }
+`;
+  const runFresh = async (failure = '') => {
+    const { stdout } = await promisify(execFile)(process.execPath,
+      ['--experimental-strip-types', '--input-type=module', '--eval', code, root, failure], { maxBuffer: 1024 * 1024 });
+    return JSON.parse(stdout.trim());
+  };
+  const producerDir = join(root, 'packages/producer');
+  const outputPath = join(producerDir, 'dist/index.js');
+  const recordPath = join(producerDir, 'dist/.happier-build-inputs.json');
+  const cold = await runFresh();
+  assert.equal(cold.error, undefined, `cold publisher failed: ${cold.error}`);
+  assert.deepEqual(cold.built, ['@fixture/consumer', '@fixture/producer', '@fixture/unrelated']);
+  assert.ok(cold.outputBodyBytes > 0);
+  const warm = await runFresh();
+  assert.deepEqual(warm.built, []);
+  assert.deepEqual(warm.builds, []);
+  assert.equal(warm.outputBodyBytes, 0, 'unchanged outputs must not be rehashed in a fresh process');
+  assert.ok(warm.outputStats > 0, 'warm admission still verifies live file identity');
+  const record = JSON.parse(readFileSync(recordPath));
+  for (const output of record.outputs) {
+    const stat = statSync(join(producerDir, 'dist', output.path), { bigint: true });
+    assert.deepEqual(output.verification, Object.fromEntries(
+      ['size', 'dev', 'ino', 'mtimeNs', 'ctimeNs'].map(key => [key, String(stat[key])])));
+  }
+  writeFileSync(recordPath, JSON.stringify({ ...record,
+    outputs: record.outputs.map(({ verification, ...output }) => output) }));
+  const migrated = await runFresh();
+  assert.deepEqual(migrated.built, []);
+  assert.ok(migrated.outputBodyBytes > 0, 'older records verify content before gaining worker-local proof');
+  assert.equal((await runFresh()).outputBodyBytes, 0, 'older record migration is persisted under the existing lease');
+  const retainedDeclaration = join(producerDir, 'dist/retained.d.ts');
+  writeFileSync(retainedDeclaration, 'export declare const retained: number;\n');
+  assert.deepEqual((await runFresh()).built, ['@fixture/consumer'], 'retained declaration additions remain visible to consumers');
+  assert.equal((await runFresh()).outputBodyBytes, 0, 'retained live outputs also gain worker-local proof');
+  writeFileSync(retainedDeclaration, 'export declare const retained: string;\n');
+  assert.deepEqual((await runFresh()).built, ['@fixture/consumer'], 'retained declaration edits still invalidate consumers');
+  rmSync(retainedDeclaration);
+  assert.deepEqual((await runFresh()).built, ['@fixture/consumer'], 'retained declaration removal remains semantic change');
+  assert.equal((await runFresh()).outputBodyBytes, 0);
+  writeFileSync(join(producerDir, 'src/index.ts'), 'export const value = 2;\n');
+  assert.deepEqual((await runFresh()).built, ['@fixture/producer'], 'equal declarations do not re-emit dependents');
+  writeFileSync(join(producerDir, 'src/index.ts'), 'export const value = "changed";\n');
+  assert.deepEqual((await runFresh()).built, ['@fixture/consumer', '@fixture/producer']);
+
+  const beforeRewrite = statSync(outputPath);
+  const originalOutput = readFileSync(outputPath, 'utf8');
+  writeFileSync(outputPath, originalOutput.replace('changed', 'damaged'));
+  utimesSync(outputPath, beforeRewrite.atime, beforeRewrite.mtime);
+  assert.deepEqual((await runFresh()).built, ['@fixture/producer'], 'ctime detects same-size restored-mtime corruption');
+  const replacement = join(producerDir, 'replacement.js');
+  writeFileSync(replacement, readFileSync(outputPath, 'utf8').replace('changed', 'invalid'));
+  renameSync(replacement, outputPath);
+  assert.deepEqual((await runFresh()).built, ['@fixture/producer'], 'inode replacement cannot reuse the old proof');
+  rmSync(join(producerDir, 'dist/index.d.ts'));
+  assert.deepEqual((await runFresh()).built, ['@fixture/producer'], 'missing output is repaired');
+  const distDir = join(producerDir, 'dist');
+  const copiedDir = join(producerDir, 'copied-dist');
+  cpSync(distDir, copiedDir, { recursive: true, preserveTimestamps: true });
+  rmSync(distDir, { recursive: true });
+  renameSync(copiedDir, distDir);
+  const copied = await runFresh();
+  assert.deepEqual(copied.built, []);
+  assert.ok(copied.outputBodyBytes > 0, 'copied files require content verification before proof reuse');
+  assert.equal((await runFresh()).outputBodyBytes, 0, 'copied files are verified once under the publication lease');
+  // A changed declaration inventory must affect the consuming fingerprint.
+  writeFileSync(join(distDir, 'added.d.ts'), 'export declare const added: boolean;\n');
+  assert.deepEqual((await runFresh()).built, ['@fixture/consumer']);
+  const priorRecord = readFileSync(recordPath, 'utf8');
+  const priorOutput = readFileSync(outputPath, 'utf8');
+  writeFileSync(join(producerDir, 'src/index.ts'), 'export const value = "failure";\n');
+  assert.match((await runFresh('fail')).error, /fixture publication failure/);
+  assert.equal(readFileSync(recordPath, 'utf8'), priorRecord);
+  assert.equal(readFileSync(outputPath, 'utf8'), priorOutput);
+  await assert.rejects(runFresh('cancel'), error => error.signal === 'SIGINT');
+  assert.equal(readFileSync(recordPath, 'utf8'), priorRecord, 'cancelled staging cannot publish a new proof');
+  assert.equal(readFileSync(outputPath, 'utf8'), priorOutput, 'cancelled staging preserves live bytes');
+  assert.match((await runFresh('fail-mounted-output')).error, /fixture mounted publication failure/);
+  assert.equal(readFileSync(recordPath, 'utf8'), priorRecord, 'failed mounted publication restores the coherent record');
+  assert.equal(readFileSync(outputPath, 'utf8'), priorOutput, 'failed mounted publication restores the prior usable output');
+  await runFresh();
+  writeFileSync(join(producerDir, 'src/index.ts'), 'export const value = "final";\n');
+  assert.match((await runFresh('fail-final-record')).error, /fixture final publication failure/);
+  assert.ok(JSON.parse(readFileSync(recordPath)).outputs.every(output => !output.verification),
+    'failed final publication leaves no clean-looking staged inode proof');
+  assert.deepEqual((await runFresh()).built, [], 'the existing lease verifies and repairs the unproven record without re-emitting');
+  assert.equal((await runFresh()).outputBodyBytes, 0);
+  t.diagnostic(JSON.stringify({cold, warm, copied}));
+});
+
 test('package admission follows source content and membership rather than timestamps', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-content-currentness-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2219,7 +2529,7 @@ test('non-strict workspace builds publish captured inputs despite edits during c
   for (const buildMode of ['qa-runtime', 'source-dev', 'strict']) await t.test(buildMode, async t => {
     const root = mkdtempSync(join(tmpdir(), 'workspace-captured-build-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+    writePnpmWorkspaceFixture(root, { workspaces: ['packages/*'] });
     for (const app of ['cli', 'ui', 'server']) {
       mkdirSync(join(root, 'apps', app), { recursive: true });
       writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -2271,7 +2581,7 @@ test('non-strict workspace builds publish captured inputs despite edits during c
 test('cold SDK capture publishes generated inputs while the producer keeps editing', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'workspace-cold-sdk-capture-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(root, { workspaces: ['packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}`,
@@ -2349,7 +2659,7 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port));
 test('QA captures approve their physical install when producer identity is remote', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'workspace-capture-install-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(root, { workspaces: ['packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -2392,7 +2702,7 @@ writeFileSync(join(process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), r
 test('QA workspace dependency preparation cannot rewrite captured producer inputs', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'workspace-captured-bundling-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(root, { workspaces: ['packages/*'] });
   for (const app of ['cli', 'ui', 'server']) {
     mkdirSync(join(root, 'apps', app), { recursive: true });
     writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -2443,7 +2753,7 @@ test('workspace phase takes one selective trailing pass for real-process input d
     await t.test(mode, async (t) => {
       const root = mkdtempSync(join(tmpdir(), 'happier-workspace-convergence-'));
       t.after(() => rmSync(root, { recursive: true, force: true }));
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+      writePnpmWorkspaceFixture(root, { workspaces: ['apps/*', 'packages/*'] });
       for (const app of ['cli', 'ui', 'server']) {
         mkdirSync(join(root, 'apps', app), { recursive: true });
         writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
@@ -2529,9 +2839,8 @@ test('workspace phase takes one selective trailing pass for real-process input d
 test('continuing concurrent source edits preserve the last coherent output and its built-input fingerprint', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-moving-inputs-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2575,9 +2884,8 @@ test('continuing concurrent source edits preserve the last coherent output and i
 test('a recorded build remains valid after source edits but not after a dependency output changes', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-built-dependencies-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*', 'apps/*'] }));
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*', 'apps/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const app of ['cli', 'ui', 'server']) {
     const dir = join(repoRoot, 'apps', app);
     mkdirSync(dir, { recursive: true });
@@ -2625,7 +2933,7 @@ test('package input fingerprint changes with the selected compiler bytes', async
   mkdirSync(join(compilerHelper, '..'), { recursive: true });
   writeFileSync(compilerHelper, 'native resolution helper one\n');
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), 'external-types@1:\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
+  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\n');
   const outputScriptOwner = join(repoRoot, 'scripts/workspaces/workspaceOutputScriptArgs.mjs');
   mkdirSync(join(outputScriptOwner, '..'), { recursive: true });
   writeFileSync(outputScriptOwner, 'export const stagedManifest = 1;\n');
@@ -2641,7 +2949,7 @@ test('package input fingerprint changes with the selected compiler bytes', async
     [nativeExecutable, 'native compiler two\n', 'native compiler replacement'],
     [compilerHelper, 'native resolution helper two\n', 'executable-resolution helper replacement'],
     [join(repoRoot, 'pnpm-lock.yaml'), 'external-types@2:\n', 'external declaration dependency-lock change'],
-    [join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\nnodeLinker: hoisted\n', 'package-manager policy change'],
+    [join(repoRoot, 'pnpm-workspace.yaml'), 'packages:\nnodeLinker: hoisted\n', 'package-manager policy change'],
     [outputScriptOwner, 'export const stagedManifest = 2;\n', 'staged manifest preparation owner replacement'],
   ]) await t.test(contract, () => {
     const before = fingerprint();
@@ -2695,13 +3003,8 @@ test('live publication refreshes declared output currentness when source changes
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2765,13 +3068,8 @@ test('concurrent workspace package build waiters reuse the one published result'
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2839,13 +3137,8 @@ test('workspace build reuses an inherited bundle publication lease', async (t) =
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2914,13 +3207,8 @@ test('workspace build preserves an inherited bundle lease through an unbundled p
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -2991,11 +3279,10 @@ test('workspace build preserves an inherited bundle lease through an unbundled p
 test('first-party plugin UI siblings prepare their manifests inside joint publication admission before capture', async (t) => {
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), 'happier-plugin-ui-manifest-admission-')));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({
+  writePnpmWorkspaceFixture(repoRoot, {
     private: true, workspaces: ['apps/*', 'packages/plugins/*'],
-  }));
+  });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3057,12 +3344,11 @@ test('first-party plugin UI siblings prepare their manifests inside joint public
 test('plugin UI runtime build uses only its package lock', async (t) => {
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), 'happier-plugin-ui-build-lock-order-')));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({
+  writePnpmWorkspaceFixture(repoRoot, {
     private: true,
     workspaces: ['packages/*'],
-  }));
+  });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3101,13 +3387,8 @@ test('workspace build refreshes a consumer bundled dependency after the dependen
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3218,13 +3499,8 @@ test('workspace build refreshes a stale private bundled dependency published by 
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3370,13 +3646,8 @@ test('workspace build leaves non-bundled packages under only their package build
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
   for (const appName of ['ui', 'cli', 'server']) {
     const appDir = join(repoRoot, 'apps', appName);
     mkdirSync(appDir, { recursive: true });
@@ -3434,13 +3705,8 @@ test('declared plugin UI artifacts participate in atomic workspace build admissi
     const packageDir = join(repoRoot, 'packages', 'inspector');
     mkdirSync(join(packageDir, 'src'), { recursive: true });
     mkdirSync(join(packageDir, 'dist'), { recursive: true });
-    writeFileSync(
-      join(repoRoot, 'package.json'),
-      JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-      'utf8',
-    );
+    writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
     writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3593,13 +3859,8 @@ test('a newer dist directory does not hide stale declared workspace outputs', as
     const distDir = join(packageDir, 'dist');
     mkdirSync(sourceDir, { recursive: true });
     mkdirSync(distDir, { recursive: true });
-    writeFileSync(
-      join(repoRoot, 'package.json'),
-      JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-      'utf8',
-    );
+    writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
     writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3723,16 +3984,11 @@ test('CLI artifact preparation rebuilds bundled outputs recreated after current 
     mkdirSync(codexSourceDir, { recursive: true });
     mkdirSync(codexDistDir, { recursive: true });
     mkdirSync(testsDir, { recursive: true });
-    writeFileSync(
-      join(repoRoot, 'package.json'),
-      JSON.stringify({
+    writePnpmWorkspaceFixture(repoRoot, {
         private: true,
         workspaces: ['apps/*', 'packages/*', 'packages/plugins/*'],
-      }),
-      'utf8',
-    );
+      });
     writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-    writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
     for (const appName of ['ui', 'cli', 'server']) {
       const appDir = join(repoRoot, 'apps', appName);
       mkdirSync(appDir, { recursive: true });
@@ -3968,13 +4224,8 @@ test('workspace build timeout kills descendant writers before releasing the pack
       'utf8',
     );
   }
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'timeout-tree');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
@@ -3999,14 +4250,14 @@ test('workspace build timeout kills descendant writers before releasing the pack
     "appendFileSync(heartbeatPath, 'started\\n', 'utf8');",
     "setInterval(() => appendFileSync(heartbeatPath, 'tick\\n', 'utf8'), 20);",
   ].join('\n');
-  const yarnEntrypointPath = join(repoRoot, 'fixture-yarn.cjs');
+  const pnpmEntrypointPath = join(repoRoot, 'fixture-pnpm.cjs');
   writeFileSync(
-    yarnEntrypointPath,
+    pnpmEntrypointPath,
     [
       "const { spawn } = require('node:child_process');",
       'const args = process.argv.slice(2);',
       "if (args.length === 1 && args[0] === '--version') process.exit(0);",
-      "if (args[0] !== '-s' || args[1] !== 'build') process.exit(91);",
+      "if (args[0] !== 'run' || args[1] !== '--silent' || args[2] !== 'build') process.exit(91);",
       `spawn(process.execPath, ['-e', ${JSON.stringify(writerSource)}, ${JSON.stringify(heartbeatPath)}, ${JSON.stringify(writerPidPath)}], { stdio: 'ignore' });`,
       'setInterval(() => {}, 1_000);',
     ].join('\n') + '\n',
@@ -4016,7 +4267,7 @@ test('workspace build timeout kills descendant writers before releasing the pack
   const native = await installWorkspaceAdmissionProcessFixture(t, repoRoot);
   const env = {
     ...native.env,
-    npm_execpath: yarnEntrypointPath,
+    npm_execpath: pnpmEntrypointPath,
   };
   let timeoutError = null;
   await assert.rejects(
@@ -4072,13 +4323,8 @@ test('quiet workspace builds retain bounded child diagnostics when the build fai
       'utf8',
     );
   }
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'quiet-diagnostic');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
@@ -4094,13 +4340,13 @@ test('quiet workspace builds retain bounded child diagnostics when the build fai
     'utf8',
   );
 
-  const yarnEntrypointPath = join(repoRoot, 'fixture-quiet-failure-yarn.cjs');
+  const pnpmEntrypointPath = join(repoRoot, 'fixture-quiet-failure-pnpm.cjs');
   writeFileSync(
-    yarnEntrypointPath,
+    pnpmEntrypointPath,
     [
       'const args = process.argv.slice(2);',
       "if (args.length === 1 && args[0] === '--version') process.exit(92);",
-      "if (args[0] !== '-s' || args[1] !== 'build') process.exit(91);",
+      "if (args[0] !== 'run' || args[1] !== '--silent' || args[2] !== 'build') process.exit(91);",
       "process.stdout.write('stdout-head\\n' + 'x'.repeat(10_000) + 'stdout-tail\\n');",
       "process.stderr.write('stderr-head\\n' + 'y'.repeat(10_000) + 'stderr-tail\\n');",
       'process.exit(37);',
@@ -4115,7 +4361,7 @@ test('quiet workspace builds retain bounded child diagnostics when the build fai
       repoRoot,
       ['@happier-dev/quiet-diagnostic'],
       {
-        env: { ...native.env, npm_execpath: yarnEntrypointPath },
+        env: { ...native.env, npm_execpath: pnpmEntrypointPath },
         force: true,
         quiet: true,
       },
@@ -4149,13 +4395,8 @@ test('Stack workspace build boundary propagates timeoutMs to the package-manager
       'utf8',
     );
   }
-  writeFileSync(
-    join(repoRoot, 'package.json'),
-    JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }),
-    'utf8',
-  );
+  writePnpmWorkspaceFixture(repoRoot, { private: true, workspaces: ['apps/*', 'packages/*'] });
   writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '# fixture\n', 'utf8');
-  writeFileSync(join(repoRoot, 'pnpm-workspace.yaml'), 'packages: []\n');
 
   const packageDir = join(repoRoot, 'packages', 'stack-timeout');
   mkdirSync(join(packageDir, 'src'), { recursive: true });
@@ -4171,15 +4412,15 @@ test('Stack workspace build boundary propagates timeoutMs to the package-manager
     'utf8',
   );
 
-  const yarnEntrypointPath = join(repoRoot, 'fixture-stack-yarn.cjs');
+  const pnpmEntrypointPath = join(repoRoot, 'fixture-stack-pnpm.cjs');
   writeFileSync(
-    yarnEntrypointPath,
+    pnpmEntrypointPath,
     [
       "const { mkdirSync, writeFileSync } = require('node:fs');",
       "const { join } = require('node:path');",
       'const args = process.argv.slice(2);',
       "if (args.length === 1 && args[0] === '--version') process.exit(0);",
-      "if (args[0] !== '-s' || args[1] !== 'build') process.exit(91);",
+      "if (args[0] !== 'run' || args[1] !== '--silent' || args[2] !== 'build') process.exit(91);",
       'setTimeout(() => {',
       '  const outDir = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;',
       '  mkdirSync(outDir, { recursive: true });',
@@ -4191,15 +4432,15 @@ test('Stack workspace build boundary propagates timeoutMs to the package-manager
   );
   const binDir = join(repoRoot, 'bin');
   mkdirSync(binDir, { recursive: true });
-  const yarnCommandPath = join(binDir, process.platform === 'win32' ? 'yarn.cmd' : 'yarn');
+  const pnpmCommandPath = join(binDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
   writeFileSync(
-    yarnCommandPath,
+    pnpmCommandPath,
     process.platform === 'win32'
-      ? `@${JSON.stringify(process.execPath)} ${JSON.stringify(yarnEntrypointPath)} %*\r\n`
-      : `#!${process.execPath}\nrequire(${JSON.stringify(yarnEntrypointPath)});\n`,
+      ? `@${JSON.stringify(process.execPath)} ${JSON.stringify(pnpmEntrypointPath)} %*\r\n`
+      : `#!${process.execPath}\nrequire(${JSON.stringify(pnpmEntrypointPath)});\n`,
     'utf8',
   );
-  chmodSync(yarnCommandPath, 0o755);
+  chmodSync(pnpmCommandPath, 0o755);
 
   const native = await installWorkspaceAdmissionProcessFixture(t, repoRoot);
   await assert.rejects(

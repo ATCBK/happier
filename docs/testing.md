@@ -138,7 +138,39 @@ The development push Gate runs each non-UI partition through `pnpm run test:gate
 
 In 0.3 development, runtime worker bootstrap, runtime validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode and public packing/publication still check semantics. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
-Public package typechecks derive current dependency declarations through `prepareReferencedTypecheckDeclarations.mjs`, inside the consumer's existing compilation admission and before its compiler starts. Microsoft emits one declaration-only batch into each producer's canonical `dist` with its package-build settings and `--noCheck --emitDeclarationOnly`; consumers resolve public package exports with their selected checker, strict options and authored admission envelope. The existing resource owner acquires package-build locks and dependency-reader custody for emission, then releases publication locks before the consumer starts. There is no separate declaration admission class. Source, dependency, toolchain and declaration-output inputs govern reuse: warm checks launch no emitter. JavaScript and package build stamps stay untouched, so declaration preparation cannot make stale runtime output current. Typechecks do not run package builds or prepare native tools or bundled-plugin artifacts. Native Windows compilation uses the same declaration owner directly; CLI cross-app source references retain their existing preparation owner. Set `HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS=1` on Linux to report declaration preparation, compiler start and RSS measurements.
+In 0.3 development, automatic workspace declaration preparation is withdrawn;
+public component typechecks read canonical package outputs. Refresh stale
+producer outputs through the explicit `prepare:typecheck:workspaces` publication
+command. The parked workspace emitter in
+`prepareReferencedTypecheckDeclarations.mjs` is not called by public typecheck
+dispatch. The same module's authored CLI-to-UI source-reference preparation
+remains active and has a separate purpose.
+
+The development-only `remote_validation_preparation.mjs --typecheck-batch`
+command explicitly prepares and reads on one selected worker. Repeat
+`--component-relative-dir=PATH` for consuming components, then supply `--` and
+the finite reader command. It collects the union of canonical producer resources
+before native admission, publishes strict prerequisites sequentially using
+authenticated inherited custody, completes each consuming component's bundled
+sync, then runs the reader. Graph changes unwind admission before the existing
+single trailing pass recollects resources. This explicit validation command is
+not enabled in automatic public dispatch.
+
+Automatic preparation stays off: in the shared checkout, producer inputs change
+while a preparation runs, so it cannot converge within the 228 s cold boundary.
+After a failed public typecheck, the reader checks producer records in dependency
+order and appends one hint line after the compiler diagnostics for the first
+noncurrent producer, with one explicit rebuild command to run from the repository
+root. This runs on the worker and reaches the caller through `hstack-exec`, and
+preserves the compiler's diagnostics and exit status. The hint does not establish
+that stale declarations caused the failure; passing checks do not run this
+diagnostic or certify producer freshness. There is no automatic rebuild or retry.
+When a typecheck reports declaration-shaped diagnostics, rebuild the producers
+explicitly and rerun. Typical symptoms are a missing export or property that
+exists in the producer's source, and `node_modules/.cache` names in consumed
+declarations. Rebuild in dependency order: Protocol, then plugin-sdk, then
+plugin-ui (`pnpm --dir packages/<name> run build`, or the `--typecheck-batch`
+command above on the worker that runs the reader).
 
 Expo dev/mobile startup is source-first: its canonical UI preflight compiles only
 plugin UI assets and publishes the app-owned inventory through the existing
@@ -237,7 +269,13 @@ In current 0.3 development, finite workspace publishers declare their existing
 package/publication leases to `workspace_build_admission.mjs`; native
 `hstack-exec` is the single joint lease/capacity owner. Plain and workspace
 waiters join the same blocking kernel decision-mutex queue before acquiring
-new leases. Under that mutex, a publisher tries its leases without waiting;
+new leases. AUTO reroutes pre-dispatch capacity refusals through the eligible
+pool once, then uses the existing candidate ranking to join one healthy worker's
+native queue. Queue waiting retains its custody, resource-aware backfill and
+cancellation without repeating selection, synchronization or bootstrap. Busy
+workers receive no failure TTL and do not justify local fallback. Runtime-control
+alternative probes remain nonblocking while their original waiter retains custody.
+Under that mutex, a publisher tries its leases without waiting;
 a busy attempt releases every new lease and yields head priority while keeping
 its waiter and original queue age. Capacity-denied attempts likewise release
 new leases before retrying. Only a ready lease transaction is admitted. The
@@ -254,11 +292,32 @@ after prerequisite publication. Bare compilers and pure compiler scripts retain
 outer admission with reentrant leaf validation. Explicit command environment/cwd overrides participate
 in that same policy. No second class table, admission budget or deadline is added.
 
+Containing typechecks reserve the envelope of their declared producer graph before
+starting. A CLI test project that references UI source therefore includes the UI
+declaration producer's envelope; narrower CLI projects retain their own class.
+Nested native commands reuse their authenticated ancestor's reservation, including
+when lifecycle adapters lose admission environment context: the existing live
+owner record and kernel ancestry must still agree. An enlargement gets one
+nonblocking decision. If capacity or the decision mutex is unavailable, it returns
+`HSTACK_NESTED_ADMISSION_CAPACITY` so the caller can reserve the composed workload
+before starting its parent. It never waits for more capacity while retaining the
+parent's reservation. Joint publication workers require their containing admission
+instead of creating a second holder if the communicated identity is invalid.
+
 Package input fingerprints use the actual package workspace's compiler-owner
 scripts, not a different checkout selected by the running Stack's environment.
 Explicit captured-origin remapping remains supported. A compiler-owner change
 invalidates that workspace's cached output through the existing build owner;
 an unrelated runtime checkout's script change does not.
+
+The same publisher's `.happier-build-inputs.json` record can retain worker-local
+output verification alongside its content digests: size, device, inode, and
+nanosecond modification/change times. Matching file identity reuses the recorded
+digest; changed identity verifies content again. Membership checks remain active,
+including retained live outputs. Old or copied records verify once before the
+publisher persists proof under its publication lease. Proof is captured from final
+published paths and written atomically last; it does not change semantic output
+identity or establish artifact authenticity.
 
 In 0.3 development, denied admission attempts keep one custody worker and its
 directory watches across retries. Lease release, queue changes and reservation

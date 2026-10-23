@@ -13,6 +13,153 @@ import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '.
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { join } from 'node:path';
 
+test('batch resource closure covers transitive publishers and detects graph changes', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-batch-resource-closure-' });
+  for (const app of ['ui', 'cli', 'server']) {
+    await mkdir(fixture.path('apps', app), { recursive: true });
+    await writeFile(fixture.path('apps', app, 'package.json'), JSON.stringify({ name: `@happier-dev/fixture-${app}`,
+      ...(app === 'cli' ? { dependencies: { '@happier-dev/alpha': 'workspace:*' } } : {}) }));
+  }
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true }));
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+  for (const name of ['alpha', 'beta', 'unrelated']) {
+    await mkdir(fixture.path('packages', name), { recursive: true });
+    await writeFile(fixture.path('packages', name, 'package.json'), JSON.stringify({ name: `@happier-dev/${name}`,
+      ...(name === 'alpha' ? { main: './dist/index.js', scripts: { build: 'node scripts/build.mjs' },
+        dependencies: { '@happier-dev/beta': 'workspace:*', '@happier-dev/fixture-cli': 'workspace:*' } } : {}) }));
+  }
+  const { collectWorkspaceBuildBatchResources, ensureWorkspacePackagesBuiltByName } = await import('../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs');
+  const selected = [fixture.path('apps', 'cli'), fixture.path('apps', 'ui'), fixture.path('packages', 'beta')];
+  const before = await collectWorkspaceBuildBatchResources(selected, { admissionClass: 'package-dist' });
+  assert.deepEqual(before.packageNames, ['@happier-dev/alpha', '@happier-dev/beta']);
+  assert.equal(before.locks.filter(lock => lock.kind === 'dependency').length, 1);
+  assert.equal(before.locks.length, 4, 'one dependency reader, bundle publisher and two package publishers');
+  assert.equal(before.admissionClass, 'compilation', 'choose the producer requirement before acquiring the lower reader envelope');
+  assert.deepEqual(await collectWorkspaceBuildBatchResources([...selected].reverse(), { admissionClass: 'package-dist' }), before);
+  assert.equal((await collectWorkspaceBuildBatchResources(selected, { admissionClass: 'compilation-ui' })).admissionClass,
+    'compilation-ui', 'a reader envelope that already covers producers is retained');
+  assert.deepEqual(before.consumerOnlyPackageNames, ['@happier-dev/fixture-cli', '@happier-dev/fixture-ui']);
+  let compilerCalls = 0;
+  await withWorkspaceBuildResources({ locks: before.locks, env: buildNativeAdmissionFixtureEnv(), signal: t.signal }, async env => {
+    const result = await ensureWorkspacePackagesBuiltByName(fixture.root, before.packageNames, {
+      env, buildMode: 'strict', inheritedAdmission: true, visitedNames: before.consumerOnlyPackageNames,
+      signal: t.signal, workspaceBuildBoundary: {
+        prepareEnv: async (_dir, value) => value,
+        // The compiler process is the system boundary; graph traversal,
+        // fingerprinting, mounted publication and custody remain real.
+        runPackageBuild: async (_dir, { env }) => {
+          compilerCalls++;
+          await mkdir(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, { recursive: true });
+          await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export const ready = true;\n');
+        },
+      },
+    });
+    assert.deepEqual(result.built, ['@happier-dev/alpha']);
+  });
+  assert.equal(compilerCalls, 1, 'consumer self-cycle is skipped without requesting its absent publication lease');
+  await writeFile(fixture.path('packages', 'beta', 'package.json'), JSON.stringify({ name: '@happier-dev/beta',
+    dependencies: { '@happier-dev/unrelated': 'workspace:*' } }));
+  const after = await collectWorkspaceBuildBatchResources(selected);
+  assert.notEqual(after.identity, before.identity);
+  assert.deepEqual(after.packageNames, ['@happier-dev/alpha', '@happier-dev/beta', '@happier-dev/unrelated']);
+  assert.equal(after.locks.length, before.locks.length + 1);
+});
+
+for (const failure of ['none', 'lease', 'producer', 'identity', 'capacity']) test(`composed batch inherits its sole reservation and exact publication custody (${failure})`, { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-composed-build-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const lockPath = fixture.path('producer.lock');
+  const ownerUrl = new URL('./workspace_build_admission.mjs', import.meta.url).href;
+  const leaf = `import {readdir,readFile} from 'node:fs/promises';
+    const owners=await readdir(${JSON.stringify(join(admissionRoot, 'owners'))});
+    if(owners.length!==1) process.exit(81);
+    if((await readFile(${JSON.stringify(join(admissionRoot, 'owners'))}+'/'+owners[0]+'/class','utf8')).trim()!=='compilation-cli') process.exit(82);
+    process.stdout.write('producer-entered');process.exit(${failure === 'producer' ? 23 : 0});`;
+  const payload = `import {runWorkspaceBuildAdmission} from ${JSON.stringify(ownerUrl)};
+    const env={...process.env};
+    ${failure === 'lease' ? "delete env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD;delete env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES;" : ''}
+    ${failure === 'identity' ? 'env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN=String(process.pid)+":0";' : ''}
+    const result=await runWorkspaceBuildAdmission({command:process.execPath,args:['--input-type=module','-e',${JSON.stringify(leaf)}],
+      launcherPath:${JSON.stringify(launcher)},locks:[{path:${JSON.stringify(failure === 'lease' ? fixture.path('unreserved.lock') : lockPath)}}],dependencyInstallDir:${JSON.stringify(fixture.root)},
+      env,inheritedAdmission:true,admissionClass:${JSON.stringify(failure === 'capacity' ? 'compilation-ui' : 'package-dist')},stdio:['ignore','pipe','pipe']});
+    process.stdout.write(result.stdout??'');process.stderr.write(result.stderr??'');process.exit(result.status??1);`;
+  const result = await runWorkspaceBuildAdmission({ command: process.execPath, args: ['--input-type=module', '-e', payload],
+    launcherPath: launcher, admissionClass: 'compilation-cli', locks: [{ path: lockPath }], dependencyInstallDir: fixture.root,
+    env: buildNativeAdmissionFixtureEnv(), signal: t.signal, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(result.status, failure === 'none' ? 0 : failure === 'producer' ? 23 : 1, result.stderr);
+  assert.equal(result.stdout, ['lease', 'identity', 'capacity'].includes(failure) ? '' : 'producer-entered');
+  assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
+  assert.deepEqual(await readdir(join(admissionRoot, 'waiters')), []);
+  await assert.rejects(lstat(lockPath), { code: 'ENOENT' });
+});
+
+test('cancelling an inherited producer reaps the containing reservation and every lease', { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-cancel-composed-build-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const lockPath = fixture.path('producer.lock');
+  const payload = `import {runWorkspaceBuildAdmission} from ${JSON.stringify(new URL('./workspace_build_admission.mjs', import.meta.url).href)};
+    const result=await runWorkspaceBuildAdmission({command:process.execPath,args:['-e','process.stdout.write("producer-started");setInterval(()=>{},1000)'],
+      launcherPath:${JSON.stringify(launcher)},locks:[{path:${JSON.stringify(lockPath)}}],dependencyInstallDir:${JSON.stringify(fixture.root)},
+      inheritedAdmission:true,env:process.env,stdio:'inherit'});process.exit(result.status??1);`;
+  const cancellation = new AbortController();
+  const result = await runWorkspaceBuildAdmission({ command: process.execPath, args: ['--input-type=module', '-e', payload],
+    launcherPath: launcher, admissionClass: 'compilation-cli', locks: [{ path: lockPath }], dependencyInstallDir: fixture.root,
+    env: buildNativeAdmissionFixtureEnv(), signal: cancellation.signal, stdio: ['ignore', 'pipe', 'pipe'],
+    onStdout: value => { if (String(value).includes('producer-started')) cancellation.abort(); } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /producer-started/);
+  assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
+  assert.deepEqual(await readdir(join(admissionRoot, 'waiters')), []);
+  await assert.rejects(lstat(lockPath), { code: 'ENOENT' });
+});
+
+test('required inherited admission rejects absent custody instead of creating a reservation', { skip: process.platform !== 'linux', timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-required-inheritance-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const result = await runWorkspaceBuildAdmission({ command: process.execPath, args: ['-e', 'process.stdout.write("unexpected")'],
+    launcherPath: launcher, inheritedAdmission: true, env: buildNativeAdmissionFixtureEnv(), signal: t.signal,
+    stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(await readdir(join(admissionRoot, 'owners')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)), []);
+  assert.deepEqual(await readdir(join(admissionRoot, 'waiters')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)), []);
+});
+
+test('resource-blocked batch holds no capacity while the external publisher enters admission', { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-batch-external-contention-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const lockPath = fixture.path('producer.lock');
+  const cancellation = new AbortController();
+  let reportBlocked;
+  const blocked = new Promise(resolve => { reportBlocked = resolve; });
+  let batch;
+  try {
+    await withWorkspaceBundleLock(async () => {
+      batch = runWorkspaceBuildAdmission({ command: process.execPath, args: ['-e', 'process.stdout.write("batch-entered")'],
+        launcherPath: launcher, admissionClass: 'compilation-cli', locks: [{ path: lockPath, errorLabel: 'batch-producer' }],
+        env: buildNativeAdmissionFixtureEnv(), signal: cancellation.signal, stdio: ['ignore', 'pipe', 'pipe'],
+        onStderr: value => { if (String(value).includes('workspace-lease-busy')) reportBlocked(); } });
+      await Promise.race([blocked, batch.then(result => assert.fail(`batch exited before contention: ${result.status}`))]);
+      assert.deepEqual(await readdir(join(admissionRoot, 'owners')), [], 'blocked head must not reserve capacity');
+      const waiters = await readdir(join(admissionRoot, 'waiters'));
+      assert.equal(waiters.length, 1);
+      assert.match(await readFile(join(admissionRoot, 'waiters', waiters[0]), 'utf8'), /workspace-busy/);
+      const external = await runWorkspaceBuildAdmission({ command: process.execPath, args: ['-e', 'process.stdout.write("external-entered")'],
+        launcherPath: launcher, env: buildNativeAdmissionFixtureEnv(), signal: t.signal, stdio: ['ignore', 'pipe', 'pipe'] });
+      assert.equal(external.status, 0, external.stderr);
+      assert.equal(external.stdout, 'external-entered');
+    }, { lockPath, signal: t.signal });
+    const result = await batch;
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'batch-entered');
+    assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
+    assert.deepEqual(await readdir(join(admissionRoot, 'waiters')), []);
+  } finally {
+    cancellation.abort();
+    await batch;
+  }
+});
+
 for (const platform of ['linux', 'win32']) test(`dependency admission selects the canonical reader resource on ${platform}`, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-dependency-admission-platform-' });
   const env = { ...buildNativeAdmissionFixtureEnv(), HAPPIER_STACK_HOME_DIR: fixture.root };
@@ -73,8 +220,9 @@ test('Turbo preserves authenticated build transport context without forwarding u
     .filter(key => config[key] !== undefined).map(key => [key, config[key]]));
   await Promise.all([
     writeFile(fixture.path('package.json'), JSON.stringify({ name: 'build-context-probe', private: true,
-      packageManager: 'yarn@1.22.22', workspaces: ['packages/*'] })),
-    writeFile(fixture.path('yarn.lock'), '# yarn lockfile v1\n'),
+      packageManager: JSON.parse(await readFile(new URL('../../../../../package.json', import.meta.url), 'utf8')).packageManager })),
+    writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - packages/*\n'),
+    writeFile(fixture.path('pnpm-lock.yaml'), "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/probe: {}\n"),
     writeFile(fixture.path('turbo.json'), JSON.stringify({ ...transportConfig,
       tasks: { 'context-probe': { cache: false } } })),
     writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@happier-test/build-context-probe',
@@ -100,6 +248,22 @@ test('Turbo preserves authenticated build transport context without forwarding u
   assert.equal(received[unrelatedKey], null, 'Turbo must retain strict filtering for unrelated environment');
   assert.deepEqual(received, { ...sentinels, [unrelatedKey]: null },
     'finite descendants must retain placement, native admission and authenticated resource-custody transport');
+});
+
+test('typecheck declaration phase cannot wait while retaining an inherited package writer', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-declaration-writer-order-' });
+  const owned = fixture.path('owned.lock');
+  const foreign = fixture.path('foreign.lock');
+  await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+    const env = { ...buildNativeAdmissionFixtureEnv(), HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue,
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '0' };
+    await withWorkspaceBundleLock(async () => {
+      await assert.rejects(withWorkspaceBuildResources({ locks: [{ path: foreign }], env,
+        typecheckDeclarationPhase: true }, () => assert.fail('foreign writer must not be acquired')), {
+        code: WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE,
+      });
+    }, { lockPath: foreign, signal: t.signal });
+  }, { lockPath: owned, signal: t.signal });
 });
 
 test('held-resource admission probe authenticates inherited dependency readers before allowing capacity waits', async t => {

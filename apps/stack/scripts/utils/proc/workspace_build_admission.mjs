@@ -5,7 +5,7 @@ import { constants } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { withWorkspaceBundleLock, WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
+import { callerHoldsWorkspaceBundleLock, withWorkspaceBundleLock, WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { parseWorkspaceLockLeaseValue } from '../../../../../packages/cli-common/workspaceLockLease.mjs';
 import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from '../../../../../packages/cli-common/fileChangeObserver.mjs';
 import { callerHoldsDependencyConsumption, resolveDependencyInstallRoot, resolveDependencyRefreshLockPath, withDependencyConsumption } from './dependency_refresh.mjs';
@@ -23,6 +23,10 @@ export function isWorkspaceBuildStartup({ env = process.env, devStartup = false 
 
 async function hasInheritedBuildCustody(env) {
   if (callerHoldsDependencyConsumption(env)) return true;
+  return await hasInheritedPackageBuildCustody(env);
+}
+
+async function hasInheritedPackageBuildCustody(env) {
   const { callerHoldsWorkspaceBundleLock } = await import('../../../../../packages/cli-common/workspaceBundleLock.mjs');
   let leases;
   try { leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'); }
@@ -40,8 +44,13 @@ async function hasInheritedBuildCustody(env) {
  */
 export function resolveWorkspaceBuildAdmissionInvocation({ command, args = [], locks = [],
   repoDir = sourceRoot, launcherPath = resolve(repoDir, 'apps/stack/bin/hstack-exec'), env = process.env,
-  admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir, devStartup = false }) {
+  admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir, devStartup = false,
+  inheritedAdmission = false }) {
   locks = workspaceBuildResources(locks, dependencyInstallDir, env);
+  if (inheritedAdmission) {
+    const workerArgs = [workerPath, '--inherited-resources', JSON.stringify(locks), launcherPath, admissionClass, '--', command, ...args];
+    return { command: process.execPath, args: workerArgs };
+  }
   if (isWorkspaceBuildStartup({ env, devStartup })) {
     // Stack's own source construction is startup-critical, with private
     // outputs. Reuse protected local jobs placement and resource custody,
@@ -61,9 +70,10 @@ export function resolveWorkspaceBuildAdmissionInvocation({ command, args = [], l
 export async function runWorkspaceBuildAdmission({ command, args = [], locks = [], cwd = process.cwd(),
   repoDir = sourceRoot, launcherPath = resolve(repoDir, 'apps/stack/bin/hstack-exec'), env = process.env,
   signal, admissionClass = 'package-dist', admissionRequired = true, dependencyInstallDir, devStartup = false,
+  inheritedAdmission = false,
   stdio = 'inherit', onStdout, onStderr, captureStdout = true, captureStderr = true }) {
   const invocation = resolveWorkspaceBuildAdmissionInvocation({ command, args, locks, repoDir,
-    launcherPath, env, admissionClass, admissionRequired, dependencyInstallDir, devStartup });
+    launcherPath, env, admissionClass, admissionRequired, dependencyInstallDir, devStartup, inheritedAdmission });
   if (isWorkspaceBuildStartup({ env, devStartup })) env = { ...env, HAPPIER_HSTACK_DISPATCH_CONTROL: '1' };
   return await new Promise(resolveResult => {
     const child = spawnForegroundCommand(invocation.command, invocation.args, {
@@ -105,6 +115,27 @@ function parseLocks(raw) {
     }
   }
   return locks;
+}
+
+/** An admitted descendant cannot extend the batch's lock set, even when a
+ * missing resource happens to be free. Reuse the owners' authentication. */
+export function assertInheritedWorkspaceBuildResources({ locks = [], dependencyInstallDir, env = process.env } = {}) {
+  locks = workspaceBuildResources(locks, dependencyInstallDir, env);
+  let leases;
+  try { leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'); }
+  catch { throw new Error('Workspace producer requires valid inherited publication custody'); }
+  if (!Array.isArray(leases)) throw new Error('Workspace producer requires valid inherited publication custody');
+  const values = [env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...leases];
+  for (const lock of locks) {
+    const valid = lock.kind === 'dependency'
+      ? resolve(lock.path) === resolveDependencyRefreshLockPath(lock.installDir, env)
+        && callerHoldsDependencyConsumption(env)
+        && JSON.parse(env.HAPPIER_BUILD_DEPENDENCY_CUSTODY)[0] === resolve(lock.path)
+      : values.some(value => typeof value === 'string' && callerHoldsWorkspaceBundleLock(resolve(lock.path), value));
+    if (!valid) throw Object.assign(new Error('Workspace producer requires every exact inherited resource lease'), {
+      code: 'HSTACK_WORKSPACE_BUILD_RESOURCES_CHANGED',
+    });
+  }
 }
 
 function admissionChangeObservation(locks, env) {
@@ -154,10 +185,15 @@ function admissionChangeObservation(locks, env) {
  * native admission. Contention unwinds every new scope before observation;
  * errors from an entered publisher are terminal and never replayed.
  */
-export async function withWorkspaceBuildResources({ locks = [], dependencyInstallDir, env = process.env, signal }, run) {
+export async function withWorkspaceBuildResources({ locks = [], dependencyInstallDir, env = process.env, signal,
+  typecheckDeclarationPhase = false }, run) {
   locks = workspaceBuildResources(locks, dependencyInstallDir, env);
   const observation = admissionChangeObservation(locks, env);
   const inherited = await hasInheritedBuildCustody(env);
+  // Declaration emission reuses the containing compiler's capacity. It may
+  // wait for publication while holding only its installed-tree reader, never
+  // while retaining another package writer. All partial attempts unwind.
+  const declarationWait = typecheckDeclarationPhase && !await hasInheritedPackageBuildCustody(env);
   let waited = false;
   try {
     while (true) {
@@ -170,8 +206,8 @@ export async function withWorkspaceBuildResources({ locks = [], dependencyInstal
           return await run(acquiredEnv, { waited });
         });
       } catch (error) {
-        if (entered || inherited || env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
-          || process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+        if (entered || (!declarationWait && (inherited || env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+          || process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'))
           || ![WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE].includes(error?.code)) throw error;
         if (!waited) console.error(error.message);
         waited = true;
@@ -231,10 +267,11 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   const [mode, rawLocks, launcherPath, admissionClass, delimiter, command, ...args] = argv;
   // Already-parsed launchers still use --worker and --worker-try. Keep their
   // one-attempt transport while current launchers reuse event-wait custody.
-  if (!['--worker', '--worker-try', '--worker-events', '--worker-events-inherited', '--worker-inherited', '--standalone', '--dev-startup'].includes(mode) || delimiter !== '--' || !command) {
+  if (!['--worker', '--worker-try', '--worker-events', '--worker-events-inherited', '--worker-inherited', '--standalone', '--dev-startup', '--inherited-resources'].includes(mode) || delimiter !== '--' || !command) {
     throw new Error('Invalid workspace admission worker invocation');
   }
   const locks = parseLocks(rawLocks);
+  if (mode === '--inherited-resources') assertInheritedWorkspaceBuildResources({ locks, env: process.env });
   if (mode === '--dev-startup') process.env.HAPPIER_WORKSPACE_BUILD_STARTUP = '1';
   const inheritedBuildCustody = await hasInheritedBuildCustody(process.env);
   if (mode === '--standalone' && process.platform === 'linux') {
@@ -253,7 +290,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, interrupt);
   // A native pipe uses event-loop custody, not a blocking filesystem read
   // which can strand the worker during cancellation or normal lock release.
-  const standalone = mode === '--standalone' || mode === '--dev-startup';
+  const standalone = mode === '--standalone' || mode === '--dev-startup' || mode === '--inherited-resources';
   controlInput = !standalone ? new Socket({ fd: 4, readable: true, writable: false }) : null;
   controls = controlInput ? createInterface({ input: controlInput }) : null;
   const lines = controls?.[Symbol.asyncIterator]();
@@ -265,7 +302,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   let waitReadSnapshot;
   let running = false;
   let reportedBusy = false;
-  const acquire = standalone || mode === '--worker'
+  const acquire = mode === '--inherited-resources' ? run => run(process.env) : standalone || mode === '--worker'
     ? run => withWorkspaceBuildResources({ locks, env: process.env, signal: cancellation.signal }, run)
     : run => withLocks(locks, process.env, cancellation.signal, run);
   try {
@@ -302,11 +339,14 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
           delete env.HSTACK_ADMISSION_WAIT_ROOT;
           delete env.HSTACK_ADMISSION_WAITER;
           cancellation.signal.throwIfAborted();
-          const invocation = standalone
+          const invocation = mode === '--inherited-resources' && process.platform === 'linux'
+            ? { command: '/bin/sh', args: [launcherPath, '--heavyweight-admission', '--require-inherited', `--class=${admissionClass}`,
+              `--machine=${env.HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE || 'local'}`, '--', command, ...args] }
+            : standalone
             ? process.platform === 'win32'
               ? (await import('../process/resolveCommandInvocation.mjs')).resolveCommandInvocation({ command, args, env })
               : { command, args }
-            : { command: '/bin/sh', args: [launcherPath, '--heavyweight-admission', `--class=${admissionClass}`,
+            : { command: '/bin/sh', args: [launcherPath, '--heavyweight-admission', '--require-inherited', `--class=${admissionClass}`,
               `--machine=${env.HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE || 'local'}`, '--', command, ...args] };
           result = await new Promise(resolveResult => {
             const child = spawn(invocation.command, invocation.args, { env, signal: cancellation.signal, stdio: 'inherit',

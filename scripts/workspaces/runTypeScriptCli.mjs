@@ -167,6 +167,17 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
         if (producers.includes(project)) break;
       }
     }
+    if (!cancelled && !result.error && !result.signal && Number.isInteger(result.status) && result.status > 0) {
+      // Diagnose on the worker only after failure, never prepare or retry. A
+      // broken/moving record must not replace the compiler's terminal result.
+      try {
+        const { findFirstNoncurrentWorkspaceDependency } = await import('./ensureWorkspacePackagesBuilt.mjs');
+        const producer = cancelled ? null : await findFirstNoncurrentWorkspaceDependency(process.cwd());
+        if (producer && !cancelled) process.stderr.write(`${producer} declarations are older than its source; rebuild: ./apps/stack/bin/hstack-exec -- pnpm run build:packages ${producer}\n`);
+      } catch {
+        // This optional hint cannot turn an inspection failure into a verdict.
+      }
+    }
   } finally {
     for (const signal of cancellationSignals) process.off(signal, observeCancellation);
   }

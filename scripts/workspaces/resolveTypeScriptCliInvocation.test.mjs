@@ -238,13 +238,17 @@ esac
     let nestedStderr = '';
     nested.stderr.on('data', chunk => { nestedStderr += chunk; });
     try {
-      for (let attempt = 0; !nestedStderr.includes('inherited owner'); attempt++) {
-        assert.ok(attempt < 250 && nested.exitCode === null, nestedStderr);
-        await new Promise(resolveWait => setTimeout(resolveWait, 20));
-      }
+      assert.deepEqual(await nestedExit, [1, null], nestedStderr);
+      assert.match(nestedStderr, /HSTACK_NESTED_ADMISSION_CAPACITY/);
       await assert.rejects(readFile(fixture.path('nested-started')), { code: 'ENOENT' });
+      assert.equal(await readFile(join(ancestorOwner, 'class'), 'utf8'), 'package-dist\n');
       await writeFile(memory, '41943040 73400320\n');
-      assert.deepEqual(await nestedExit, [7, null], nestedStderr);
+      const immediate = spawn(command, [...invocation.argsPrefix], { env: { ...env,
+        HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: `${process.pid}:${token}`,
+        HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: admissionRoot,
+        HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: machine,
+      } });
+      assert.deepEqual(await once(immediate, 'exit'), [7, null]);
       assert.equal(await readFile(join(ancestorOwner, 'class'), 'utf8'), 'compilation\n');
       assert.deepEqual(await readdir(join(admissionRoot, 'owners')), [`${process.pid}-${token}`],
         'larger compiler escalates the validated envelope without a second owner');

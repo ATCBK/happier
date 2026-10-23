@@ -3,7 +3,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +13,8 @@ import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
 import { callerHoldsWorkspaceBundleLock, withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
 import { WORKSPACE_BUILD_MODE_ENV } from './workspaceChildBuildEnv.mjs';
+import { ensureWorkspacePackagesBuiltByName, isWorkspacePackageOutputCurrent } from './ensureWorkspacePackagesBuilt.mjs';
+import { parseWorkspaceBuildArgs } from './ensureWorkspacePackagesBuiltCli.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
 const runner = fileURLToPath(new URL('./runTypeScriptCli.mjs', import.meta.url));
@@ -24,6 +27,7 @@ const procModule = new URL('../../apps/stack/scripts/utils/proc/proc.mjs', impor
 const rootTypecheckModule = new URL('../testing/runTypecheck.ts', import.meta.url).href;
 const measurementLeaf = fileURLToPath(new URL('./measureTypeScriptCompiler.py', import.meta.url));
 const measuredEnv = { CI: 'true', HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: '1' };
+const repositoryPackageManager = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).packageManager;
 
 async function waitUntil(predicate, message) {
   const deadline = Date.now() + 5_000;
@@ -162,6 +166,7 @@ esac
     await rm(root, { recursive: true, force: true });
   });
   return {
+    admission,
     pidFile,
     workerPidFile,
     root,
@@ -198,6 +203,90 @@ esac
       return { child, stderr: () => stderr, stdout: () => Buffer.concat(stdout) };
     },
   };
+}
+
+for (const scenario of ['stale', 'current', 'pass']) {
+  test(`failed typecheck declaration hint: ${scenario}`, async t => {
+    const setup = await fixture(t, {
+      exitCode: scenario === 'pass' ? 0 : 7,
+      compilerBody: "process.stderr.write('fixture compiler diagnostic\\n');",
+    });
+    await writeFile(join(setup.root, 'package.json'), JSON.stringify({
+      private: true, packageManager: repositoryPackageManager,
+      dependencies: { '@fixture/consumer': 'workspace:*', '@fixture/unvisited': 'workspace:*' },
+    }));
+    await writeFile(join(setup.root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+    await writeFile(join(setup.root, 'pnpm-lock.yaml'), '# fixture\n');
+    for (const app of ['ui', 'cli', 'server']) {
+      await mkdir(join(setup.root, 'apps', app), { recursive: true });
+      await writeFile(join(setup.root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
+    }
+    for (const name of ['consumer', 'producer', 'unvisited']) {
+      const dir = join(setup.root, 'packages', name);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'index.ts'), 'export const value = true;\n');
+      await writeFile(join(dir, 'package.json'), JSON.stringify({
+        name: `@fixture/${name}`, type: 'module', types: './dist/index.d.ts', main: './dist/index.js',
+        scripts: { build: 'fixture-build' },
+        ...(name === 'consumer' ? { dependencies: { '@fixture/producer': 'workspace:*' } } : {}),
+      }));
+    }
+    const buildOptions = {
+      quiet: true, buildMode: 'strict', env: { ...buildNativeAdmissionFixtureEnv(), HAPPIER_WORKSPACE_CAPTURE_INPUTS: '0' },
+      workspaceBuildBoundary: {
+        workerLauncherPath: setup.admission.launcher,
+        async prepareEnv(_dir, env) { return env; },
+        // The package compiler is the external process boundary; publication,
+        // graph ordering, fingerprints and record verification remain real.
+        async runPackageBuild(_dir, { env }) {
+          await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), 'export const value = true;\n');
+          await writeFile(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), 'export declare const value: true;\n');
+        },
+      },
+    };
+    await ensureWorkspacePackagesBuiltByName(setup.root, ['@fixture/consumer', '@fixture/unvisited'], buildOptions);
+    const producerDir = join(setup.root, 'packages', 'producer');
+    assert.equal(isWorkspacePackageOutputCurrent(producerDir, { buildMode: 'strict' }), true);
+    if (scenario !== 'current') {
+      await writeFile(join(producerDir, 'src', 'index.ts'), 'export const value = false;\n');
+    }
+    // A real filesystem-boundary probe proves that passing checks never load
+    // the diagnostic, and stale checks stop before a later producer's sources.
+    const probePath = join(setup.root, 'diagnostic-reads.jsonl');
+    const readProbe = join(setup.root, 'read-probe.cjs');
+    await writeFile(readProbe, `
+      const fs = require('node:fs');
+      const original = fs.readFileSync;
+      fs.readFileSync = function(path, ...args) {
+        if (String(path).includes('/packages/') && String(path).includes('/src/')) {
+          fs.appendFileSync(${JSON.stringify(probePath)}, JSON.stringify(String(path)) + '\\n');
+        }
+        return original.call(this, path, ...args);
+      };
+      require('node:module').syncBuiltinESMExports();
+    `);
+    const { child, stderr } = setup.start(['--require', readProbe, runner, '--noEmit']);
+    assert.deepEqual(await once(child, 'exit'), [scenario === 'pass' ? 0 : 7, null], stderr());
+    assert.ok(stderr().startsWith('fixture compiler diagnostic\n'), stderr());
+    const hints = stderr().split('\n').filter(line => line.includes('declarations are older than its source; rebuild:'));
+    const reads = await readFile(probePath, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+    if (scenario === 'stale') {
+      assert.equal(hints.length, 1, stderr());
+      assert.match(hints[0], /^@fixture\/producer declarations are older than its source; rebuild: /);
+      assert.ok(reads.includes('/producer/src/'), reads);
+      assert.ok(!reads.includes('/consumer/src/') && !reads.includes('/unvisited/src/'), reads);
+      const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+      const buildArgs = parseWorkspaceBuildArgs([...manifest.scripts['build:packages'].split(/\s+/).slice(2), '@fixture/producer']);
+      assert.ok(hints[0].endsWith('./apps/stack/bin/hstack-exec -- pnpm run build:packages @fixture/producer'));
+      const rebuilt = await ensureWorkspacePackagesBuiltByName(setup.root, buildArgs.packageNames, buildOptions);
+      assert.ok(rebuilt.built.includes('@fixture/producer'));
+      assert.equal(isWorkspacePackageOutputCurrent(producerDir), true, 'the named producer can be rebuilt by the canonical publisher');
+    } else {
+      assert.deepEqual(hints, []);
+      if (scenario === 'pass') assert.equal(reads, '', 'passing checks do not inspect producer sources');
+      else assert.ok(reads.includes('/unvisited/src/'), reads);
+    }
+  });
 }
 
 test('Windows compiler noEmit uses the local native compiler instead of the POSIX router', async (t) => {
@@ -275,7 +364,7 @@ for (const env of [
     const setup = await fixture(t, { exitCode: 0 });
     const { child, stderr } = setup.start([runner], { env: { ...env, HAPPIER_TYPECHECK_DISPATCHED: '' } });
     assert.deepEqual(await once(child, 'exit'), [1, null], stderr());
-    assert.match(stderr(), /run `pnpm typecheck` \(routed\) instead of `typecheck:(?:source:)?finite`/);
+    assert.match(stderr(), /run `pnpm run typecheck` \(routed\) instead of `typecheck:(?:source:)?finite`/);
     await assert.rejects(readFile(setup.pidFile), { code: 'ENOENT' });
   });
 }
@@ -287,6 +376,49 @@ test('finite compiler accepts explicit public-owner dispatch without changing co
   } });
   assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
   assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
+});
+
+test('public CLI compiler checks its selected roots and admits concurrent additions on the next invocation', async t => {
+  const setup = await fixture(t, { exitCode: 0, compilerBody: `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const config = JSON.parse(fs.readFileSync(process.argv[process.argv.indexOf('--project') + 1], 'utf8'));
+    fs.appendFileSync(path.join(process.cwd(), 'checked-inputs.jsonl'), JSON.stringify(config.files) + '\\n');
+  ` });
+  await mkdir(join(setup.root, 'src'));
+  await writeFile(join(setup.root, 'src/kept.ts'), 'export const kept = 1;');
+  await writeFile(join(setup.root, 'src/globals.d.ts'), 'declare const shared: string;');
+  await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { noEmit: true, types: [] }, include: ['src/**/*.ts'],
+  }));
+  const manifest = JSON.parse(await readFile(new URL('../../apps/cli/package.json', import.meta.url), 'utf8'));
+  const names = [...manifest.scripts['typecheck:source:finite'].matchAll(/--project tsconfig\.([^ ]+)\.json/g)].map(([, name]) => name);
+  for (const name of names) await writeFile(join(setup.root, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.json', files: ['src/globals.d.ts'], include: [],
+  }));
+  // The filesystem boundary creates a real root after the last finite project
+  // is published. Derivation, coverage, and runner wiring all remain real.
+  const preloadPath = join(setup.root, 'preload.cjs');
+  await writeFile(preloadPath, await readFile(preloadPath, 'utf8') + `
+    const fsPromises = require('node:fs/promises');
+    const originalRename = fsPromises.rename;
+    fsPromises.rename = async (from, to) => {
+      await originalRename(from, to);
+      if (require('node:path').basename(to) === 'tsconfig.test-ui.json') {
+        require('node:fs').writeFileSync('src/late.ts', 'export const late = 1;');
+      }
+    };
+    require('node:module').syncBuiltinESMExports();
+  `);
+  const run = () => setup.start([runner, '--verifyProjectCoverage', 'tsconfig.json',
+    ...names.flatMap(name => ['--project', `tsconfig.${name}.json`])]);
+  const first = run();
+  assert.deepEqual(await once(first.child, 'exit'), [0, null], first.stderr());
+  const inputs = async () => (await readFile(join(setup.root, 'checked-inputs.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse).flat();
+  assert.ok(!(await inputs()).includes(join(setup.root, 'src/late.ts')));
+  const next = run();
+  assert.deepEqual(await once(next.child, 'exit'), [0, null], next.stderr());
+  assert.equal((await inputs()).filter(path => path === join(setup.root, 'src/late.ts')).length, 1);
 });
 
 for (const windows of [false, true]) {
@@ -316,7 +448,8 @@ for (const windows of [false, true]) {
       await mkdir(uiDir, { recursive: true });
       // Expo is the real installed configuration boundary used by UI preparation.
       await mkdir(join(uiDir, 'node_modules'));
-      await symlink(fileURLToPath(new URL('../../apps/ui/node_modules/expo', import.meta.url)), join(uiDir, 'node_modules/expo'), process.platform === 'win32' ? 'junction' : 'dir');
+      const uiRequire = createRequire(new URL('../../apps/ui/package.json', import.meta.url));
+      await symlink(dirname(uiRequire.resolve('expo/package.json')), join(uiDir, 'node_modules/expo'), process.platform === 'win32' ? 'junction' : 'dir');
       await writeFile(join(uiDir, 'package.json'), JSON.stringify({ name: 'ui-declaration-fixture' }));
       await writeFile(join(uiDir, 'app.json'), JSON.stringify({ expo: { name: 'UI declaration fixture', slug: 'ui-declaration-fixture', experiments: { typedRoutes: false } } }));
       await writeFile(join(uiDir, 'source.ts'), 'export declare const value: true;\n');
@@ -372,14 +505,14 @@ for (const windows of [false, true]) {
 
 test('actual CLI and Plugin SDK direct finite Pnpm entries refuse before compilation', () => {
   for (const [workspace, task] of [['apps/cli', 'typecheck:source:finite'], ['packages/plugin-sdk', 'typecheck:finite']]) {
-    const pnpm = resolvePnpmCommandInvocation(['--cwd', fileURLToPath(new URL(`../../${workspace}/`, import.meta.url)), '-s', task]);
+    const pnpm = resolvePnpmCommandInvocation(['--dir', fileURLToPath(new URL(`../../${workspace}/`, import.meta.url)), '-s', 'run', task]);
     const result = spawnSync(pnpm.command, pnpm.args, {
       encoding: 'utf8',
       env: { ...process.env, HAPPIER_TYPECHECK_DISPATCHED: '', TURBO_TASK_ID: '' },
     });
     assert.ifError(result.error);
     assert.equal(result.status, 1, result.stderr);
-    assert.ok(result.stderr.includes(`run \`pnpm typecheck\` (routed) instead of \`${task}\``), result.stderr);
+    assert.ok(result.stderr.includes(`run \`pnpm run typecheck\` (routed) instead of \`${task}\``), result.stderr);
   }
 });
 
@@ -404,7 +537,7 @@ for (const explicitLocal of [false, true]) {
     await chmod(join(binDir, 'uname'), 0o755);
     await writeFile(join(setup.root, 'package.json'), JSON.stringify({
       name: 'finite-dispatch-fixture',
-      packageManager: 'pnpm@12.14.0',
+      packageManager: repositoryPackageManager,
       scripts: {
         typecheck: cliPackage.scripts.typecheck.replace('../stack/bin/hstack-exec', `${JSON.stringify(launcher)}${explicitLocal ? ' --local' : ''}`),
         'typecheck:local': cliPackage.scripts['typecheck:local'],
@@ -566,8 +699,8 @@ for (const target of ['compiler leaf', 'outer heartbeat']) {
       await writeFile(${JSON.stringify(suiteStartedFile)}, JSON.stringify({ pnpm: process.env.npm_config_user_agent }));
       try {
         await runRootTypecheck({ commands: [
-          { id: 'compiler-leaf', args: ['-s', 'compiler'] },
-          { id: 'subsequent-sentinel', args: ['-s', 'sentinel'] },
+          { id: 'compiler-leaf', args: ['--silent', 'run', 'compiler'] },
+          { id: 'subsequent-sentinel', args: ['--silent', 'run', 'sentinel'] },
         ] });
       } catch (error) {
         process.stderr.write(error.message + '\\n');
@@ -579,18 +712,19 @@ for (const target of ['compiler leaf', 'outer heartbeat']) {
     await writeFile(join(setup.root, 'package.json'), JSON.stringify({
       name: 'cancellation-fixture',
       type: 'module',
-      packageManager: 'pnpm@12.14.0',
+      packageManager: repositoryPackageManager,
       scripts: {
         'root-suite': `${JSON.stringify(process.execPath)} --experimental-strip-types ${JSON.stringify(suiteScript)}`,
         compiler: nodeScript(runner),
         sentinel: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(sentinelScript)}`,
       },
     }));
-    const pnpm = resolvePnpmCommandInvocation(['-s', 'root-suite']);
+    const pnpm = resolvePnpmCommandInvocation(['--silent', 'run', 'root-suite']);
     const { child, stderr } = setup.start([heartbeatRunner, '--', pnpm.command, ...pnpm.args]);
     // The marker belongs only to the substituted compiler, before any signal is sent.
     await waitUntil(() => readFile(setup.pidFile).then(() => true, () => false), () => `fake compiler did not start: ${stderr()}`);
-    assert.match(JSON.parse(await readFile(suiteStartedFile, 'utf8')).pnpm, /^pnpm\/1\.22\.22\b/);
+    assert.equal(JSON.parse(await readFile(suiteStartedFile, 'utf8')).pnpm.split(' ')[0],
+      repositoryPackageManager.replace('pnpm@', 'pnpm/').split('+')[0]);
     const compilerPid = Number(await readFile(setup.pidFile, 'utf8'));
     const exited = once(child, 'exit');
     if (target === 'compiler leaf') {
@@ -604,7 +738,7 @@ for (const target of ['compiler leaf', 'outer heartbeat']) {
       const workerPid = Number(await readFile(setup.workerPidFile, 'utf8'));
       child.kill('SIGTERM');
       await waitUntil(() => !alive(compilerPid) && !alive(workerPid), 'compiler or native worker survived outer cancellation');
-      assert.deepEqual(await exited, [1, null], stderr());
+      assert.deepEqual(await exited, [null, 'SIGTERM'], stderr());
       assert.equal(await readFile(sentinelFile, 'utf8').catch((error) => {
         if (error.code === 'ENOENT') return null;
         throw error;

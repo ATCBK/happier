@@ -13,7 +13,8 @@ import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 import { readWorkspaceBuildInputs } from '../../apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs';
 export { readWorkspaceBuildInputs } from '../../apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs';
 import { coerceHappyMonorepoRootFromPath } from '../../apps/stack/scripts/utils/paths/paths.mjs';
-import { runWorkspaceBuildAdmission, withWorkspaceBuildResources } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
+import { assertInheritedWorkspaceBuildResources, runWorkspaceBuildAdmission, withWorkspaceBuildResources } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
+import { resolveDependencyInstallRoot, resolveDependencyRefreshLockPath } from '../../apps/stack/scripts/utils/proc/dependency_refresh.mjs';
 import { createWorkspaceBuildWaitNotifier } from '../../apps/stack/scripts/utils/proc/workspaceBuildWaitNotifier.mjs';
 import { run } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { collectWorkspacePackageJsonPaths } from '../../apps/stack/scripts/utils/proc/workspace_package_manifests.mjs';
@@ -159,11 +160,13 @@ function readQaStalePackage(packageDir, packageName, { monorepoRoot, dependencyD
   if (!record.qaFailure || !isWorkspacePackageOutputValid(packageDir, { monorepoRoot, dependencyDirs })) return null;
   const { qaFailure, ...lastGreenBuildRecord } = record;
   const hash = createHash('sha256').update('happier:qa-last-green-output:v1\0');
-  hash.update(JSON.stringify({ fingerprint: record.fingerprint, dependencies: record.dependencies, outputs: record.outputs, files: record.files }));
+  hash.update(JSON.stringify({ fingerprint: record.fingerprint, dependencies: record.dependencies,
+    outputs: record.outputs.map(({ path, digest }) => ({ path, digest })), files: record.files }));
   for (const path of record.files) {
     const outputPath = resolve(packageDir, 'dist', path);
     if (!outputPath.startsWith(`${resolve(packageDir, 'dist')}${sep}`)) throw new Error(`[workspace-build] invalid recorded output: ${path}`);
-    hash.update(`${path}\0${readWorkspaceBuildFileDigest(outputPath)}\0`);
+    hash.update(`${path}\0${readWorkspaceBuildFileDigestAtStat(outputPath, lstatSync(outputPath, { bigint: true }),
+      record.outputs.find(output => output.path === path))}\0`);
   }
   return { packageName, lastGreenBuildRecord, lastGreenBuiltAt: qaFailure.lastGreenBuiltAt,
     diagnosticSummary: qaFailure.diagnosticSummary, outputIdentity: hash.digest('hex') };
@@ -288,6 +291,99 @@ export async function readWorkspaceComponentDependencyGraph(componentDir, {
   return { ...graph, componentPackageJson, packageNames, closure };
 }
 
+/** Failure-only reader diagnostic. This does not certify the reader or rebuild
+ * anything; currentness remains the publisher's recorded-output decision. */
+export async function findFirstNoncurrentWorkspaceDependency(componentDir, { env = process.env } = {}) {
+  const graph = await readWorkspaceComponentDependencyGraph(componentDir);
+  if (!graph) return null;
+  const { packageDirsByName, packageJsonByDir, packageNames, closure } = graph;
+  const workspacePackageNames = new Set(packageDirsByName.keys());
+  const visited = new Set();
+  const visit = name => {
+    if (visited.has(name)) return null;
+    visited.add(name);
+    const packageDir = packageDirsByName.get(name);
+    if (!packageDir) return null;
+    const metadata = packageJsonByDir.get(packageDir);
+    const dependencies = [
+      ...collectInternalWorkspaceDependencyNames(metadata, name, { workspacePackageNames }),
+      ...collectAdmittedInternalWorkspacePeerDependencyNames(metadata, name, {
+        admittedWorkspacePackageNames: closure, workspacePackageNames,
+      }),
+    ];
+    for (const dependency of dependencies) {
+      const first = visit(dependency);
+      if (first) return first;
+    }
+    if (collectExpectedPackageOutputTargets(metadata).length === 0) return null;
+    const dependencyDirs = collectWorkspacePackageFingerprintDependencyNames(metadata, name,
+      workspacePackageNames, { packageDirsByName }).map(dependency => packageDirsByName.get(dependency));
+    return isWorkspacePackageOutputCurrent(packageDir, { dependencyDirs, env, buildMode: 'strict' }) ? null : name;
+  };
+  for (const name of packageNames) {
+    const first = visit(name);
+    if (first) return first;
+  }
+  return null;
+}
+
+/** Collect before requesting capacity. Repeating this observation beneath the
+ * admitted leases detects a changed graph without extending a held lock set. */
+export async function collectWorkspaceBuildBatchResources(componentDirs, { env = process.env, admissionClass = 'compilation' } = {}) {
+  const components = [...new Set(componentDirs.map(path => resolve(path)))].sort();
+  if (components.length === 0) throw new Error('Workspace build batch requires a consuming component');
+  const monorepoRoot = coerceHappyMonorepoRootFromPath(components[0]);
+  if (!monorepoRoot || components.some(path => coerceHappyMonorepoRootFromPath(path) !== monorepoRoot)) {
+    throw new Error('Workspace build batch components must belong to one monorepo');
+  }
+  const { packageDirsByName, packageJsonByDir } = await readWorkspacePackageGraph(monorepoRoot);
+  const componentInputs = await Promise.all(components.map(async path => [path, await readJson(join(path, 'package.json'))]));
+  const closures = await Promise.all(componentInputs.map(async ([, manifest]) => {
+    const requested = collectInternalWorkspaceDependencyNames(manifest, manifest.name, {
+      workspacePackageNames: packageDirsByName.keys(),
+    });
+    const closure = await collectWorkspaceDependencyClosure(requested, packageDirsByName, { packageJsonByDir });
+    // Match the publisher's own visited consumer, while preserving this
+    // component as a producer when another selected component needs its dist.
+    closure.delete(manifest.name);
+    return [...closure];
+  }));
+  const packageNames = [...new Set(closures.flat())].sort();
+  const consumerOnlyPackageNames = componentInputs.map(([, manifest]) => manifest.name)
+    .filter(name => typeof name === 'string' && !packageNames.includes(name)).sort();
+  const { resolveWorkspacePackageBuildAdmissionClass, resolveHeavyweightMemoryFloorKiB } = await import(
+    '../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs'
+  );
+  const producerClasses = await Promise.all(packageNames.map(async name => {
+    const cwd = packageDirsByName.get(name);
+    const packageJson = packageJsonByDir.get(cwd);
+    return packageJson.scripts?.build && collectExpectedPackageOutputTargets(packageJson).length
+      ? await resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd, env, repoRoot: monorepoRoot }) : null;
+  }));
+  for (const required of producerClasses) {
+    if (required && resolveHeavyweightMemoryFloorKiB(required) > resolveHeavyweightMemoryFloorKiB(admissionClass)) {
+      admissionClass = required;
+    }
+  }
+  const installDir = resolveDependencyInstallRoot(monorepoRoot);
+  const locks = [
+    { kind: 'dependency', installDir, path: resolveDependencyRefreshLockPath(installDir, env) },
+    // Actual consuming components finish their existing bundled-host sync.
+    { path: resolveWorkspaceBundleLockPath(monorepoRoot) },
+    ...packageNames.map(name => {
+      const dir = packageDirsByName.get(name);
+      return { path: resolveWorkspacePackageBuildLockPath(dir, packageJsonByDir.get(dir)) };
+    }),
+  ];
+  const identity = createHash('sha256').update(JSON.stringify({ componentInputs, locks, admissionClass,
+    packages: packageNames.map(name => {
+      const dir = packageDirsByName.get(name);
+      return [name, dir, packageJsonByDir.get(dir)];
+    }),
+  })).digest('hex');
+  return { locks, identity, packageNames, consumerOnlyPackageNames, admissionClass };
+}
+
 export function collectWorkspacePackageFingerprintDependencyNames(
   packageJson,
   currentPackageName,
@@ -385,22 +481,40 @@ function remapDistPathToDir(path, { packageDir, distDir }) {
 
 export function readWorkspaceBuildFileDigest(path, { followSymlinks = false } = {}) {
   const stat = (followSymlinks ? statSync : lstatSync)(path, { bigint: true });
+  return readWorkspaceBuildFileDigestAtStat(path, stat);
+}
+
+const OUTPUT_VERIFICATION_FIELDS = ['size', 'dev', 'ino', 'mtimeNs', 'ctimeNs'];
+
+function outputVerification(stat) {
+  return Object.fromEntries(OUTPUT_VERIFICATION_FIELDS.map(key => [key, String(stat[key])]));
+}
+
+function outputVerificationMatches(verification, stat) {
+  return verification && OUTPUT_VERIFICATION_FIELDS.every(key =>
+    typeof verification[key] === 'string' && verification[key] === String(stat[key]));
+}
+
+function readWorkspaceBuildFileDigestAtStat(path, stat, recordedOutput) {
   if (!stat.isFile()) throw new Error(`[workspace-build] expected a build input file: ${path}`);
+  if (/^[a-f0-9]{64}$/.test(recordedOutput?.digest)
+    && outputVerificationMatches(recordedOutput.verification, stat)) return recordedOutput.digest;
   const digest = readCachedFileDigestSync(path, stat);
   if (digest.startsWith('metadata:')) throw new Error(`[workspace-build] unreadable build input: ${path}`);
   return digest;
 }
 
-function digestDirectory(path, hash, { declarationsOnly = false, root = path, followSymlinks = false } = {}) {
+function digestDirectory(path, hash, { declarationsOnly = false, root = path, followSymlinks = false, recordedOutputs } = {}) {
   if (!existsSync(path)) return;
   for (const name of readdirSync(path).sort()) {
     if (name === BUILD_INPUT_RECORD) continue;
     const child = join(path, name);
     const stat = (followSymlinks ? statSync : lstatSync)(child, { bigint: true });
-    if (stat.isDirectory()) digestDirectory(child, hash, { declarationsOnly, root, followSymlinks });
+    if (stat.isDirectory()) digestDirectory(child, hash, { declarationsOnly, root, followSymlinks, recordedOutputs });
     else if (!declarationsOnly || /\.d\.(?:ts|mts|cts)$/.test(name)) {
       hash.update(`${relative(root, child).split(sep).join('/')}\0`);
-      if (stat.isFile()) hash.update(readWorkspaceBuildFileDigest(child, { followSymlinks }));
+      if (stat.isFile()) hash.update(readWorkspaceBuildFileDigestAtStat(child, stat,
+        recordedOutputs?.get(relative(root, child).split(sep).join('/'))));
       else hash.update(`other:${stat.mode}:${stat.size}:${stat.mtimeNs}`);
       hash.update('\0');
     }
@@ -409,7 +523,15 @@ function digestDirectory(path, hash, { declarationsOnly = false, root = path, fo
 
 function digestDependencyOutputs(packageDir, packageJson, hash, { declarationsOnly = false } = {}) {
   const distDir = join(packageDir, 'dist');
-  digestDirectory(distDir, hash, { declarationsOnly });
+  let recordedOutputs;
+  try {
+    const record = JSON.parse(readFileSync(join(distDir, BUILD_INPUT_RECORD), 'utf8'));
+    if (record.version === 2 && Array.isArray(record.outputs)) {
+      recordedOutputs = new Map([...(Array.isArray(record.outputVerification) ? record.outputVerification : []),
+        ...record.outputs].map(output => [output.path, output]));
+    }
+  } catch { /* An unrecorded dependency still uses real content verification. */ }
+  digestDirectory(distDir, hash, { declarationsOnly, recordedOutputs });
   const targets = new Set(collectPackageBuildOutputTargets({
     ...packageJson,
     exports: [packageJson.exports, packageJson.imports],
@@ -465,7 +587,7 @@ export function readWorkspacePackageInputFingerprint({
   const dependencyPolicyPaths = dependencyLockRepoDir
     ? ['pnpm-lock.yaml', 'pnpm-workspace.yaml'].map(name => join(dependencyLockRepoDir, name))
     : [];
-  const buildOwnerPaths = ['buildTypeScriptPackageDist.mjs', 'workspaceOutputScriptArgs.mjs'].map(name => {
+  const buildOwnerPaths = ['ensureWorkspacePackagesBuilt.mjs', 'buildTypeScriptPackageDist.mjs', 'workspaceOutputScriptArgs.mjs'].map(name => {
     const capturedPath = identitySourceRepoDir && join(identitySourceRepoDir, 'scripts/workspaces', name);
     return capturedPath && existsSync(capturedPath) ? capturedPath : fileURLToPath(new URL(`./${name}`, import.meta.url));
   });
@@ -527,7 +649,7 @@ function collectPublishedDistFiles(distDir, relativeDir = '') {
   }).sort();
 }
 
-function publishedOutputsMatch(distDir, inputFingerprint, { requirePruned = false, requireCompleteDigests = false, allowQaFailure = true, buildMode = 'qa-runtime' } = {}) {
+function readVerifiedOutputRecord(distDir, inputFingerprint, { requirePruned = false, requireCompleteDigests = false, allowQaFailure = true, buildMode = 'qa-runtime' } = {}) {
   try {
     const record = JSON.parse(readFileSync(join(distDir, BUILD_INPUT_RECORD), 'utf8'));
     if (!allowQaFailure && record.qaFailure) return false;
@@ -547,15 +669,41 @@ function publishedOutputsMatch(distDir, inputFingerprint, { requirePruned = fals
         || record.files.some((path, index) => path !== actualFiles[index])
       ) return false;
     }
-    return record.outputs.every(({ path, digest }) => {
+    let verificationNeeded = false;
+    const outputs = record.outputs.map(output => {
+      const { path, digest } = output;
       if (typeof path !== 'string' || !path || !/^[a-f0-9]{64}$/.test(digest)) return false;
       const outputPath = resolve(distDir, path);
       if (!outputPath.startsWith(`${resolve(distDir)}${sep}`)) return false;
-      return readWorkspaceBuildFileDigest(outputPath) === digest;
+      const stat = lstatSync(outputPath, { bigint: true });
+      if (readWorkspaceBuildFileDigestAtStat(outputPath, stat, output) !== digest) return false;
+      if (!outputVerificationMatches(output.verification, stat)) verificationNeeded = true;
+      return { ...output, verification: outputVerification(stat) };
     });
+    if (outputs.some(output => output === false)) return false;
+    // Live publication retains older files for already-loaded readers. They
+    // still participate in dependency identity, but are not current compiler
+    // output. Persist their stat proof in this same publisher-owned record.
+    const recordedPaths = new Set(outputs.map(output => output.path));
+    const previousVerification = new Map((Array.isArray(record.outputVerification) ? record.outputVerification : [])
+      .map(output => [output.path, output]));
+    const verification = collectPublishedDistFiles(distDir).flatMap(path => {
+      if (recordedPaths.has(path)) return [];
+      const outputPath = join(distDir, path);
+      const stat = lstatSync(outputPath, { bigint: true });
+      if (!stat.isFile()) return [];
+      return [{ path, digest: readWorkspaceBuildFileDigestAtStat(outputPath, stat, previousVerification.get(path)),
+        verification: outputVerification(stat) }];
+    });
+    if (JSON.stringify(record.outputVerification ?? []) !== JSON.stringify(verification)) verificationNeeded = true;
+    return { record: { ...record, outputs, outputVerification: verification }, verificationNeeded };
   } catch {
     return false;
   }
+}
+
+function publishedOutputsMatch(distDir, inputFingerprint, options) {
+  return Boolean(readVerifiedOutputRecord(distDir, inputFingerprint, options));
 }
 
 export function isWorkspacePackageOutputCurrent(packageDir, { dependencyDirs = [], buildMode = 'qa-runtime', env = process.env } = {}) {
@@ -697,14 +845,14 @@ async function inspectWorkspacePackageOutput(packageDir, packageJson, {
     };
   }
 
-  const outputsAreAdmissible = missing.length === 0 && inputFingerprint
-    && await publishedOutputsMatch(distDir, inputFingerprint, {
+  const verifiedOutput = missing.length === 0 && inputFingerprint
+    && readVerifiedOutputRecord(distDir, inputFingerprint, {
       requirePruned: publicationMode === 'artifact',
       requireCompleteDigests,
       allowQaFailure,
       buildMode: resolveWorkspaceBuildMode({ env }),
     });
-  if (outputsAreAdmissible) {
+  if (verifiedOutput) {
     try {
       if (
         retryImports
@@ -717,6 +865,7 @@ async function inspectWorkspacePackageOutput(packageDir, packageJson, {
       return {
         complete: publishedDependencyOutputsMatch(distDir, builtDependencies, { requireRecorded: requireCompleteDigests }),
         compileComplete: true,
+        verifiedOutput,
         invalidation: 'dependencies-changed',
         expectedTargets,
         expectedFiles,
@@ -966,6 +1115,11 @@ async function consumeWorkspacePackageBuildInputs({
   const reportImportRetry = createWorkspaceBuildWaitNotifier({ env, label, kind: 'imports' });
   if (expectedTargets.length === 0) return { built: false, reason: 'no-expected-files' };
   if (!force && state.complete) {
+    if (state.verifiedOutput.verificationNeeded) {
+      // Initial inspection is read-only. Only this admitted publisher may
+      // persist successful migration/reverification of worker-local identity.
+      await writeJsonAtomic(join(distDir, BUILD_INPUT_RECORD), state.verifiedOutput.record);
+    }
     return {
       built: false,
       reason: waited ? 'concurrent_build_already_completed' : 'already-built',
@@ -1010,6 +1164,7 @@ async function consumeWorkspacePackageBuildInputs({
     inputFingerprint = capture.inputFingerprint;
     builtDependencies = capture.builtDependencies;
   }
+  let publishedRecord;
   const publishOutputs = async (tmpDistDir) => {
     // Capture may legitimately converge to newer authored source. Its staged
     // UI input must not be the manifest prepared from an earlier source basis.
@@ -1099,11 +1254,16 @@ async function consumeWorkspacePackageBuildInputs({
       builtAt: refreshOnly ? priorRecord.builtAt : new Date().toISOString(),
       fingerprint: inputFingerprint,
       dependencies: builtDependencies,
-      outputs: refreshOnly && tmpDistDir === distDir ? priorRecord.outputs : collectOutputDigests(tmpDistDir, stagedExpectedTargetMatches),
+      outputs: refreshOnly && tmpDistDir === distDir
+        ? priorRecord.outputs
+        : collectOutputDigests(tmpDistDir, stagedExpectedTargetMatches),
       files: refreshOnly && tmpDistDir === distDir ? priorRecord.files : collectPublishedDistFiles(tmpDistDir),
+      ...(refreshOnly && tmpDistDir === distDir && priorRecord.outputVerification
+        ? { outputVerification: priorRecord.outputVerification } : {}),
     };
     // Reference-only refreshes replace the receipt, never the compiler output.
     await writeJsonAtomic(join(tmpDistDir, BUILD_INPUT_RECORD), record);
+    publishedRecord = record;
   };
   try {
     if (refreshOnly && !packageJson.scripts?.['build:ui']) {
@@ -1114,6 +1274,12 @@ async function consumeWorkspacePackageBuildInputs({
         pruneStale: publicationMode === 'artifact',
       });
     }
+    // Mounted publication can preserve existing inodes or move staged ones.
+    // Certify the actual final paths, and replace the record atomically last.
+    // The staged record intentionally contains no reusable inode proof.
+    const verifiedOutput = readVerifiedOutputRecord(distDir, publishedRecord.fingerprint, { buildMode });
+    if (!verifiedOutput) throw new Error(`[workspace-build] published output verification failed for ${packageJson.name ?? packageDir}`);
+    await writeJsonAtomic(join(distDir, BUILD_INPUT_RECORD), verifiedOutput.record);
   } catch (error) {
     // Keep the phase's existing trailing pass before admitting retained bytes.
     // Drift can also reject an output-only refresh; neither case certifies the
@@ -1171,6 +1337,7 @@ async function ensureWorkspacePackageBuilt(packageDir, {
   trailingPass,
   dependencyDirs,
   signal,
+  inheritedAdmission,
 }) {
   signal?.throwIfAborted();
   const packageJsonPath = join(packageDir, 'package.json');
@@ -1185,13 +1352,17 @@ async function ensureWorkspacePackageBuilt(packageDir, {
     publicationMode,
   });
   if (initial.expectedTargets.length === 0) return { built: false, reason: 'no-expected-files' };
-  if (!force && initial.complete) return { built: false, reason: 'already-built' };
+  if (!force && initial.complete && !initial.verifiedOutput.verificationNeeded) return { built: false, reason: 'already-built' };
 
   const env = await workspaceBuildBoundary.prepareEnv(packageDir, envIn);
   const lockPath = resolveWorkspacePackageBuildLockPath(packageDir, packageJson);
   const workspaceBundleLockPath = buildEntersWorkspaceBundleLock(packageJson, { monorepoRoot, packageDir })
     ? resolveWorkspaceBundleLockPath(monorepoRoot)
     : null;
+  if (inheritedAdmission) assertInheritedWorkspaceBuildResources({
+    locks: [...(workspaceBundleLockPath ? [{ path: workspaceBundleLockPath }] : []), { path: lockPath }],
+    dependencyInstallDir: monorepoRoot, env,
+  });
   // Real process adapters run the complete publication transaction beneath
   // the joint admission owner. Injected compiler boundaries remain in-process
   // so tests can exercise this same deterministic publisher without mocking it.
@@ -1239,6 +1410,7 @@ async function ensureWorkspacePackageBuilt(packageDir, {
         dependencyInstallDir: monorepoRoot,
         admissionRequired: requiresTypeScriptAdmission({ env }),
         admissionClass: await resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: packageDir, env, repoRoot: monorepoRoot }),
+        inheritedAdmission,
         stdio: ['inherit', 'pipe', 'inherit'],
         onStdout: consumeStdout,
       });
@@ -1268,10 +1440,11 @@ async function ensureWorkspacePackageBuilt(packageDir, {
   // Never retain dependency/global publication custody while awaiting a
   // package publisher. The under-lock inspection already resolves completed
   // concurrent builds, so a second waiter-specific currentness probe is redundant.
-  return await withWorkspaceBuildResources({
+  const resources = {
     locks: [...(workspaceBundleLockPath ? [{ path: workspaceBundleLockPath }] : []), { path: lockPath }],
     dependencyInstallDir: monorepoRoot, env, signal,
-  }, (env, { waited }) => ensureWorkspacePackageBuiltUnderLock({
+  };
+  const publish = (env, { waited }) => ensureWorkspacePackageBuiltUnderLock({
     monorepoRoot,
     packageDir,
     packageJsonPath,
@@ -1288,7 +1461,11 @@ async function ensureWorkspacePackageBuilt(packageDir, {
     buildMode,
     trailingPass,
     dependencyDirs,
-  }));
+  });
+  if (inheritedAdmission) {
+    return await publish(env, { waited: false });
+  }
+  return await withWorkspaceBuildResources(resources, publish);
 }
 
 async function ensureWorkspacePackageNamesBuilt(monorepoRoot, packageNames, options) {
@@ -1342,6 +1519,7 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
   buildMode,
   trailingPass,
   maxConcurrentBuilds,
+  inheritedAdmission,
   isolatePluginFailures = false,
   built,
   refreshed,
@@ -1362,7 +1540,7 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
   const admittedWorkspacePackageNames = await collectWorkspaceDependencyClosure(
     packageNames ?? [], packageDirsByName, { includeDevDependencies, packageJsonByDir },
   );
-  const scheduleConcurrentPackageBuild = createAsyncConcurrencyLimiter(maxConcurrentBuilds);
+  const scheduleConcurrentPackageBuild = createAsyncConcurrencyLimiter(inheritedAdmission ? 1 : maxConcurrentBuilds);
   const scheduleBundledWorkspacePackageBuild = createAsyncConcurrencyLimiter(1);
   const schedulePackageBuild = (packageJson, packageDir, operation) => (
     buildEntersWorkspaceBundleLock(packageJson, { monorepoRoot, packageDir })
@@ -1466,6 +1644,7 @@ async function ensureWorkspacePackageNamesBuiltPass(monorepoRoot, packageNames, 
             trailingPass,
             dependencyDirs,
             signal,
+            inheritedAdmission,
           });
         });
       } catch (error) {
@@ -1521,6 +1700,8 @@ export async function ensureWorkspacePackagesBuiltByName(monorepoPath, packageNa
   isolatePluginFailures = false,
   buildMode,
   signal,
+  inheritedAdmission = false,
+  visitedNames = [],
 } = {}) {
   signal?.throwIfAborted();
   const monorepoRoot = coerceHappyMonorepoRootFromPath(monorepoPath);
@@ -1548,6 +1729,8 @@ export async function ensureWorkspacePackagesBuiltByName(monorepoPath, packageNa
     maxConcurrentBuilds,
     isolatePluginFailures,
     signal,
+    inheritedAdmission,
+    visitedNames,
   });
   return { ok: true, ...result, skipped: [] };
 }
@@ -1603,6 +1786,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
   logger = console,
   onPackageBuildResult = null,
   deferBundledWorkspaceSync = false,
+  inheritedAdmission = false,
 } = {}) {
   signal?.throwIfAborted();
   if (startup && resolveWorkspaceBuildMode({ buildMode, env }) !== 'strict' && publicationMode === 'live') {
@@ -1610,6 +1794,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
       quiet, env, workspaceBuildBoundary, publicationMode, maxConcurrentBuilds,
       isolatePluginFailures, buildMode, signal,
       onPackageBuildResult, deferBundledWorkspaceSync,
+      inheritedAdmission,
     });
     return await prepareWorkspaceComponentStartup({
       readLastGreen: async () => await hasUsableWorkspaceLastGreen(componentDir)
@@ -1648,6 +1833,7 @@ export async function ensureWorkspacePackagesBuiltForComponent(componentDir, {
     isolatePluginFailures,
     signal,
     onPackageBuildResult,
+    inheritedAdmission,
   });
   if (!deferBundledWorkspaceSync) {
     await syncWorkspaceComponentBundledDependencies(componentDir, {
