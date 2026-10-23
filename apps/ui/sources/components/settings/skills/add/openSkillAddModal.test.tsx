@@ -17,6 +17,21 @@ const { WhereItsOnControl } = await import('@/components/capabilities/where/Wher
 const { SkillAddModal } = await import('./openSkillAddModal');
 
 describe('Skills Add modal through the real Account and registry owners', () => {
+    it.each(['link', 'upload'] as const)('does not read an unopened catalog from the %s tab, then loads Browse on demand', async modeKey => {
+        const { externalRequests, sourceId } = await createRegistrySourcesUiHome(`demand-${modeKey}`);
+        const screen = await renderScreen(<SkillAddModal onClose={() => {}} params={{ modeKey, sourceId, onWrite() {} }} />);
+        const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const { flushHookEffects } = await import('@/dev/testkit');
+        await flushHookEffects();
+        // The configured source is a real GitHub HTTP boundary, reached only by catalog demand.
+        expect(externalRequests.filter(url => url.includes('api.github.com/repos/fixture/skills'))).toHaveLength(0);
+        const { SegmentedTabBar } = await import('@/components/ui/navigation/SegmentedTabBar');
+        await React.act(async () => { screen.findByType(SegmentedTabBar).props.onSelect('browse'); });
+        await waitForHomeGovernance(() => expect(externalRequests.some(url => url.includes('/git/trees/'))).toBe(true));
+        await waitForHomeGovernance(() => expect(screen.find(node => node.props.testID === 'skills.add:collection'
+            && typeof node.props.model?.actions?.open === 'function').props.model.keys).toContain(`${sourceId}|review`));
+    });
+
     for (const rulesUnavailable of [false, true]) it(`keeps missing batch content recoverable after an acknowledgment (rules unavailable: ${rulesUnavailable})`, async () => {
         const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
         const skills = ['review', 'lint'].map(name => createPromptRegistrySkillFixture({ sourceId: 'fixture', itemId: name, title: name,

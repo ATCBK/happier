@@ -144,6 +144,29 @@ it('composes the real rules lookup and sheet model without showing Off before th
   expect(hook.getCurrent().groups[0]?.rows[0]).toMatchObject({ id: 'review', scope: 'Everywhere', dimmed: false });
 });
 
+it('indexes rules once for a sheet inventory and retains each selected rule array between reads', async () => {
+  const scope = { serverId, accountId: 'owner' };
+  const record = PromptLibraryRecordV1Schema.parse({ key: 'skill-rules', value: { v: 1,
+    rules: Array.from({ length: 139 }, (_, index) => ({ id: `rule-${index}`, skillId: `skill-${index}`,
+      target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 })),
+  } });
+  if (record.key !== 'skill-rules') throw new Error('Invalid rules fixture');
+  const { applyPromptLibraryCatalogAcknowledgedRecord } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+  await act(() => applyPromptLibraryCatalogAcknowledgedRecord(scope, record, 1, true));
+  const hook = await renderHook(() => useReachRulesLookup(scope));
+  let visits = 0;
+  for (const rule of record.value.rules) {
+    const skillId = rule.skillId;
+    Object.defineProperty(rule, 'skillId', { configurable: true, get() { visits++; return skillId; } });
+  }
+  const first = Array.from({ length: 139 }, (_, i) => hook.getCurrent().rules('skill', `skill-${i}`));
+  const second = Array.from({ length: 139 }, (_, i) => hook.getCurrent().rules('skill', `skill-${i}`));
+  expect(visits).toBeLessThanOrEqual(139 * 2);
+  expect(first.every((rules, i) => rules === second[i])).toBe(true);
+  expect(first[0]).toEqual([{ id: 'rule-0', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }]);
+  expect(hook.getCurrent().rules('skill', 'missing')).toBe(hook.getCurrent().rules('skill', 'also-missing'));
+});
+
 it('binds the draft chip to the preview on intent and edits only the draft', async () => {
   const hook = await renderHook(() => {
     const [selection, setSelection] =

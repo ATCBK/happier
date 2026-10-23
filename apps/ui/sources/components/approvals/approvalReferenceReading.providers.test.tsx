@@ -102,6 +102,36 @@ describe('Provider approval reference reading', () => {
         } finally { account.dispose(); }
     });
 
+    it('reads only the selected source Team name when confirming among thousands of cached resources', async () => {
+        const home = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://provider-reference-cost.test',
+            accountId: 'recipient', serverIdentityId: 'srv_approval_cost' });
+        const scope = { serverId: 'srv_approval_cost', accountId: 'recipient' };
+        const address = { serverId: scope.serverId, teamId: resource.teamId };
+        let teamNameReads = 0;
+        // Count actual DTO field reads while retaining the real store and reference resolver.
+        const team = { ...teamSummaryFixture({ id: resource.teamId }), get name() {
+            teamNameReads += 1;
+            return 'Platform';
+        } };
+        applyTeamProjection({ scope, address, team, observedAt: 1 });
+        applyTeamCredentialResourceCatalog({ scope, address, observedAt: 1,
+            resources: [...Array.from({ length: 1_000 }, (_, index) => ({ ...resource,
+                id: `unrelated-${index}`, providerModels: [] })), resource] });
+        const account = await captureLazyActionAccountContext(home);
+        teamNameReads = 0;
+        try {
+            const reference = { kind: 'providerConnection' as const, id: input.connectionId,
+                catalogSourceKey: input.catalogSourceKey };
+            expect((await readApprovalReferenceForConfirmation(reference, account)).text)
+                .toBe(`${resource.displayName} · Platform`);
+            expect(teamNameReads).toBe(1);
+            teamNameReads = 0;
+            expect((await readApprovalReferenceForConfirmation({ ...reference, catalogSourceKey: 'x'.repeat(43) }, account)).text)
+                .toBe('Unavailable');
+            expect(teamNameReads).toBe(0);
+        } finally { account.dispose(); }
+    });
+
     it('uses the declared model as the subject and names the Agent in the generic approval reader', async () => {
         const home = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://provider-model-reference.test',
             accountId: 'recipient', serverIdentityId: 'srv_approval' });
