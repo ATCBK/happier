@@ -1696,6 +1696,13 @@ owners. It never replaces them:
   and canonical migration digest. The finalizer replaces the credential and flips
   `Account.encryptionMode` in the same transaction; passwordless transitions keep their
   existing request. The independently gated staged V5 routes remain disabled.
+- In 0.3 development, whole-Account conversion enters `settings.invoke` at
+  `account.encryptionMode` with `account_encryption_mode_convert` and the target
+  mode. Settings and Agent calls share
+  `apps/ui/sources/sync/ops/account/convertAccountEncryptionMode.ts` for inventory,
+  proofs, upload custody and that one-shot transition. Declaration-owned
+  Ask-first approval precedes preparation; Action inputs contain no credentials,
+  keys or prepared migration payload.
 - Both branches share one password-text acceptance contract: well-formed Unicode scalars
   only (unpaired surrogates rejected), a 15-scalar minimum, a 1024-UTF-8-byte ceiling,
   and no silent normalization, so every platform hashes the exact entered bytes.
