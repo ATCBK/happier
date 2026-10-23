@@ -4,9 +4,9 @@ description: Every HAPPIER_FEATURE_* variable the server reads, generated from t
 ---
 
 This is the complete list of environment variables the server reads to decide
-what it advertises and how much of it a client may use. There are **167**, of
-which **66** are on/off switches and the rest are limits, timeouts,
-policies and header names. **167** of them can also be set by a Home owner
+what it advertises and how much of it a client may use. There are **168**, of
+which **67** are on/off switches and the rest are limits, timeouts,
+policies and header names. **168** of them can also be set by a Home owner
 in Home Administration; an explicit env value still wins there and is shown as fixed.
 
 - **Switches** (`…__ENABLED`) turn a capability on or off. When the capability
@@ -28,6 +28,12 @@ Every other server variable is listed in the
 ## Variables
 
 Grouped by feature family.
+
+### Account
+
+| Variable | Kind | Type | Default | Applies | Set from | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED` | Switch | boolean | `true` | Live | Home settings or env | Opt-in public Account profiles and usage sharing. |
 
 ### Artifact
 

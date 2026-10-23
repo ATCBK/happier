@@ -420,6 +420,16 @@ The most important example is **Codex**:
 - With **native auth**, Happier browses sessions from the machine’s standard Codex home.
 - With a **connected service profile** selected for Codex, Happier browses sessions from that connected-service-backed Codex home.
 
+In 0.3 development builds, materialized Codex homes with shared state
+use one native session database across your connected accounts on that machine
+and keep the full native history linked. Sharing also includes pending inputs,
+generated memories and local
+diagnostic entries that can contain account identifiers. A pool switch can
+continue a thread's pending input using the next account. Authentication
+credentials stay separate. Isolated homes and discovery probes select their
+own session database. Browsing, hooks, handoff and takeover reuse the stored database
+selection when they reopen a connected home.
+
 This matters in two places:
 
 - **Direct → Browse provider sessions**: you can explicitly choose a source/home when browsing.

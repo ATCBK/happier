@@ -45,7 +45,7 @@ These appear in **Settings → Features**. 8 of the 22 are marked experimental.
 | **Friends** | `social.friends` | Experimental | Off |
 | **Embedded terminal** | `terminal.embeddedPty` | Standard | On |
 | **Usage reporting** | `usage.reporting` | Standard | On |
-| **Voice** | `voice` | Standard | On |
+| `voice` | `voice` | Standard | On |
 | **Voice agent** | `voice.agent` | Standard | On |
 | **Machine speech** | `voice.daemonInference` | Standard | On |
 | **Zen** | `zen.navigation` | Experimental | On |
@@ -66,7 +66,7 @@ behaviour but still needs the server to advertise the capability.
 
 | Id | What it gates | Owned by | Depends on | Environment variable |
 | --- | --- | --- | --- | --- |
-| `account.publicProfiles` | Opt-in public Account profiles and usage sharing. | server | — | — |
+| `account.publicProfiles` | Opt-in public Account profiles and usage sharing. | server | — | `HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED` |
 | `actions.approvals` | ActionSpec-driven approval request queue and inbox UI surfaces. | client | `inbox.global` | — |
 | `agents.claude.unifiedTerminal` | Claude unified terminal runtime capability. | client | `sessions.direct` | — |
 | `agents.claude.unifiedTerminal.tuiRuntimeControl` | Claude unified terminal TUI runtime-control controller (live model/effort/permission-mode controls). Falls back to restart/unsupported outcomes when disabled. | client | `agents.claude.unifiedTerminal` | — |

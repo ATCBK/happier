@@ -977,6 +977,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
+- `actionId` (text): Action id
+- `cursor` (text): Cursor
 - `status` (select): Status
 - `limit` (text): Limit
 
@@ -1378,7 +1380,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Report Automation Event source status** — Read or update Event Automation state through the canonical Automation owner.
 
-- Safety: `danger`; side effect: `write`.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -19710,6 +19712,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `scope` (json, required): Home and Account
 - `draftId` (text, required): Mounted draft id
+
+## `workflow.definition.capture`
+
+**Prepare an editable pattern** — Prepare an editable draft from explicitly selected authorized Discussion messages. Review inferred steps, exact dependencies and per-run question/participant inputs; use choices to resolve unlinked messages. Workflow-backed exchanges reuse their authored definition and source provenance. Capture does not save, share or start work; open the draft in the ordinary editor and save with workflow.definition.create.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
 
 ## `workflow.definition.create`
 

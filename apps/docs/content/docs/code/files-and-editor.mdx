@@ -16,6 +16,17 @@ the repository, or open the file it just mentioned, without leaving the session.
   still load file data through the machine-level workspace APIs.
 </Callout>
 
+## Syntax highlighting (0.3 development)
+
+In the unreleased 0.3 development version, file View and diff views default to
+advanced syntax highlighting on web and desktop. Native clients use the simple
+tokenizer. An explicitly saved Off, Simple or Advanced preference keeps its
+meaning, including preferences saved by 0.2; only an unset preference picks up
+the new default.
+
+The existing tokenization budgets still govern large files and long lines.
+Content remains readable when highlighting is skipped.
+
 ## Replace in files and blame (0.3 development)
 
 The unreleased Files & Editor work brings replacement review into **Text in

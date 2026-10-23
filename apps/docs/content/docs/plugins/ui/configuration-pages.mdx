@@ -452,6 +452,18 @@ Happier's Skills, MCP servers and Agents pages use. Import it from
   for needs-you, rose for a failure), with the fix as its action.
 - `pickMostBlockingCapabilityStatus` picks the one status to show when an item has
   several (for example one per machine).
+- `WhereItsOnControl` is the "Where it's on" section: the sentence ("On
+  everywhere · except Gemini"), Everywhere On | Off, the rules and an add menu,
+  and an optional line saying where it is available now. You pass where your item
+  is on (`everywhere` and `rules`) and the places to offer; `onIntent` receives the
+  person's choice (`everywhere`, `add`, `remove` or `narrow`), which you apply to
+  your own rules. Return `{ ok: false, message }` to show that a change failed,
+  with Try again.
+- `CapabilityAddBody` is the body of an Add flow, for your own page or sheet: the
+  ways to add as tabs, a searchable catalog list with each item's details beside
+  it (pushed on a phone), the pinned footer with your install action, and an
+  optional registry selector. The page or sheet around it and its header stay
+  yours; `onLevelChange` tells you when to show a way back.
 
 You supply the data and the fix handlers; the words come from Happier's
 defaults or your translation bundle (`happier.plugin-ui.capability.*`).
