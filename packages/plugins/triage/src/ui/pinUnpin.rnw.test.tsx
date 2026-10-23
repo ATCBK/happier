@@ -369,7 +369,8 @@ describe('the mounted Pin/Unpin affordance', () => {
         // Settled at the writer, not optimistically in this mount.
         expect(await liveMarkCount(harness)).toBe(0);
         await expect(shell.queryByText('A change this device has not read')).resolves.toBeUndefined();
-        await expect(shell.getByText('Unpinned')).resolves.toEqual({ content: 'Unpinned' });
+        // The row leaving is the confirmation; a settled pin leaves no lingering line in the page header.
+        await expect(shell.queryByText('Unpinned')).resolves.toBeUndefined();
     });
 
     it('renders one pin for an entry the reader pinned from another device', async () => {

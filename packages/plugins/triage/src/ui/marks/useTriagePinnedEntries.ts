@@ -92,24 +92,22 @@ function intentFor(row: TriageListDisplayRowV1): TriagePinIntentV1 {
       };
 }
 
+/**
+ * What a settled pin write says. A pin or unpin that landed says nothing: the row moving into (or out of) the
+ * Pinned section is the confirmation, and a lingering "Pinned" line under the page header would be a second, stale
+ * voice for it. Only a write that did not land as pressed is said.
+ */
 function noticeFor(
   status: 'pinned' | 'unpinned' | 'conflict',
   text: (key: string, fallback?: string) => string,
-): TriagePinNoticeV1 {
-  if (status === 'conflict') {
-    return {
-      tone: 'warning',
-      message: text(
-        'plugins.triage.surface.pin.conflict',
-        'That pin was changed somewhere else. Showing the current state.',
-      ),
-    };
-  }
+): TriagePinNoticeV1 | null {
+  if (status !== 'conflict') return null;
   return {
-    tone: 'secondary',
-    message: status === 'pinned'
-      ? text('plugins.triage.surface.pin.pinned', 'Pinned')
-      : text('plugins.triage.surface.pin.unpinned', 'Unpinned'),
+    tone: 'warning',
+    message: text(
+      'plugins.triage.surface.pin.conflict',
+      'That pin was changed somewhere else. Showing the current state.',
+    ),
   };
 }
 
