@@ -81,8 +81,9 @@ export function createBrowserDaemonControlBroker(): BrowserDaemonControlBroker {
       if (!adapter) {
         return browserCommandDispatchFailure({
           commandId: command.commandId,
-          code: 'unsupported_command',
-          message: 'No Browser daemon control adapter supports this openView command.',
+          code: 'adapter_unavailable',
+          completion: 'known',
+          message: 'No Browser daemon adapter can open this target. Open workspace-owned targets with browser.workspace.open; a mounted Browser pane is not required.',
         });
       }
       return normalizeAdapterResult(adapter, command, await adapter.dispatchCommand(command, scope));

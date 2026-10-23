@@ -160,7 +160,7 @@ describe('browser daemon control broker', () => {
       },
     }))).resolves.toMatchObject({
       status: 'failed',
-      error: { code: 'unsupported_command' },
+      error: { code: 'adapter_unavailable', message: expect.stringContaining('browser.workspace.open') },
     });
   });
 

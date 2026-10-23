@@ -62,7 +62,7 @@ describe('LocalPreviewTarget web', () => {
         expect(lifecycle).toHaveBeenLastCalledWith({ kind: 'loadFinished', url: props.url });
     });
 
-    it('feeds the preview documents\' own history and loading truth to the control lifecycle without moving the view\'s URL', async () => {
+    it('feeds the preview documents\' own location, history and loading truth to the control lifecycle', async () => {
         const host = new EventTarget();
         vi.stubGlobal('window', host);
         const frame = {};
@@ -78,7 +78,8 @@ describe('LocalPreviewTarget web', () => {
             origin: { value: 'https://preview.example.test' }, source: { value: frame },
         });
         await act(async () => { host.dispatchEvent(event); });
-        expect(lifecycle).toHaveBeenCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false });
+        expect(lifecycle).toHaveBeenCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false,
+            url: 'https://preview.example.test/other', navigationGeneration: 1 });
         const titled = new Event('message') as MessageEvent;
         Object.defineProperties(titled, {
             data: { value: JSON.stringify({ v: 1, kind: 'browser.collector.navigation', ...identity, loading: false, canGoBack: true, canGoForward: false, url: 'https://preview.example.test/c', title: 'Checkout' }) },
@@ -86,7 +87,8 @@ describe('LocalPreviewTarget web', () => {
         });
         await act(async () => { host.dispatchEvent(titled); });
         // The tab names the document the preview is on now, not the one it was opened at.
-        expect(lifecycle).toHaveBeenLastCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false, title: 'Checkout' });
+        expect(lifecycle).toHaveBeenLastCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false, title: 'Checkout',
+            url: 'https://preview.example.test/c', navigationGeneration: 1 });
         await screen.unmount();
     });
 

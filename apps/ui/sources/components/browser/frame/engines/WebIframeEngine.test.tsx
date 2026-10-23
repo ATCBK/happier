@@ -132,8 +132,10 @@ describe('WebIframeEngine diagnostics wiring', () => {
             await act(async () => {
                 for (const frame of frames) new Function('window', 'document', buildCooperativeNavigationRuntimeScript('null'))(frame, { readyState: 'complete' });
             });
-            expect(observed[0]).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false });
-            expect(observed[1]).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true });
+            expect(observed[0]).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false,
+                url: 'https://preview.example.test/page-0', navigationGeneration: 1 });
+            expect(observed[1]).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true,
+                url: 'https://preview.example.test/page-1', navigationGeneration: 1 });
             expect(bindings).toEqual(['pane-0', 'pane-1']);
         } finally { for (const screen of screens) await screen.unmount(); }
     });
@@ -220,7 +222,8 @@ describe('WebIframeEngine diagnostics wiring', () => {
             new Function('window', 'document', buildCooperativeNavigationRuntimeScript(JSON.stringify({ ...JSON.parse(sourceUrl.searchParams.get('__happierCollector')!), cooperativePreview: true })))(frame, { readyState: 'complete' });
         };
         await act(async () => { install(sourceUrl.href); });
-        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: false });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: false,
+            url: 'https://preview.example.test/?signed=a%20b', navigationGeneration: 6 });
 
         // A report from another pane's identity, window or origin is not navigation truth.
         const report = { v: 1, kind: 'browser.collector.navigation', ...identityFor(6), loading: true, canGoBack: true, canGoForward: true, url: 'https://preview.example.test/' };
@@ -238,9 +241,11 @@ describe('WebIframeEngine diagnostics wiring', () => {
         await act(async () => screen.findByType('iframe').props.onLoad());
         navigation.canGoBack = true;
         await act(async () => { install('https://preview.example.test/other?x=1'); });
-        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false,
+            url: 'https://preview.example.test/other?x=1', navigationGeneration: 6 });
         await act(async () => { navigation.canGoBack = false; navigation.canGoForward = true; navigation.dispatchEvent(new Event('currententrychange')); });
-        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true,
+            url: 'https://preview.example.test/other?x=1', navigationGeneration: 6 });
 
         for (const [kind, expected] of [['goBack', 'back'], ['goForward', 'forward'], ['stop', 'stop']] as const) {
             await screen.update(element(6, { navigationCommand: { commandId: `command_${kind}`, kind } }));

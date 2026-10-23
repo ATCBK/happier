@@ -739,9 +739,12 @@ export async function createCdpConnection(webSocketDebuggerUrl) {
   const pending = new Map();
   const listeners = new Map();
   let closed = false;
+  let resolveDisconnected;
+  const disconnected = new Promise(resolve => { resolveDisconnected = resolve; });
 
   const rejectAll = (error) => {
     closed = true;
+    resolveDisconnected({ reason: 'closed' });
     for (const { reject, timeoutId } of pending.values()) {
       clearTimeout(timeoutId);
       reject(error);
@@ -789,6 +792,7 @@ export async function createCdpConnection(webSocketDebuggerUrl) {
   ws.addEventListener('error', () => rejectAll(new Error('CDP WebSocket error')));
 
   return {
+    disconnected,
     on(method, listener) {
       const methods = listeners.get(method) ?? new Set();
       methods.add(listener);
@@ -808,6 +812,7 @@ export async function createCdpConnection(webSocketDebuggerUrl) {
     },
     close() {
       closed = true;
+      resolveDisconnected({ reason: 'closed' });
       for (const { reject, timeoutId } of pending.values()) {
         clearTimeout(timeoutId);
         reject(new Error('CDP WebSocket closed'));
@@ -1944,10 +1949,10 @@ function buildRunSummary(results) {
   };
 }
 
-async function main(argv) {
+export async function main(argv, journeyRuntime) {
   if (argv[0] === 'journey' || argv[0] === 'compare') {
     const { runPerformanceCli } = await import('../../../stack/scripts/perf/perf.mjs');
-    await runPerformanceCli(argv);
+    await runPerformanceCli(argv, journeyRuntime);
     return;
   }
   const args = parsePerfAuditArgs(argv);

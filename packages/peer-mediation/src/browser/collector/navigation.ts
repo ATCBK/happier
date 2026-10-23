@@ -10,6 +10,7 @@ import { COOPERATIVE_NAVIGATION_BIND_KIND, COOPERATIVE_NAVIGATION_BIND_REQUEST_K
 export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
   (function (config) {
     var navigationPending = false;
+    var reportedTitle = null;
     var collectorQueryNames = ['__happierCollector', '__happierCollectorState'];
 
     function currentUrl() {
@@ -23,6 +24,7 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
     function reportNavigationState() {
       if (!config || !window.parent || typeof window.parent.postMessage !== 'function') return;
       var navigation = window.navigation;
+      var title = String(document.title || '');
       try {
         window.parent.postMessage(JSON.stringify({
           v: 1, kind: 'browser.collector.navigation',
@@ -33,8 +35,9 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
           canGoBack: Boolean(navigation && navigation.canGoBack),
           canGoForward: Boolean(navigation && navigation.canGoForward),
           url: currentUrl(),
-          title: String(document.title || '')
+          title: title
         }), config.webPostMessageTargetOrigin);
+        reportedTitle = title;
       } catch (_error) {
         // Reporting is best-effort metadata; it must never disturb the previewed page.
       }
@@ -84,6 +87,13 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
     window.addEventListener('message', handleNavigationCommand);
     window.addEventListener('load', reportNavigationState);
     window.addEventListener('pageshow', requestBinding);
+    // A page can rename itself after load without navigating. Keep this document's title
+    // on the same identity-bound report; unrelated head changes do not publish state.
+    if (document.head && typeof window.MutationObserver === 'function') {
+      new window.MutationObserver(function () {
+        if (String(document.title || '') !== reportedTitle) reportNavigationState();
+      }).observe(document.head, { childList: true, characterData: true, subtree: true });
+    }
     if (window.navigation && typeof window.navigation.addEventListener === 'function') {
       window.navigation.addEventListener('currententrychange', reportNavigationState);
       window.navigation.addEventListener('navigate', function (event) {

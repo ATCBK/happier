@@ -66,6 +66,7 @@ export type BrowserViewLifecycleSignal =
          */
         kind: 'navigationStateChanged';
         url?: string | null;
+        navigationGeneration?: number;
         title?: string | null;
         loading: boolean;
         canGoBack: boolean;
@@ -122,6 +123,7 @@ export function browserViewLifecycleEvent(
                 loadingState: signal.loading ? 'loading' : 'ready',
                 canGoBack: signal.canGoBack,
                 canGoForward: signal.canGoForward,
+                ...(signal.navigationGeneration !== undefined ? { navigationGeneration: signal.navigationGeneration } : {}),
                 ...(url ? (signal.loading ? { pendingUrl: url } : { currentUrl: url }) : {}),
                 ...(signal.title ? { title: signal.title } : {}),
             };

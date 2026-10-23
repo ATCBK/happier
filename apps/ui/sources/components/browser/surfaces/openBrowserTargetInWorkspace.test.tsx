@@ -34,6 +34,7 @@ import {
     resolveBrowserViewTargetOpenTab,
 } from './openBrowserTargetInWorkspace';
 import { readBrowserViewDetailsResource } from './browserSurfaceDetailsTabModel';
+import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 const localServicePreviewTarget = {
     kind: 'localServicePreview',
@@ -252,6 +253,49 @@ describe('openBrowserTargetInWorkspace', () => {
                 .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
         }
         expect(openDetailsTab).not.toHaveBeenCalled();
+    });
+    it('opens the canonical Home workspace from the approving device profile without accepting another Account', async () => {
+        const tabs: DetailsTab[] = [];
+        let stored: ApprovalRequest | null = null;
+        const { executor, context, dispose } = createBrowserWorkspaceOpeningFixture({
+            scope: 'sessionDetails', platform: 'web', openDetailsTab: tab => { tabs.push(tab); },
+            accountLifetime: {
+                scope: { serverId: 'srv_browser_workspace_alias', accountId: 'account_1' },
+                isCurrent: () => true, onRetire: () => ({ dispose: () => {} }),
+            },
+        }, {
+            // Only Account-private approval storage is replaced; replay and Browser owners stay real.
+            approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'profile-open-approval' }; },
+            approvalsGet: async () => stored,
+            approvalsUpdate: async ({ request }) => { stored = request; return { ok: true }; },
+        });
+        const profile = await upsertServerProfile({ serverUrl: 'https://browser-workspace-alias.example.test', name: 'Browser workspace' });
+        try {
+            expect(await setServerProfileIdentityForUrl(profile.serverUrl, context.serverId))
+                .toMatchObject({ serverIdentityId: context.serverId });
+            const input = { scopeId: 'workspace_1', commandId: 'approved_profile_open', target: localServicePreviewTarget };
+            const approvingContext = { ...context, serverId: profile.id, surface: 'ui' as const, authority: 'present_user' as const };
+            expect(await executor.execute('browser.workspace.open', input, {
+                ...approvingContext, runtimeAccountId: 'another_account',
+            })).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+            expect(tabs).toHaveLength(0);
+            expect(await executor.execute('browser.workspace.open', input, approvingContext))
+                .toMatchObject({ ok: true, result: { commandId: 'approved_profile_open', status: 'dispatched' } });
+            expect(tabs).toHaveLength(1);
+            expect(await executor.execute('browser.workspace.open', { ...input, commandId: 'profile_approval_replay' }, {
+                ...approvingContext, actionsSettings: confirmOpeningSettings,
+            })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            expect(tabs).toHaveLength(1);
+            expect(await executor.execute('approval.request.decide', {
+                artifactId: 'profile-open-approval', decision: 'approve',
+            }, approvingContext)).toMatchObject({ ok: true });
+            expect(stored).toMatchObject({ status: 'executed', execution: { ok: true,
+                result: { commandId: 'profile_approval_replay', status: 'dispatched' } } });
+            expect(tabs).toHaveLength(2);
+        } finally {
+            dispose();
+            await removeServerProfile(profile.id);
+        }
     });
     it('reports an OS refusal without creating a substitute workspace tab', async () => {
         const openDetailsTab = vi.fn();

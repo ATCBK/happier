@@ -10,6 +10,29 @@ import {
 } from './browserSurfaceDetailsTabModel';
 
 describe('browser surface details tab model', () => {
+    it('keeps a double-slash preview pathname relative to fresh access on restore', () => {
+        const target = { kind: 'localServicePreview', targetId: 'preview', sessionId: 'session', machineId: 'machine' } as const;
+        const tab = createBrowserViewDetailsTab({ target, currentUrl: 'https://old-preview.test//details?qa93=1#section' });
+        const restored = readBrowserViewDetailsResource(JSON.parse(JSON.stringify(tab.resource)));
+        expect(restored?.currentUrl).toBe('.//details?qa93=1#section');
+        const destination = new URL(restored!.currentUrl!, 'https://fresh-preview.test/');
+        expect(destination.origin).toBe('https://fresh-preview.test');
+        expect(destination.pathname).toBe('//details');
+    });
+
+    it.each([
+        { target: { kind: 'localServicePreview', targetId: 'preview', sessionId: 'session', machineId: 'machine' },
+            expected: '/details?qa93=1#section' },
+        { target: { kind: 'externalUrl', targetId: 'external', url: 'https://external.test/' },
+            expected: 'https://preview.test/details?qa93=1&previewToken=one-use#section' },
+    ] as const)('round trips the last location for $target.kind without storing preview admission', ({ target, expected }) => {
+        const tab = createBrowserViewDetailsTab({ target,
+            currentUrl: 'https://preview.test/details?qa93=1&previewToken=one-use#section' });
+        const restored = readBrowserViewDetailsResource(JSON.parse(JSON.stringify(tab.resource)));
+        expect(restored).toMatchObject({ target, currentUrl: expected });
+        if (target.kind === 'localServicePreview') expect(JSON.stringify(tab)).not.toContain('one-use');
+    });
+
     it('selects the current Browser workspace source and refuses an unrelated active Details tab', () => {
         const first = { ...createBrowserViewDetailsTab({ target: { kind: 'externalUrl', targetId: 'first', url: 'https://first.test/' } }),
             isPreview: false, isPinned: true };

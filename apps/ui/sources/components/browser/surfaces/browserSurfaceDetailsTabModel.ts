@@ -3,13 +3,15 @@ import { BrowserViewTargetV1Schema, type BrowserViewTargetV1 } from '@happier-de
 import type { DetailsTab, DetailsTabState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import type { DetailsTabPresentation } from '@/components/appShell/panes/details/workspace/DetailsTabStrip';
 import { resolveBrowserViewIdForTarget } from '@/sync/domains/browser/store';
+import { withoutPreviewAdmission } from '@/sync/domains/local/services/preview/url';
 import { t } from '@/text';
 
 export const BROWSER_LAUNCHPAD_DETAILS_TAB_KEY = 'browser:launchpad';
 
 /**
  * The kind-agnostic details-workspace engine hosts the browser as just another tab. A
- * `browser-view` tab carries ONLY the workspace seam (`browserSessionId`, `viewId`, `target`);
+ * `browser-view` tab carries the workspace seam (`browserSessionId`, `viewId`, `target`) and the
+ * last committed location for restoration;
  * the live per-view CONTENT lifecycle lives in the browser store, while the workspace owns tab
  * order/active/open/close/pin/split/keep-mounted. This collapses the prior two-tab-levels
  * structure (a launchpad tab containing a bespoke inner browser tab strip) onto one engine.
@@ -103,7 +105,23 @@ export type BrowserViewDetailsResource = Readonly<{
     browserSessionId: string;
     viewId: string;
     target: BrowserViewTargetV1;
+    /** Previews retain only path/query/hash, never a credential or device-local listener origin. */
+    currentUrl?: string;
 }>;
+
+function normalizeRestoredLocation(target: BrowserViewTargetV1, value: unknown): string | undefined {
+    if (typeof value !== 'string' || !value) return undefined;
+    try {
+        // Preview locations are relative to freshly acquired access, including after a native
+        // listener changes. The parse-only base never becomes a persisted or navigated origin.
+        const parsed = new URL(value, target.kind === 'externalUrl' ? target.url : 'https://preview.invalid/');
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+        if (target.kind !== 'localServicePreview') return parsed.href;
+        const clean = new URL(withoutPreviewAdmission(parsed.href));
+        const pathname = clean.pathname.startsWith('//') ? `.${clean.pathname}` : clean.pathname;
+        return pathname + clean.search + clean.hash;
+    } catch { return undefined; }
+}
 
 /**
  * Build a single-view `browser-view` workspace tab from a target. `key` is stable per
@@ -118,6 +136,7 @@ export function createBrowserViewDetailsTab(params: Readonly<{
     browserSessionId?: string;
     viewId?: string;
     scope?: string;
+    currentUrl?: string | null;
 }>): DetailsTab {
     const scopePart = params.scope ?? 'details';
     const browserSessionId = params.browserSessionId
@@ -126,6 +145,7 @@ export function createBrowserViewDetailsTab(params: Readonly<{
     const title = params.target.display?.title
         ?? params.target.display?.addressLabel
         ?? t('browserSurface.title');
+    const currentUrl = normalizeRestoredLocation(params.target, params.currentUrl);
     return {
         key: `${BROWSER_VIEW_DETAILS_TAB_KIND}:${browserSessionId}:${viewId}`,
         kind: BROWSER_VIEW_DETAILS_TAB_KIND,
@@ -135,6 +155,7 @@ export function createBrowserViewDetailsTab(params: Readonly<{
             browserSessionId,
             viewId,
             target: params.target,
+            ...(currentUrl ? { currentUrl } : {}),
         } satisfies BrowserViewDetailsResource,
     };
 }
@@ -159,11 +180,13 @@ export function readBrowserViewDetailsResource(value: unknown): BrowserViewDetai
     if (!parsedTarget.success) {
         return null;
     }
+    const currentUrl = normalizeRestoredLocation(parsedTarget.data, resource.currentUrl);
     return {
         kind: 'browser-view',
         browserSessionId: resource.browserSessionId,
         viewId: resource.viewId,
         target: parsedTarget.data,
+        ...(currentUrl ? { currentUrl } : {}),
     };
 }
 

@@ -9,6 +9,7 @@ import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-de
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
     readClaimedBrowserRuntimeWorkspaceOpenRegion,
     readRegisteredBrowserRuntimeWorkspaceOpeningAdapter,
@@ -253,13 +254,14 @@ async function executeBrowserControlAction(
         const parsed = PUBLIC_ACTION_INPUT_SCHEMAS['browser.workspace.open'].safeParse(args.input ?? {});
         if (!parsed.success) return invalidParametersResult;
         const request = parsed.data;
-        const scope = args.context.serverId && args.context.runtimeAccountId
-            ? { serverId: args.context.serverId, accountId: args.context.runtimeAccountId } : null;
+        const serverId = resolveServerProfileScopeIdForIdentifier(args.context.serverId);
+        const scope = serverId && args.context.runtimeAccountId
+            ? { serverId, accountId: args.context.runtimeAccountId } : null;
         const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId) : null;
         if (!owner || owner.scopeId !== request.scopeId) return browserRuntimeActionDisabledResult('browser_view_unavailable');
         const lifetime = owner.accountLifetime;
         if (!lifetime?.isCurrent() || args.context.signal?.aborted
-            || args.context.serverId !== lifetime.scope.serverId
+            || serverId !== lifetime.scope.serverId
             || args.context.runtimeAccountId !== lifetime.scope.accountId) {
             return browserRuntimeActionDisabledResult('browser_view_unavailable');
         }

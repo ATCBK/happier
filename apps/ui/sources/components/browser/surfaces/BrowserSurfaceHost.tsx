@@ -115,6 +115,13 @@ export type BrowserSurfaceViewTargetChange = Readonly<{
     target: BrowserViewTargetV1;
 }>;
 
+export type BrowserSurfaceViewStateChange = Readonly<{
+    browserSessionId: string;
+    viewId: string;
+    title: string | null;
+    currentUrl: string | null;
+}>;
+
 function hasBrowserSurfaceProductModelValues(model: BrowserSurfaceProductModels): boolean {
     return model.browserContext !== undefined
         || model.browserDiagnostics !== undefined
@@ -284,6 +291,7 @@ export function BrowserSurfaceHost(props: Readonly<{
     testID?: string;
     onLifecycleChange?: (snapshot: BrowserSurfaceLifecycleSnapshot) => void;
     onViewTargetChange?: (input: BrowserSurfaceViewTargetChange) => void;
+    onViewStateChange?: (input: BrowserSurfaceViewStateChange) => void;
     /**
      * UX-6 opt-in. When `true` (and a `BrowserPresentationRetentionProvider` is mounted above the
      * router) the surface is hosted by the route-stable webview portal keyed by `presentationSlotId`,
@@ -370,6 +378,19 @@ export function BrowserSurfaceHost(props: Readonly<{
     );
     const focusedView = selectActiveBrowserView(surfaceState.browserState, props.browserSessionId)
         ?? (presenceSessionId ? selectActiveBrowserView(surfaceState.browserState, presenceSessionId) : null);
+    const reportedViewRef = React.useRef<Readonly<{ resetKey: typeof resetKey; view: BrowserSurfaceViewStateChange }> | null>(null);
+    React.useEffect(() => {
+        if (!focusedView) return;
+        const view = { browserSessionId: focusedView.browserSessionId, viewId: focusedView.viewId,
+            title: focusedView.title, currentUrl: focusedView.currentUrl };
+        const previous = reportedViewRef.current;
+        reportedViewRef.current = { resetKey, view };
+        // Mount/reset only hydrates. Persist actual engine changes, not the seed or callback churn.
+        if (!previous || previous.resetKey !== resetKey) return;
+        if (previous.view.browserSessionId === view.browserSessionId && previous.view.viewId === view.viewId
+            && previous.view.title === view.title && previous.view.currentUrl === view.currentUrl) return;
+        props.onViewStateChange?.(view);
+    }, [focusedView?.browserSessionId, focusedView?.viewId, focusedView?.title, focusedView?.currentUrl, props.onViewStateChange, resetKey]);
     const applyDaemonEvents = React.useCallback((events: readonly BrowserEventV1[]) => {
         setSurfaceState(current => {
             const browserState = events.reduce((state, event) => {

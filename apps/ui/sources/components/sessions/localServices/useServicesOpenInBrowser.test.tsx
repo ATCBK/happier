@@ -18,6 +18,11 @@ import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/ad
 
 import { useServicesOpenInBrowser } from './useServicesOpenInBrowser';
 import { readLocalServiceActionOutcome } from './localServiceActionOutcome';
+import { SessionServicesSurfaceScreen } from '@/components/workspaceCockpit/session/SessionServicesSurfaceScreen';
+import { buildLocalServiceInventoryState } from '@/dev/testkit';
+import { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
+import { clearBrowserRuntimeControlRegistryForTests } from '@/sync/domains/browser/actions/runtimeControlRegistry';
+import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 
 const machineRpcMock = vi.hoisted(() => vi.fn());
 const openExternalUrlMock = vi.hoisted(() => vi.fn(async () => true));
@@ -63,6 +68,7 @@ function HookProbe(props: Readonly<{
     scope?: OpenBrowserTargetScope;
     onAfterOpen?: () => void;
     onAfterDetailsOpen?: () => void;
+    phoneServices?: boolean;
 }>) {
     const pane = useAppPaneScope(props.scopeId);
     const open = useServicesOpenInBrowser({
@@ -79,7 +85,13 @@ function HookProbe(props: Readonly<{
 
     return React.createElement('HookProbe', {
         detailsTabKinds: (pane.scopeState?.details.tabs ?? []).map((tab) => tab.kind),
-    });
+    }, props.phoneServices ? <SessionServicesSurfaceScreen
+        inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+        launcherState={applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
+            v: 1, machineId: 'machine-a', sessionId: 'session-a', updatedAt: 1_000, targets: [openableTarget],
+        })}
+        onOpenServiceInBrowser={open}
+    /> : null);
 }
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
@@ -124,6 +136,8 @@ describe('useServicesOpenInBrowser', () => {
                     approvalWaivedSurfaces: { 'browser.workspace.open': ['ui'] },
                 } } } }) : null,
         });
+        expect(await setServerProfileIdentityForUrl(fixture.home.serverUrl, 'srv_services_phone_home'))
+            .toMatchObject({ serverIdentityId: 'srv_services_phone_home' });
         const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         primeServerFeaturesSnapshot({ serverId: fixture.home.id, snapshot: { status: 'ready', features } });
         await fixture.hydrateAccountSettings();
@@ -143,6 +157,33 @@ describe('useServicesOpenInBrowser', () => {
 
         const probe = screen.tree.findByType('HookProbe' as never);
         expect(probe.props.detailsTabKinds).toContain('browser-view');
+    });
+
+    it('opens the real phone Services row through a profile alias into the Home-qualified Browser workspace', async () => {
+        expect(account!.accountLifetime.scope.serverId).toBe('srv_services_phone_home');
+        expect(fixture!.home.id).not.toBe(account!.accountLifetime.scope.serverId);
+        const onAfterOpen = vi.fn();
+        const captured: Captured = { open: null };
+        const screen = await renderServicesHook({ scopeId: 'session:phone:browser', scope: 'sessionMobile',
+            captured, phoneServices: true, onAfterOpen });
+        await screen.pressByTestIdAsync('session-mobile-services-row:preview:open-feed-open');
+        expect(screen.tree.findByType('HookProbe' as never).props.detailsTabKinds).toEqual(['browser-view']);
+        expect(onAfterOpen).toHaveBeenCalledOnce();
+    });
+
+    it('shows the exact Browser refusal in the real phone row Details when its workspace owner is absent', async () => {
+        const onAfterOpen = vi.fn();
+        const captured: Captured = { open: null };
+        const screen = await renderServicesHook({ scopeId: 'session:phone:unavailable:browser', scope: 'sessionMobile',
+            captured, phoneServices: true, onAfterOpen });
+        // Remove the real registration, rather than substituting an Action or opener implementation.
+        clearBrowserRuntimeControlRegistryForTests();
+        await screen.pressByTestIdAsync('session-mobile-services-row:preview:open-feed-open');
+        await screen.pressByTestIdAsync('session-mobile-services-row:preview:open-feed-failure.details');
+        expect(screen.getTextContent()).toContain('browser_view_unavailable');
+        expect(screen.getTextContent()).not.toContain('runtime_action_disabled');
+        expect(screen.tree.findByType('HookProbe' as never).props.detailsTabKinds).toEqual([]);
+        expect(onAfterOpen).not.toHaveBeenCalled();
     });
 
     it('invokes onAfterOpen only when the target is mappable', async () => {
@@ -186,7 +227,7 @@ describe('useServicesOpenInBrowser', () => {
         const captured: Captured = { open: null };
         const screen = await renderServicesHook({ scopeId: 'session:disabled:browser', captured, onAfterOpen, onAfterDetailsOpen });
         await act(async () => {
-            expect(await captured.open!(openableTarget)).toMatchObject({ status: 'denied' });
+            expect(await captured.open!(openableTarget)).toMatchObject({ ok: false, errorCode: 'action_disabled' });
         });
         expect(screen.tree.findByType('HookProbe' as never).props.detailsTabKinds).toEqual([]);
         expect(onAfterOpen).not.toHaveBeenCalled();

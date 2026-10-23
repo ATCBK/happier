@@ -60,6 +60,8 @@ import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { buildCooperativeNavigationRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
 
 // The visibility owner installs one app-lifetime watch. Keep one OS emitter for
 // the whole suite so eager executor imports cannot bind it to a discarded stub.
@@ -125,6 +127,7 @@ const browserStreamBoundary = vi.hoisted(() => ({
 const browserPreviewBoundary = vi.hoisted(() => ({
     response: null as DaemonLocalServicePreviewOpenOrCreateResponseV1 | null,
 }));
+let browserFeatures: ReturnType<typeof createRootLayoutFeaturesResponse> | null = null;
 
 // Discovery and relay socket are genuine network boundaries; host/runtime/ingestion stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
@@ -578,6 +581,7 @@ beforeEach(async () => {
     browserAppState.emit('active');
     browserSystemOpen.mockClear();
     browserPreviewBoundary.response = null;
+    browserFeatures = null;
     browserActionModal.show.mockClear();
     browserActionModal.hide.mockClear();
     browserActionModal.confirmFallback.mockClear();
@@ -597,6 +601,12 @@ beforeEach(async () => {
     }, source: 'qr', descriptorAuthority: 'current_connection_observation' });
     browserAccountConnection = await restoreServerAccountForTest({ serverUrl, accountId: 'account-1', request: async (input) => {
         const path = new URL(String(input)).pathname;
+        if (path === '/v1/features' && browserFeatures) return Response.json(browserFeatures);
+        if (path === '/v1/local-services/preview/preview_1/access' && browserFeatures) {
+            const { LocalServicePreviewServerAccessV1Schema } = await import('@happier-dev/protocol/local/services/preview/nativeDirect');
+            return Response.json(LocalServicePreviewServerAccessV1Schema.parse({ v: 1, kind: 'server_preview',
+                previewId: 'preview_1', machineId: 'machine_1', accessUrl: 'https://preview.happier.test/', expiresAt: Date.now() + 60_000 }));
+        }
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         return new Response('{}', { status: 404 });
@@ -613,6 +623,109 @@ afterEach(async () => {
 });
 
 describe('BrowserSurfaceHost', () => {
+    it('persists the relay document title and location without admission or reloading the frame, and restores after remount', async () => {
+        const { createBrowserViewDetailsSurfaceRenderer } = await import('./browserDetailsSurfaceRenderer');
+        const { createBrowserViewDetailsTab } = await import('./browserSurfaceDetailsTabModel');
+        const { DetailsTabStrip } = await import('@/components/appShell/panes/details/workspace/DetailsTabStrip');
+        const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { JSDOM } = await import('jsdom');
+        browserFeatures = createRootLayoutFeaturesResponse({ features: { browser: {
+            enabled: true, viewTargets: { enabled: true }, internal: { enabled: true },
+            diagnostics: { enabled: true }, automation: { enabled: true },
+        } } });
+        expect((await getServerFeaturesSnapshot({ force: true })).status).toBe('ready');
+        const host = Object.assign(new EventTarget(), {
+            location: { origin: 'https://browser-host.example.test' },
+            postMessage: (data: string) => {
+                const event = new Event('message');
+                Object.defineProperties(event, { data: { value: data }, origin: { value: 'https://preview.happier.test' }, source: { value: frame } });
+                host.dispatchEvent(event);
+            },
+        });
+        vi.stubGlobal('window', host);
+        // Shared tests can carry desktop bridge globals. This scenario is the ordinary web
+        // renderer, whose platform owner must see browser boundary facts.
+        vi.stubGlobal('__TAURI_INTERNALS__', undefined);
+        vi.stubGlobal('__TAURI__', undefined);
+        vi.stubGlobal('isTauri', false);
+        vi.stubGlobal('navigator', Object.create(globalThis.navigator, { userAgent: { value: 'Mozilla/5.0' } }));
+        expect((await import('@/utils/platform/desktopHost')).isDesktopHost()).toBe(false);
+        const dom = new JSDOM('<!doctype html><title>Sign in</title><body></body>', { url: 'https://preview.happier.test/' });
+        const frame = dom.window;
+        Object.defineProperty(frame, 'parent', { value: host });
+        const previewState = applyLocalServicePreviewSnapshot(createLocalServicePreviewState(), {
+            generatedAt: 100, refreshState: 'idle', diagnostics: [], previews: [{
+                previewId: 'preview_1', accessUrl: 'https://preview.happier.test/', expiresAt: null, diagnostics: [], resource: {
+                    previewId: 'preview_1', sessionId: 'session_1', machineId: 'machine_1', owner: { kind: 'session', id: 'session_1' },
+                    target: { scheme: 'http', host: 'localhost', port: 5173 }, initialPath: { pathname: '/', search: '' },
+                    display: { title: 'Preview', addressLabel: 'localhost:5173' }, originMode: 'host', browserTarget: target,
+                },
+            }],
+        });
+        const renderer = createBrowserViewDetailsSurfaceRenderer({ platform: 'web', keepAliveAboveRouter: false,
+            localServicePreviewState: previewState, browserFeatureDecision: enabledBrowserDecision });
+        let pane: AppPaneScopeApi | undefined;
+        const tab = createBrowserViewDetailsTab({ target, browserSessionId: 'relay-title' });
+        function Workspace() {
+            pane = useAppPaneScope('relay-title');
+            const group = pane.scopeState?.details.groups?.[0];
+            const current = group?.tabs[0];
+            return <>{group ? <DetailsTabStrip pane={pane} group={group} testIds={{ tab: () => 'relay-document-tab' }} /> : null}
+                {current ? renderer.render({ tab: current, descriptor: { surfaceId: 'relay-title', resourceKey: 'relay-title',
+                    scope: { kind: 'global' }, region: 'details', status: 'available' }, scope: { kind: 'global' },
+                    region: 'details', active: true, callbacks: { replaceTab: pane.replaceDetailsTab } }) : null}</>;
+        }
+        let screen = await renderScreen(<AppPaneProvider><Workspace /></AppPaneProvider>, {
+            createNodeMock: node => node.type === 'iframe' ? { contentWindow: frame } : null,
+        });
+        try {
+            await act(async () => { pane!.openDetailsTab(tab, { intent: 'pinned' }); });
+            await vi.waitFor(() => expect(screen.findAllByType('iframe'), screen.findAll(node =>
+                typeof node.props.testID === 'string').map(node => node.props.testID).slice(-20).join(',')).toHaveLength(1));
+            const iframe = screen.findByType('iframe');
+            const initialSrc = iframe.props.src;
+            const config = new URL(iframe.props.src).searchParams.get('__happierCollector');
+            expect(config).not.toBeNull();
+            const tabLabel = () => screen.findByTestId('relay-document-tab')!.findAll(node =>
+                typeof node.props.children === 'string').map(node => node.props.children).join('');
+            expect(tabLabel()).toContain('Preview');
+            await act(async () => { new Function('window', 'document', buildCooperativeNavigationRuntimeScript(config!))(frame, frame.document); });
+            expect(tabLabel()).toContain('Sign in');
+            // Page JS changes the title after load, without a navigation or synthetic load signal.
+            await act(async () => { frame.document.title = 'Projects'; await new Promise(resolve => setImmediate(resolve)); });
+            expect(tabLabel()).toContain('Projects');
+            await act(async () => {
+                frame.history.pushState({}, '', '/details?qa93=1&previewToken=one-use#section');
+                // JSDOM has no Navigation API; pageshow exercises the same real document reporter.
+                frame.dispatchEvent(new dom.window.Event('pageshow'));
+            });
+            expect(pane!.scopeState?.details.tabs[0].resource).toMatchObject({ currentUrl: '/details?qa93=1#section' });
+            expect(JSON.stringify(pane!.scopeState?.details)).not.toContain('one-use');
+            await act(async () => { screen.findByType('iframe').props.onLoad(); });
+            expect(pane!.scopeState?.details.tabs[0].resource).toMatchObject({ currentUrl: '/details?qa93=1#section' });
+            const binding = JSON.parse(config!);
+            await act(async () => { host.postMessage(JSON.stringify({
+                v: 1, kind: 'browser.collector.navigation', browserSessionId: binding.browserSessionId,
+                navigationGeneration: binding.navigationGeneration,
+                collectorId: binding.collector.collectorId, nonce: binding.collector.nonce,
+                viewId: 'another-view', loading: false, canGoBack: false, canGoForward: false,
+                url: frame.location.href, title: 'Stale view',
+            })); });
+            expect(tabLabel()).toContain('Projects');
+            expect(screen.findByType('iframe')).toBe(iframe);
+            expect(screen.findByType('iframe').props.src).toBe(initialSrc);
+            expect(pane!.scopeState?.details.tabs).toHaveLength(1);
+            expect(pane!.scopeState?.details.tabs[0].key).toBe(tab.key);
+            await screen.unmount();
+            screen = await renderScreen(<AppPaneProvider><Workspace /></AppPaneProvider>, {
+                createNodeMock: node => node.type === 'iframe' ? { contentWindow: frame } : null,
+            });
+            await vi.waitFor(() => expect(screen.findAllByType('iframe')).toHaveLength(1));
+            const restored = new URL(screen.findByType('iframe').props.src);
+            expect(restored.pathname + restored.searchParams.get('qa93') + restored.hash).toBe('/details1#section');
+        } finally { await screen.unmount(); dom.window.close(); vi.unstubAllGlobals(); }
+    });
+
     it.each([false, true])('retries the failing launchpad catalog through its shared preview owner (caller snapshot=%s)', async (callerSnapshot) => {
         const { useBrowserSurfaceHostProps } = await import('./useBrowserSurfaceHostProps');
         const { useLocalServicePreviewState } = await import('@/sync/domains/local/services/preview/useLocalServicePreviewState');

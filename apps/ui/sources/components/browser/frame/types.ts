@@ -129,6 +129,7 @@ export type BrowserFrameNavigationCommand = Readonly<{
  */
 export type BrowserFrameNavigationState = Readonly<{
     url?: string | null;
+    navigationGeneration?: number;
     title?: string | null;
     loading: boolean;
     canGoBack: boolean;

@@ -3,6 +3,7 @@ import {
   type RuntimeActionIdV1,
 } from '../actionIds.js';
 import type { RuntimeActionDispatchArgs } from './types.js';
+import { BrowserCommandDispatchResultV1Schema } from '../../browser/control/v1.js';
 
 export const BROWSER_RUNTIME_ACTION_IDS = [
   ...ACTION_ID_FAMILIES_V1.browser_control,
@@ -21,9 +22,16 @@ export function isBrowserRuntimeActionId(actionId: RuntimeActionIdV1): actionId 
 }
 
 export async function executeBrowserRuntimeAction(args: RuntimeActionDispatchArgs<BrowserRuntimeActionId>): Promise<unknown> {
-  return args.runtimeActionExecute({
+  const result = await args.runtimeActionExecute({
     actionId: args.actionId,
     input: args.input,
     context: args.context,
   });
+  // Control transports return the Browser protocol outcome. Project its failure
+  // once here so every Action caller and durable approval records the same result.
+  const command = BrowserCommandDispatchResultV1Schema.safeParse(result);
+  if (command.success && command.data.status === 'failed') {
+    return { ok: false, errorCode: command.data.error.code, error: command.data.error.message, details: command.data };
+  }
+  return result;
 }

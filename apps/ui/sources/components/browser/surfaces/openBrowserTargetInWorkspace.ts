@@ -122,6 +122,7 @@ export type BrowserViewTargetReplacementInput = Readonly<{
     target: BrowserViewTargetV1;
     browserSessionId: string;
     viewId: string;
+    currentUrl?: string | null;
 }>;
 
 /**
@@ -211,7 +212,9 @@ export function resolveBrowserTargetOpenOptions(params: Readonly<{
     }
 
     const preview = selectLocalServicePreviewByBrowserTarget(params.localServicePreviewState, params.target);
-    const currentUrl = params.currentUrl ?? preview?.accessUrl;
+    const currentUrl = params.currentUrl && preview?.accessUrl
+        ? new URL(params.currentUrl, preview.accessUrl).href
+        : params.currentUrl ?? preview?.accessUrl;
     const previewExpiresAt = typeof preview?.expiresAt === 'number' ? preview.expiresAt : undefined;
     const currentUrlExpiresAt = params.currentUrlExpiresAt ?? previewExpiresAt;
     return {
@@ -412,6 +415,7 @@ export function mapLocalServiceLaunchTargetToBrowserTarget(
 export type ServicesOpenInBrowserResult =
     | Readonly<{ status: 'succeeded' }>
     | Readonly<{ status: 'denied'; reasonCode: string }>
+    | Extract<ActionExecuteResult, { ok: false }>
     | ActionApprovalRequestCreatedResult;
 
 type ServicesOpenInBrowserDeps = Readonly<{
@@ -487,7 +491,7 @@ export function bindServicesOpenInBrowser(
                 platform: deps.platform,
                 ...(preview.accessUrl ? { currentUrl: preview.accessUrl } : {}),
             });
-            if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
+            if (opened && !opened.ok) return opened;
             const approval = opened && ActionApprovalRequestCreatedResultSchema.safeParse(opened.result);
             if (approval && approval.success) return approval.data;
             return { status: 'succeeded' };
@@ -496,7 +500,7 @@ export function bindServicesOpenInBrowser(
             return { status: 'denied', reasonCode: 'browser_target_unavailable' };
         }
         const opened = await openBrowserViewTarget(browserTarget);
-        if (opened && !opened.ok) return { status: 'denied', reasonCode: opened.errorCode ?? 'browser_target_unavailable' };
+        if (opened && !opened.ok) return opened;
         const approval = opened && ActionApprovalRequestCreatedResultSchema.safeParse(opened.result);
         if (approval && approval.success) return approval.data;
         return { status: 'succeeded' };

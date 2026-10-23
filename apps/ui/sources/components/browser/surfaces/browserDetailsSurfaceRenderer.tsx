@@ -36,7 +36,7 @@ import {
     BrowserSurfaceHost,
     mergeBrowserSurfaceProductModels,
 } from './BrowserSurfaceHost';
-import type { BrowserSurfaceProductModels } from './BrowserSurfaceHost';
+import type { BrowserSurfaceProductModels, BrowserSurfaceViewStateChange } from './BrowserSurfaceHost';
 import {
     createBrowserSurfaceSessionId,
     readBrowserViewDetailsResource,
@@ -183,6 +183,7 @@ export function BrowserDetailsSurface(props: Readonly<{
     supplementalDiagnostics?: BrowserPreviewProxyDiagnosticsProjection | null;
     browserRecording?: React.ComponentProps<typeof BrowserSurfaceHost>['browserRecording'];
     onViewTargetChange?: (input: BrowserDetailsSurfaceViewTargetChange) => void;
+    onViewStateChange?: (input: BrowserSurfaceViewStateChange) => void;
     nowMs?: () => number;
     testID?: string;
 }>): React.ReactElement | null {
@@ -278,7 +279,7 @@ export function BrowserDetailsSurface(props: Readonly<{
             browserSessionId={browserSessionId}
             platform={platform}
             initialBrowserState={initialBrowserState}
-            surfaceKey={`${browserSessionId}:${viewId ?? ''}:${targetIdentity}:${platform}:${currentUrl ?? ''}:${currentUrlExpiresAt ?? ''}:${selectionContextKey}`}
+            surfaceKey={`${browserSessionId}:${viewId ?? ''}:${targetIdentity}:${platform}:${selectionContextKey}`}
             presentationSlotId={props.presentationSlotId}
             keepAliveAboveRouter={props.keepAliveAboveRouter ?? true}
             visible={props.visible ?? props.active ?? true}
@@ -306,6 +307,7 @@ export function BrowserDetailsSurface(props: Readonly<{
             sendDaemonCommand={sendDaemonCommand}
             subscribeBrowserEvents={productModels?.browserContext?.daemonControl?.subscribeBrowserEvents}
             onViewTargetChange={props.onViewTargetChange}
+            onViewStateChange={props.onViewStateChange}
             nowMs={props.nowMs}
             testID={props.testID ?? 'browser-details-surface'}
         />
@@ -356,6 +358,7 @@ export function createBrowserViewDetailsSurfaceRenderer(
                     target: viewResource!.target,
                     browserSessionId: viewResource!.browserSessionId,
                     viewId: viewResource!.viewId,
+                    currentUrl: viewResource!.currentUrl,
                 };
             const handleViewTargetChange = (viewResource || launchpadResource) && input.callbacks.replaceTab
                 ? (change: BrowserDetailsSurfaceViewTargetChange) => {
@@ -374,6 +377,18 @@ export function createBrowserViewDetailsSurfaceRenderer(
                                     : 'default',
                         },
                     );
+                }
+                : undefined;
+            const handleViewStateChange = viewResource && input.callbacks.replaceTab
+                ? (change: BrowserSurfaceViewStateChange) => {
+                    if (change.browserSessionId !== viewResource.browserSessionId || change.viewId !== viewResource.viewId) return;
+                    const nextTab = resolveBrowserViewTargetReplacementTab({ ...viewResource, currentUrl: change.currentUrl });
+                    const title = change.title?.trim() || input.tab.title;
+                    const nextResource = readBrowserViewDetailsResource(nextTab.resource);
+                    if (title === input.tab.title && nextResource?.currentUrl === viewResource.currentUrl) return;
+                    input.callbacks.replaceTab?.(input.tab.key, { ...input.tab, title, resource: nextTab.resource }, {
+                        intent: input.tab.isPinned ? 'pinned' : input.tab.isPreview ? 'preview' : 'default',
+                    });
                 }
                 : undefined;
             return (
@@ -403,6 +418,7 @@ export function createBrowserViewDetailsSurfaceRenderer(
                     onRefreshLaunchpad={options.onRefreshLaunchpad}
                     onOpenTarget={options.onOpenTarget}
                     onViewTargetChange={handleViewTargetChange}
+                    onViewStateChange={handleViewStateChange}
                     nowMs={options.nowMs}
                     testID="browser-view-details-surface"
                 />

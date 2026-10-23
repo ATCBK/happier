@@ -159,15 +159,21 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     onNavigationStateChangeRef.current = props.onNavigationStateChange;
     // The page the relay preview is on now, as its own document last reported it.
     const frameUrlRef = React.useRef<string | null>(null);
-    const [reloadBase, setReloadBase] = React.useState<Readonly<{ navigationKey: string; forUrl: string | undefined; url: string | null }> | null>(null);
+    const [navigationSource, setNavigationSource] = React.useState(() => ({ navigationKey, forUrl: props.url, url: props.url }));
     // A reload (the host's fresh navigation key) reloads the page the preview is on, not the one it was
     // opened at. The new identity still arrives in the navigation URL, so the base is chosen before the
     // frame sees any source change.
-    if (navigationKey !== undefined && reloadBase?.navigationKey !== navigationKey) {
-        setReloadBase({ navigationKey, forUrl: props.url, url: frameUrlRef.current });
+    if (navigationKey !== undefined && navigationSource.navigationKey !== navigationKey) {
+        setNavigationSource({ navigationKey, forUrl: props.url, url: frameUrlRef.current ?? props.url });
+    } else if (navigationSource.forUrl !== props.url) {
+        // A page's location report updates the owning view and durable tab. Echoing that observed
+        // address into src would navigate it again and lose its history/state. Only a new command
+        // or an address the physical frame has not reported changes the assigned source.
+        const observed = props.url && frameUrlRef.current
+            && withoutPreviewAdmission(props.url) === withoutPreviewAdmission(frameUrlRef.current);
+        setNavigationSource({ ...navigationSource, forUrl: props.url, url: observed ? navigationSource.url : props.url });
     }
-    const navigationUrl = (navigationKey !== undefined && reloadBase?.navigationKey === navigationKey
-        && reloadBase.forUrl === props.url ? reloadBase.url : null) ?? props.url;
+    const navigationUrl = navigationSource.url;
     const diagnosticsRef = React.useRef(props.diagnostics);
     const automationRef = React.useRef(props.automation);
     diagnosticsRef.current = props.diagnostics;
@@ -290,6 +296,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
             if (!state || normalizePostMessageOrigin(state.url) !== cooperativeNavigation.sourceOrigin) return;
             frameUrlRef.current = state.url;
             onNavigationStateChangeRef.current?.({ loading: state.loading, canGoBack: state.canGoBack, canGoForward: state.canGoForward,
+                url: state.url, navigationGeneration: cooperativeNavigation.config.navigationGeneration,
                 ...(state.title?.trim() ? { title: state.title.trim() } : {}) });
         };
         window.addEventListener('message', listener);
