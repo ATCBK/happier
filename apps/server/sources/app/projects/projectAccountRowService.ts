@@ -63,10 +63,17 @@ export async function readProjectAccountRowInTx(tx: Tx, input: Readonly<{ accoun
     return { status: 'present', row: { key: input.key, revision: result.revision, content: result.envelope } };
 }
 
-/** A complete private census; invalid retained content refuses rather than disappearing. */
+/** A complete selected census; selected invalid retained content refuses rather than disappearing. */
 export async function listProjectAccountRowsInTx(tx: Tx, input: Readonly<{ accountId: string }> & ProjectAccountRowListRequestV1): Promise<ProjectAccountRowListResponseV1> {
+    const kinds = [...new Set(input.kinds ?? ['workspace-ref', 'relationship-graph', 'project-organization'])];
+    const physicalPrefixes = kinds.map(kind => {
+        if (kind === 'relationship-graph') return buildProjectAccountRowPhysicalKeyV1({ kind });
+        const family = kind === 'workspace-ref' ? 'ref' : 'organization';
+        return `${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}${family}/${input.serverId ? `${encodeURIComponent(input.serverId)}/` : ''}`;
+    });
     const result = await listReservedAccountScopedKvRowsInTx(tx, {
         accountId: input.accountId, physicalPrefix: PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1, domain: domainForKey(),
+        ...(input.kinds !== undefined || input.serverId !== undefined ? { physicalPrefixes } : {}),
     });
     if (result.status !== 'listed') return result;
     const rows: ProjectAccountRowV1[] = [];
@@ -77,7 +84,7 @@ export async function listProjectAccountRowsInTx(tx: Tx, input: Readonly<{ accou
             try { assertProjectAccountRowPayloadBindingV1(key, row.envelope.v); }
             catch { return { status: 'invalid-stored-content' }; }
         }
-        if (input.kinds && !input.kinds.includes(key.kind)) continue;
+        if (!kinds.includes(key.kind)) continue;
         if (input.serverId && key.kind !== 'relationship-graph' && key.serverId !== input.serverId) continue;
         rows.push({ key, revision: row.revision, content: row.envelope });
     }

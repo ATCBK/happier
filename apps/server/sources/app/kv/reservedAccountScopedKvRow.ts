@@ -6,6 +6,7 @@ import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/ac
 import { transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 import type { AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { getDbProviderFromEnv } from '@/config/databaseProvider';
 
 import {
     decodeAccountScopedKvJson,
@@ -209,6 +210,8 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
         physicalKey?: string;
         /** A finite domain census admits only keys known to its current reader. */
         physicalKeys?: readonly string[];
+        /** Narrow by canonical ASCII physical prefixes before opening unrelated envelopes. */
+        physicalPrefixes?: readonly string[];
         domain: ReservedAccountScopedKvRowDomain<TEnvelope>;
         cursor?: string;
         limit?: number;
@@ -228,6 +231,10 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
         || input.physicalKeys.some(key => !key.startsWith(input.physicalPrefix)))) {
         throw new Error(`${input.domain.label} physical keys must belong to the prefix without a singleton key`);
     }
+    if (input.physicalPrefixes !== undefined && (input.physicalKey !== undefined || input.physicalKeys !== undefined
+        || input.physicalPrefixes.some(prefix => !prefix.startsWith(input.physicalPrefix) || !/^[\x00-\x7f]+$/.test(prefix)))) {
+        throw new Error(`${input.domain.label} physical prefixes must be ASCII within the domain without exact keys`);
+    }
     if (input.cursor !== undefined && !input.cursor.startsWith(input.physicalPrefix)) {
         throw new Error(`${input.domain.label} cursor must belong to the physical prefix`);
     }
@@ -241,8 +248,15 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
         : input.physicalKeys !== undefined
         ? { in: [...input.physicalKeys] }
         : { startsWith: input.physicalPrefix };
+    const prefixes = input.physicalPrefixes === undefined ? {} : {
+        OR: input.physicalPrefixes.map(prefix => ({ key: getDbProviderFromEnv(process.env, 'postgres') === 'sqlite'
+            // SQLite LIKE has no default escape and ignores ASCII case. Its
+            // binary key ordering gives an exact range for these ASCII prefixes.
+            ? { gte: prefix, lt: prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1) }
+            : { startsWith: prefix.replace(/[\\%_]/g, '\\$&') } })),
+    };
     const storedRows = await tx.userKVStore.findMany({
-        where: { accountId: input.accountId, key: { ...keyScope,
+        where: { accountId: input.accountId, ...prefixes, key: { ...keyScope,
             ...(input.cursor !== undefined ? { gt: input.cursor } : {}) } },
         select: { key: true, version: true, value: true },
         orderBy: { key: "asc" },
@@ -265,7 +279,7 @@ export async function listReservedAccountScopedKvRowsInTx<TEnvelope>(
     const lastPhysicalKey = storedRows.at(-1)?.key;
     const remaining = input.limit !== undefined && storedRows.length === input.limit && lastPhysicalKey !== undefined
         ? await tx.userKVStore.findFirst({
-            where: { accountId: input.accountId, key: { ...keyScope, gt: lastPhysicalKey } },
+            where: { accountId: input.accountId, ...prefixes, key: { ...keyScope, gt: lastPhysicalKey } },
             select: { key: true },
             orderBy: { key: "asc" },
         }) : null;
