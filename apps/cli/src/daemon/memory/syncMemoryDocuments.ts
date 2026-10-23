@@ -20,6 +20,7 @@ import { getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsS
 import { logger } from '@/ui/logger';
 import type { DeepIndexDbHandle, DeepIndexDocumentEntry, DeepIndexDocumentIdentity } from './deepIndex/deepIndexDb';
 import { matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { createSessionProjectKeyResolverV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
@@ -120,6 +121,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         throw new Error('context_source_unavailable');
       }
       const projectContext = project ? await params.readProjectContext!(project, params.signal) : undefined;
+      const sessionProjectKeyResolver = project ? createSessionProjectKeyResolverV1(projectContext?.workspaceRefs) : undefined;
       const projectPreparation = createSessionProjectPromptStackPreparation({ credentials: params.credentials,
         serverId: home.serverId, signal: params.signal });
       const eligibleSessionIds: string[] = [];
@@ -158,7 +160,8 @@ export async function syncMemoryDocuments(params: Readonly<{
               ? 'session_owner_metadata_unavailable' : 'session_metadata_unavailable',
           });
           if (project) {
-            const match = matchSessionProjectFilterV1(metadata, project.serverId, project, projectContext?.workspaceRefs);
+            const match = matchSessionProjectFilterV1(metadata, project.serverId, project, projectContext?.workspaceRefs,
+              { projectKey: session.projectKey, sessionProjectKeyResolver });
             if (match === 'unavailable') partial = true;
             if (match !== 'match') return;
             eligibleSessionIds.push(session.id);
