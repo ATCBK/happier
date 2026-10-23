@@ -436,6 +436,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
      */
     const [loadAttempt, setLoadAttempt] = React.useState(0);
     const [invocationInvalidationToken, setInvocationInvalidationToken] = React.useState(0);
+    const summaryInvalidationRef = React.useRef<'materialized' | 'refresh' | null>(null);
     const [view, setView] = React.useState<WorkflowRunDetailView>('flow');
     const [selectedInvocationId, setSelectedInvocationId] = React.useState<string | null>(requestedInvocationId);
     const [pendingOperation, setPendingOperation] = React.useState<PendingRunOperation | null>(null);
@@ -593,20 +594,32 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         if (!activelyViewed || runId === null) return;
         const lifetime = accountLifetime;
         if (lifetime === null) return;
-        return subscribeVisibleWorkflowRunListInvalidation({
+        summaryInvalidationRef.current = 'refresh';
+        const unsubscribe = subscribeVisibleWorkflowRunListInvalidation({
             lifetime,
             runId,
             // Detail is demanded even while its first read is in flight. A
             // row wake must retire that read rather than publish stale facts.
             isVisibleWindowLoaded: () => true,
-            invalidate: () => setInvocationInvalidationToken((token) => token + 1),
+            invalidate: ({ summaryCurrent }) => {
+                summaryInvalidationRef.current = summaryCurrent ? 'materialized' : 'refresh';
+                setInvocationInvalidationToken((token) => token + 1);
+            },
         });
-    }, [accountLifetime, accountScopeKey, activelyViewed, runId]);
+        return () => { summaryInvalidationRef.current = null; unsubscribe(); };
+    }, [accountLifetime, activeLifetime, accountScopeKey, activelyViewed, runId]);
 
     React.useEffect(() => {
         if (!activelyViewed || runId === null) return;
         const lifetime = accountLifetime;
         if (lifetime === null) return;
+        // This observation belongs to one invalidation, never a later focus or retry.
+        const summaryInvalidation = summaryInvalidationRef.current;
+        summaryInvalidationRef.current = null;
+        // Recording a completed revision clears pendingRefreshRevision. That
+        // transition acknowledges the load; it is not another read request.
+        if (summaryInvalidation === null && pendingRefreshRevision === null
+            && loadedDetail?.contentIdentity === contentIdentity) return;
         const requestScopeKey = contentIdentity;
         /**
          * A background invalidation restates what changed; it does not reopen
@@ -618,8 +631,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
          * it on every revision bump made an ordinary progress update scan and
          * decrypt the whole Run, and replaced the loaded index pages with their
          * first page. An Account wake can precede its summary read, so the
-         * demanded background load also confirms the shared summary through
-         * its canonical lean refresh owner.
+         * demanded background load confirms the shared summary through its
+         * canonical lean refresh owner unless catch-up already published it
+         * or that newer shared row is what triggered this load.
          */
         const isBackgroundRefresh = loadedDetail !== null && loadedDetail.contentIdentity === contentIdentity
             && getStorage().getState().workflowRunsById[workflowRunStoreKey(runId, lifetime.scope)]?.detail !== undefined;
@@ -636,7 +650,8 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
 
         void (async () => {
             try {
-                if (isBackgroundRefresh) {
+                if (isBackgroundRefresh && summaryInvalidation !== 'materialized'
+                    && (summaryInvalidation === 'refresh' || pendingRefreshRevision === null)) {
                     await refreshWorkflowRunById(runId, { signal: controller.signal, fence: lifetime, accountLifetime: lifetime });
                     if (cancelled || !lifetime.isCurrent() || !isContentIdentityCurrent(requestScopeKey)) return;
                 }
@@ -812,6 +827,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     const retryLoad = React.useCallback(() => {
         setLoadProblem(null);
         setLoadState('loading');
+        summaryInvalidationRef.current = 'refresh';
         setLoadAttempt((attempt) => attempt + 1);
     }, []);
 
@@ -1318,6 +1334,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     }), [invocationStructure, selectedInvocation, selectedInvocationId, selectedProgress, visibleAcceptedContext?.frozenChildren, visibleDefinition]);
     const settleReview = React.useCallback((run: WorkflowRunSummaryV1) => {
         getStorage().getState().upsertWorkflowRuns([workflowRunRowFromSummary(run)], activeAccountScope);
+        summaryInvalidationRef.current = 'refresh';
         setInvocationInvalidationToken((token) => token + 1);
     }, [activeAccountScope]);
     const selectedExecutionRunId = selectedProgress?.execution?.kind === 'detached_run'

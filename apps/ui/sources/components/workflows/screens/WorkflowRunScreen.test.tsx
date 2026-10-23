@@ -18,6 +18,7 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { parseToken } from '@/utils/auth/parseToken';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createWorkflowAccountRunActionOwner, type WorkflowAccountRunActionDeps } from '@happier-dev/protocol/actions';
 import { WorkflowRunGetResultV1Schema, WorkflowRunRecipientCensusResponseV1Schema, type RoleArtifactV1, type WorkflowInvocationGetResultV1 } from '@happier-dev/protocol';
 import { ModalProvider } from '@/modal';
@@ -168,7 +169,7 @@ const nativeRecoveryReads: string[] = [];
 let nativeRecoveryFailure: 'target_unavailable' | 'run_access_denied' | null = null;
 let supplementalRecoveryLookupFailure: 503 | 403 | null = null;
 let supplementalRecoveryLookupPending = false;
-let supplementalRecoveryLookupEffect: (() => void) | undefined;
+let supplementalRecoveryLookupEffect: (() => void | Promise<unknown>) | undefined;
 const supplementalRecoveryLookupFailures: number[] = [];
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 const storedRunDetails = new Map<string, Record<string, unknown>>();
@@ -714,7 +715,7 @@ beforeEach(async () => {
                 if (operation.operation === 'get' && supplementalRecoveryLookupPending && supplementalRecoveryLookupFailure) {
                     supplementalRecoveryLookupPending = false;
                     supplementalRecoveryLookupFailures.push(supplementalRecoveryLookupFailure);
-                    supplementalRecoveryLookupEffect?.();
+                    await supplementalRecoveryLookupEffect?.();
                     return Response.json({ error: supplementalRecoveryLookupFailure === 403 ? 'run_access_denied' : 'storage_unavailable' },
                         { status: supplementalRecoveryLookupFailure });
                 }
@@ -2140,7 +2141,7 @@ describe('WorkflowRunScreen', () => {
         });
     });
 
-    it.each(['unknown', 'offline', 'unavailable', 'denied', 'supplemental503', 'supplemental403', 'supplementalCancelled', 'supplementalRetired'] as const)('keeps recovery content readable without inventing native continuation evidence (%s)', async (state) => {
+    it.each(['unknown', 'offline', 'unavailable', 'denied', 'supplemental503', 'supplemental403', 'supplementalCancelled', 'supplementalRetired', 'supplementalFocusRetired'] as const)('keeps recovery content readable without inventing native continuation evidence (%s)', async (state) => {
         const root = createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333', lifecycle: 'failed' });
         const step = createWorkflowInvocationIndexFixture({ id: '44444444-4444-4444-8444-444444444444',
             parentRecordId: root.id, sequence: '1', lifecycle: 'needs_attention' });
@@ -2166,19 +2167,23 @@ describe('WorkflowRunScreen', () => {
             recordMachineRequestFailed({ serverId: requireDefined(accountConnection ?? undefined, 'Expected the restored Account').serverId,
                 accountId: 'account-a', machineId: 'machine-1' });
         });
-        if (state === 'supplementalCancelled' || state === 'supplementalRetired') {
+        if (state === 'supplementalCancelled' || state === 'supplementalRetired' || state === 'supplementalFocusRetired') {
             const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
             const { createUiWorkflowAction } = await import('@/sync/ops/actions/workflowActionDeps');
             const account = await captureLazyActionAccountContext(servedHomeId);
             const controller = new AbortController();
             supplementalRecoveryLookupEffect = state === 'supplementalCancelled'
-                ? () => controller.abort() : () => retireActiveServerAccountScopeLifetime();
+                ? () => controller.abort()
+                : state === 'supplementalFocusRetired' ? () => retireActiveServerAccountScopeLifetime()
+                : () => TokenStorage.removeCredentialsForServerUrl('https://server-a', { serverId: servedHomeId });
             try {
                 await act(async () => {
                     const response = createUiWorkflowAction({ account })({ actionId: 'workflow.run.invocations.get',
                         input: { runId: step.runId, invocationId: step.id }, signal: controller.signal,
                         context: { surface: 'ui', authority: 'present_user', serverId: servedHomeId, runtimeAccountId: 'account-a' } });
                     if (state === 'supplementalCancelled') await expect(response).rejects.toBeInstanceOf(Error);
+                    // Explicit Home Actions survive focused Sync retirement, but never credential withdrawal.
+                    else if (state === 'supplementalFocusRetired') await expect(response).resolves.toMatchObject({ invocation: { index: { id: step.id } } });
                     else await expect(response).resolves.toEqual({ ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' });
                 });
                 expect(supplementalRecoveryLookupFailures).toEqual([503]);
@@ -2858,6 +2863,65 @@ describe('WorkflowRunScreen', () => {
      * that lost its race is ignored rather than published.
      */
     describe('Run summary freshness on an invocation wake', () => {
+        it.each(['terminal', 'invocation-only', 'unbound-invalidation'] as const)('consumes a held Account catch-up Run refresh once for detail and rail (%s)', async change => {
+            const run = createWorkflowRunSummaryFixture({ state: 'running', revision: 1, origin: { kind: 'direct' } });
+            const invocation = createWorkflowInvocationIndexFixture({ runId: run.id });
+            await renderRunScreen({ run, invocations: [invocation] });
+            const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+            const { useWorkflowRunRows } = await import('@/sync/store/hooks');
+            const { planSyncActionsFromChanges } = await import('@/sync/runtime/orchestration/changesPlanner');
+            const { applyPlannedChangeActions } = await import('@/sync/runtime/orchestration/changesApplier');
+            const { refreshWorkflowRunsByIds } = await import('@/sync/engine/workflows/refreshWorkflowRun');
+            const rail = await renderHook(() => useWorkflowRunRows([run.id]));
+            const priorDetail = await detailActions.getRun.mock.results[0]!.value;
+            const changed = change === 'terminal'
+                ? { ...run, state: 'failed' as const, revision: 11, workflowCustodyState: 'settled' as const } : run;
+            detailActions.getRun.mockResolvedValue({ ...priorDetail, run: changed });
+            const completed = { ...invocation, lifecycle: 'completed' as const, contentRevision: '1' };
+            detailActions.listInvocations.mockImplementation(async (input: Readonly<{ lifecycles?: readonly string[] }>) => ({
+                invocations: input.lifecycles === undefined ? [completed] : [], parentRevision: changed.revision,
+            }));
+            const readGate = createDeferred<void>();
+            let requested = false;
+            detailActions.listRuns.mockClear();
+            detailActions.listRuns.mockImplementation(async () => {
+                requested = true;
+                await readGate.promise;
+                return { runs: [changed], metadataByRunId: {} };
+            });
+            const changes = [{ cursor: 1, changedAt: 1, kind: 'account' as const, entityId: `workflow-run:${run.id}`, hint: { revision: changed.revision } }];
+            const catchUp = applyPlannedChangeActions({ planned: planSyncActionsFromChanges(changes), credentials: { token: 'fixture' },
+                isSessionMessagesLoaded: () => false, invalidate: {}, refreshWorkflowRuns: refreshWorkflowRunsByIds,
+                // Negative wiring control: the same parent revision cannot wake
+                // invocation readers if the materialized notification is unbound.
+                publishAccountChanges: change === 'unbound-invalidation' ? undefined : (page, materialization) => publishHomeAccountChange('server-a', page.map(change => change.entityId), {
+                    changeKinds: page.map(change => change.kind), entityRevisions: { [`workflow-run:${run.id}`]: changed.revision },
+                    ...materialization,
+                }), invalidateMessagesForSession: async () => {}, invalidateScmStatusForSession: () => {},
+                applyTodoSocketUpdates: async () => {}, kvBulkGet: async () => ({ values: [] }),
+            });
+            try {
+                await vi.waitFor(() => expect(requested).toBe(true));
+                await act(async () => {
+                    for (let index = 0; index < 100; index++) publishHomeAccountChange('server-a', undefined, { source: 'catch-up-pending' });
+                });
+                expect(readContentProps()?.run).toMatchObject({ state: 'running', revision: 1 });
+                await act(async () => { readGate.resolve(); expect(await catchUp).toMatchObject({ status: 'complete' }); });
+                await vi.waitFor(() => expect(readContentProps()?.run).toMatchObject({ state: changed.state, revision: changed.revision }));
+                if (change === 'unbound-invalidation') {
+                    expect(readContentProps()?.invocations.find(row => row.id === invocation.id))
+                        .toMatchObject({ lifecycle: 'running', contentRevision: '0' });
+                } else {
+                    await vi.waitFor(() => expect(readContentProps()?.invocations.find(row => row.id === invocation.id))
+                        .toMatchObject({ lifecycle: 'completed', contentRevision: '1' }));
+                }
+                expect(rail.getCurrent()[0]?.summary).toMatchObject({ state: changed.state, revision: changed.revision });
+                expect(detailActions.listRuns.mock.calls.map(([request]) => request)).toEqual([
+                    expect.objectContaining({ runIds: [run.id] }),
+                ]);
+            } finally { readGate.resolve(); await catchUp; await rail.unmount(); }
+        });
+
         it('shows current held work when the opened admission detail still records queued revision zero', async () => {
             const queued = createWorkflowRunSummaryFixture({ state: 'queued', revision: 0, origin: { kind: 'direct' } });
             const definition = createWorkflowDefinitionFixture({ defaults: {}, blocks: [{ kind: 'wait', id: 'confirm',
