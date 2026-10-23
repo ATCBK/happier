@@ -804,10 +804,11 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         <ItemGroup surface="none">
           {/* Dismiss closes without an answer; Reject answers no. Consent remains with decide. */}
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}
+            irreversible={review?.irreversible === true && !confidentialAction}
             layout={handoffTargetPresentation ? 'stacked' : 'inline'}
             approve={!confidentialAction ? {
               testID: 'approvals.approve', label: handoffTargetPresentation?.decisionLabel ?? projectCommandDecisions?.approve ?? proposalLabels?.approve
-                ?? discussionDraftDecisions?.approve,
+                ?? discussionDraftDecisions?.approve ?? review?.approveVerb ?? undefined,
               disabled: isDeciding || approvalWithheld || approvalRouteUnavailable || Boolean(proposal?.approveWithheld),
               accessibilityHint: approvalRouteUnavailable ? t('actionConfirmations.homeUnavailable')
                 : approvalWithheld ? t('approvals.approveUnavailableHint') : undefined,

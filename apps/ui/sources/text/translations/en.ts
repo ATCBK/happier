@@ -1660,6 +1660,7 @@ const enApprovals = {
     'Happier could not display this request exactly as it was sent, so it cannot be approved. Reject it, or ask for it to be sent again.',
   approveUnavailableHint:
     'Approval is unavailable while these details cannot be shown safely.',
+  irreversibleNote: "This can't be undone.",
   dismiss: "Dismiss",
   dismissHint: "Closes the request without approving or rejecting it.",
   confirmApproveTitle: 'Approve request?',

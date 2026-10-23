@@ -99,6 +99,25 @@ describe('the shared Action approval presentation owner', () => {
             { ...simple, actionArgs: {} }, { ...simple, status: 'rejected' as const },
         ]) expect(readActionApprovalReview(detailed).simple).toBe(false);
     });
+    it('gives every approval surface the declared verb and irreversibility from the review owner', () => {
+        const requestFor = (actionId: string) => ApprovalRequestV2Schema.parse({
+            v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, createdBy: { surface: 'agent' },
+            actionId, actionArgs: {}, summary: 'Review this request',
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+                serverId: 'home-a', sessionId: 'session-a', machineId: 'machine-a', actionId, requestId: 'request-a' },
+        });
+        const irreversible = readActionApprovalReview(requestFor('plugins.uninstall'));
+        expect(irreversible.approveVerb).toBe('Uninstall');
+        expect(irreversible.irreversible).toBe(true);
+        // A reversible Action keeps its verb but never reads as one that cannot be undone.
+        const reversible = readActionApprovalReview(requestFor('updates.batch.start'));
+        expect(reversible.approveVerb).toBe('Update');
+        expect(reversible.irreversible).toBe(false);
+        // An Action that declares no verb leaves each surface its own default word.
+        const undeclared = readActionApprovalReview(requestFor('discussion.owner.transfer'));
+        expect(undeclared.approveVerb).toBeNull();
+        expect(undeclared.irreversible).toBe(false);
+    });
     it('retains captured widget and plugin-page names in a request preview across locales', async () => {
         const actionArgs = { ref: { surface: { serverId: 'home', accountId: 'account', owner: {
             kind: 'pluginArea', pluginId: 'examples.widget-areas', pageId: 'overview', area: 'pinned',

@@ -2070,6 +2070,7 @@ export const ja: TranslationStructure = {
     unsafeDetailsTitle: "この内容は安全に表示できません",
     unsafeDetailsBody: "送信されたとおりに表示できなかったため、このリクエストは承認できません。拒否するか、再送を依頼してください。",
     approveUnavailableHint: "この内容を安全に表示できない間は承認できません。",
+    irreversibleNote: "この操作は取り消せません。",
     dismiss: "閉じる",
     dismissHint: "承認も拒否もせずにリクエストを閉じます。",
     confirmApproveTitle: "承認しますか？",

@@ -17,6 +17,8 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
     /** The refusal's own word ("Deny"); defaults to Reject. */
     rejectLabel?: string;
     approveAccessibilityHint?: string;
+    /** The approved Action declares it cannot be undone. */
+    irreversible?: boolean;
     disabledReason?: TranscriptPermissionDisabledReason;
     isDeciding: boolean;
     testIDPrefix?: string;
@@ -52,7 +54,7 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
     }
 
     return (
-        <ApprovalDecisionBar size="small" disabled={disabled}
+        <ApprovalDecisionBar size="small" disabled={disabled} irreversible={props.irreversible}
             approve={{ label: props.approveLabel, testID: `${testIDPrefix}-approve`, controlRef: primaryAnswerRef,
                 accessibilityHint: props.approveAccessibilityHint, disabled: approveDisabled,
                 busy: props.isDeciding, onPress: props.onApprove }}

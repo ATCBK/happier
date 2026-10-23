@@ -1923,6 +1923,7 @@ export const ca: TranslationStructure = {
         unsafeDetailsTitle: 'Aquests detalls no es poden mostrar amb seguretat',
         unsafeDetailsBody: 'Happier no ha pogut mostrar aquesta sol·licitud exactament tal com es va enviar, així que no es pot aprovar. Rebutja-la o demana que la tornin a enviar.',
         approveUnavailableHint: 'L\'aprovació no està disponible mentre aquests detalls no es puguin mostrar amb seguretat.',
+        irreversibleNote: 'Això no es pot desfer.',
         dismiss: "Descarta",
         dismissHint: "Tanca la sol·licitud sense aprovar-la ni rebutjar-la.",
         confirmApproveTitle: 'Aprovar la sol·licitud?',

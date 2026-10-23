@@ -25,6 +25,7 @@ import { InboxWorkRow } from '../InboxWorkRow';
 import { InboxRelativeTime } from '../InboxRelativeTime';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { readApprovalQuickActions } from '@/components/approvals/approvalQuickActions';
+import { readActionApprovalReview } from '@/components/approvals/actionApprovalReview';
 import {
   alertApprovalFailure,
   useApprovalDecisionHandler,
@@ -56,6 +57,11 @@ function ApprovalQuickDecision(
   const [deciding, setDeciding] = React.useState<'approve' | 'reject' | null>(
     null,
   );
+  // The verb and irreversibility the approval page and the transcript card read from the same owner.
+  const { approveVerb, irreversible } = React.useMemo(
+    () => readActionApprovalReview(props.approval),
+    [props.approval],
+  );
   const run = (decision: 'approve' | 'reject') => {
     if (deciding) return;
     setDeciding(decision);
@@ -82,8 +88,9 @@ function ApprovalQuickDecision(
       <RoundButton
         testID={`inbox.approval.${props.artifact.id}.allow_once`}
         size="small"
-        display="secondary"
-        title={t('inbox.work.quickDecision.allowOnce')}
+        display={irreversible ? 'destructive' : 'secondary'}
+        title={approveVerb ?? t('inbox.work.quickDecision.allowOnce')}
+        accessibilityHint={irreversible ? t('approvals.irreversibleNote') : undefined}
         disabled={deciding !== null}
         loading={deciding === 'approve'}
         onPress={() => run('approve')}

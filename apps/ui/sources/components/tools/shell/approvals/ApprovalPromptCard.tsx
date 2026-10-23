@@ -1,10 +1,10 @@
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { View } from 'react-native';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { describeApprovalRequestFields } from '@happier-dev/protocol/actions';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -16,12 +16,12 @@ import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { ApprovalDecisionFooter } from './ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from './ApprovalPromptChrome';
+import { ApprovalOpenButton } from './ApprovalOpenButton';
 import { BrowserOpenApprovalProgress } from '@/components/approvals/BrowserOpenOperationStatus';
 import { readBrowserOpenAcceptance } from '@/sync/domains/browser/firstUse/browserFirstUse';
 import { alertApprovalFailure, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
 import { presentApprovalFailureOutcome, resolveApprovalActionTitle } from './approvalFailureOutcome';
 import { useFailedApprovalDismissal } from './failedApprovalDismissal';
-import { Icon } from '@/components/ui/icons/Icon';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from '@/components/approvals/ActionApprovalFieldsCard';
 import { PromptDocApprovalDiff } from '@/components/approvals/PromptDocApprovalDiff';
 import { ComputerActionApprovalCard } from '@/components/approvals/ComputerActionApprovalCard';
@@ -72,7 +72,6 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     /** A declined request's tool row defers its output here: it stays reachable in Technical details. */
     toolOutput?: string | null;
 }>) {
-    const { theme } = useUnistyles();
     const transcriptSource = useSessionTranscriptSource();
     const decide = useApprovalDecisionHandler(props.artifact, props.approval, props.sessionId);
     const approvalHome = useApprovalHome(props.artifact, props.approval, props.sessionId);
@@ -178,17 +177,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
         }
     }, [approvalWithheld, confidentialAction, confidentialApproval, computerChoice, decisionDisabled, decide, isDeciding, proposal, props.artifact.id, transcriptSource]);
 
-    const viewToolButton = canOpenToolRoute ? (
-        <Pressable
-            testID="approval-prompt-view-tool"
-            onPress={onViewTool}
-            accessibilityRole="button"
-            accessibilityLabel={t('toolView.open')}
-            style={({ pressed }) => [styles.viewButton, pressed && styles.viewButtonPressed]}
-        >
-            <Icon name="arrow-square-out" size={16} color={theme.colors.text.secondary} />
-        </Pressable>
-    ) : null;
+    const viewToolButton = canOpenToolRoute ? <ApprovalOpenButton testID="approval-prompt-view-tool" onPress={onViewTool} /> : null;
     // An Agent asking to turn a skill or MCP server on for its session reads as that request (P8 U8.5, lab xi Q).
     if (capabilityEnable) {
         return <CapabilityEnableApproval artifact={props.artifact} approval={props.approval} sessionId={props.sessionId}
@@ -239,7 +228,9 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                     glyph="minus-circle" tone="quiet" />
             ) : undefined) : (
                 <ApprovalDecisionFooter
-                    approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommandDecisions?.approve ?? proposalLabels?.approve}
+                    approveLabel={confidentialAction ? t('approvals.confidential.review')
+                        : projectCommandDecisions?.approve ?? proposalLabels?.approve ?? review.approveVerb ?? undefined}
+                    irreversible={review.irreversible && !confidentialAction}
                     rejectLabel={projectCommandDecisions?.reject ?? proposalLabels?.reject}
                     disabled={accessDisabled}
                     decisionDisabled={approvalRouteUnavailable}
@@ -301,16 +292,6 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s4,
-    },
-    viewButton: {
-        minWidth: Platform.select({ ios: 44, default: 48 }),
-        minHeight: Platform.select({ ios: 44, default: 48 }),
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 8,
-    },
-    viewButtonPressed: {
-        backgroundColor: theme.colors.surface.pressedOverlay,
     },
     previewText: {
         fontSize: 12,

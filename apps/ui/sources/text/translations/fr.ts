@@ -1924,6 +1924,7 @@ export const fr: TranslationStructure = {
     unsafeDetailsTitle: "Ces détails ne peuvent pas être affichés en toute sécurité",
     unsafeDetailsBody: "Happier n’a pas pu afficher cette demande exactement telle qu’elle a été envoyée ; elle ne peut donc pas être approuvée. Refuse-la ou demande qu’elle soit renvoyée.",
     approveUnavailableHint: "L’approbation est indisponible tant que ces détails ne peuvent pas être affichés en toute sécurité.",
+    irreversibleNote: "Cette action est irréversible.",
     dismiss: "Ignorer",
     dismissHint: "Ferme la demande sans l’approuver ni la refuser.",
     confirmApproveTitle: "Approuver la demande ?",

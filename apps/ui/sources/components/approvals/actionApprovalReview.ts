@@ -9,6 +9,7 @@ import { readResourceProposalApproval } from './resourceProposal/readResourcePro
 import { readPromptDocUpdateApproval } from './promptDocApprovalModel';
 import { readCapabilityEnableApproval } from '@/components/sessions/capabilities/capabilityEnableApproval';
 import { readApprovalFileSource } from './approvalFileSource';
+import { resolveActionConfirmVerb } from '@/text/actionTitles';
 
 export type ActionApprovalReview = Readonly<{
     admission: ReturnType<typeof resolveApprovalRequestApproveAdmission> | null;
@@ -19,6 +20,10 @@ export type ActionApprovalReview = Readonly<{
     resourceProposal: ReturnType<typeof readResourceProposalApproval>;
     visualPreview: ReturnType<typeof resolveApprovalVisualPreview>;
     simple: boolean;
+    /** The Action's declared button word ("Delete"); null leaves each surface its own default. */
+    approveVerb: string | null;
+    /** Only an Action that declares it cannot be undone; never inferred from danger or policy. */
+    irreversible: boolean;
     workspaceFileSource: ReturnType<typeof readApprovalFileSource>;
 }>;
 
@@ -47,5 +52,7 @@ export function readActionApprovalReview(request: ApprovalRequest): ActionApprov
     const simple = request.v === 2 && request.status === 'open' && admission?.status === 'available'
         && spec !== null && spec.inputSchema.safeParse(request.actionArgs).success && !requiresReview;
     return { admission, confidentialAction, confidential, capabilityEnable, promptDocUpdate, resourceProposal,
-        visualPreview, simple, workspaceFileSource: readApprovalFileSource(request) };
+        visualPreview, simple, workspaceFileSource: readApprovalFileSource(request),
+        approveVerb: spec?.confirmVerb !== undefined ? resolveActionConfirmVerb(spec.confirmVerb) : null,
+        irreversible: spec?.irreversible === true };
 }

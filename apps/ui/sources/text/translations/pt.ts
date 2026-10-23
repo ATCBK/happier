@@ -2125,6 +2125,7 @@ export const pt: TranslationStructure = {
     unsafeDetailsTitle: "Estes detalhes não podem ser mostrados com segurança",
     unsafeDetailsBody: "O Happier não conseguiu mostrar este pedido exatamente como foi enviado, por isso não pode ser aprovado. Recuse-o ou peça que seja enviado novamente.",
     approveUnavailableHint: "A aprovação fica indisponível enquanto estes detalhes não puderem ser mostrados com segurança.",
+    irreversibleNote: "Isto não pode ser desfeito.",
     dismiss: "Dispensar",
     dismissHint: "Fecha o pedido sem o aprovar nem rejeitar.",
     confirmApproveTitle: "Aprovar solicitação?",
