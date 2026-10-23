@@ -4027,6 +4027,11 @@ export const ru: TranslationStructure = {
     plugins: {
             claude: {
                 title: "Claude Code",
+                responseLocationOptions: {
+                    app_and_terminal: { title: "Приложение и терминал", subtitle: "Отвечайте в приложении Happier или терминале Claude Code." },
+                    app_only: { title: "Запросы в приложении", subtitle: "Используйте существующий процесс запросов в приложении. Claude по-прежнему может принимать ответы в своём терминале." },
+                    terminal_only: { title: "Только терминал", subtitle: "Отвечайте в терминале Claude Code." },
+                },
                 sections: {
                     claudeModelDiscovery: {
                         title: "Обнаружение моделей",
@@ -4071,6 +4076,14 @@ export const ru: TranslationStructure = {
                                 subtitle: "Использовать встроенный в Happier хост zellij."
                             }
                         }
+                    },
+                    claudeUnifiedTerminalQuestionResponseLocation: {
+                        title: "Ответы на вопросы",
+                        subtitle: "Выберите, где отвечать на вопросы в сеансах единого терминала."
+                    },
+                    claudeUnifiedTerminalPermissionResponseLocation: {
+                        title: "Подтверждение запросов разрешений",
+                        subtitle: "Выберите, где подтверждать запросы разрешений в сеансах единого терминала."
                     },
                     claudeUnifiedTerminalResumeChoice: {
                         title: "Возобновление больших сессий",
@@ -4174,7 +4187,7 @@ export const ru: TranslationStructure = {
                     },
                     claudeLocalPermissionBridgeEnabled: {
                         title: "Экспериментально: локальный мост разрешений",
-                        subtitle: "Перенаправляет запросы разрешений Claude в локальном режиме в Happier, чтобы вы могли одобрять или отклонять их из интерфейса."
+                        subtitle: "Передавайте запросы разрешений из классических локальных сеансов Claude в Happier. Сеансы единого терминала используют варианты ответа выше."
                     },
                     claudeLocalPermissionBridgeWaitIndefinitely: {
                         title: "Оставлять запросы открытыми до ответа",
