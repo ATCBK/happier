@@ -15,7 +15,8 @@ import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceS
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedAccountAuthentication, getConnectedServiceRegistrySnapshot, subscribeConnectedServiceRegistry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { waitForTestEvent } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -270,11 +271,15 @@ function ProjectionReader() {
   return null;
 }
 async function waitForDescriptorReply() {
-  await vi.waitFor(async () => {
-    await flush();
-    expect(getConnectedAccountAuthentication(descriptorService))
-      .toEqual(descriptorReplies.find(entry => entry.id === descriptorService.localId)?.authentication ?? null);
+  const expected = descriptorReplies.find(entry => entry.id === descriptorService.localId)?.authentication ?? null;
+  await act(async () => {
+    await waitForTestEvent(subscribeConnectedServiceRegistry, () => ({
+      status: getConnectedServiceRegistrySnapshot().status,
+      authentication: getConnectedAccountAuthentication(descriptorService),
+    }), snapshot => snapshot.status === 'ready'
+      && JSON.stringify(snapshot.authentication) === JSON.stringify(expected));
   });
+  expect(getConnectedAccountAuthentication(descriptorService)).toEqual(expected);
 }
 const projectionRequests = installSessionActionRpcBoundary(request => {
   if (!request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
@@ -330,10 +335,20 @@ let afterAcknowledgement: (() => void) | undefined;
 let omitSettingsReceipt: boolean;
 // Observation only: the real dispatcher still attaches its genuine error sink.
 // Awaiting its actual promise keeps refusal checks from passing before admission.
-function observeGesture() { return vi.spyOn(gestureDispatch, 'fireAndForget'); }
+const gestureListeners = new Set<() => void>();
+function observeGesture() {
+  const dispatch = gestureDispatch.fireAndForget;
+  return vi.spyOn(gestureDispatch, 'fireAndForget').mockImplementation((...args) => {
+    dispatch(...args);
+    for (const notify of gestureListeners) notify();
+  });
+}
 let gestureObservation: ReturnType<typeof observeGesture>;
 async function selectionReceipt() {
-  await vi.waitFor(() => expect(gestureObservation.mock.calls.some(([, options]) =>
+  await waitForTestEvent(notify => {
+    gestureListeners.add(notify);
+    return () => { gestureListeners.delete(notify); };
+  }, () => expect(gestureObservation.mock.calls.some(([, options]) =>
     options?.tag?.startsWith('VoiceCredentialSourceField.'))).toBe(true));
   const call = gestureObservation.mock.calls.find(([, options]) =>
     options?.tag?.startsWith('VoiceCredentialSourceField.'));
@@ -397,13 +412,10 @@ async function renderField(currentDeclaration = declaration, isCurrent?: () => b
     </AppShellPluginUiProjectionProvider>
   </ModalProvider></InjectedAuthProvider>;
   await act(async () => { root.render(element()); });
-  await vi.waitFor(async () => {
-    await flush();
-    expect(projectionRequests.some(request => request.method.endsWith(
-      `:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`,
-    )), 'Actual AppShell daemon description admission').toBe(true);
-  });
   await waitForDescriptorReply();
+  expect(projectionRequests.some(request => request.method.endsWith(
+    `:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`,
+  )), 'Actual AppShell daemon description admission').toBe(true);
   return async () => { await act(async () => { root.render(element()); }); };
 }
 async function publishProfile(accounts: AccountProfile['connectedAccountsV4'] = [codexAccount]) {
@@ -614,7 +626,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     gestureObservation.mockClear();
     await act(async () => { pointerPress(requireNode(`dropdown-option-${optionId(codexTarget)}`)); });
     expect(await selectionReceipt()).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => assertAccountSelection());
+    assertAccountSelection();
     expect(writes.map(write => write.expectedRevision)).toEqual([9]);
   });
   it('selects the exact declared account and presents its service without exposing its id', async () => {
@@ -626,15 +638,15 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     expect(row.getAttribute('aria-label')).toBe('Codex · Work Codex');
     await act(async () => { pointerPress(row); });
     expect(await selectionReceipt()).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => assertAccountSelection());
-    await vi.waitFor(() => expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex'));
+    assertAccountSelection();
+    expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex');
   });
   it('keeps an acknowledged but uncertain selection visible without replaying the composite mutation', async () => {
     omitSettingsReceipt = true;
     await renderField();
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'outcomeUnknown' });
-    await vi.waitFor(() => expect(requireNode('voice-credential-source-api_key').textContent)
-      .toContain(t('settingsProviders.errors.mutationOutcomeUnknownDescription')));
+    expect(requireNode('voice-credential-source-api_key').textContent)
+      .toContain(t('settingsProviders.errors.mutationOutcomeUnknownDescription'));
     expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex');
     assertAccountSelection();
     expect(revision).toBe(10);
@@ -657,8 +669,8 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     installCurrentDeclaration(speech);
     await renderField(speech);
     await choose(optionId(codexTarget));
-    await vi.waitFor(() => assertAccountSelection(codexTarget,
-      { pluginId: contribution.pluginId, localId: speech.id }, 'voice.speech.transcribe'));
+    assertAccountSelection(codexTarget,
+      { pluginId: contribution.pluginId, localId: speech.id }, 'voice.speech.transcribe');
   });
   it('refuses an account whose mode still needs Account configuration', async () => {
     await installCodexDescriptor({ requiresAccountConfiguration: true });
@@ -682,7 +694,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     expect(requireNode(`dropdown-option-${optionId(codexTarget)}`).getAttribute('aria-disabled')).not.toBe('true');
     await act(async () => { pointerPress(requireNode(`dropdown-option-${optionId(codexTarget)}`)); });
     expect(await selectionReceipt()).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => assertAccountSelection());
+    assertAccountSelection();
   });
   it('selects a bundled account without a Machine descriptor supplier', async () => {
     const bundledService = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
@@ -697,7 +709,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await installCodexDescriptor({ available: false });
     await renderField(bundledDeclaration);
     await choose(optionId(bundledTarget));
-    await vi.waitFor(() => assertAccountSelection(bundledTarget));
+    assertAccountSelection(bundledTarget);
   });
   it('offers none, SavedSecret and only manifest-declared service accounts', async () => {
     await installCodexDescriptor({ includeOpenAi: true });
@@ -721,7 +733,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await renderField();
     expect(requireNode('voice-credential-source-api_key').textContent).toContain(t('common.unavailable'));
     await choose('none');
-    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'none' } }));
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'none' } });
     expect(purposes.bindings).toEqual([]);
   });
   it('replaces the single purpose between accounts and clears it for none', async () => {
@@ -730,11 +742,11 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
       authenticationModeId: 'api-key', configurationReady: true, displayName: 'Work API key' }]);
     await renderField();
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => assertAccountSelection());
+    assertAccountSelection();
     await choose(optionId(apiTarget));
-    await vi.waitFor(() => assertAccountSelection(apiTarget));
+    assertAccountSelection(apiTarget);
     await choose('none');
-    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'none' } }));
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'none' } });
     expect(purposes.bindings).toEqual([]);
     expect(writes.map(write => write.expectedRevision)).toEqual([9, 10, 11]);
   });
@@ -750,7 +762,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     installCurrentDeclaration(VoiceProviderContributionSchema.parse(structuredClone(declaration)));
     await renderField();
     await choose(optionId(codexTarget));
-    await vi.waitFor(() => assertAccountSelection());
+    assertAccountSelection();
   });
   it('admits reordered raw grants and header-name sets', async () => {
     const expected = VoiceProviderContributionSchema.parse({
@@ -769,7 +781,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     }));
     await renderField(expected);
     await choose(optionId(codexTarget));
-    await vi.waitFor(() => assertAccountSelection());
+    assertAccountSelection();
   });
   it.each([
     ['slot', { credentials: { ...credentials, slot: { ...credentials.slot, id: 'replacement_key' },
@@ -787,7 +799,7 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await renderField();
     beforePurposeRead = () => installCurrentDeclaration(drifted);
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'conflict' });
-    await vi.waitFor(() => expect(beforePurposeRead).toBeUndefined());
+    expect(beforePurposeRead).toBeUndefined();
     await flush();
     expect(binding()).toBeUndefined();
     expect(purposes.bindings).toEqual([]);
@@ -824,8 +836,8 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     afterAcknowledgement = () => installCurrentDeclaration(changed);
     await renderField();
     expect(await choose(optionId(codexTarget))).toMatchObject({ status: 'applied' });
-    await vi.waitFor(() => assertAccountSelection());
-    await vi.waitFor(() => expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex'));
+    assertAccountSelection();
+    expect(requireNode('voice-credential-source-api_key').textContent).toContain('Work Codex');
     expect(requireNode('voice-credential-source-api_key').textContent).not.toContain(t('settingsProviders.errors.mutationOutcomeUnknownDescription'));
     expect(revision).toBe(10);
   });

@@ -2833,8 +2833,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // B correctly owns the live connection by then, so A's trailing control
       // fails; that must not discard the final A admitted before the boundary.
       await expect(typedTurn).rejects.toThrow('voice_service_unavailable');
-      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(1));
       await aWriteStarted.promise;
+      expect(transcriptWrites).toHaveLength(1);
 
       replacementPeer.channel.message(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.completed',
