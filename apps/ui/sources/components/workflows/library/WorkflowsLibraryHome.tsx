@@ -179,7 +179,7 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
     }, [deleted, deletionFocusRequest]);
 
     const newWorkflow = () => router.push(WORKFLOWS_NEW_ROUTE as never);
-    const importWorkflow = () => router.push(WORKFLOWS_IMPORT_ROUTE as never);
+    const importWorkflow = () => router.pushRetainingCurrent(WORKFLOWS_IMPORT_ROUTE as never);
     const createWithAgent = () => openAgent(buildWorkflowAgentAuthoringSeed({ kind: 'create' }));
 
     const firstVisit = library.status === 'loaded' && libraryIsEmpty

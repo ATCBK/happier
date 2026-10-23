@@ -114,7 +114,7 @@ export const WorkflowsColumnActions = React.memo(function WorkflowsColumnActions
                         if (id === 'trigger') { setNewTriggerOpen(true); return; }
                         if (id === 'example') { setExamplesOpen(true); return; }
                         if (id === 'agent') { openAgent(buildWorkflowAgentAuthoringSeed({ kind: 'create' })); return; }
-                        router.push((id === 'import' ? WORKFLOWS_IMPORT_ROUTE : WORKFLOWS_NEW_ROUTE) as never);
+                        router.pushRetainingCurrent((id === 'import' ? WORKFLOWS_IMPORT_ROUTE : WORKFLOWS_NEW_ROUTE) as never);
                     }}
                     placement="bottom"
                     popoverAnchorAlign="end"

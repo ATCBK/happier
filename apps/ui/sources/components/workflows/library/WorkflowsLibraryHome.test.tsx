@@ -11,7 +11,8 @@ import { WorkflowsLibraryHome } from './WorkflowsLibraryHome';
 import { WorkflowsDestinationIndex } from './WorkflowsDestinationIndex';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProvider';
-import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { hrefForDestinationRef, resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { ModalProvider, useModal } from '@/modal/ModalProvider';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
@@ -118,6 +119,67 @@ afterEach(async () => {
 });
 
 describe('workflow library page anatomy', () => {
+    it.each(['library', 'column'] as const)('retains the library and creates a distinct draft for each %s Import entrance', async entrance => {
+        const { WorkflowsColumnActions } = await import('../column/WorkflowsColumnActions');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [] } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { summaries: [], remainingSourceArtifactIds: [] } };
+            if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
+            if (actionId === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            workflows: true, friends: false, inbox: false, externalSessions: false,
+        } });
+        let current: WorkspaceNavigationContextValue | null = null;
+        let libraryId: string | undefined;
+        const navigation = (): WorkspaceNavigationContextValue => {
+            if (!current) throw new Error('Workspace owner not mounted');
+            return current;
+        };
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{owner => {
+            current = owner;
+            libraryId ??= owner.state.groups[owner.state.focusedGroupId].activeTabId;
+            const tab = owner.state.tabs[libraryId];
+            return <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname="/workflows"
+                focused={owner.state.groups[owner.state.focusedGroupId].activeTabId === tab.id} visible
+                navigation={owner.navigationForTab(tab.id)}>
+                {entrance === 'library' ? <WorkflowsLibraryHome /> : <WorkflowsColumnActions canCreate />}
+            </DestinationInstanceHost>;
+        }}</WorkspaceProvider>, { wrapper: Wrapper });
+        const activeTab = () => {
+            const state = navigation().state;
+            return state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        };
+        const library = activeTab();
+        const enter = async () => {
+            if (entrance === 'column') {
+                const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'workflows-column:add:menu');
+                if (!menu) throw new Error('Import menu missing');
+                await act(async () => menu.props.onSelect('import'));
+            } else {
+                const id = await vi.waitFor(() => {
+                    const id = ['workflows-home:import', 'workflows-home:firstVisit:import']
+                        .find(id => screen.findHostByTestId(id) !== null);
+                    if (!id) throw new Error('Import button missing');
+                    return id;
+                });
+                await screen.pressByTestIdAsync(id);
+            }
+        };
+        await enter();
+        const first = activeTab();
+        expect(first.id).not.toBe(library.id);
+        expect(hrefForDestinationRef(catalog, first.target)).toBe('/workflows/new?importJson=1');
+        await act(async () => { navigation().openHref('/workflows'); });
+        expect(activeTab().id).toBe(library.id);
+        await enter();
+        expect(activeTab().id).not.toBe(first.id);
+        expect(navigation().state.tabs[first.id]).toBe(first);
+        expect(navigation().state.tabs[library.id]).toMatchObject({ target: library.target });
+    });
+
     it('retires the busy plugin discovery split after a zero-reader deletion acknowledgement', async () => {
         const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
         const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
