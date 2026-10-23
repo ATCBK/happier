@@ -6,6 +6,7 @@ import { readSessionTerminalControlServiceabilityStateV1 } from '@happier-dev/pr
 import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { resolveAwarenessCurrentnessV1 } from '@happier-dev/protocol/sessions/awareness/runtime';
 import { SessionWorkflowActivityHeadlineV1Schema } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowActivityHeadlineV1';
+import { readSessionUsageLimitRecoveryFromMetadata } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import type { AccountEncryptionCurrentnessResponse, ProjectSessionAwarenessV1Input, SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
@@ -119,6 +120,7 @@ function buildCliSessionAwarenessInputFromPresentationV1(
     .map(([, request]) => resolveAgentRequestKind({ toolName: request.tool, requestKind: request.kind })) : null;
 
   const lifecycle = {
+    processTerminalState: metadata?.lifecycleState === 'stopped' ? 'stopped' : null,
     archivedAtMs: readNumber(row.archivedAt),
     // `undefined` (the producer projected no turn status at all) and an explicit `null` are
     // different facts here: the first is absent lifecycle evidence, the second is observed.
@@ -153,6 +155,8 @@ function buildCliSessionAwarenessInputFromPresentationV1(
     ...(row.managedSessions !== undefined ? { managedSessions: row.managedSessions } : {}),
     ...(row.pendingReviewRuns !== undefined ? { pendingReviewRuns: row.pendingReviewRuns } : {}),
     title: readText(summary?.text) ?? readText(metadata?.name),
+    runtimeIssue: row.lastRuntimeIssue,
+    usageLimitRecovery: readSessionUsageLimitRecoveryFromMetadata(metadata),
     lifecycle,
     runtime,
     pending: {
