@@ -2100,6 +2100,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             `我們找到了與 ${provider} 關聯的既有 Happier 帳戶。要在此裝置上完成登入，請使用 QR code 或你的密鑰來還原帳戶金鑰。`,
         linkNewDeviceTitle: '連結新裝置',
         linkNewDeviceSubtitle: '掃描新裝置上顯示的 QR Code 以將其連結至此帳戶',
+        pairingConnectionWarningTitle: "伺服器已中斷連線",
+        pairingConnectionWarningBody: "配對需要能夠存取伺服器。請檢查連線，或掃描其他伺服器的 QR Code。",
         linkNewDeviceQrInstructions: '在新裝置上開啟 Happier 並顯示 QR Code',
         scanQrCodeOnDevice: '掃描 QR Code',
         unsupported: {

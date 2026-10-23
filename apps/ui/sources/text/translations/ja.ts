@@ -1741,6 +1741,8 @@ export const ja: TranslationStructure = {
     secretKeyPlaceholder: "XXXXX-XXXXX-XXXXX...",
     linkNewDeviceTitle: "新しいデバイスをリンク",
     linkNewDeviceSubtitle: "新しいデバイスに表示されているQRコードをスキャンしてこのアカウントにリンクしてください",
+    pairingConnectionWarningTitle: "サーバー未接続",
+    pairingConnectionWarningBody: "ペアリングにはサーバーへの接続が必要です。接続を確認するか、別のサーバーのコードをスキャンしてください。",
     linkNewDeviceQrInstructions: "新しいデバイスでHappierを開いてQRコードを表示してください",
     scanQrCodeOnDevice: "QRコードをスキャン",
     unsupported: {

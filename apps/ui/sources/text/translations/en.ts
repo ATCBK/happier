@@ -1271,6 +1271,8 @@ export const en = {
         secretKeyPlaceholder: 'XXXXX-XXXXX-XXXXX...',
         linkNewDeviceTitle: 'Link New Device',
         linkNewDeviceSubtitle: 'Scan the QR code shown on your new device to link it to this account',
+        pairingConnectionWarningTitle: "Server disconnected",
+        pairingConnectionWarningBody: "Pairing needs a reachable server. Check your connection, or scan a code for another server.",
         linkNewDeviceQrInstructions: 'Open Happier on your new device and display the QR code',
         scanQrCodeOnDevice: 'Scan QR Code',
         unsupported: {

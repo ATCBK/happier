@@ -1377,6 +1377,8 @@ export const ru: TranslationStructure = {
     secretKeyPlaceholder: "XXXXX-XXXXX-XXXXX...",
     linkNewDeviceTitle: "Привязать новое устройство",
     linkNewDeviceSubtitle: "Отсканируйте QR-код, отображаемый на новом устройстве, чтобы привязать его к этой учетной записи",
+    pairingConnectionWarningTitle: "Нет подключения к серверу",
+    pairingConnectionWarningBody: "Для сопряжения сервер должен быть доступен. Проверьте подключение или отсканируйте код другого сервера.",
     linkNewDeviceQrInstructions: "Откройте Happier на новом устройстве и отобразите QR-код",
     scanQrCodeOnDevice: "Сканировать QR-код",
     unsupported: {
