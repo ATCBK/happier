@@ -86,7 +86,6 @@ import { createTurnAssistantTextSnapshotStore } from './turns/assistantTextSnaps
 import { prepareInstalledRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
-import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import {
     registerSessionClientRuntimeHandlers,
 } from './client/executionRuns/registerSessionClientRuntimeHandlers';
@@ -1736,7 +1735,7 @@ export class ApiSessionClient extends EventEmitter {
                         externalActionMachineRequestPrivateKey: installation.privateKey,
                         readCredentials: async () => await admitted.isCurrent() ? admitted.credentials : null,
                         actionsSettingsProvider: {
-                            getActionsSettings: () => normalizeActionsSettingsV1(admitted.accountSettingsContext.settings.actionsSettingsV1),
+                            getActionsSettings: () => admitted.accountSettingsContext.settings.actionsSettingsV1,
                             getAccountSettings: () => admitted.accountSettingsContext.settings,
                         },
                     }),
