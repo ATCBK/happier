@@ -8065,6 +8065,11 @@
       "types": "./dist/plugins/contributionIdentity.d.ts",
       "default": "./dist/plugins/contributionIdentity.js"
     },
+    "./plugins/contribution-key": {
+      "happier-source": "./src/plugins/contributionKey.ts",
+      "types": "./dist/plugins/contributionKey.d.ts",
+      "default": "./dist/plugins/contributionKey.js"
+    },
     "./plugins/backend-surface-declaration": {
       "happier-source": "./src/plugins/backendSurfaceDeclarationV1.ts",
       "types": "./dist/plugins/backendSurfaceDeclarationV1.d.ts",
@@ -8079,6 +8084,11 @@
       "happier-source": "./src/plugins/contributions/publicTypes.ts",
       "types": "./dist/plugins/contributions/publicTypes.d.ts",
       "default": "./dist/plugins/contributions/publicTypes.js"
+    },
+    "./plugins/contributions/policy-evaluation": {
+      "happier-source": "./src/plugins/contributions/policyEvaluation.ts",
+      "types": "./dist/plugins/contributions/policyEvaluation.d.ts",
+      "default": "./dist/plugins/contributions/policyEvaluation.js"
     },
     "./plugins/source-spec": {
       "happier-source": "./src/plugins/sourceSpecV1.ts",
