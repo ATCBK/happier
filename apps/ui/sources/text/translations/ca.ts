@@ -1362,6 +1362,8 @@ export const ca: TranslationStructure = {
         secretKeyPlaceholder: 'XXXXX-XXXXX-XXXXX...',
         linkNewDeviceTitle: 'Vincular Nou Dispositiu',
         linkNewDeviceSubtitle: 'Escaneja el codi QR que es mostra al teu nou dispositiu per vincular-lo a aquest compte',
+        pairingConnectionWarningTitle: "Servidor desconnectat",
+        pairingConnectionWarningBody: "L’aparellament necessita un servidor accessible. Comprova la connexió o escaneja un codi d’un altre servidor.",
         linkNewDeviceQrInstructions: 'Obre Happier al teu nou dispositiu i mostra el codi QR',
         scanQrCodeOnDevice: 'Escanejar codi QR',
         unsupported: {

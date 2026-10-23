@@ -1760,6 +1760,8 @@ export const it: TranslationStructure = {
     secretKeyPlaceholder: "XXXXX-XXXXX-XXXXX...",
     linkNewDeviceTitle: "Collega nuovo dispositivo",
     linkNewDeviceSubtitle: "Scansiona il codice QR mostrato sul nuovo dispositivo per collegarlo a questo account",
+    pairingConnectionWarningTitle: "Server disconnesso",
+    pairingConnectionWarningBody: "Per associare un dispositivo, il server deve essere raggiungibile. Controlla la connessione o scansiona un codice per un altro server.",
     linkNewDeviceQrInstructions: "Apri Happier sul nuovo dispositivo e mostra il codice QR",
     scanQrCodeOnDevice: "Scansiona codice QR",
     unsupported: {

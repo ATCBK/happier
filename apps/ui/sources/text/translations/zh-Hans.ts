@@ -1401,6 +1401,8 @@ export const zhHans: TranslationStructure = {
     secretKeyPlaceholder: "XXXXX-XXXXX-XXXXX...",
     linkNewDeviceTitle: "链接新设备",
     linkNewDeviceSubtitle: "扫描新设备上显示的二维码以将其链接到此账户",
+    pairingConnectionWarningTitle: "服务器已断开连接",
+    pairingConnectionWarningBody: "配对需要能够访问服务器。请检查连接，或扫描其他服务器的二维码。",
     linkNewDeviceQrInstructions: "在新设备上打开 Happier 并显示二维码",
     scanQrCodeOnDevice: "扫描二维码",
     unsupported: {

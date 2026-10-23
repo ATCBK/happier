@@ -1273,6 +1273,8 @@ export const de: TranslationStructure = {
         secretKeyPlaceholder: 'XXXXX-XXXXX-XXXXX...',
         linkNewDeviceTitle: 'Neues Gerät verknüpfen',
         linkNewDeviceSubtitle: 'Scanne den QR-Code auf deinem neuen Gerät, um es mit diesem Konto zu verknüpfen',
+        pairingConnectionWarningTitle: "Keine Serververbindung",
+        pairingConnectionWarningBody: "Zum Koppeln muss der Server erreichbar sein. Prüfe deine Verbindung oder scanne einen Code für einen anderen Server.",
         linkNewDeviceQrInstructions: 'Öffne Happier auf deinem neuen Gerät und lass den QR-Code anzeigen',
         scanQrCodeOnDevice: 'QR-Code scannen',
         unsupported: {
