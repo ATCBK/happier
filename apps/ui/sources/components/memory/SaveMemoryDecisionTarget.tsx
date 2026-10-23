@@ -33,6 +33,21 @@ export const memoryDecisionSheetRowStyle = { paddingHorizontal: 0 } as const;
  */
 const MAX_SEGMENTS = 3;
 
+/**
+ * Segments are for short names (DESIGN.md control table): three content-width segments must fit the
+ * sheet's field width, so a longer Project name moves the choice into the field menu instead of
+ * breaking inside a segment.
+ */
+const MAX_SEGMENT_LABEL_CHARS = 16;
+
+/** Which control offers the places: one segmented row for a few short names, otherwise the field menu. */
+export function memoryDecisionTargetControl(labels: readonly string[]): 'segmented' | 'menu' | 'none' {
+  if (labels.length === 0) return 'none';
+  return labels.length <= MAX_SEGMENTS && labels.every((label) => label.length <= MAX_SEGMENT_LABEL_CHARS)
+    ? 'segmented'
+    : 'menu';
+}
+
 export function memoryDecisionTargetId(target: MemoryScopeTargetV1): string {
   return target.scope === 'account'
     ? 'account'
@@ -131,9 +146,10 @@ function TargetChoice(
       })),
     [labels, targets],
   );
+  const control = memoryDecisionTargetControl(options.map((option) => option.label));
   return (
     <View testID="save-memory-decision.target" style={styles.target}>
-      {targets.length >= 1 && targets.length <= MAX_SEGMENTS ? (
+      {control === 'segmented' ? (
         <SegmentedChoiceItem<string>
           title={t('memoryContext.memory.sheetSaveTo')}
           subtitle={overrideNote}
@@ -146,7 +162,7 @@ function TargetChoice(
           style={memoryDecisionSheetRowStyle}
           disabled={locked}
         />
-      ) : targets.length > MAX_SEGMENTS ? (
+      ) : control === 'menu' ? (
         <DropdownMenu
           testID="save-memory-decision.targetMenu"
           open={menuOpen}
