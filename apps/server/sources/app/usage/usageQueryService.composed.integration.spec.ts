@@ -1,4 +1,4 @@
-import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, estimateUsageModelCost,
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, estimateUsageModelCost, buildConnectedServiceCredentialRecord,
     normalizeUsageQuery, resolveUsagePageAggregation,
     UsageAnalyticsQueryRequestSchema, UsageEventIngestRequestSchema, usageQueryToAnalyticsRequest } from '@happier-dev/protocol';
 import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -14,7 +14,12 @@ import { queryUsageAnalytics } from './usageQueryService';
 import { recordUsageEvent } from './usageWriteService';
 import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
 import { createNativeAgentSessionOperations } from '../../../../cli/src/agent/runtime/registry/engineRegistry/nativeAgentSession';
-import { withCodexDaemonMaterializedBootstrap } from '../../../../cli/src/daemon/connectedServices/materialize/codexDaemonBootstrap.testkit';
+import { withAgentDaemonMaterializedBootstrap } from '../../../../cli/src/daemon/connectedServices/materialize/agentDaemonBootstrap.testkit';
+import { createSdkExecFixture, createEventsFixture, createPluginContextFixture,
+    createSessionHooksFixture, createTerminalHostFixture,
+} from '../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit';
+import { createClaudeAgentSdkTurnOperations } from '../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session';
+import { createClaudeNativeSessionRuntimeFromOperations } from '../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime';
 import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR, resolveExplicitSpawnScopedEnvironmentFromProcessEnv } from '../../../../cli/src/daemon/spawn/spawnExplicitEnvKeysMarker';
 import { reconcileAgentSessionScopedEnvironment } from '../../../../cli/src/session/runtime/control/sessionControlEnvironment';
 
@@ -60,7 +65,10 @@ describe('native usage producer → ingest → query', () => {
         const account = await db.account.create({ data: { publicKey: `pk-codex-exact-${planType}` } });
         const session = await db.session.create({ data: { id: 'actual-happier-session', accountId: account.id,
             tag: `codex-exact-${planType}`, encryptionMode: 'plain', metadata: '{}' } });
-        await withCodexDaemonMaterializedBootstrap({ sessionId: session.id, bound: binding !== 'unbound', run: async startup => {
+        const record = buildConnectedServiceCredentialRecord({ now: 10, serviceId: 'openai-codex', profileId: 'account-A',
+            kind: 'oauth', expiresAt: null, oauth: { accessToken: 'synthetic-startup-A', refreshToken: 'synthetic-refresh',
+                idToken: null, scope: null, tokenType: null, providerAccountId: 'provider-account-A', providerEmail: null } });
+        await withAgentDaemonMaterializedBootstrap({ agentId: 'codex', record, sessionId: session.id, bound: binding !== 'unbound', run: async startup => {
         const connectedAccounts = binding === 'missing-session-ref' || binding === 'daemon-without-bootstrap'
             ? [] : startup.bootstrap.launch?.sessionConnectedAccounts ?? [];
         // The real daemon marks sanitized materializer output as explicit child
@@ -176,6 +184,66 @@ describe('native usage producer → ingest → query', () => {
             } }),
             runtimeAuthHost: { nativeHome: startup.nativeHome },
         });
+        } });
+    });
+
+    it.each(['pro', 'max', 'team', 'enterprise', undefined, 'future-plan'])('admits only witnessed personal Claude subscription deltas (%s)', async subscriptionType => {
+        const account = await db.account.create({ data: { publicKey: `pk-claude-scope-${subscriptionType}` } });
+        const session = await db.session.create({ data: { accountId: account.id,
+            tag: `claude-scope-${subscriptionType}`, encryptionMode: 'plain', metadata: '{}' } });
+        const record = buildConnectedServiceCredentialRecord({ now: 10, serviceId: 'claude-subscription', profileId: 'claude-account',
+            kind: 'oauth', expiresAt: null, oauth: { accessToken: 'synthetic-claude-access', refreshToken: 'synthetic-refresh',
+                idToken: null, scope: 'user:inference user:sessions:claude_code', tokenType: null,
+                providerAccountId: 'native-claude-account', providerEmail: null,
+                raw: { claudeAiOauth: { ...(subscriptionType ? { subscriptionType } : {}) } } } });
+        await withAgentDaemonMaterializedBootstrap({ agentId: 'claude', record, sessionId: session.id, bound: true, run: async startup => {
+            expect(startup.bootstrap.launch?.sessionConnectedAccounts).toMatchObject([{
+                usageAccountScope: subscriptionType === 'pro' || subscriptionType === 'max' ? 'personal'
+                    : subscriptionType === 'team' || subscriptionType === 'enterprise' ? 'workspace' : 'unknown',
+            }]);
+            const exec = createSdkExecFixture();
+            const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+                { exec: exec.service, sessionHooks: createSessionHooksFixture().service });
+            const provider = createClaudeAgentSdkTurnOperations({ ctx, directory: startup.nativeHome.root,
+                launchEnv: startup.environment, permissionMode: 'default', happierSessionId: session.id, initialModelId: 'claude-haiku-4-5' });
+            const context = { session: { services: { activeInput: { bind: () => ({ dispose() {} }) },
+                models: { bind: () => ({ dispose() {} }) } } } } as unknown as AgentSessionRuntimeContext;
+            const native = createClaudeNativeSessionRuntimeFromOperations(provider,
+                { kind: 'create', sessionId: session.id, cwd: startup.nativeHome.root }, context);
+            const writes: Array<ReturnType<typeof recordUsageEvent>> = [];
+            const operations = createNativeAgentSessionOperations(native, session.id, undefined, undefined, {
+                provider: 'claude', publish(input) {
+                    const request = UsageEventIngestRequestSchema.parse(buildUsageEventIngestRequest({ ...input, sessionId: session.id }));
+                    if (request.scope === 'turn_delta') expect(request).toMatchObject({
+                        turnId: 'claude-host-turn', attribution: { source: { kind: 'native',
+                            ...(subscriptionType === 'pro' || subscriptionType === 'max' ? { accountScope: 'personal' } : {}),
+                        } },
+                    });
+                    writes.push(recordUsageEvent(account.id, request));
+                },
+            }, undefined, undefined, { context, cwd: startup.nativeHome.root,
+                connectedAccounts: startup.bootstrap.launch?.sessionConnectedAccounts ?? [],
+                capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+                cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } });
+            const unsubscribe = operations.subscribeRuntimeEvents(() => undefined);
+            try {
+                await operations.sendTurnPrompt('reply ready', { localId: 'claude-input', turnId: 'claude-host-turn' });
+                await exec.emit({ type: 'assistant', uuid: 'claude-record', session_id: 'native-claude-session',
+                    message: { id: 'claude-inference', role: 'assistant', model: 'claude-haiku-4-5', content: [],
+                        usage: { input_tokens: 10, output_tokens: 2 } } });
+                await exec.emit({ type: 'result', subtype: 'success', session_id: 'native-claude-session', total_cost_usd: 0.01,
+                    modelUsage: { 'claude-haiku-4-5': { inputTokens: 10, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } });
+                await expect.poll(() => writes.length).toBe(2);
+                for (const result of await Promise.all(writes)) expect(result).toMatchObject({ ok: true });
+                const privateResult = await queryUsageAnalytics(account.id, UsageAnalyticsQueryRequestSchema.parse({ filters: { sessionIds: [session.id] } }));
+                expect(privateResult.totals.tokens.total).toBe(12);
+                const publicResult = await queryUsageAnalytics(account.id, UsageAnalyticsQueryRequestSchema.parse({
+                    filters: { sessionIds: [session.id] }, population: 'public_eligible_personal' }));
+                const eligible = subscriptionType === 'pro' || subscriptionType === 'max';
+                expect(publicResult.totals.tokens.total).toBe(eligible ? 12 : 0);
+                if (eligible) expect(publicResult.contributions).toEqual([expect.objectContaining({
+                    turnId: 'claude-host-turn', providerAttribution: 'known', providerSource: 'native' })]);
+            } finally { unsubscribe(); await operations.resetOrDisposeRuntime('runtime_recovery'); }
         } });
     });
 

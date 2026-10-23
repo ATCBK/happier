@@ -1180,9 +1180,9 @@ attribution. Older scalar servers receive only the unchanged cumulative stream;
 its legacy projection excludes the supplemental exact stream because scalar
 replacement cannot reconcile it. An in-turn auth application,
 refresh or contradictory native account read withdraws that attempt's proof,
-including an A → B → A transition. Combined counters remain unknown. Claude's
-current usage stream does not expose request-auth evidence, so a selected
-Connected Account or materialized launch selection does not certify its rows.
+including an A → B → A transition. Combined counters remain unknown. An explicit
+unknown native witness also prevents substitution of launch proof for a
+contradicted response or a last-only snapshot.
 
 The prospective Codex native attribution also carries optional `accountScope`
 (`personal` or `workspace`) from the supported native Account plan contract at
@@ -1190,6 +1190,20 @@ that dispatch. Missing or unrecognized plans stay unknown; a later plan read
 cannot classify historical Usage. Refresh must not attach the failed Account's
 plan hint to replacement tokens. This extends the same request attribution,
 not a separate subscription collector or provider-independent attestation.
+
+The connected-service materialization result now has optional, credential-free
+`usageAccountScope` in 0.3 development. The service classifies the actual admitted
+credential revision; the shared host snapshots that fact at dispatch only when
+all materialized selections identify the same Account. Claude subscription
+`pro`/`max` classify personal, `team`/`enterprise` workspace, and missing or
+unrecognized values unknown. Setup tokens and API keys provide no plan proof.
+The protected daemon bootstrap and foreground claim carry this classification;
+current Session metadata is never an evidence source. Only host-turn-attributed
+`turn_delta` usage consumes the snapshot. Claude assistant deltas can therefore
+qualify, while the unturned whole-call result remains private reconciliation
+and cannot double count public usage. A native response witness takes precedence;
+unknown plans, ambiguous Accounts, Team credentials and unturned/cumulative
+observations remain excluded by the unchanged public eligibility policy.
 
 Runtime accounting carries the existing host runtime incarnation and event
 sequence as optional ordering evidence. Equal-clock response deltas and counter
@@ -1211,7 +1225,7 @@ the references to the same private late native-open input; the Codex plugin
 consumes them as the attribution service identity. A declared target, an
 unresolved group or a native home alone does not produce a daemon launch reference.
 A credential environment alone does not replace the missing reference or establish personal
-scope. Startup attribution still requires the materialized native auth identity
+scope. Codex attribution still requires the materialized native auth identity
 and the exact request's native account-scope read, just as hot-auth application
 does. Missing bindings remain unknown rather than being inferred from a current
 subscription or used to relabel history.

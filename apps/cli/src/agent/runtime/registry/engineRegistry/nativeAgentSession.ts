@@ -1526,6 +1526,7 @@ function buildNativeAgentSessionOpenInputs(
         ? Object.freeze(buildOptions.sessionConnectedAccounts.map((selection) =>
             Object.freeze({
                 purpose: selection.purpose,
+                ...(selection.usageAccountScope === undefined ? {} : { usageAccountScope: selection.usageAccountScope }),
                 account: Object.freeze({
                     service: Object.freeze({ ...selection.account.service }),
                     accountId: selection.account.accountId,
@@ -2479,6 +2480,7 @@ export function createNativeAgentSessionOperations(
     let configuration = initialConfiguration;
     const rollbackTurns: Array<Readonly<{
         turnId: string;
+        requestAttribution?: UsageRequestAttribution;
         localId?: string;
         userMessageSeq: number | null;
         providerCheckpoint?: Extract<
@@ -2491,7 +2493,7 @@ export function createNativeAgentSessionOperations(
         >;
         didPublishRollbackBoundary?: boolean;
         rollbackEligible?: boolean;
-    }>> = initialRollbackTurns.map((turn) => Object.freeze({ ...turn }));
+    }>> = initialRollbackTurns.map((turn) => Object.freeze({ ...turn, requestAttribution: undefined }));
     const pendingRollbackJoinByLocalId = new Map<string, Readonly<{ turnId: string }>>();
     const readActiveTurnAdmissionWitness = (): NativeAgentNewTurnAdmissionWitness | null => {
         const activeTurnId =
@@ -2978,7 +2980,10 @@ export function createNativeAgentSessionOperations(
             publishCanonicalEvent?.(event);
         }
         if (event.kind === 'usage-observed' && usagePublisher) {
-            const requestProof = [...inputCorrelations.values()].find(candidate => candidate.turnId === event.turnId)?.requestAttribution;
+            const latestTurn = rollbackTurns[rollbackTurns.length - 1];
+            const requestProof = [...inputCorrelations.values()].find(candidate => candidate.turnId === event.turnId)?.requestAttribution
+                ?? (latestTurn?.turnId === event.turnId ? latestTurn
+                    : rollbackTurns.find(turn => turn.turnId === event.turnId))?.requestAttribution;
             const nativeProof = UsageRequestAttributionSchema.safeParse(event.attribution);
             const suppliedSource = nativeProof.success && nativeProof.data.turnId === event.turnId
                 && nativeProof.data.source.kind === 'native' ? nativeProof.data.source : null;
@@ -2988,7 +2993,8 @@ export function createNativeAgentSessionOperations(
             const attribution = event.scope === 'turn_delta'
                 ? requestProof?.source.kind === 'provider' ? requestProof
                     : acceptedNativeSource && nativeProof.success ? nativeProof.data
-                        : requestProof?.source.kind === 'native' && requestProof.source.connectedAccount === null ? requestProof : undefined
+                        : requestProof?.source.kind === 'native'
+                            && (requestProof.source.connectedAccount === null || event.attribution === undefined) ? requestProof : undefined
                 : undefined;
             const publishUsage = (witness: NativeAgentSessionUsagePublisher['accountingWitness']): void => {
               if (disposeStarted) return;
@@ -3067,6 +3073,9 @@ export function createNativeAgentSessionOperations(
             if (!rollbackTurns.some((turn) => turn.turnId === event.turnId)) {
                 rollbackTurns.push(Object.freeze({
                     turnId: event.turnId,
+                    // Input custody ends at turn-start; retain its immutable
+                    // dispatch fact on the existing in-process turn record.
+                    ...(correlation?.requestAttribution ? { requestAttribution: correlation.requestAttribution } : {}),
                     ...(correlation ? { localId: correlation.inputId } : {}),
                     userMessageSeq: correlation?.userMessageSeq ?? null,
                 }));
@@ -3878,9 +3887,24 @@ export function createNativeAgentSessionOperations(
                             'Native Agent runtime delivery was cancelled before admission',
                         );
                 }
-                inputCorrelations.set(correlation.inputId, {
-                    ...correlation, requestAttribution: usagePublisher?.captureRequestAttribution?.(correlation.turnId),
-                });
+                let requestAttribution = usagePublisher?.captureRequestAttribution?.(correlation.turnId);
+                // The service, not the Agent or Session metadata, classifies the
+                // actual admitted credential. Multiple possible upstream Accounts
+                // cannot establish which one served this turn.
+                const selections = directFacets?.connectedAccounts ?? [];
+                const selection = selections[0];
+                if (!requestAttribution && !directFacets?.readAppliedTeamCredentialModel?.()
+                    && selection?.usageAccountScope !== undefined
+                    && selections.every(candidate => candidate.account.service.pluginId === selection.account.service.pluginId
+                        && candidate.account.service.localId === selection.account.service.localId
+                        && candidate.account.accountId === selection.account.accountId
+                        && candidate.usageAccountScope === selection.usageAccountScope)) {
+                    requestAttribution = { v: 1, turnId: correlation.turnId, source: {
+                        kind: 'native', connectedAccount: { service: { ...selection.account.service }, accountId: selection.account.accountId },
+                        ...(selection.usageAccountScope === 'unknown' ? {} : { accountScope: selection.usageAccountScope }),
+                    } };
+                }
+                inputCorrelations.set(correlation.inputId, { ...correlation, requestAttribution });
                 activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(
                     correlation,
                 );
@@ -6064,8 +6088,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                         if (!openRequest.providerBinding && appliedTeamCredentialModel === null && openedWithoutConnectedServices) {
                             return { v: 1, turnId, source: { kind: 'native', connectedAccount: null } };
                         }
-                        // Selected native accounts require provider request evidence; a
-                        // host-turn start snapshot cannot prove auth across native retries.
+                        // Native response evidence has priority. The dispatch owner
+                        // below may capture service-classified materialized credentials.
                         return undefined;
                     },
                     ...(boundExternalSessionSource ? { boundNativeSessionId: boundExternalSessionSource.remoteSessionId } : {}),
@@ -6163,7 +6187,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     cwd,
                     getWorkspaceWrites: hostRuntimeParams.getWorkspaceWrites,
                     resolveMcpToolPolicy: hostRuntimeParams.resolveMcpToolPolicy,
-                    connectedAccounts: openRequest.connectedAccounts ?? [],
+                    get connectedAccounts() { return openRequest.connectedAccounts ?? []; },
                         capabilities: sessionCapabilities,
                         cancellation,
                         configuration,

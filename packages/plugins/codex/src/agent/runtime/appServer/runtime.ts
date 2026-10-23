@@ -2162,7 +2162,12 @@ export function createCodexAppServerRuntime(
         accountScope: pendingTurn?.providerAccountScope,
         scope: observation.scope, matchesNativeAttempt: Boolean(pendingTurn?.agentTurnId && pendingTurn.agentTurnId === nativeTurnId),
       }) : undefined;
-      publishRuntimeEvent({ ...sessionObservation, ...(hostTurnId ? { turnId: hostTurnId } : {}), ...(attribution ? { attribution } : {}) });
+      // An explicit unknown native witness prevents the host from substituting
+      // launch credentials for a snapshot or a contradicted response identity.
+      const usageAttribution = attribution ?? (hostTurnId ? {
+        v: 1 as const, turnId: hostTurnId, source: { kind: 'native' as const, connectedAccount: null },
+      } : undefined);
+      publishRuntimeEvent({ ...sessionObservation, ...(hostTurnId ? { turnId: hostTurnId } : {}), ...(usageAttribution ? { attribution: usageAttribution } : {}) });
     };
     if (params.happierSessionId !== undefined) nextClient.registerNotificationHandler('rawResponse/completed', (notificationParams) => {
       const record = readRecord(notificationParams);

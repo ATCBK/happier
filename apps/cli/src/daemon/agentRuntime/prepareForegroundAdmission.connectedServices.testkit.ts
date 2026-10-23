@@ -28,11 +28,12 @@ export function createForegroundPurposeOwnerFixture(input: Readonly<{
   consumer: PluginContributionIdentityV1;
   service: QualifiedConnectedAccountServiceRef;
   accountId?: string;
+  purpose?: string;
   materializeAccount: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount'];
   resolveTarget?: ConnectedAccountPurposeBindingOwnerDependencies['resolveTarget'];
   resolveCredentialRevision?: ConnectedAccountPurposeBindingOwnerDependencies['resolveCredentialRevision'];
 }>) {
-  const purpose = { consumer: input.consumer, purpose: 'primary' } as const;
+  const purpose = { consumer: input.consumer, purpose: input.purpose ?? 'primary' } as const;
   const binding: QualifiedConnectedAccountPurposeBindingV1 = {
     purpose, target: { kind: 'account', account: { service: input.service, accountId: input.accountId ?? 'selected-account' } },
   };
