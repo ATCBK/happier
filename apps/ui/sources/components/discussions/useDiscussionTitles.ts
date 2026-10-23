@@ -4,27 +4,12 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import type { DiscussionRepositorySnapshot } from '@/sync/ops/discussions/discussionRepository';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
+import { useDiscussionTitleProjections } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 import type { DiscussionHomeAddress } from './discussionDetailsTarget';
 
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 const NO_SERVER_IDS: readonly string[] = Object.freeze([]);
-
-function readTitles(snapshot: DiscussionRepositorySnapshot | null, discussionIds: readonly string[]): ReadonlyMap<string, string> {
-    if (!snapshot || discussionIds.length === 0) return NO_TITLES;
-    const titles = new Map<string, string>();
-    const wanted = new Set(discussionIds);
-    for (const item of [...snapshot.lists.active.items, ...snapshot.lists.archived.items]) {
-        const title = item.title?.trim();
-        if (title && wanted.has(item.id)) titles.set(item.id, title);
-    }
-    for (const discussionId of discussionIds) {
-        const title = snapshot.threads[discussionId]?.summary?.title?.trim();
-        if (title && !titles.has(discussionId)) titles.set(discussionId, title);
-    }
-    return titles.size === 0 ? NO_TITLES : titles;
-}
 
 /**
  * The titles of Home conversations, for surfaces that name one without opening it:
@@ -57,32 +42,34 @@ export function useDiscussionTitles(input: Readonly<{
             accountLifetime: binding,
         });
     }, [address, availability, binding, enabled, wanted]);
-    const subscribe = React.useCallback(
-        (listener: () => void) => repository ? repository.subscribe(listener) : () => undefined,
-        [repository],
-    );
-    const read = React.useCallback(() => repository?.getSnapshot() ?? null, [repository]);
-    const snapshot = React.useSyncExternalStore(subscribe, read, read);
     React.useEffect(() => repository?.mount(), [repository]);
 
     const idsKey = input.discussionIds.join('\u0000');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the id set, not the array identity
     const discussionIds = React.useMemo(() => input.discussionIds, [idsKey]);
-    const titles = React.useMemo(() => readTitles(snapshot, discussionIds), [discussionIds, snapshot]);
+    const addresses = React.useMemo(() => discussionIds.map(discussionId => ({ serverId, discussionId })), [discussionIds, serverId]);
+    const projected = useDiscussionTitleProjections(addresses);
+    const titles = React.useMemo(() => {
+        if (!repository) return NO_TITLES;
+        return new Map(discussionIds.flatMap((id, index) => {
+            const title = projected[index]?.trim();
+            return title ? [[id, title] as const] : [];
+        }));
+    }, [discussionIds, projected, repository]);
 
     const requested = React.useRef(new Set<string>());
     React.useEffect(() => {
         requested.current = new Set();
     }, [repository]);
     React.useEffect(() => {
-        if (!repository || !snapshot) return;
+        if (!repository) return;
         for (const discussionId of discussionIds) {
             if (titles.has(discussionId) || requested.current.has(discussionId)) continue;
-            if (snapshot.threads[discussionId]) continue;
+            if (repository.getSnapshot().threads[discussionId]) continue;
             requested.current.add(discussionId);
-            void repository.refreshDiscussion(discussionId);
+            void repository.refreshSummary(discussionId);
         }
-    }, [discussionIds, repository, snapshot, titles]);
+    }, [discussionIds, repository, titles]);
 
     return titles;
 }

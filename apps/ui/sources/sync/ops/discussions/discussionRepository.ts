@@ -203,9 +203,8 @@ function stableJsonEqual(left: unknown, right: unknown): boolean {
     return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function retainStableRow<T extends Readonly<{ id: string }>>(existing: ReadonlyMap<string, T>, incoming: T): T {
-    const current = existing.get(incoming.id);
-    return current && stableJsonEqual(current, incoming) ? current : incoming;
+function retainStableRow<T extends Readonly<{ id: string }>>(current: T | undefined, incoming: T): T {
+    return current && (current === incoming || stableJsonEqual(current, incoming)) ? current : incoming;
 }
 
 function flattenListPages(pages: readonly ListPage[], previous: readonly DiscussionOpenedSummaryV1[]): readonly DiscussionOpenedSummaryV1[] {
@@ -216,19 +215,20 @@ function flattenListPages(pages: readonly ListPage[], previous: readonly Discuss
         for (const row of page.rows) {
             if (seen.has(row.id)) continue;
             seen.add(row.id);
-            rows.push(retainStableRow(previousById, row));
+            rows.push(retainStableRow(previousById.get(row.id), row));
         }
     }
-    return rows;
+    return rows.length === previous.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
 }
 
 export function mergeDiscussionMessages(
     previous: readonly DiscussionOpenedMessageV1[],
     incoming: readonly DiscussionOpenedMessageV1[],
 ): readonly DiscussionOpenedMessageV1[] {
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-    const byId = new Map<string, DiscussionOpenedMessageV1>();
-    for (const row of [...previous, ...incoming]) {
+    if (incoming.length === 0) return previous;
+    const byId = new Map(previous.map((row) => [row.id, row]));
+    let changed = false;
+    for (const row of incoming) {
         const current = byId.get(row.id);
         const decision = current?.docEditProposalDispositionV1;
         // Decisions close once. A response captured before that commit cannot
@@ -236,9 +236,10 @@ export function mergeDiscussionMessages(
         // Incoming null content still hides; a current terminal read can reopen it.
         const reconciled = decision && decision.state !== 'open' && row.docEditProposalDispositionV1?.state === 'open'
             ? { ...row, content: current?.content === null ? null : row.content, docEditProposalDispositionV1: decision } : row;
-        byId.set(row.id, retainStableRow(previousById, reconciled));
+        const retained = retainStableRow(current, reconciled);
+        if (retained !== current) { byId.set(row.id, retained); changed = true; }
     }
-    return [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+    return changed ? [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id)) : previous;
 }
 
 function olderMessageFrontier(messages: readonly DiscussionOpenedMessageV1[]): number | undefined {
@@ -771,11 +772,11 @@ export function createDiscussionRepository(options: Readonly<{
         }
     };
 
-    const refreshDiscussion = async (discussionId: string, signal?: AbortSignal): Promise<void> => {
+    const refreshSummary = async (discussionId: string, signal?: AbortSignal): Promise<boolean> => {
         const operationEpoch = captureOperation(discussionId);
         const retained = snapshot.threads[discussionId] ?? emptyThread();
         const outcome = await client.get(discussionId, signal);
-        if (!isCurrentOperation(operationEpoch)) return;
+        if (!isCurrentOperation(operationEpoch)) return false;
         if (outcome.kind !== 'succeeded') {
             const code = outcome.kind === 'failed' ? outcome.errorCode : outcome.kind;
             if (isExplicitAccessLoss(code)) purgeDiscussion(discussionId, code);
@@ -783,7 +784,7 @@ export function createDiscussionRepository(options: Readonly<{
                 ...(statusForFailure(code) === 'revoked' ? emptyThread() : retained),
                 status: statusForFailure(code), errorCode: code,
             });
-            return;
+            return false;
         }
         applySummary(outcome.value.discussion);
         // `applySummary` only refreshes a thread that already exists. A reader opening
@@ -795,6 +796,11 @@ export function createDiscussionRepository(options: Readonly<{
         if (!snapshot.threads[discussionId]) {
             updateThread(discussionId, { ...emptyThread(), summary: outcome.value.discussion });
         }
+        return true;
+    };
+
+    const refreshDiscussion = async (discussionId: string, signal?: AbortSignal): Promise<void> => {
+        if (!await refreshSummary(discussionId, signal)) return;
         await refreshMessages(discussionId, signal);
     };
 
@@ -1198,6 +1204,7 @@ export function createDiscussionRepository(options: Readonly<{
         },
         loadMoreList,
         loadCompleteList,
+        refreshSummary,
         refreshAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return refreshList(state, signal, anchorSessionId); },
         loadMoreAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return loadMoreList(state, signal, anchorSessionId); },
         refreshDiscussion,
