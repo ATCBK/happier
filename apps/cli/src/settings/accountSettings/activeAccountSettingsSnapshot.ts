@@ -199,9 +199,9 @@ export function commitActiveAccountSettingsSnapshot(
     previous?.scopeKey
     && next.scopeKey === previous.scopeKey
     && next.settingsVersion <= previous.settingsVersion
-    // A successful first read can observe the still-empty version zero. This
-    // supplies source availability, not a competing equal-revision write.
-    && !(next.settingsVersion === previous.settingsVersion && previous.source === 'none'
+    // A first network read can confirm the cached revision (including empty
+    // version zero). Publish that readiness once, retaining unchanged values.
+    && !(next.settingsVersion === previous.settingsVersion && previous.source !== 'network'
       && next.source === 'network' && next.rawSettings !== undefined)
   ) {
     return { snapshot: previous, didCommit: false };

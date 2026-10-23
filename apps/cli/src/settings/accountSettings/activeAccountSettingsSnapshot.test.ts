@@ -637,6 +637,32 @@ describe('active account settings snapshot publication', () => {
     unsubscribe();
   });
 
+  it('publishes network confirmation of a cached revision once without rebuilding unchanged settings', () => {
+    const cached = { ...snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' }), source: 'cache' as const,
+      rawSettings: { sessionPendingQueueDeliveryTiming: 'after_runtime_idle' } };
+    setActiveAccountSettingsSnapshot(cached);
+    const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const listener = vi.fn();
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot(listener);
+    const confirmed = { ...snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' }), loadedAtMs: 2,
+      rawSettings: { sessionPendingQueueDeliveryTiming: 'after_runtime_idle' } };
+    try {
+      const result = commitActiveAccountSettingsSnapshot(confirmed);
+      expect(result.didCommit).toBe(true);
+      expect(result.snapshot.source).toBe('network');
+      expect(result.snapshot.settings).toBe(cached.settings);
+      expect(result.snapshot.settingsSecretsReadKeys).toBe(cached.settingsSecretsReadKeys);
+      expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
+      expect(listener).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < 20; i++) {
+        expect(commitActiveAccountSettingsSnapshot({ ...confirmed, loadedAtMs: 3 + i }).didCommit).toBe(false);
+      }
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(commitActiveAccountSettingsSnapshot({ ...confirmed, settingsVersion: 3 }).didCommit).toBe(false);
+      expect(getActiveAccountSettingsSnapshot()).toBe(result.snapshot);
+    } finally { unsubscribe(); }
+  });
+
   it('allows a different credential scope to become the active winner', () => {
     const previous = snapshot({ scopeKey: 'scope-a', version: 9, timing: 'after_runtime_idle' });
     const next = snapshot({ scopeKey: 'scope-b', version: 1, timing: 'after_foreground_ready' });
