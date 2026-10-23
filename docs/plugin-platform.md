@@ -1829,11 +1829,20 @@ daemon-Action and contribution-point requirements before any runtime supplier
 arrives. These presentation facts keep cold Machine reads on the same loading
 path; they supply no occurrence, source selection or execution authority.
 Plugin UI owns the shared projection in `usePluginHostReadiness`: `pending`
-defers a Machine read and its `revision` changes when prerequisites settle or
+defers a Machine read while loading, and `ready === false` prevents acquisition
+even when loading has settled. Omitted `ready` retains the older host's loading-only
+observation. Its `revision` changes when prerequisites settle or
 execution is re-admitted. Resource hooks consume it automatically; custom mounted
 read lifecycles, including Triage's aggregate, detail and fix-PR links, use that
 same projection. The existing pane bridge carries it to host-rendered details.
-Account-local reads use their own availability. Readers retain their own data,
+The same context owner projects `requesterExecutionReady`: an app-union requester
+waits for scoped Availability and, when its destination has Account custody, for
+that exact admitted origin. Loaded absence of an Account destination leaves a
+legitimate Machine requester available; a withdrawn Account origin is not ready.
+Account-local reads use `usePluginHostReadiness(false)` to ignore unrelated
+Machine admission, not requester admission. Their readiness and revision remain
+independent of Machine-only changes. Account reads on Settings and other surfaces
+defer while `ready === false` and acquire after requester admission. Readers retain their own data,
 cancellation and single-flight/pacing owners; Triage no longer classifies host
 refusal diagnostics or maintains a separate readiness state in its aggregate.
 An undemanded reader stays cold, and a settled source outage remains terminal
