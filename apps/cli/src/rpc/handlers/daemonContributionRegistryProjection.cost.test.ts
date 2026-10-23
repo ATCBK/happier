@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { cpus, loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema,
@@ -15,6 +15,10 @@ import type { RpcHandler } from '@/api/rpc/types';
 import { reloadConfiguration } from '@/configuration';
 import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { resolveDefaultScmBackendRegistry } from '@/scm/scmBackendCatalog';
+import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProviders/runtimeServices';
+import { runScmRoute } from '@/scm/rpc/dispatch';
 import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/install/ui/generatedArtifacts';
 import { resolveContainedPluginResourcePath } from '@/plugins/projection/resources/package/resolve';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -24,6 +28,104 @@ import {
 } from './daemonContributionRegistryProjection';
 
 describe('bundled daemon contribution describe cost', () => {
+    it('keeps authored SCM declarations cold through full describe and acquires native registrations only for an operation', async () => {
+        const pluginId = 'acme.cold-scm';
+        const failedPluginId = 'acme.failed-scm';
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ coldStart: true, plugins: [{
+            manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: {
+                scmBackends: [{ id: 'stacked', title: 'Authored SCM', description: 'Cold backend metadata',
+                    kind: 'acme', capabilities: ['detect', 'status'], metadata: { routing: 'stacked' } }],
+                scmHostingProviders: [{ id: 'forge', title: 'Authored Forge', kind: 'acme', capabilities: ['detect'] }],
+            } }),
+            files: { 'daemon.mjs': `export function activate(api) {
+                api.scm.registerHostingProvider('forge', { adapter: { routing: {
+                    detectRemote: () => ({ id: 'forge', kind: 'acme', displayName: 'Authored Forge',
+                        baseUrl: 'https://forge.example', repositoryWebUrl: 'https://forge.example/acme/repo' }),
+                    buildCompareUrl: () => null,
+                } } });
+                api.scm.registerBackend('stacked', { runtime: {
+                    repoModes: ['.git'], commands: [], capabilities: {
+                        detection: { repository: { support: 'supported' } }, read: { status: { support: 'supported' } },
+                        changeSet: { model: 'working-copy', diffAreas: ['pending'] }, commit: {}, remote: {}, branch: {},
+                        worktree: {}, lifecycle: {}, hosting: {}, checkpoints: {}, workspaceIntegration: {}, tooling: {}, freshness: {},
+                    },
+                }, handlers: {
+                    detection: { detectRepo: async ({ cwd }) => ({ isRepo: true, rootPath: cwd, mode: '.git' }) },
+                    read: { statusSnapshot: async () => ({ success: true, branch: 'authored/main' }) },
+                } });
+            }` },
+        }, {
+            manifest: createPluginManifestV2Fixture({ id: failedPluginId, contributes: {
+                scmBackends: [{ id: 'broken', title: 'Declared but failed SCM', kind: 'acme', capabilities: ['detect', 'status'] }],
+            } }),
+            files: { 'daemon.mjs': "export function activate() { throw new Error('authored SCM activation failed'); }" },
+        }] });
+        const runtime = fixture.registry;
+        const retained: { invokeStatus?: () => Promise<unknown> } = {};
+        try {
+            expect(runtime.activatedPluginIds.has(pluginId)).toBe(false);
+            expect(runtime.activatedPluginIds.has(failedPluginId)).toBe(false);
+            const handlers = new Map<string, RpcHandler>();
+            registerDaemonContributionRegistryProjectionHandler({ registerHandler(method, handler) { handlers.set(method, handler); } }, {
+                resolveRuntimeRegistry: async () => runtime,
+                resolveInstalledPackages: async () => [],
+                resolveServerFeaturesSnapshot: () => undefined,
+            });
+            const handler = handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE);
+            if (!handler) throw new Error('Expected the full describe handler');
+            const describe = async () => DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({ machineId: 'scm-machine' }));
+            const cold = await describe();
+            expect(cold.projection.familiesById.scmBackends?.entriesById).toMatchObject({
+                [`${pluginId}/stacked`]: { displayName: 'Authored SCM', description: 'Cold backend metadata',
+                    operations: ['detect', 'status'], metadata: { routing: 'stacked' } },
+                [`${failedPluginId}/broken`]: { displayName: 'Declared but failed SCM', operations: ['detect', 'status'] },
+            });
+            expect(cold.projection.familiesById.scmHostingProviders?.entriesById[`${pluginId}/forge`])
+                .toMatchObject({ displayName: 'Authored Forge', operations: ['detect'] });
+            // Full discovery still contains the UI/browser families Home consumes.
+            expect(cold.projection.familiesById.pluginUi).toBeDefined();
+            expect(cold.projection.familiesById.pluginBrowser).toBeDefined();
+            expect(runtime.activatedPluginIds.has(pluginId)).toBe(false);
+            expect(runtime.activatedPluginIds.has(failedPluginId)).toBe(false);
+            expect(runtime.scmBackendsById?.size).toBe(0);
+            expect(runtime.scmHostingProvidersById.size).toBe(0);
+
+            const registry = await resolveDefaultScmBackendRegistry({ pluginRuntimeRegistry: runtime });
+            const status = (backendId: string) => runScmRoute({
+                request: { cwd: fixture.happyHomeDir, backendPreference: { kind: 'prefer', backendId } },
+                workingDirectory: fixture.happyHomeDir,
+                registry,
+                onNonRepository: () => ({ success: false }),
+                runWithBackend: async ({ context, selection }) => {
+                    if (!selection.backend.statusSnapshot) throw new Error('Expected the authored status operation');
+                    retained.invokeStatus = () => selection.backend.statusSnapshot!({ context, request: { cwd: fixture.happyHomeDir } });
+                    return await retained.invokeStatus();
+                },
+            });
+            await expect(status(`${pluginId}/stacked`)).resolves.toMatchObject({ success: true, branch: 'authored/main' });
+            expect(runtime.activatedPluginIds.has(pluginId)).toBe(true);
+            const hosting = createHostScmHostingProviderRuntimeServices({
+                contributes: runtime.contributes, scmHostingProvidersById: runtime.scmHostingProvidersById,
+                envAllowedNamesByPluginId: runtime.envAllowedNamesByPluginId, managedDependencies: runtime.managedDependencies,
+            });
+            const hostingRegistry = await hosting.resolveScmHostingProviderRegistry?.();
+            expect(hostingRegistry?.detectRemote({ remoteName: 'origin', remoteUrl: 'https://forge.example/acme/repo' }))
+                .toMatchObject({ kind: 'resolved', providerId: `${pluginId}/forge` });
+
+            await expect(status(`${failedPluginId}/broken`)).resolves.toMatchObject({ success: false, errorCode: 'BACKEND_UNAVAILABLE' });
+            const diagnostics = runtime.pluginDiagnosticsByPluginId[failedPluginId] ?? [];
+            expect(diagnostics.length).toBeGreaterThan(0);
+            const afterFailure = await describe();
+            expect(afterFailure.projection.familiesById.scmBackends?.entriesById[`${failedPluginId}/broken`])
+                .toMatchObject({ displayName: 'Declared but failed SCM' });
+            expect(afterFailure.projection.diagnostics).toEqual(expect.arrayContaining(diagnostics.map(({ code }) =>
+                expect.objectContaining({ plugin: expect.objectContaining({ id: failedPluginId }),
+                    data: expect.objectContaining({ code }) }))));
+        } finally { await fixture.dispose(); }
+        if (!retained.invokeStatus) throw new Error('Expected a retained native SCM operation');
+        await expect(retained.invokeStatus()).rejects.toThrow(/no longer active/);
+    });
+
     it('measures the real bundled response and keeps Artifact bytes and Action schemas out of describe', async () => {
         const previousHome = process.env.HAPPIER_HOME_DIR;
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'gi-describe-cost-'));
@@ -126,9 +228,7 @@ describe('bundled daemon contribution describe cost', () => {
             const equivalentFullBuildReads = installedPackageReads;
             const equivalentFullResponses = new Set([fullResponse, fullAgain, equivalentHostResponse]).size;
             expect.soft(equivalentFullBuildReads).toBe(1);
-            // Full SCM demand activates runtime leaves and changes their applied
-            // authorization facts. Compare projections of that same live state;
-            // admission-only demand must not activate unrelated SCM leaves.
+            // Full discovery and admission-only reads share the same cold declarations.
             const admissionResponse = await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'connectedAccountAdmission',
             });
@@ -145,9 +245,7 @@ describe('bundled daemon contribution describe cost', () => {
             expect(settings.projection.settingsById).toEqual(full.projection.settingsById);
             expect(admission.projection.installedPackagesById).toEqual(full.projection.installedPackagesById);
             expect(admission.projection.actionsById).toEqual(full.projection.actionsById);
-            // Purpose setup/readiness consumes declared services and availability,
-            // not the applied-generation witness. Full SCM activation must not
-            // change any of those actual admission decisions.
+            // Purpose setup/readiness consumes declared services and availability.
             let comparedPurposes = 0;
             for (const action of Object.values(initialAdmission.projection.actionsById)) {
                 for (const declaration of action.connectedAccountPurposes ?? []) {
@@ -165,9 +263,7 @@ describe('bundled daemon contribution describe cost', () => {
                 connectedAccounts: full.projection.familiesById.connectedAccounts,
                 machineProvisioners: full.projection.familiesById.machineProvisioners,
             });
-            // Independently build the other report only after checking that
-            // the pre-full admission cache refreshed to the new live state.
-            // This also prevents a cache hit hiding a new report dependency.
+            // A fresh build must agree with the retained descriptive response.
             invalidateDaemonContributionRegistryProjectionCache();
             expect(await handler({ machineId: 'test-machine', locale: 'fr-FR',
                 reactNativeHostRuntimeIdentity: { platform: 'ios', channel: 'internal', appVersion: '99.0.0' },
@@ -190,6 +286,30 @@ describe('bundled daemon contribution describe cost', () => {
             expect(byteSize(settings)).toBeLessThan(byteSize(full));
             expect(byteSize(admission)).toBeLessThan(byteSize(full));
             expect(await handler({ machineId: 'test-machine', locale: 'fr-FR' })).toEqual(full);
+            const coldWindows = [];
+            for (let repeat = 0; repeat < 5; repeat += 1) {
+                invalidateDaemonContributionRegistryProjectionCache();
+                const before = installedPackageReads;
+                const catalog = blockNextCatalogRead();
+                const started = performance.now();
+                const concurrent = Array.from({ length: 4 }, () => handler({ machineId: 'test-machine', locale: 'fr-FR' }));
+                try {
+                    await catalog.entered;
+                    await new Promise(resolve => setImmediate(resolve));
+                } finally {
+                    catalog.release();
+                }
+                const responses = await Promise.all(concurrent);
+                const coldMs = performance.now() - started;
+                const coldBuilds = installedPackageReads - before;
+                const warmStarted = performance.now();
+                const warm = await handler({ machineId: 'test-machine', locale: 'fr-FR' });
+                coldWindows.push({ callers: concurrent.length, coldBuilds, warmBuilds: installedPackageReads - before - coldBuilds,
+                    responseIdentities: new Set(responses).size, coldMs, warmMs: performance.now() - warmStarted });
+                expect(coldBuilds).toBe(1);
+                expect(installedPackageReads - before).toBe(1);
+                for (const response of responses) expect(response).toBe(warm);
+            }
             // The catalog is a filesystem boundary. A slower earlier request
             // must use the authority observed after preparation, not republish
             // the origin retired while it waited. Exercise both selected and
