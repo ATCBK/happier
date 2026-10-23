@@ -484,6 +484,9 @@ function extractNestedReferences(family: string, value: Readonly<Record<string, 
   if (family === 'ui.views') {
     const headerActions = Array.isArray(value.headerActions) ? value.headerActions : [];
     return [
+      ...(value.container === 'rightSidebarTab' && value.countResourceId !== undefined ? [{
+        targetFamily: 'resources', reference: value.countResourceId, path: ['countResourceId'],
+      }] : []),
       ...(value.container === 'widget' && Array.isArray(value.resources) ? value.resources.map((reference, index) => ({
         targetFamily: 'resources', allowQualifiedCrossPlugin: false, allowQualifiedSamePlugin: true, reference, path: ['resources', index],
       })) : []),

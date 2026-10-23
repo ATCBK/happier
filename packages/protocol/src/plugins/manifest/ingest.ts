@@ -917,6 +917,23 @@ function readComposerControlStateResourceDiagnostics(
   return diagnostics;
 }
 
+function readRightSidebarCountResourceDiagnostics(manifest: ParsedPluginManifestV2): PluginManifestIngestionDiagnostic[] {
+  const resourcesById = new Map(manifest.contributes.resources.map(resource => [resource.id, resource]));
+  const diagnostics: PluginManifestIngestionDiagnostic[] = [];
+  manifest.contributes.ui.views.forEach((view, index) => {
+    if (view.container !== 'rightSidebarTab' || view.countResourceId === undefined) return;
+    const resource = resourcesById.get(view.countResourceId);
+    // The catalog owns dangling and wrong-family reference diagnostics.
+    if (!resource) return;
+    if (!isDynamicPluginResourceContributionV2(resource) || resource.contentType !== 'application/json'
+      || resource.scope === 'session' && view.target.kind !== 'session') {
+      diagnostics.push({ code: 'plugin_manifest_invalid', path: ['contributes', 'ui', 'views', index, 'countResourceId'],
+        message: `Right-sidebar count '${view.countResourceId}' must reference a dynamic JSON Resource with a compatible target scope.` });
+    }
+  });
+  return diagnostics;
+}
+
 /**
  * A brand icon is intentionally narrower than an arbitrary Resource consumer:
  * it is a same-plugin, packaged PNG asset. Byte existence, decoding, and
@@ -1058,6 +1075,7 @@ export function ingestPluginManifestV2(input: unknown): PluginManifestIngestionR
     ...readTranscriptActivityDiagnostics(manifest),
     ...readSessionInfoSectionDiagnostics(manifest),
     ...readComposerControlStateResourceDiagnostics(manifest),
+    ...readRightSidebarCountResourceDiagnostics(manifest),
     ...readBrandIconDiagnostics(manifest),
     ...readVoiceModelPackOriginDiagnostics(manifest),
   ];

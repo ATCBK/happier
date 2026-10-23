@@ -59,6 +59,8 @@ import type {
 } from '@happier-dev/protocol/plugins/ui/client';
 import type {
     PluginUiAppPageColumnV1 as ProtocolPluginUiAppPageColumnV1,
+    PluginRightSidebarDefaultPlacement as ProtocolPluginRightSidebarDefaultPlacement,
+    PluginRightSidebarCountV1 as ProtocolPluginRightSidebarCountV1,
     PluginUiWidgetAreaDeclarationV1 as ProtocolPluginUiWidgetAreaDeclarationV1,
     PluginUiDestinationPlacementV1 as ProtocolPluginUiDestinationPlacementV1,
     PluginUiViewInlineBindingInputV2 as ProtocolPluginUiViewInlineBindingInputV2,
@@ -112,6 +114,8 @@ export type PluginUiSchema<T> = Readonly<{
         | Readonly<{ success: true; data: T }>
         | Readonly<{ success: false; error: unknown }>;
 }>;
+export type PluginRightSidebarDefaultPlacement = ProtocolPluginRightSidebarDefaultPlacement;
+export type PluginRightSidebarCountV1 = ProtocolPluginRightSidebarCountV1;
 
 export type PluginUiJsonValueV1 = JsonValue;
 export type PluginUiJsonObjectV1 = { readonly [key: string]: PluginUiJsonValueV1 };
@@ -756,6 +760,8 @@ export type PluginUiViewDestinationBindingInputV2 =
     | {
         container: 'rightSidebarTab';
         target: { kind: 'app' };
+        defaultPlacement?: PluginRightSidebarDefaultPlacement;
+        countResourceId?: string;
         instancePolicy?: 'singleton';
         headerActions?: [];
         placement?: PluginUiDestinationPlacementV1;
@@ -763,6 +769,8 @@ export type PluginUiViewDestinationBindingInputV2 =
     | {
         container: 'rightSidebarTab';
         target: { kind: 'session'; sessionIdPath?: string } | PluginUiViewTargetV2 & { kind: 'project' };
+        defaultPlacement?: PluginRightSidebarDefaultPlacement;
+        countResourceId?: string;
         instancePolicy?: 'singleton';
         headerActions?: [];
     }

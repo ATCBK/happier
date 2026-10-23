@@ -1,5 +1,8 @@
 import { PLUGIN_UI_ICON_TOKENS_V1 as canonicalPluginUiIconTokensV1 } from '@happier-dev/protocol/plugins/contributions/ui/tokens';
 import { projectProtocolValue } from './protocol/projectProtocolValue.js';
+import { PluginRightSidebarCountV1Schema as canonicalPluginRightSidebarCountV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';
+import type { PluginRightSidebarCountV1, PluginUiSchema as SidebarCountSchema } from './ui/publicContract.js';
+export const PluginRightSidebarCountV1Schema: SidebarCountSchema<PluginRightSidebarCountV1> = /* @__PURE__ */ projectProtocolValue(canonicalPluginRightSidebarCountV1Schema);
 export { PluginUiLaunchInputV1Schema } from './ui/hostApi.js';
 import type {
     PluginSessionHeaderActionDescriptor,
@@ -16,6 +19,8 @@ import type {
 } from './ui/publicContract.js';
 
 export type {
+    PluginRightSidebarDefaultPlacement,
+    PluginRightSidebarCountV1,
     PluginUiWidgetAreaDeclarationV1,
     PluginUiAppPageColumnV1,
     PluginUiDestinationPlacementV1,

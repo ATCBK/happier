@@ -146,6 +146,34 @@ describe('composer reference provider contribution contract', () => {
     }).success).toBe(false);
   });
 
+  it('admits composer placement hints while keeping the executable declaration closed', () => {
+    const declaration = {
+      id: 'issue-control',
+      label: 'Issue',
+      icon: 'error',
+      interaction: { kind: 'action' as const, action: 'refresh-issue' },
+    };
+
+    expect(PluginComposerControlContributionV1Schema.parse(declaration)).toEqual(declaration);
+    for (const defaultPlacement of ['pinned', 'overflow']) {
+      expect(PluginComposerControlContributionV1Schema.parse({
+        ...declaration,
+        defaultPlacement,
+      })).toEqual({ ...declaration, defaultPlacement });
+    }
+    for (const defaultPlacement of ['hidden', 'auto']) {
+      expect(PluginComposerControlContributionV1Schema.safeParse({
+        ...declaration,
+        defaultPlacement,
+      }).success).toBe(false);
+    }
+    expect(PluginComposerControlContributionV1Schema.safeParse({
+      ...declaration,
+      defaultPlacement: 'pinned',
+      pending: true,
+    }).success).toBe(false);
+  });
+
   it('rejects lossy whitespace around declared control-choice identities', () => {
     const declaration = {
       id: 'issue-control',

@@ -305,6 +305,10 @@ function generatedViewDisplay(view: ResolvedUiViewV2Contribution): Readonly<Reco
                 ...(badge.tone === undefined ? {} : { tone: badge.tone }),
             });
     const presentationDefaults = {
+        ...(destinationDefinition?.container === 'rightSidebarTab' && destinationDefinition.defaultPlacement !== undefined
+            ? { defaultPlacement: destinationDefinition.defaultPlacement } : {}),
+        ...(destinationDefinition?.container === 'rightSidebarTab' && destinationDefinition.countResourceId !== undefined
+            ? { countResourceId: destinationDefinition.countResourceId } : {}),
         ...(destinationDefinition?.container === 'appPage' && destinationDefinition.description !== undefined
             ? { description: destinationDefinition.description }
             : {}),

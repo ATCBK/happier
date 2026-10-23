@@ -1413,6 +1413,7 @@ describe('definePlugin', () => {
                     'issue-control': defineComposerControl({
                         label: 'Issue',
                         icon: 'error',
+                        defaultPlacement: 'pinned',
                         scopes: ['workflowAuthoring', 'discussion'],
                         interaction: {
                             kind: 'attachmentPicker',
@@ -1500,6 +1501,7 @@ describe('definePlugin', () => {
             id: 'issue-control',
             label: 'Issue',
             icon: 'error',
+            defaultPlacement: 'pinned',
             scopes: ['workflowAuthoring', 'discussion'],
             interaction: {
                 kind: 'attachmentPicker',
@@ -1534,6 +1536,8 @@ describe('definePlugin', () => {
         expect(emitted.contributes.composerAttachments).toEqual(plugin.manifest.contributes.composerAttachments);
         expect(emitted.contributes.composerControls).toEqual(plugin.manifest.contributes.composerControls);
         expect(emitted.contributes.composerRegions).toEqual(plugin.manifest.contributes.composerRegions);
+        expect(PluginManifestV2Schema.parse(emitted).contributes.composerControls)
+            .toEqual(plugin.manifest.contributes.composerControls);
 
         const scope = createPluginRegistrationScope({
             pluginId: plugin.manifest.id,

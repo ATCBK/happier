@@ -11,6 +11,7 @@ export * from './declarativeProjectedModelV1.js';
 export * from './declarativeModel.js';
 export * from './settingsDescriptors.js';
 export * from './declarationProjection.js';
+export * from './defaultPlacement.js';
 export * from './hostedWeb.js';
 export * from './hostedHtmlSourceV1.js';
 export * from './hostedHtmlCapabilitiesV1.js';
@@ -41,9 +42,12 @@ export type {
 } from './v2.js';
 export {
   PluginUiAppPageColumnV1Schema,
+  PluginRightSidebarDefaultPlacementSchema,
+  PluginRightSidebarCountV1Schema,
   PluginUiDestinationPlacementV1Schema,
   PluginUiWidgetHomeV1Schema,
 } from './v2.js';
+export type { PluginRightSidebarDefaultPlacement, PluginRightSidebarCountV1 } from './v2.js';
 export { selectPluginUiWidgetEntriesV1 } from './widgetInventory.js';
 export {
   PLUGIN_TRANSCRIPT_PRESENTATION_NODE_V1_KINDS,

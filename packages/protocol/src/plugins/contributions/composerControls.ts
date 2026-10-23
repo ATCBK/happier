@@ -14,6 +14,7 @@ import {
   ComposerScopeKindV1Schema,
 } from '../ui/composer.js';
 import { PluginUiRendererChainBindingV1Schema } from './ui/rendererChainBinding.js';
+import { PluginDefaultPlacementSchema } from './ui/defaultPlacement.js';
 import { PluginUiIconTokenV1Schema } from './ui/tokens.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
@@ -106,6 +107,7 @@ export const PluginComposerControlContributionV1Schema = lazyZodSchema(() => z.s
   icon: PluginUiIconTokenV1Schema,
   scopes: z.optional(z.array(ComposerScopeKindV1Schema).check(z.minLength(1))),
   order: z.optional(z.number()),
+  defaultPlacement: z.optional(PluginDefaultPlacementSchema),
   labelPolicy: z.optional(z.enum(['always', 'auto-hide'])),
   state: z.optional(ComposerControlStateBindingV1Schema),
   interaction: ComposerControlInteractionV1Schema,

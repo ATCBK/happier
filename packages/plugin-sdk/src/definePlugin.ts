@@ -1,6 +1,7 @@
 import { COMPOSER_ATTACHMENT_RUNTIME_REGISTRATION_FIELDS_V1 } from '@happier-dev/protocol/plugins/contributions/composer-attachments';
 import { declaresHostSynthesizedAgentResumeOnlyExternalSources, findAgentResumeOnlyExternalSourceContractIssue } from '@happier-dev/protocol/plugins/contributions/agent-resume-only-sources';
 import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import type { PluginDefaultPlacement } from '@happier-dev/protocol/plugins/contributions/ui';
 
 import type { ActionContract, ActionHandler, PluginAccountActionHandler } from './actions/contracts.js';
 import {
@@ -612,6 +613,7 @@ export interface PluginComposerControlDefinition {
     readonly icon: PluginUiIconTokenV1;
     readonly scopes?: readonly ProtocolComposerRefV1['kind'][];
     readonly order?: number;
+    readonly defaultPlacement?: PluginDefaultPlacement;
     readonly labelPolicy?: 'always' | 'auto-hide';
     readonly state?: Readonly<{ resource: string }>;
     readonly interaction: ComposerControlAuthorInteraction;

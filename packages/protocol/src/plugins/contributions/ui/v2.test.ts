@@ -15,6 +15,7 @@ import {
   PluginUiRendererV2Schema,
   PluginUiViewV2Schema,
 } from './v2.js';
+import * as uiContracts from './v2.js';
 import { PluginUiIconTokenV1Schema } from './tokens.js';
 import {
   MAX_PLUGIN_DECLARATIVE_DOCUMENT_DEPTH_V1,
@@ -33,6 +34,38 @@ import { PluginJsonSchemaV2Schema } from '../publicTypes.js';
  * from drifting into a general data-binding surface.
  */
 describe('declarative node vocabulary v2', () => {
+  it('validates the closed sidebar count payload without treating unknown as empty', () => {
+    expect(uiContracts).toHaveProperty('PluginRightSidebarCountV1Schema');
+    const schema = Reflect.get(uiContracts, 'PluginRightSidebarCountV1Schema') as { safeParse(value: unknown): {success: boolean} };
+    for (const count of [null, 0, 1, Number.MAX_SAFE_INTEGER]) expect(schema.safeParse({ count }).success).toBe(true);
+    for (const payload of [{}, { count: -1 }, { count: 0.5 }, { count: Infinity }, { count: NaN },
+      { count: Number.MAX_SAFE_INTEGER + 1 }, { count: '3' }, { count: 1, label: 'stale' }]) {
+      expect(schema.safeParse(payload).success).toBe(false);
+    }
+  });
+  it('admits sidebar-only placement and live count references through parser, author schema and display projection', () => {
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    for (const kind of ['session', 'project', 'app']) {
+      const view = { id: 'issues', renderer: 'native', container: 'rightSidebarTab', target: { kind }, defaultPlacement: 'auto', countResourceId: 'issues-count' };
+      expect(PluginUiViewV2Schema.safeParse(view).success).toBe(true);
+      expect(validate(view)).toBe(true);
+      const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
+        schemaVersion: 2, id: 'acme.counted-tabs', version: '1.0.0', displayName: 'Counted tabs', runtime: { apiVersion: 1 },
+        contributes: { ui: { views: [view], renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Issues' } }] } },
+      }));
+      expect(projected['surfacePlacement:acme.counted-tabs:issues']).toHaveProperty('display.defaultPlacement', 'auto');
+      expect(projected['surfacePlacement:acme.counted-tabs:issues']).toHaveProperty('display.countResourceId', 'issues-count');
+    }
+    for (const view of [
+      { container: 'rightPane', target: { kind: 'session' }, defaultPlacement: 'auto' },
+      { container: 'appPage', target: { kind: 'app' }, countResourceId: 'issues-count' },
+      { container: 'rightSidebarTab', target: { kind: 'session' }, defaultPlacement: 'hidden' },
+    ]) {
+      const candidate = { id: 'issues', renderer: 'native', ...view };
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(false);
+      expect(validate(candidate)).toBe(false);
+    }
+  });
   it('retains a standalone targeted renderer through the portable declaration projection', () => {
     const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
       schemaVersion: 2, id: 'acme.targeted-detail', version: '1.0.0', displayName: 'Targeted detail',

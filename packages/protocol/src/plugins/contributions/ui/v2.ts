@@ -1,6 +1,7 @@
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { PluginDefaultPlacementSchema } from './defaultPlacement.js';
 import { PluginUiWidgetAreaDeclarationsV1Schema, type PluginUiWidgetAreaDeclarationV1 } from './widgetAreas.js';
 export { PluginUiWidgetAreaDeclarationV1Schema, PluginUiWidgetAreaDeclarationsV1Schema } from './widgetAreas.js';
 export type { PluginUiWidgetAreaDeclarationV1 } from './widgetAreas.js';
@@ -415,6 +416,16 @@ export const PluginUiDestinationPlacementV1Schema = lazyZodSchema(() => z.discri
 ]));
 export type PluginUiDestinationPlacementV1 = z.infer<typeof PluginUiDestinationPlacementV1Schema>;
 
+/** Automatic content placement belongs only to right-sidebar tabs. */
+export const PluginRightSidebarDefaultPlacementSchema = lazyZodSchema(() => z.union([PluginDefaultPlacementSchema, z.literal('auto')]));
+export type PluginRightSidebarDefaultPlacement = z.infer<typeof PluginRightSidebarDefaultPlacementSchema>;
+
+/** Null is unknown; zero is known empty. Count Resources never supply presentation text. */
+export const PluginRightSidebarCountV1Schema = lazyZodSchema(() => z.strictObject({
+  count: z.nullable(z.number().check(z.int(), z.nonnegative())),
+}));
+export type PluginRightSidebarCountV1 = Readonly<z.infer<typeof PluginRightSidebarCountV1Schema>>;
+
 export const PluginUiAppPageColumnV1Schema = lazyZodSchema(() => z.strictObject({
   renderer: asProtocolZod(PluginContributionLocalIdSchema),
 }));
@@ -496,6 +507,10 @@ function createPluginUiViewBindingSchemaV2() {
       ...(slot.container === 'appPage'
         ? { description: zMini.optional(PluginLocalizedStringV2Schema), headerStyle: z.optional(PluginUiAppPageHeaderStyleV1Schema), column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
         : {}),
+      ...(slot.container === 'rightSidebarTab' ? {
+        defaultPlacement: z.optional(PluginRightSidebarDefaultPlacementSchema),
+        countResourceId: z.optional(asProtocolZod(PluginContributionLocalIdSchema)),
+      } : {}),
       container: z.literal(slot.container),
       target: PluginUiViewTargetSchemaByKindV1[slot.targetKind],
     }));
@@ -601,6 +616,8 @@ export type PluginUiViewDestinationBindingInputV2 = {
     container: TSlot['container'];
     target: z.input<typeof PluginUiViewTargetSchemaByKindV1[TSlot['targetKind']]>;
     instancePolicy?: TSlot['instancePolicies'][number];
+    defaultPlacement?: TSlot['container'] extends 'rightSidebarTab' ? PluginRightSidebarDefaultPlacement : never;
+    countResourceId?: TSlot['container'] extends 'rightSidebarTab' ? string : never;
     headerActions?: TSlot['container'] extends 'appPage'
       ? PluginUiPageHeaderActionV1Input[]
       : [];
@@ -650,6 +667,8 @@ export type PluginUiViewDestinationBindingV2 = z.output<typeof PluginUiViewV2Sch
     container: TSlot['container'];
     target: z.output<typeof PluginUiViewTargetSchemaByKindV1[TSlot['targetKind']]>;
     instancePolicy: TSlot['instancePolicies'][number];
+    defaultPlacement?: TSlot['container'] extends 'rightSidebarTab' ? PluginRightSidebarDefaultPlacement : never;
+    countResourceId?: TSlot['container'] extends 'rightSidebarTab' ? string : never;
     headerActions: TSlot['container'] extends 'appPage'
       ? PluginUiPageHeaderActionV1[]
       : [];

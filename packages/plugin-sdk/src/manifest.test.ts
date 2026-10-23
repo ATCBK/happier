@@ -29,6 +29,19 @@ type ProviderContributionV1 = never; /* @sdk-negative-type-case-end */
 type VoiceModelPackContributionV1 = never; /* @sdk-negative-type-case-end */
 
 describe('manifest authoring contract', () => {
+    it('lets an external author bind an automatic sidebar tab to its declared live JSON count', () => {
+        const plugin = sdk.definePlugin({
+            id: 'acme.counted-sidebar', version: '1.0.0',
+            resources: { 'issues-count': { source: 'dynamic', kind: 'config', scope: 'session', contentType: 'application/json' } },
+            ui: { views: [{ id: 'issues', renderer: 'native', container: 'rightSidebarTab', target: { kind: 'session' },
+                defaultPlacement: 'auto', countResourceId: 'issues-count' }],
+                renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Issues' } }] },
+        });
+        const parsed = manifestSdk.parsePluginManifest(plugin.manifest);
+        expect(parsed).toMatchObject({ ok: true, manifest: { contributes: { ui: { views: [
+            expect.objectContaining({ defaultPlacement: 'auto', countResourceId: 'issues-count' }),
+        ] } } } });
+    });
     it('reports rejected view fields through the public definePlugin manifest parser', () => {
         const plugin = sdk.definePlugin({
             id: 'acme.manifest-diagnostics',
