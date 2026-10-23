@@ -89,9 +89,7 @@ describe('original external Session Action currentness composition', () => {
         const selfArchive = 'selfArchive' in scenario && scenario.selfArchive;
         const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(17) };
         const contentKey = nacl.box.keyPair.fromSecretKey(material.machineKey).publicKey;
-        const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(
-            selfArchive ? 29 : memoryExposure ? accountMode === 'plain' ? 27 : 28
-                : accountMode === 'plain' ? 23 : kind === 'terminal' ? 22 : runConsent === 'ask' ? 20 : 18));
+        const signing = nacl.sign.keyPair();
         const account = await db.account.create({ data: {
             encryptionMode: accountMode, publicKey: Buffer.from(signing.publicKey).toString('hex'),
             contentPublicKey: contentKey, contentPublicKeySig: signAccountContentKeyBindingV1({
@@ -171,6 +169,15 @@ describe('original external Session Action currentness composition', () => {
         artifactsRoutes(app);
         registerStoredContentPublicShareRoutes(app);
         const io = new Server(app.server, { path: '/v1/updates', transports: ['websocket'] });
+        // Admit real credential facts at the socket transport boundary, as startSocket does.
+        io.use(async (socket, next) => {
+            const verified = await auth.verifyTokenForRoute(socket.handshake.auth.token);
+            if (!verified || verified.userId !== account.id) return next(new Error('invalid_token'));
+            socket.data.authTokenKind = verified.authTokenKind;
+            socket.data.authAuthority = verified.authority;
+            socket.data.authTokenAuthenticationEvidence = verified.authenticationEvidence;
+            next();
+        });
         const presence = createSessionPublisherPresence();
         let receivingSocket: import('socket.io').Socket | undefined;
         let publisherSocket: import('socket.io').Socket | undefined;
@@ -204,9 +211,10 @@ describe('original external Session Action currentness composition', () => {
             resolveCurrentSessionMachineFromServer({ io, presence, ...input }));
         registerExternalActionRoutes(app, { dispatch: createExternalActionDaemonDispatcher({ io, sessionPublisherPresence: presence }) });
         const serverHttpBaseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
-        const daemon = ioClient(serverHttpBaseUrl, { path: '/v1/updates', transports: ['websocket'], autoConnect: false, reconnection: false });
+        const daemon = ioClient(serverHttpBaseUrl, { path: '/v1/updates', transports: ['websocket'], autoConnect: false,
+            reconnection: false, auth: { token: daemonToken } });
         const publisher = ioClient(serverHttpBaseUrl, { path: '/v1/updates', transports: ['websocket'], autoConnect: false,
-            reconnection: false, auth: { role: 'session' } });
+            reconnection: false, auth: { role: 'session', token: daemonToken } });
         const executorParams = { credentials, readCredentials: async () => credentials,
             serverId: 'qa8-profile', serverApiUrl: serverHttpBaseUrl, serverIdentityId: homeId, machineId,
             externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: installationId,
@@ -618,11 +626,19 @@ describe('original external Session Action currentness composition', () => {
                 const rawTokenEffect = await app.inject({ method: 'POST', url: `/v3/automations/${automationIds[0]}/run-now`,
                     headers: { authorization: `Bearer ${pat.token}` } });
                 expect(rawTokenEffect.statusCode).toBe(403);
+                // Ordinary PATs retain Home-readable V1 transport even for E2EE Accounts.
+                // Account credentials above still require V2, and direct PAT effects remain forbidden.
+                const plainRequestId = randomUUID();
+                const plainRunEffectsBefore = runEffects.length;
                 const plainTokenRequest = await app.inject({ method: 'POST', url: '/v1/actions/workflow.trigger.run_now',
-                    headers: { authorization: `Bearer ${pat.token}` }, payload: { v: 1, requestId: randomUUID(),
+                    headers: { authorization: `Bearer ${pat.token}` }, payload: { v: 1, requestId: plainRequestId,
                         target: { kind: 'machine', machineId }, input: { automationId: automationIds[0] } } });
-                expect(plainTokenRequest.statusCode).toBe(400);
-                expect(plainTokenRequest.json()).toMatchObject({ code: 'invalid_envelope' });
+                expect(plainTokenRequest.statusCode, plainTokenRequest.body).toBe(200);
+                const plainExecution = await approveRun({ response: plainTokenRequest, requestId: plainRequestId,
+                    runEffectsBefore: plainRunEffectsBefore,
+                    execution: ExternalActionResponseEnvelopeV1Schema.parse(plainTokenRequest.json()).execution });
+                expect(plainExecution).toMatchObject({ ok: true, result: { run: { automationId: automationIds[0], state: 'queued' } } });
+                expect(runReceipt(plainExecution).run.id).not.toBe(runReceipt(originalExecution).run.id);
                 const appManualRun = () => app.inject({ method: 'POST', url: `/v3/automations/${automationIds[0]}/run-now`,
                     headers: { authorization: `Bearer ${token}`, 'idempotency-key': 'qa-app-key' } });
                 const appOccurrence = await appManualRun();
@@ -631,7 +647,7 @@ describe('original external Session Action currentness composition', () => {
                 await auth.revokeApiToken({ accountId: account.id, tokenId: pat.tokenId });
                 expect((await signedRun(automationIds[0]!)).statusCode).toBe(401);
                 expect((await invoke(automationIds[0])).response.statusCode).toBe(401);
-                expect(await db.automationRun.count({ where: { automationId: { in: automationIds } } })).toBe(5);
+                expect(await db.automationRun.count({ where: { automationId: { in: automationIds } } })).toBe(6);
             }
             await db.account.update({ where: { id: account.id }, data: { tokenEpoch: { increment: 1 } } });
             if (runConsent === 'waived') {

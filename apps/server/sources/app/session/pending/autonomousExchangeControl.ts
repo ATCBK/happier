@@ -54,24 +54,18 @@ export async function controlAutonomousExchange(params: Readonly<{
     request: AutonomousExchangeControlRequestV1;
 }>): Promise<ExchangeResult> {
     const outcome = await inTx(async tx => {
-        const row = await tx.sessionMessage.findUnique({
+        const readRoot = () => tx.sessionMessage.findUnique({
             where: { sessionId_localId: { sessionId: params.sessionId, localId: params.originInputLocalId } },
             select: { id: true, rowRevision: true, autonomousExchangeState: true, inputAdmissionReceipt: true,
                 autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true,
                 session: { select: { accountId: true, archivedAt: true } } },
         });
-        if (!row) return { result: { ok: false, error: 'not-found' } as const, publications: [] };
-        if (row.session.accountId !== params.actorUserId || row.session.archivedAt !== null)
+        // Refuse an unrelated caller before discovering or locking dependents.
+        // This fast rejection does not replace admission under the held locks.
+        const discoveredRoot = await readRoot();
+        if (!discoveredRoot) return { result: { ok: false, error: 'not-found' } as const, publications: [] };
+        if (discoveredRoot.session.accountId !== params.actorUserId || discoveredRoot.session.archivedAt !== null)
             return { result: { ok: false, error: 'forbidden' } as const, publications: [] };
-        const state = createStoredReadSchema(AutonomousExchangeStateV1Schema).safeParse(row.autonomousExchangeState);
-        if (!isAutonomousExchangeRootReceiptForAccount(row.inputAdmissionReceipt, params.actorUserId, params.sessionId)
-            || !state.success || row.autonomousExchangeRootSessionId !== null
-                && (row.autonomousExchangeRootSessionId !== params.sessionId || row.autonomousExchangeRootLocalId !== params.originInputLocalId)
-            || revision(row.rowRevision) !== params.request.observedRevision
-            || state.data.stopped || params.request.control !== 'stop'
-                && readAutonomousExchangeAdmissionV1(state.data) !== 'check_in') {
-            return { result: { ok: false, error: 'conflict' } as const, publications: [] };
-        }
         const readUnstarted = () => tx.sessionPendingMessage.findMany({
             where: { autonomousExchangeRootSessionId: params.sessionId,
                 autonomousExchangeRootLocalId: params.originInputLocalId,
@@ -87,6 +81,21 @@ export async function controlAutonomousExchange(params: Readonly<{
         // Root and dependent children share one resource-first admission, even
         // when the dependent input has no current Follow edge to its root.
         await acquireSessionAccountCursorLocksInTx(tx, sessionIds, [params.actorUserId]);
+        // Discovery confers no control authority. Admit the root's lifecycle,
+        // receipt and revision after the complete Session set is held.
+        const row = await readRoot();
+        if (!row) return { result: { ok: false, error: 'not-found' } as const, publications: [] };
+        if (row.session.accountId !== params.actorUserId || row.session.archivedAt !== null)
+            return { result: { ok: false, error: 'forbidden' } as const, publications: [] };
+        const state = createStoredReadSchema(AutonomousExchangeStateV1Schema).safeParse(row.autonomousExchangeState);
+        if (!isAutonomousExchangeRootReceiptForAccount(row.inputAdmissionReceipt, params.actorUserId, params.sessionId)
+            || !state.success || row.autonomousExchangeRootSessionId !== null
+                && (row.autonomousExchangeRootSessionId !== params.sessionId || row.autonomousExchangeRootLocalId !== params.originInputLocalId)
+            || revision(row.rowRevision) !== params.request.observedRevision
+            || state.data.stopped || params.request.control !== 'stop'
+                && readAutonomousExchangeAdmissionV1(state.data) !== 'check_in') {
+            return { result: { ok: false, error: 'conflict' } as const, publications: [] };
+        }
         const unstarted = await readUnstarted();
         const admittedSessions = new Set(sessionIds);
         if (unstarted.some(pending => !admittedSessions.has(pending.sessionId))) {
@@ -142,7 +151,7 @@ export async function controlAutonomousExchange(params: Readonly<{
                 recipientCursors: resolveSessionAccountChangePublications(publication.recipientCursors),
             })),
         }));
-    }, { isolationLevel: 'Serializable' });
+    }, { isolationLevel: 'ReadCommitted' });
     for (const publication of outcome.publications) {
         await emitPendingChanged({ sessionId: publication.sessionId, changedByAccountId: params.actorUserId,
             pendingCount: publication.pendingCount, pendingBlockedCount: publication.pendingBlockedCount,

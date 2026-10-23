@@ -27,9 +27,10 @@ import {
     type EffectiveSessionAccess,
 } from "@/app/session/access/sessionAccess";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type ResolvedTransactionResult, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { isPrismaErrorCode } from "@/storage/prisma";
 import { error as logError } from "@/utils/logging/log";
@@ -480,6 +481,17 @@ async function ensureSessionRecordAccess(params: Readonly<{ actorUserId: string;
         return { ok: false, error: "session-not-found" };
     }
     return { ok: true, access };
+}
+
+/** Standalone mutations admit the same Session owner used by composed writers. */
+async function inSessionSystemRecordMutation<T>(
+    params: Readonly<{ actorUserId: string; sessionId: string }>,
+    mutate: (tx: Tx) => Promise<T>,
+): Promise<ResolvedTransactionResult<T>> {
+    return await inTx(async tx => {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
+        return await mutate(tx);
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 function canMutateHostSystemRecord(params: Readonly<{
@@ -948,6 +960,20 @@ async function ensureV1RecordAccess(
     return reader ? await readAdmission(reader) : await inTx(readAdmission);
 }
 
+async function ensureV1RecordWriteAccessInTx(tx: Tx, params: SessionSystemRecordV1BaseParams & Readonly<{
+    address: SessionSystemRecordAddress;
+    content: SessionSystemRecordContent;
+}>) {
+    const access = await ensureV1RecordAccess(params, { ...params.address, operation: "write" }, tx);
+    if (!access.ok) return access;
+    const storage = buildStorageModeRejection({
+        storagePolicy: readEncryptionFeatureEnv(process.env).storagePolicy,
+        sessionEncryptionMode: access.sessionEncryptionMode,
+        content: params.content,
+    });
+    return storage.ok ? access : { ok: false as const, code: "plugin_session_record_invalid_query" as const };
+}
+
 type FoundV1Record = Readonly<{
     expected: PersistedSessionSystemRecordAddress;
     keys: ReturnType<typeof deriveSessionSystemRecordAddressKeys>;
@@ -988,7 +1014,7 @@ async function refetchV1RecordAfterMutation(
     currentAccess: CurrentSessionRecordAccess,
 ): Promise<FoundV1Record | SessionSystemRecordV1Failure> {
     try {
-        return reportSystemRecordResult("v1-refetch", await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-refetch", await inReadSnapshot(async (tx) => {
             const found = await findV1RecordByAddress(tx, { ...params, accountId, requiredAccess: currentAccess });
             if (!found) return { ok: false, code: "plugin_session_record_invalid_query" as const };
             if (!await hasCurrentSessionRecordAccessInTx(tx, {
@@ -1000,7 +1026,7 @@ async function refetchV1RecordAfterMutation(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return found;
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+        }));
     } catch (error) {
         reportSystemRecordFailure("v1-refetch", error);
         return { ok: false, code: "plugin_session_record_internal" };
@@ -1244,24 +1270,21 @@ async function settleV1UnconditionalCreateRace(
         address: SessionSystemRecordAddress;
         content: SessionSystemRecordContent;
     }>,
-    accountId: string,
-    currentAccess: CurrentSessionRecordAccess,
 ): Promise<SessionSystemRecordV1Result<{ record: SessionSystemRecordStored }>> {
-    const raced = await refetchV1RecordAfterMutation(params, accountId, currentAccess);
-    if (isV1RecordRefetchFailure(raced)) return raced;
-    const currentRow = raced.row;
-    if (!currentRow) return reportSystemRecordResult("v1-upsert-settlement", { ok: false, code: "plugin_session_record_internal" });
-    const current = storedV1Record(currentRow, raced.expected);
-    if (!current.ok) return reportSystemRecordResult("v1-upsert-settlement", current);
-    if (currentRow.kind !== params.address.kind) {
-        return { ok: false, code: "plugin_session_record_kind_conflict" };
-    }
-    if (isDeepStrictEqual(currentRow.content, params.content)) return current;
-    if (currentRow.version >= SESSION_SYSTEM_RECORD_VERSION_MAX) {
-        return { ok: false, code: "plugin_session_record_revision_exhausted" };
-    }
     try {
-        return reportSystemRecordResult("v1-upsert-settlement", await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-upsert-settlement", await inSessionSystemRecordMutation(params, async (tx) => {
+            const access = await ensureV1RecordWriteAccessInTx(tx, params);
+            if (!access.ok) return access;
+            const { accountId, currentAccess } = access;
+            const raced = await findV1RecordByAddress(tx, { ...params, accountId, requiredAccess: currentAccess });
+            if (!raced) return { ok: false, code: "plugin_session_record_invalid_query" as const };
+            const currentRow = raced.row;
+            if (!currentRow) return { ok: false, code: "plugin_session_record_internal" as const };
+            const current = storedV1Record(currentRow, raced.expected);
+            if (!current.ok) return current;
+            if (currentRow.kind !== params.address.kind) return { ok: false, code: "plugin_session_record_kind_conflict" as const };
+            if (isDeepStrictEqual(currentRow.content, params.content)) return current;
+            if (currentRow.version >= SESSION_SYSTEM_RECORD_VERSION_MAX) return { ok: false, code: "plugin_session_record_revision_exhausted" as const };
             const updated = await tx.sessionSystemRecord.updateMany({
                 where: {
                     accountId,
@@ -1305,7 +1328,7 @@ async function settleV1UnconditionalCreateRace(
             return next
                 ? storedV1Record(next, raced.expected)
                 : { ok: false, code: "plugin_session_record_internal" as const };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+        }));
     } catch (error) {
         reportSystemRecordFailure("v1-upsert-settlement", error);
         return { ok: false, code: "plugin_session_record_internal" };
@@ -1351,7 +1374,16 @@ async function upsertSessionSystemRecordV1InTx(
         if (current.kind !== params.address.kind) {
             return { ok: false, code: "plugin_session_record_kind_conflict" as const };
         }
-        const sameEnvelope = isDeepStrictEqual(projected.record.content, params.content);
+        let sameEnvelope = isDeepStrictEqual(projected.record.content, params.content);
+        if (params.address.owner === "host" && projected.record.content.t === "plain" && params.content.t === "plain") {
+            // Stored payload projection may supply canonical defaults. Compare
+            // both sides through that same codec, without changing write bytes.
+            const codec = getSessionSystemRecordStoredPayloadSchema(params.address.namespace, params.address.kind);
+            const currentPayload = codec?.safeParse(projected.record.content.v);
+            const requestedPayload = codec?.safeParse(params.content.v);
+            sameEnvelope = currentPayload?.success === true && requestedPayload?.success === true
+                && isDeepStrictEqual(currentPayload.data, requestedPayload.data);
+        }
         const expected = params.expectedRevision === undefined || params.expectedRevision === null
             ? null
             : parseSessionSystemRecordRevision(params.expectedRevision);
@@ -1478,7 +1510,10 @@ async function upsertSessionSystemRecordV1Attempt(
 
     let outcome: SessionSystemRecordV1Result<{ record: SessionSystemRecordStored }> | V1UpsertMutationRace;
     try {
-        outcome = await inTx((tx) => upsertSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
+        outcome = await inSessionSystemRecordMutation(params, async tx => {
+            const admitted = await ensureV1RecordWriteAccessInTx(tx, params);
+            return admitted.ok ? await upsertSessionSystemRecordV1InTx(tx, params, admitted) : admitted;
+        });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) {
             reportSystemRecordFailure("v1-upsert", error);
@@ -1487,7 +1522,7 @@ async function upsertSessionSystemRecordV1Attempt(
         if (params.expectedRevision === undefined) {
             return retryUnconditionalSettlement
                 ? await upsertSessionSystemRecordV1Attempt(params, false)
-                : await settleV1UnconditionalCreateRace(params, access.accountId, access.currentAccess);
+                : await settleV1UnconditionalCreateRace(params);
         }
         return await settleV1CreateRace(params, access.accountId, access.currentAccess);
     }
@@ -1505,19 +1540,18 @@ async function settleV1UnconditionalDeleteMiss(
     params: SessionSystemRecordV1BaseParams & Readonly<{
         address: SessionSystemRecordAddress;
     }>,
-    accountId: string,
-    currentAccess: CurrentSessionRecordAccess,
 ): Promise<SessionSystemRecordV1Result<Record<never, never>>> {
-    const found = await refetchV1RecordAfterMutation(params, accountId, currentAccess);
-    if (isV1RecordRefetchFailure(found)) return found;
-    if (!found.row) return { ok: true };
-    const current = storedV1Record(found.row, found.expected);
-    if (!current.ok) return reportSystemRecordResult("v1-delete-settlement", current);
-    if (found.row.kind !== params.address.kind) {
-        return { ok: false, code: "plugin_session_record_kind_conflict" };
-    }
     try {
-        return reportSystemRecordResult("v1-delete-settlement", await inTx(async (tx) => {
+        return reportSystemRecordResult("v1-delete-settlement", await inSessionSystemRecordMutation(params, async (tx) => {
+            const access = await ensureV1RecordAccess(params, { ...params.address, operation: "delete" }, tx);
+            if (!access.ok) return access;
+            const { accountId, currentAccess } = access;
+            const found = await findV1RecordByAddress(tx, { ...params, accountId, requiredAccess: currentAccess });
+            if (!found) return { ok: false, code: "plugin_session_record_invalid_query" as const };
+            if (!found.row) return { ok: true };
+            const current = storedV1Record(found.row, found.expected);
+            if (!current.ok) return current;
+            if (found.row.kind !== params.address.kind) return { ok: false, code: "plugin_session_record_kind_conflict" as const };
             const deleted = await tx.sessionSystemRecord.deleteMany({
                 where: {
                     accountId,
@@ -1542,7 +1576,7 @@ async function settleV1UnconditionalDeleteMiss(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return { ok: false, code: "plugin_session_record_internal" as const };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+        }));
     } catch (error) {
         reportSystemRecordFailure("v1-delete-settlement", error);
         return { ok: false, code: "plugin_session_record_internal" };
@@ -1638,14 +1672,17 @@ export async function deleteSessionSystemRecordV1(
     if (!access.ok) return access;
     let outcome: SessionSystemRecordV1Result<Record<never, never>> | V1DeleteMutationRace;
     try {
-        outcome = await inTx((tx) => deleteSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
+        outcome = await inSessionSystemRecordMutation(params, async tx => {
+            const admitted = await ensureV1RecordAccess(params, { ...params.address, operation: "delete" }, tx);
+            return admitted.ok ? await deleteSessionSystemRecordV1InTx(tx, params, admitted) : admitted;
+        });
     } catch (error) {
         reportSystemRecordFailure("v1-delete", error);
         return { ok: false, code: "plugin_session_record_internal" };
     }
     if (!isV1DeleteMutationRace(outcome)) return reportSystemRecordResult("v1-delete", outcome);
     if (outcome.kind === "settle-unconditional-delete") {
-        return await settleV1UnconditionalDeleteMiss(params, access.accountId, access.currentAccess);
+        return await settleV1UnconditionalDeleteMiss(params);
     }
     return await resolveV1ConditionalDeleteMiss(params, access.accountId, access.currentAccess);
 }
@@ -2323,7 +2360,7 @@ async function upsertSessionSystemRecordWithCreateRaceRetry(
     const currentAccess = currentSessionRecordAccessForRequirement(mutationPolicy.requirement);
 
     try {
-        return reportSystemRecordResult("upsert", await inTx(async (tx) => {
+        return reportSystemRecordResult("upsert", await inSessionSystemRecordMutation(params, async (tx) => {
             const session = await tx.session.findUnique({
                 where: { id: params.sessionId },
                 select: { accountId: true, encryptionMode: true },
@@ -2454,7 +2491,7 @@ async function upsertSessionSystemRecordWithCreateRaceRetry(
             const createdRecord = toSessionSystemRecordRow(created);
             if (!createdRecord) return { ok: false, error: "internal" };
             return { ok: true, didCreate: true, didUpdate: false, record: createdRecord };
-        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ }));
+        }));
     } catch (error) {
         if (retryCreateRace && isPrismaErrorCode(error, "P2002")) {
             return await upsertSessionSystemRecordWithCreateRaceRetry(params, false);

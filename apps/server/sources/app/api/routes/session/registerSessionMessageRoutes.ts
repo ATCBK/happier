@@ -57,7 +57,7 @@ import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { refreshTrackedSessionAccountBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sessionInputAdmission";
@@ -333,7 +333,7 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
         accessDecision: snapshotAccessDecision,
         turnProjectionNextBeforeSeq,
         pageAccountActors,
-    } = await inTx(async (tx) => {
+    } = await inReadSnapshot(async (tx) => {
         const publication = await loadSessionTranscriptPublication(tx, sessionId);
         const currentParticipantWhere = { AND: [{ id: sessionId }, await buildSessionAccessWhere({ tx, accountId: userId, capability: 'readTranscript', mode: 'effective_access_v1', authentication })] };
 
@@ -581,7 +581,7 @@ export async function readSessionMessagePage(input: Readonly<{ userId: string; s
                     authorAccountId: v.authorAccountId,
                 }))),
         };
-    }, { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+    });
     const accessDecision = snapshotAccessDecision.status === "allowed"
         ? await readCurrentSessionAccessForOperation({ accountId: userId, sessionId, authentication, capability: "readTranscript" })
         : snapshotAccessDecision;
@@ -727,7 +727,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
             return reply.send({ status: "unavailable" });
         }
 
-        const resolution = await inTx(async (tx) => await resolveSessionMessageActionLookup({
+        const resolution = await inReadSnapshot(async (tx) => await resolveSessionMessageActionLookup({
             actorUserId: request.userId,
             sessionId,
             messageId: reference.messageId,
@@ -755,7 +755,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     select: SESSION_TRANSCRIPT_PUBLICATION_SELECT,
                 });
             },
-        }), { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+        }));
         if (resolution.status !== "unavailable" && (await readCurrentSessionAccessForOperation({
             accountId: request.userId, sessionId, authentication, capability: "readTranscript",
         })).status !== "allowed") {
@@ -784,17 +784,17 @@ export function registerSessionMessageRoutes(app: Fastify) {
     }, async (request, reply) => {
         const authentication = readSessionAccessAuthenticationFromRequest(request);
         const params = { accountId: request.userId, sessionId: request.params.sessionId, afterLocalId: request.query.afterLocalId, authentication };
-        const result = await inTx(tx => listSessionMessageRepliesPendingInTx(tx, params), { isolationLevel: 'Serializable', readOnly: true });
+        const result = await inReadSnapshot(tx => listSessionMessageRepliesPendingInTx(tx, params));
         if ((await readCurrentSessionAccessForOperation({ accountId: params.accountId, sessionId: params.sessionId,
             authentication, capability: 'readTranscript' })).status !== 'allowed') return reply.send({ v: 1, entries: [], nextAfterLocalId: null });
-        const entries = await inTx(async tx => {
+        const entries = await inReadSnapshot(async tx => {
             const admitted = [];
             for (const entry of result.entries) {
                 const current = await readSessionMessageReplyInTx(tx, { ...params, localId: entry.requestLocalId });
                 if (current.status === 'available') admitted.push(entry);
             }
             return admitted;
-        }, { isolationLevel: 'Serializable', readOnly: true });
+        });
         return reply.send({ ...result, entries });
     });
 
@@ -806,7 +806,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
     }, async (request, reply) => reply.send(await inTx(tx => mutateSessionMessageReplyForAccountInTx(tx, {
         accountId: request.userId, sessionId: request.params.sessionId, localId: request.params.localId,
         ...request.body, authentication: readSessionAccessAuthenticationFromRequest(request),
-    }), { isolationLevel: 'Serializable' })));
+    }), { isolationLevel: 'ReadCommitted' })));
 
     app.get('/v2/sessions/:sessionId/messages/by-local-id/:localId/reply', {
         preHandler: app.authenticate,
@@ -816,10 +816,10 @@ export function registerSessionMessageRoutes(app: Fastify) {
     }, async (request, reply) => {
         const params = { accountId: request.userId, sessionId: request.params.sessionId, localId: request.params.localId,
             authentication: readSessionAccessAuthenticationFromRequest(request) };
-        const result = await inTx(tx => readSessionMessageReplyInTx(tx, params), { isolationLevel: 'Serializable', readOnly: true });
+        const result = await inReadSnapshot(tx => readSessionMessageReplyInTx(tx, params));
         if (result.status === 'available' && ((await readCurrentSessionAccessForOperation({ accountId: params.accountId,
             sessionId: params.sessionId, authentication: params.authentication, capability: 'readTranscript' })).status !== 'allowed'
-            || (await inTx(tx => readSessionMessageReplyInTx(tx, params), { isolationLevel: 'Serializable', readOnly: true })).status !== 'available')) {
+            || (await inReadSnapshot(tx => readSessionMessageReplyInTx(tx, params))).status !== 'available')) {
             return reply.send({ v: 1, status: 'unavailable' });
         }
         return reply.send(result);
@@ -873,9 +873,8 @@ export function registerSessionMessageRoutes(app: Fastify) {
         const targetMachineId = authentication.apiTokenGrant
             ? await app.resolveCurrentSessionMachine?.({ accountId: userId, sessionId }) : undefined;
 
-        const { row, accessDecision: snapshotAccessDecision, accountActor } = await inTx(tx =>
-            readCommittedSessionMessageInTx(tx, { accountId: userId, sessionId, localId, authentication, targetMachineId }),
-        { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+        const { row, accessDecision: snapshotAccessDecision, accountActor } = await inReadSnapshot(tx =>
+            readCommittedSessionMessageInTx(tx, { accountId: userId, sessionId, localId, authentication, targetMachineId }));
         const accessDecision = snapshotAccessDecision.status === "allowed"
             ? await readCurrentSessionAccessForOperation({ accountId: userId, sessionId, authentication, capability: "readTranscript" })
             : snapshotAccessDecision;

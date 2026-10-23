@@ -10,7 +10,7 @@ import type { PreparedLayout1SessionCreate } from "./prepareLayout1SessionCreate
 
 export type SessionCreationPublicationInput = Pick<PreparedLayout1SessionCreate,
     "accountId" | "tag" | "initialAccess" | "primaryTeamId" | "manager"
-    | "discussionParticipant" | "originSessionId" | "initialTriggers">;
+    | "discussionParticipant" | "originSessionId" | "initialTriggers" | "teamCredentialBindings">;
 
 export interface SessionCreationPublicationAudience {
     readonly seedSessionIds: readonly string[];
@@ -58,7 +58,12 @@ async function validateCreationAudienceInTx(tx: Tx, input: SessionCreationPublic
 }
 
 async function fenceCreationAudienceInTx(tx: Tx, input: SessionCreationPublicationInput, captured: SessionCreationPublicationAudience): Promise<void> {
-    await acquireAccountChangePublicationLocksInTx(tx, captured.accountIds, { includeSingleAccount: true });
+    // Each composed owner rechecks mutable admission during terminal
+    // publication; entry content admission remains compatible with cursor writes.
+    await acquireAccountChangePublicationLocksInTx(tx, captured.accountIds, {
+        includeSingleAccount: true,
+        intent: "content",
+    });
     await validateCreationAudienceInTx(tx, input, captured);
     await fenceSessionAccountCursorAudienceInTx(tx,
         { projectionSessionIds: captured.sessionIds, accountIds: captured.accountIds },

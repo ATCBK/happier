@@ -3,10 +3,8 @@ import { type CreateOrUpdateSessionOrganizationFolderRequest, type CreateOrUpdat
 import { type SetSessionAttentionStandingRequest } from '@happier-dev/protocol/sessions/organization/standings';
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
-import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { applyViewerReadCursorOperationInTx } from "@/app/session/personal/readState";
-import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { afterTx, inTx } from "@/storage/inTx";
 import {
     areSessionOrganizationDisplayEnvelopesAllowedForAccount,
@@ -19,6 +17,7 @@ import {
     validateSessionOrganizationFolderParentChange,
 } from "./folderIdentity";
 import {
+    acquireSessionOrganizationMutationAdmissionInTx,
     markBulkSessionFolderAssignmentsChanged,
     markSessionFolderAssignmentChanged,
     markSessionOrganizationChanged,
@@ -131,6 +130,7 @@ export async function importLegacySessionOrganization(params: Readonly<{
 }>): Promise<ImportLegacySessionOrganizationResponse | { error: ImportLegacySessionOrganizationErrorCode }> {
     try {
         return await inTx(async (tx) => {
+            await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
             const displaysAllowed = await areSessionOrganizationDisplayEnvelopesAllowedForAccount({
                 tx,
                 accountId: params.accountId,
@@ -279,7 +279,7 @@ export async function importLegacySessionOrganization(params: Readonly<{
                     labels: importedLabels,
                 },
             };
-        }, { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+        }, { isolationLevel: "ReadCommitted" });
     } catch (error) {
         if (error instanceof SessionOrganizationImportKnownError) {
             return { error: error.code };
@@ -295,6 +295,7 @@ export async function setSessionPinInTx(tx: SessionOrganizationTx, params: Reado
     request: SetSessionPinRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ pin: ReturnType<typeof mapSessionOrganizationPin> | null }> | { error: "session-pin-limit-exceeded" | "session-not-found" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     const surface = params.request.surface ?? "list";
     const membership = surface === "rail" ? { railPinned: params.request.pinned } : { listPinned: params.request.pinned };
     const select = { sessionId: true, sortKey: true, pinnedAt: true, listPinned: true, railPinned: true } as const;
@@ -376,7 +377,7 @@ export async function setSessionPin(params: Readonly<{
     request: SetSessionPinRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ pin: ReturnType<typeof mapSessionOrganizationPin> | null }> | { error: "session-pin-limit-exceeded" | "session-not-found" }> {
-    return await inTx(async (tx) => await setSessionPinInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await setSessionPinInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 async function markSessionAttentionStandingChangedInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -410,6 +411,8 @@ export async function setSessionAttentionStandingInTx(tx: SessionOrganizationTx,
     request: SetSessionAttentionStandingRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ standing: ReturnType<typeof mapSessionAttentionStanding> | null }> | { error: "session-not-found" }> {
+    // Reminder read-state publication needs the full Session audience at entry.
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId, params.sessionId);
     if (params.request.standing === null) {
         const deleted = await tx.sessionAttentionStanding.deleteMany({
             where: { accountId: params.accountId, sessionId: params.sessionId },
@@ -484,7 +487,6 @@ export async function setSessionAttentionStandingInTx(tx: SessionOrganizationTx,
         return { standing: mapSessionAttentionStanding(existingStanding) };
     }
     if (typeof params.request.remindAt === "number") {
-        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.accountId]);
         // The read-state owner, rather than cursor-row existence, decides whether
         // this Account is currently tracked. An unfollowed collaborator may
         // retain an inert historical row; setting a reminder is still valid and
@@ -550,13 +552,14 @@ export async function setSessionAttentionStanding(params: Readonly<{
     request: SetSessionAttentionStandingRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ standing: ReturnType<typeof mapSessionAttentionStanding> | null }> | { error: "session-not-found" }> {
-    return await inTx(async (tx) => await setSessionAttentionStandingInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await setSessionAttentionStandingInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function upsertSessionOrganizationFolderInTx(tx: SessionOrganizationTx, params: Readonly<{
     accountId: string;
     request: CreateOrUpdateSessionOrganizationFolderRequest;
 }>): Promise<Readonly<{ folder: ReturnType<typeof mapSessionOrganizationFolder> }> | { error: "invalid-parent-folder" | "invalid-display-envelope" | "session-organization-folder-limit-exceeded" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     if (!await isSessionOrganizationDisplayEnvelopeAllowedForAccount({
         tx,
         accountId: params.accountId,
@@ -654,7 +657,7 @@ export async function upsertSessionOrganizationFolder(params: Readonly<{
     accountId: string;
     request: CreateOrUpdateSessionOrganizationFolderRequest;
 }>): Promise<Readonly<{ folder: ReturnType<typeof mapSessionOrganizationFolder> }> | { error: "invalid-parent-folder" | "invalid-display-envelope" | "session-organization-folder-limit-exceeded" }> {
-    return await inTx(async (tx) => await upsertSessionOrganizationFolderInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await upsertSessionOrganizationFolderInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 function collectDeletedFolderIds(params: Readonly<{
@@ -686,7 +689,7 @@ export async function deleteSessionOrganizationFolder(params: Readonly<{
     return await inTx(async (tx) => {
         // Exclude admitted births before reading the tree and its assignments.
         // Birth placement can then use current reads without certifying cursor writes.
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
+        await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
         const folders = await tx.sessionOrganizationFolder.findMany({
             where: { accountId: params.accountId, archivedAt: null },
             select: { id: true, folderKey: true, parentKey: true },
@@ -746,7 +749,7 @@ export async function deleteSessionOrganizationFolder(params: Readonly<{
             assignmentTargetFolderId,
             affectedAssignmentCount: writeResult.count,
         };
-    }, { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export async function setSessionFolderAssignmentInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -755,6 +758,7 @@ export async function setSessionFolderAssignmentInTx(tx: SessionOrganizationTx, 
     folderId: string | null;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ sessionId: string; folderId: string | null }> | { error: "invalid-folder" | "session-not-found" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId, params.sessionId);
     if (!await canAccessSyncedSessionForOrganizationInTx(tx, params)) return { error: "session-not-found" };
     if (params.folderId !== null) {
         const targetFolder = await findActiveSessionOrganizationFoldersById({
@@ -767,7 +771,6 @@ export async function setSessionFolderAssignmentInTx(tx: SessionOrganizationTx, 
         }
     }
 
-    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.accountId]);
     if (params.folderId === null) {
         await tx.sessionFolderAssignment.deleteMany({
             where: {
@@ -814,7 +817,7 @@ export async function setSessionFolderAssignment(params: Readonly<{
 }>): Promise<Readonly<{ sessionId: string; folderId: string | null }> | { error: "invalid-folder" | "session-not-found" }> {
     return await inTx(async (tx) =>
         await setSessionFolderAssignmentInTx(tx, params),
-        { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+        { isolationLevel: "ReadCommitted" });
 }
 
 async function validateSessionOrganizationTagIdsInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -938,6 +941,7 @@ export async function moveSessionFolderAssignments(params: Readonly<{
     authentication: SessionAccessAuthentication;
 }>): Promise<MoveSessionFolderAssignmentsResponse | { error: "invalid-folder" }> {
     return await inTx(async (tx) => {
+        await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
         if (params.toFolderId !== null) {
             const targetFolder = await findActiveSessionOrganizationFoldersById({
                 tx,
@@ -987,13 +991,14 @@ export async function moveSessionFolderAssignments(params: Readonly<{
             affectedCount: writeResult.count,
             toFolderId: params.toFolderId,
         };
-    }, { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export async function upsertSessionOrganizationTagInTx(tx: SessionOrganizationTx, params: Readonly<{
     accountId: string;
     request: CreateOrUpdateSessionOrganizationTagRequest;
 }>): Promise<Readonly<{ tag: ReturnType<typeof mapSessionOrganizationTag> }> | { error: "invalid-display-envelope" | "session-organization-tag-limit-exceeded" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     if (!await isSessionOrganizationDisplayEnvelopeAllowedForAccount({
         tx,
         accountId: params.accountId,
@@ -1062,7 +1067,7 @@ export async function upsertSessionOrganizationTag(params: Readonly<{
     accountId: string;
     request: CreateOrUpdateSessionOrganizationTagRequest;
 }>): Promise<Readonly<{ tag: ReturnType<typeof mapSessionOrganizationTag> }> | { error: "invalid-display-envelope" | "session-organization-tag-limit-exceeded" }> {
-    return await inTx(async (tx) => await upsertSessionOrganizationTagInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await upsertSessionOrganizationTagInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function deleteSessionOrganizationTag(params: Readonly<{
@@ -1072,7 +1077,7 @@ export async function deleteSessionOrganizationTag(params: Readonly<{
     return await inTx(async (tx) => {
         // The same admission as Folder deletion covers birth's active-tag check
         // through assignment commit, including assignments absent at delete entry.
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
+        await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
         const removedAssignments = await tx.sessionTagAssignment.deleteMany({
             where: { accountId: params.accountId, tagId: params.request.tagId },
         });
@@ -1099,7 +1104,7 @@ export async function deleteSessionOrganizationTag(params: Readonly<{
             tagId: params.request.tagId,
             removedAssignmentCount: removedAssignments.count,
         };
-    }, { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export async function setSessionTagAssignments(params: Readonly<{
@@ -1108,7 +1113,7 @@ export async function setSessionTagAssignments(params: Readonly<{
     request: SetSessionTagAssignmentsRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ sessionId: string; tagIds: string[] }> | { error: "invalid-session-tags" | "session-not-found" }> {
-    return await inTx(async (tx) => await setSessionTagAssignmentsInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await setSessionTagAssignmentsInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function setSessionTagAssignmentsInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -1117,6 +1122,7 @@ export async function setSessionTagAssignmentsInTx(tx: SessionOrganizationTx, pa
     request: SetSessionTagAssignmentsRequest;
     authentication: SessionAccessAuthentication;
 }>): Promise<Readonly<{ sessionId: string; tagIds: string[] }> | { error: "invalid-session-tags" | "session-not-found" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     if (!await canAccessSyncedSessionForOrganizationInTx(tx, params)) return { error: "session-not-found" };
     const uniqueTagIds = await validateSessionOrganizationTagIdsInTx(tx, {
         accountId: params.accountId,
@@ -1161,6 +1167,7 @@ export async function upsertSessionOrganizationLabelInTx(tx: SessionOrganization
     accountId: string;
     request: UpsertSessionOrganizationLabelRequest;
 }>): Promise<Readonly<{ label: ReturnType<typeof mapSessionOrganizationLabel> }> | { error: "invalid-display-envelope" | "session-organization-label-limit-exceeded" }> {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     if (!await isSessionOrganizationDisplayEnvelopeAllowedForAccount({
         tx,
         accountId: params.accountId,
@@ -1239,7 +1246,7 @@ export async function upsertSessionOrganizationLabel(params: Readonly<{
     accountId: string;
     request: UpsertSessionOrganizationLabelRequest;
 }>): Promise<Readonly<{ label: ReturnType<typeof mapSessionOrganizationLabel> }> | { error: "invalid-display-envelope" | "session-organization-label-limit-exceeded" }> {
-    return await inTx(async (tx) => await upsertSessionOrganizationLabelInTx(tx, params), { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    return await inTx(async (tx) => await upsertSessionOrganizationLabelInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function deleteSessionOrganizationLabel(params: Readonly<{
@@ -1247,6 +1254,7 @@ export async function deleteSessionOrganizationLabel(params: Readonly<{
     request: DeleteSessionOrganizationLabelRequest;
 }>) {
     return await inTx(async (tx) => {
+        await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
         const scopeHash = hashSessionOrganizationKey(params.request.scopeKey);
         await tx.sessionOrganizationLabel.updateMany({
             where: {
@@ -1270,5 +1278,5 @@ export async function deleteSessionOrganizationLabel(params: Readonly<{
             scopeKey: params.request.scopeKey,
             archived: true,
         };
-    }, { isolationLevel: "Serializable" /* Organization capacity, hierarchy and replacement decisions depend on prior collection reads. */ });
+    }, { isolationLevel: "ReadCommitted" });
 }

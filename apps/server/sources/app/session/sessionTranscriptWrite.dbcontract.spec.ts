@@ -4,7 +4,7 @@ import {
     makeExternalSessionHistoricalImportBatchIdV1,
     UsageAnalyticsQueryRequestSchema,
 } from "@happier-dev/protocol";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { executeExternalSessionHistoricalImportCommand } from "@/app/session/externalSessionHistoricalImportCommand";
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
@@ -23,7 +23,8 @@ import {
 import { createSessionMessage } from "@/app/session/sessionWriteService";
 import { loadUsageMessageStatsForQuery } from "@/app/usage/query/loadUsageMessageStatsForQuery";
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
-import { inTx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -247,6 +248,61 @@ describe("historical transcript writer database contract", () => {
             process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = previousStoragePolicy;
         }
         if (connected) await db.$disconnect();
+    });
+
+    it.skipIf(provider !== 'postgres')('readmits the historical storage mode after a transition wins before Account admission', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: '{}',
+            encryptionMode: 'plain', currentStorageState: 'machine_only' } });
+        const originalTransaction = db.$transaction;
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        let transitioned = false;
+        try {
+            // Interleave at the real transport immediately before the batch's
+            // existing Account fence. Keep both transactions and the writer real.
+            db.$transaction = new Proxy(originalTransaction, {
+                apply(target, thisArg, args) {
+                    const operation: unknown = args[0];
+                    if (typeof operation !== 'function') return Reflect.apply(target, thisArg, args);
+                    return Reflect.apply(target, thisArg, [async (tx: Tx) => {
+                        const edges = new Proxy(tx.sessionFollowEdge, {
+                            get(owner, property, receiver) {
+                                const method: unknown = Reflect.get(owner, property, receiver);
+                                if (property !== 'findMany' || typeof method !== 'function') return method;
+                                return async (...values: unknown[]) => {
+                                    const rows: unknown = await Reflect.apply(method, owner, values);
+                                    if (!transitioned) {
+                                        transitioned = true;
+                                        await inTx(async client => {
+                                            await acquireAccountSessionOwnerMetadataFenceInTx(client, account.id, 'exclusive');
+                                            await client.session.update({ where: { id: session.id }, data: { encryptionMode: 'e2ee' } });
+                                        });
+                                    }
+                                    return rows;
+                                };
+                            },
+                        });
+                        return Reflect.apply(operation, undefined, [new Proxy(tx, {
+                            get(owner, property, receiver) {
+                                return property === 'sessionFollowEdge' ? edges : Reflect.get(owner, property, receiver);
+                            },
+                        })]);
+                    }, { ...(typeof args[1] === 'object' && args[1] !== null ? args[1] : {}), isolationLevel: 'ReadCommitted' }]);
+                },
+            });
+            expect(await writeHistoricalSessionMessageBatch({ sessionId: session.id, storagePolicy: 'optional',
+                items: [{ localId: 'mode-race', sidechainId: null, messageRole: 'user', content: { t: 'plain', v: { text: 'private' } } }],
+            })).toEqual({ ok: false, error: 'storage-mode-conflict', code: 'session_encryption_mode_mismatch' });
+            expect(transitioned).toBe(true);
+            expect(await db.sessionMessage.count({ where: { sessionId: session.id } })).toBe(0);
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ seq: 0, encryptionMode: 'e2ee' });
+        } finally {
+            db.$transaction = originalTransaction;
+            vi.unstubAllEnvs();
+            await db.sessionMessage.deleteMany({ where: { sessionId: session.id } });
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
     });
 
     it("keeps historical, Pending, and ordinary writes gapless across retry, rollback, and mode rejection", async () => {

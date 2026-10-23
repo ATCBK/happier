@@ -1,5 +1,6 @@
 import { InactiveAccountError } from "@/app/auth/accountStatus";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
+import { prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 import { z } from "zod/mini";
@@ -353,7 +354,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                     createdFresh = true;
                     return created;
                 }, {
-                    isolationLevel: "Serializable", // Creation admission must remain coherent with lifecycle and Account state.
+                    isolationLevel: "ReadCommitted", // The creation owner admits Account authority before reading it.
                     transactionClass: "session.legacy-create",
                 });
             } catch (error) {
@@ -404,8 +405,9 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                     }
                     return await restoreSessionTagRejoinInTx(tx, current);
                 }, {
-                    isolationLevel: "Serializable", // Rejoin composes the canonical lifecycle transition.
+                    isolationLevel: "ReadCommitted",
                     transactionClass: "session.legacy-rejoin",
+                    prepare: () => prepareSessionAccountCursorLocks([existing.id], [userId]),
                 }).catch((restoreError: unknown) => {
                     if (restoreError instanceof ApiTokenOperationError && restoreError.code === 'invalid_token') return null;
                     throw restoreError;
@@ -491,14 +493,13 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
         });
         // The relation can change independently of creation metadata. Reuse
         // the authorized current-row projector, including on tag rejoins.
-        const [organization] = await inTx((tx) => projectSessionManagerForRowsInTx(tx, {
+        const [organization] = await inReadSnapshot((tx) => projectSessionManagerForRowsInTx(tx, {
             accountId: userId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
             sessions: [session],
             accessMode: "effective_access_v1",
             nowMs: Date.now(),
         }), {
-            isolationLevel: "Serializable", // Organization projection retains coherent access and relation facts.
             transactionClass: "session.creation-projection",
         });
         log({ module: "session-create", sessionId: resolvedSession.id, userId }, `Session resolved: ${resolvedSession.id}`);

@@ -20,10 +20,12 @@ import type { SessionAccessAuthentication } from "@/app/session/access/sessionAc
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
 import type { SessionCreationExecutionAuthorization } from './apiTokenSessionCreationAuthorization';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
+import { beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     applyInitialSessionAccessInTx,
-    type SessionAccessGrantErrorCode,
+    SessionInitialAccessError,
 } from "@/app/session/access/sessionAccessGrantService";
+export { SessionInitialAccessError } from "@/app/session/access/sessionAccessGrantService";
 import {
     projectReleasedDirectShareEvent,
     scheduleReleasedDirectShareEvent,
@@ -32,6 +34,7 @@ import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDis
 import { validateDiscussionParticipantBirthInTx, bindDiscussionParticipantSessionInTx } from "@/app/discussions/accessService";
 import {
     validatePlannedSessionTeamCredentialBindingIntentInTx,
+    validateSessionTeamCredentialBindingIntentInTx,
     writeSessionTeamCredentialBindingsInTx,
     type SessionTeamCredentialBindingRejection,
 } from "@/app/teams/credentials/sessionBinding";
@@ -95,13 +98,6 @@ export class SessionOwnerEnvelopeError extends Error {
     constructor() {
         super("invalid-owner-envelope");
         this.name = "SessionOwnerEnvelopeError";
-    }
-}
-
-export class SessionInitialAccessError extends Error {
-    constructor(readonly code: SessionAccessGrantErrorCode | "session_initial_access_creator_mismatch") {
-        super(code);
-        this.name = "SessionInitialAccessError";
     }
 }
 
@@ -325,6 +321,16 @@ export async function insertLayout1SessionRowInTx(
             authentication: params.authentication,
         });
         if (!bindingResult.ok) throw new SessionTeamCredentialBindingError(bindingResult.reason);
+        if (prepared.teamCredentialBindings.length > 0) {
+            beforeAccountChangePublication(tx, [prepared.accountId], async client => {
+                for (const intent of prepared.teamCredentialBindings ?? []) {
+                    const current = await validateSessionTeamCredentialBindingIntentInTx(client, {
+                        sessionId: session.id, accountId: prepared.accountId, intent, authentication: params.authentication,
+                    });
+                    if (!current.ok) throw new SessionTeamCredentialBindingError(current.reason);
+                }
+            });
+        }
     }
     if (prepared.initialTriggers?.length) {
         const featurePolicy = await resolveAutomationRecipeFeaturePolicy({ tx });

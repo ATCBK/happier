@@ -26,7 +26,7 @@ import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeat
 import { AsyncLock, isLockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { debug, error as logError, log } from "@/utils/logging/log";
 import { randomUUID } from 'node:crypto';
-import { timeWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
+import { recordWebLatencyPhase, timeWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 import { readHomeConfigEnv } from '@/app/home/settings/homeSettings';
 import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
@@ -106,7 +106,7 @@ import {
     acknowledgeAccountVoiceFollowInTx,
     observePendingAccountVoiceFollowInTx,
 } from "@/app/session/follow/accountFollowService";
-import { createDiscussionInTx, postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
+import { createDiscussionInTx, postPreparedDiscussionMessageInTx, prepareDiscussionCreationMutationAccounts, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
 import { reconcileDiscussionCreationIdentityRace } from '@/app/discussions/createIdentityReconciliation';
 import type { createSessionPublisherPresence, CurrentSessionPublisherAuthority, SessionPublisherBinding } from "@/app/presence/sessionPublisherPresence";
 import type { TeamCredentialExecutionRunCurrentnessResolver } from "@/app/teams/credentials/providerBrokerAdmission";
@@ -558,7 +558,7 @@ export function sessionUpdateHandler(
             respond({ v: 1, ok: false, error: 'invalid_request' }); return;
         }
         try {
-            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'Serializable',
+            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'ReadCommitted',
                 operation: (publisherAuthority, tx) => releaseSessionMessageReplySourceTurnInTx(tx, { accountId: userId, request: request.data, publisherAuthority }) });
             respond(result ?? { v: 1, ok: false, error: 'forbidden' });
         } catch { respond({ v: 1, ok: false, error: 'unavailable' }); }
@@ -573,7 +573,7 @@ export function sessionUpdateHandler(
             return;
         }
         try {
-            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'Serializable',
+            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'ReadCommitted',
                 operation: (publisherAuthority, tx) => mutateSessionMessageReplyInTx(tx, { accountId: userId,
                     mutation: request.data, publisherAuthority, authentication: readSessionAccessAuthenticationFromSocket(socket) }) });
             respond(result ?? { v: 1, ok: false, error: 'forbidden' });
@@ -636,8 +636,8 @@ export function sessionUpdateHandler(
                 // its current neighbor must not create a shorter publication
                 // deadline; authority is rechecked below and inTx owns its
                 // resource acquisition/execution budgets.
-                ...(append ? { prepare: () => prepareDiscussionPostMutationAccounts(append) }
-                    : { isolationLevel: "Serializable" as const }), // Creation retains its identity-race transaction.
+                prepare: () => 'discussionId' in publication ? prepareDiscussionPostMutationAccounts(append!)
+                    : prepareDiscussionCreationMutationAccounts({ ...actor, request: publication.request }),
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(
                         tx,
@@ -645,7 +645,7 @@ export function sessionUpdateHandler(
                         userId,
                         request.data.sessionId,
                         undefined,
-                        { lockMachineAuthority: append !== null },
+                        { lockMachineAuthority: true },
                     )) {
                         return null;
                     }
@@ -1153,6 +1153,7 @@ export function sessionUpdateHandler(
                 });
                 return;
             }
+            recordWebLatencyPhase('socket.transcript-observation.ack', 0);
             respond({
                 ok: true,
                 status: "observed",

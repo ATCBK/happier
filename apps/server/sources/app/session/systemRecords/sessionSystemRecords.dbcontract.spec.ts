@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { artifactHtmlBundleFromBodyV1 } from "@happier-dev/protocol/artifacts/artifactHtmlV1";
 import { mutateSessionBoard } from "@/app/session/board/service";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
@@ -97,6 +98,48 @@ async function withAccountFenceInterleaving<T>(peer: () => Promise<void>, operat
 describe("SessionSystemRecord native CONTRACT database behavior", () => {
     const provider = resolveContractProvider();
 
+    it.skipIf(provider !== 'postgres')('readmits standalone plugin record storage mode after a transition wins before admission', async () => {
+        const { account, session } = await createAccountAndSession(`mode-readmission-${randomUUID()}`);
+        const originalTransaction = db.$transaction;
+        let changed = false;
+        db.$transaction = new Proxy(originalTransaction, { apply(transaction, receiver, args: unknown[]) {
+            const operation: unknown = args[0];
+            if (typeof operation !== 'function') return Reflect.apply(transaction, receiver, args);
+            return Reflect.apply(transaction, receiver, [async (tx: Tx) => operation(new Proxy(tx, { get(client, property, txReceiver) {
+                if (property !== 'sessionFollowEdge' && property !== 'sessionSystemRecord') return Reflect.get(client, property, txReceiver);
+                const delegate = client[property];
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const query: unknown = Reflect.get(model, method, modelReceiver);
+                    if (method !== (property === 'sessionFollowEdge' ? 'findMany' : 'findFirst') || typeof query !== 'function') return query;
+                    return async (...values: unknown[]) => {
+                        // Old standalone writers first reach the record lookup;
+                        // admitted writers first discover their Session audience.
+                        // In either shape the real transition wins before entry locks.
+                        if (!changed) {
+                            changed = true;
+                            await inTx(async peer => {
+                                await acquireAccountSessionOwnerMetadataFenceInTx(peer, account.id, 'exclusive');
+                                await peer.session.update({ where: { id: session.id }, data: { encryptionMode: 'e2ee' } });
+                            });
+                        }
+                        return await Reflect.apply(query, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            const result = await upsertSessionSystemRecordV1({ authentication, actorUserId: account.id, sessionId: session.id,
+                pluginId: 'acme.notes', address: { owner: 'plugin', namespace: 'notes', kind: 'entry.v1', localId: 'mode-readmission' },
+                content: { t: 'plain', v: { title: 'Must not cross a mode transition' } }, expectedRevision: null });
+            expect(changed).toBe(true);
+            expect(result).toEqual({ ok: false, code: 'plugin_session_record_invalid_query' });
+            expect(await db.sessionSystemRecord.count({ where: { sessionId: session.id } })).toBe(0);
+        } finally {
+            db.$transaction = originalTransaction;
+            await deleteAccountFixture(account.id);
+        }
+    });
+
     it.skipIf(provider !== "postgres")("commits a Board write while an unrelated Account cursor writer commits after its initial reads", async () => {
         const { account, session } = await createAccountAndSession(`board-account-contention-${randomUUID()}`);
         let peerCommitted = false;
@@ -151,7 +194,7 @@ describe("SessionSystemRecord native CONTRACT database behavior", () => {
                 invoke(exactFixture, mutation("same")),
                 invoke(exactFixture, mutation("same")),
             ]);
-            expect(exactCreates.every(result => result.ok)).toBe(true);
+            expect(exactCreates).toEqual([expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true })]);
             if (!exactCreates[0]?.ok || !exactCreates[1]?.ok) throw new Error("Expected byte-identical create settlement");
             if (exactCreates[0].result.operation !== "upsert_item" || exactCreates[1].result.operation !== "upsert_item") {
                 throw new Error("Expected upsert-item settlement");

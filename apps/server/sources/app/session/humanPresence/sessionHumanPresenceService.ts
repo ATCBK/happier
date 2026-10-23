@@ -5,7 +5,7 @@ import { type SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessio
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { DiscussionIdSchema } from '@happier-dev/protocol/discussions/content';
 import { db } from "@/storage/db";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1, resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
@@ -329,7 +329,7 @@ export function createSessionHumanPresenceService(input: Readonly<{
         requestedLocations: readonly SessionHumanPresenceLocationV1[] = [],
     ) {
         if (closed || !socket.connected) throw new Error("Human presence socket unavailable");
-        const replacement = await inTx(async tx => {
+        const replacement = await inReadSnapshot(async tx => {
             const where = await buildSessionAccessWhere({
                 tx,
                 accountId,
@@ -357,7 +357,7 @@ export function createSessionHumanPresenceService(input: Readonly<{
             }
             admittedLocations.sort((left, right) => left.discussionId.localeCompare(right.discussionId));
             return { admittedSessionIds, admittedLocations };
-        }, { isolationLevel: "Serializable" /* Presence replacement must admit its Session and discussion locations from one access snapshot. */ });
+        });
         if (closed || !socket.connected) throw new Error("Human presence socket unavailable");
         const previous = sessionHumanPresenceLocationsFromRooms(socket.rooms);
         const next = [

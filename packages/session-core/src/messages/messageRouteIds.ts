@@ -168,7 +168,13 @@ export function resolveSessionMessageRouteId(params: Readonly<{
         );
     }
     if (stableRef?.kind === 'server') {
-        return params.reducerState?.messageIds.get(stableRef.value) ?? null;
+        // Assistant text keeps its committed identity on the rendered row;
+        // messageIds is also the reducer's processed-message/deduplication map
+        // and does not index every assistant block. Reverse the same stable
+        // identity used by buildMessageRouteId without changing reducer dedupe.
+        return params.reducerState?.messageIds.get(stableRef.value)
+            ?? Object.values(params.messagesById).find(message => readStableServerMessageId(message) === stableRef.value)?.id
+            ?? null;
     }
     if (stableRef?.kind === 'local') {
         return params.reducerState?.localIds.get(stableRef.value) ?? null;

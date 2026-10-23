@@ -568,6 +568,9 @@ export async function writeHistoricalSessionMessageBatchInTx(
         items: readonly HistoricalSessionMessageItem[];
     }>,
 ) {
+    // Storage admission must observe the mode after the same Session fence
+    // that protects sequence allocation and historical-row replacement.
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
     const session = await tx.session.findUnique({
         where: { id: params.sessionId },
         select: { encryptionMode: true },
@@ -594,8 +597,7 @@ export async function writeHistoricalSessionMessageBatch(
 ) {
     const attempt = async () => await inTx(
         async (tx) => await writeHistoricalSessionMessageBatchInTx(tx, params),
-        // The batch captures Session.encryptionMode before its Account fence.
-        { isolationLevel: "Serializable" },
+        { isolationLevel: "ReadCommitted" },
     );
     try {
         return await attempt();

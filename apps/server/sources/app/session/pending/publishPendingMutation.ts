@@ -7,7 +7,7 @@ import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import { log } from '@/utils/logging/log';
 import { mapPendingActivationAuthorization, readPendingActivationTargetInTx, type PendingActivationTarget } from './pendingActivationAuthorization';
 import type { ParticipantExecutionRunRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 import { readPendingManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
 import { PendingActivationRequestedEphemeralV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
@@ -18,9 +18,7 @@ export function buildPendingActivationRequestHint(
 }
 
 export async function loadPendingActivationPublication(sessionId: string) {
-    return inTx(tx => loadPendingActivationPublicationInTx(tx, sessionId), {
-        isolationLevel: "Serializable" /* Waiting authorization and the admitted Machine target must describe one activation. */,
-    });
+    return inReadSnapshot(tx => loadPendingActivationPublicationInTx(tx, sessionId));
 }
 
 export async function loadPendingActivationPublicationInTx(tx: Tx, sessionId: string) {

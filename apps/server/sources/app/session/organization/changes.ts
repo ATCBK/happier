@@ -1,5 +1,25 @@
-import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { Tx } from "@/storage/inTx";
+
+/**
+ * Counts, hierarchy and whole replacements belong to one Account aggregate.
+ * Exclude content admission too: births insert folder/tag assignments and
+ * encryption/lifecycle owners already use the same exclusive Account fence.
+ * Select the strongest complete cohort before any read, never by an upgrade.
+ * Birth placement retains its surrounding content admission and current checks.
+ */
+export async function acquireSessionOrganizationMutationAdmissionInTx(
+    tx: Tx,
+    accountId: string,
+    sessionId?: string,
+): Promise<void> {
+    if (sessionId !== undefined) {
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [accountId], { intent: "exclusive" });
+    } else {
+        await acquireAccountChangePublicationLocksInTx(tx, [accountId], { includeSingleAccount: true, intent: "exclusive" });
+    }
+}
 
 export type SessionOrganizationChangeScope =
     | "pins"

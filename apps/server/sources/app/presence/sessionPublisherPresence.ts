@@ -739,7 +739,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
 
     const captureExplicitMachineStop = async (params: Readonly<{
         binding: SessionPublisherBinding;
-    }>): Promise<CaptureExplicitMachineStopResult> => await inTx(async (tx): Promise<CaptureExplicitMachineStopResult> => {
+    }>): Promise<CaptureExplicitMachineStopResult> => await inReadSnapshot(async (tx): Promise<CaptureExplicitMachineStopResult> => {
         const session = await tx.session.findUnique({
             where: { id: params.binding.sessionId },
             select: {
@@ -778,7 +778,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 authority,
             },
         };
-    }, { isolationLevel: "Serializable" /* Stop capture combines Session generation, Machine access and Runner currentness in one snapshot. */ });
+    });
 
     const captureMachineSessionTerminal = captureExplicitMachineStop;
 
@@ -894,10 +894,24 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         const operation = async () => {
             const registration = registrations.get(params.socket);
             if (!registration) return null;
-            return await inTx(async (tx) => await params.operation({
-                ...registration.binding,
-                committedFence: new Date(registration.committedFence.getTime()),
-            }, tx), {
+            return await inTx(async (tx) => {
+                // Snapshot operations do not hold the socket lock. A heartbeat
+                // may commit while database admission waits; resolve this
+                // registration's current fence inside the transaction rather
+                // than treating that same-publisher heartbeat as replacement.
+                const currentAuthority = params.authorityMode === 'snapshot'
+                    ? await readExactCurrentPublisherAuthorityInTx(tx, {
+                        ...registration.binding,
+                        publisherGeneration: registration.publisherGeneration,
+                    }, registration.binding.accountId, registration.binding.sessionId)
+                    : null;
+                // An unavailable registration keeps its captured precondition:
+                // the consuming guard must retain its own typed refusal.
+                return await params.operation(currentAuthority ?? {
+                    ...registration.binding,
+                    committedFence: new Date(registration.committedFence.getTime()),
+                }, tx);
+            }, {
                 deadlineAtMs: params.deadlineAtMs,
                 ...(params.prepare ? { prepare: params.prepare } : {}),
                 ...(params.isolationLevel === undefined ? {} : { isolationLevel: params.isolationLevel }),
@@ -957,12 +971,12 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         ) {
             return null;
         }
-        return await inTx(async (tx) => await readExactCurrentPublisherAuthorityInTx(tx, {
+        return await inReadSnapshot(async (tx) => await readExactCurrentPublisherAuthorityInTx(tx, {
             accountId: projection.accountId,
             machineId: projection.machineId,
             sessionId: projection.sessionId,
             publisherGeneration: BigInt(projection.publisherGeneration),
-        }, params.expectedAccountId, params.expectedSessionId), { isolationLevel: "Serializable" /* Projected publisher generation and Machine access must be read from one snapshot. */ });
+        }, params.expectedAccountId, params.expectedSessionId));
     };
 
     const isCurrentPublisherProjection = async (params: Readonly<{

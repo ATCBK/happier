@@ -67,8 +67,9 @@ import { AgentSessionRuntimeEventV1Schema } from '@happier-dev/protocol';
 import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { AutonomousExchangeRootV1Schema } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
-import { setOtherSessionFollowSource, observeRunFollowOccurrenceRoutes } from '@/app/session/follow/sessionFollowEdgeService';
+import { setOtherSessionFollowSource, observeRunFollowOccurrenceRoutes, setSessionFollowSource } from '@/app/session/follow/sessionFollowEdgeService';
 import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { setSessionManager } from '@/app/session/follow/sessionManagerService';
 import { readAutonomousExchangeControl, controlAutonomousExchange } from './autonomousExchangeControl';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { decodeBase64 } from 'privacy-kit';
@@ -1742,6 +1743,106 @@ describe("pendingMessageService (shared sessions)", () => {
         expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId: resent.newLocalId } } })).toMatchObject({
             authorAccountId: null, inputAdmissionReceipt: { issuer: "authenticatedMachine" }, targetExecutionRunId: "run-a",
         });
+    });
+
+    it.each([false, true])("cancels a materialized encrypted original without an equality tag (retained transcript: %s)", async retainedTranscript => {
+        const owner = await createAccount("obsolete-encrypted-original");
+        const session = await createSession(owner.id);
+        const publisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
+        await db.machine.update({ where: { id: publisher.machineId }, data: {
+            installationId: `install-${publisher.machineId}`,
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
+        } });
+        const localId = 'follow-original:obsolete-question';
+        const content = { t: 'encrypted' as const, c: 'sealed-original' };
+        expect(await enqueuePendingMessage({ actorUserId: owner.id, targetMachineId: publisher.machineId,
+            sessionId: session.id, localId, content, requestedAction: { v: 1, kind: 'enqueue' },
+        })).toMatchObject({ ok: true });
+        // The live failure rejoins an older original already present in the
+        // transcript. New protected inputs instead defer that write until admission.
+        if (retainedTranscript) await createCommittedTranscriptMessage({ sessionId: session.id,
+            localId, seq: 1, messageRole: 'user', ciphertext: content.c });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority: publisher }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        const cancellation = { actorUserId: owner.id, sessionId: session.id, localId, publisherAuthority: publisher,
+            decision: { kind: 'reject' as const, code: 'session_input_cancelled' as const } };
+        expect(await settlePendingInputAdmission(cancellation)).toMatchObject({ ok: true,
+            result: { status: 'rejected', code: 'session_input_cancelled' }, pendingCount: 0, pendingBlockedCount: 0 });
+        expect(await settlePendingInputAdmission(cancellation)).toMatchObject({ ok: true,
+            result: { status: 'rejected', code: 'session_input_cancelled' }, pendingCount: 0 });
+        expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+            .toMatchObject({ status: 'discarded', discardedReason: 'session_input_cancelled', content, requestEqualityEvidenceV1: null });
+        const transcript = await db.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId } } });
+        if (retainedTranscript) expect(transcript).toMatchObject({ content, deliveryResolution: null, turnStartWitnessId: null });
+        else expect(transcript).toBeNull();
+        expect(await enqueuePendingMessage({ actorUserId: owner.id, targetMachineId: publisher.machineId,
+            sessionId: session.id, localId: 'next-input', content, requestedAction: { v: 1, kind: 'enqueue' },
+        })).toMatchObject({ ok: true });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority: publisher }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId: 'next-input' } });
+    });
+
+    it.each(['detached', 'reattached', 'overlapping follower', 'provider accepted'] as const)("retires an obsolete retained Follow attachment before dispatch (%s)", async state => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true' });
+        const owner = await createAccount('retained-follow-attachment');
+        const source = await createSession(owner.id);
+        const receiver = await createSession(owner.id);
+        await db.session.update({ where: { id: source.id }, data: { agentStateVersion: 1 } });
+        const publisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: receiver.id });
+        await db.machine.update({ where: { id: publisher.machineId }, data: {
+            installationId: `install-${publisher.machineId}`,
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
+        } });
+        expect(await setSessionManager({ accountId: owner.id, sessionId: source.id, managerSessionId: receiver.id,
+            expectedManagerSessionId: null, authentication })).toMatchObject({ ok: true });
+        const edge = await db.sessionFollowEdge.findUniqueOrThrow({ where: { managerSourceSessionId: source.id } });
+        if (state === 'overlapping follower') expect(await setSessionFollowSource({ accountId: owner.id,
+            sourceSessionId: source.id, destinationSessionId: receiver.id, policy: { preset: 'important' }, authentication }))
+            .toMatchObject({ ok: true });
+        const delivery = { v: 1 as const, delivery: 'wake' as const,
+            original: { sourceSessionId: source.id, sourceRequests: { agentStateVersion: 1,
+                requests: [{ requestId: 'old-question', createdAt: 1 }] } },
+            requestEvents: [{ requestId: 'old-question', event: { kind: 'needs_you' as const, type: 'decision' as const } }] };
+        const localId = deriveSessionFollowInputLocalIdV1({ destinationSessionId: receiver.id, original: delivery.original });
+        const content = { t: 'encrypted' as const, c: 'retained-follow-original' };
+        expect(await enqueuePendingMessage({ actorUserId: owner.id, targetMachineId: publisher.machineId,
+            sessionId: receiver.id, localId, content, followDeliveryV1: delivery,
+            followRelations: [{ relation: 'manager', attachedAt: edge.attachedAt.getTime() },
+                ...(state === 'overlapping follower' ? [{ relation: 'follower' as const }] : [])] })).toMatchObject({ ok: true });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: receiver.id, publisherAuthority: publisher }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: receiver.id, localId } } });
+        // Retained QA input already has a transcript row, but no native acceptance or equality tag.
+        await db.sessionMessage.create({ data: { sessionId: receiver.id, localId, seq: 1, messageRole: 'user', content,
+            inputAdmissionReceipt: pending.inputAdmissionReceipt! } });
+        await db.session.update({ where: { id: receiver.id }, data: { seq: 1 } });
+        if (state === 'provider accepted') expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id,
+            sessionId: receiver.id, localId, publisherAuthority: publisher,
+            acceptedTurn: { kind: 'newTurn', turnId: 'accepted-follow-turn' } })).toMatchObject({ ok: true, didResolve: true });
+        await db.session.update({ where: { id: source.id }, data: { agentStateVersion: 2 } });
+        expect(await setSessionManager({ accountId: owner.id, sessionId: source.id, managerSessionId: null,
+            expectedManagerSessionId: receiver.id, authentication })).toMatchObject({ ok: true });
+        if (state === 'reattached') {
+            expect(await setSessionManager({ accountId: owner.id, sessionId: source.id, managerSessionId: receiver.id,
+                expectedManagerSessionId: null, authentication })).toMatchObject({ ok: true });
+        }
+        const settlement = { actorUserId: owner.id, sessionId: receiver.id, localId, publisherAuthority: publisher,
+            decision: { kind: 'admit' as const, finalContent: content } };
+        const result = await settlePendingInputAdmission(settlement);
+        if (state === 'provider accepted' || state === 'overlapping follower') {
+            expect(result).toMatchObject({ ok: true, result: { status: 'alreadyAccepted', localId } });
+            return;
+        }
+        expect(result).toMatchObject({ ok: true, result: { status: 'rejected', code: 'session_input_cancelled' },
+            pendingCount: 0, pendingBlockedCount: 0 });
+        expect(await settlePendingInputAdmission(settlement)).toMatchObject({ ok: true,
+            result: { status: 'rejected', code: 'session_input_cancelled' } });
+        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: receiver.id, localId } } }))
+            .toMatchObject({ content, deliveryResolution: null, turnStartWitnessId: null });
+        expect(await enqueuePendingMessage({ actorUserId: owner.id, targetMachineId: publisher.machineId,
+            sessionId: receiver.id, localId: 'next-human-input', content })).toMatchObject({ ok: true });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: receiver.id, publisherAuthority: publisher }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId: 'next-human-input' } });
     });
 
     it("rejects an edit that changes the authored recipient of an exact target row", async () => {

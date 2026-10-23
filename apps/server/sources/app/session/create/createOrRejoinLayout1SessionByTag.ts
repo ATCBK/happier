@@ -204,15 +204,6 @@ async function insertAdmittedLayout1SessionInTx(
     };
 }
 
-/** Placement deletion takes exclusive Account admission; birth holds content admission. */
-function hasOnlyFencedCreationAdmission(prepared: PreparedLayout1SessionCreate): boolean {
-    return (prepared.initialAccess?.grants.length ?? 0) === 0
-        && (prepared.initialTriggers?.length ?? 0) === 0
-        && prepared.primaryTeamId == null
-        && (prepared.teamCredentialBindings?.length ?? 0) === 0
-        && prepared.discussionParticipant === undefined;
-}
-
 /**
  * Only a fresh private row with Account-local admission is protected completely
  * by the existing owner-metadata fence. A Workflow birth Run belongs to that
@@ -225,7 +216,11 @@ function hasOnlyAccountLocalCreationAdmission(
     authentication: SessionAccessAuthentication,
     authorization: SessionCreationExecutionAuthorization | undefined,
 ): boolean {
-    return hasOnlyFencedCreationAdmission(prepared)
+    return (prepared.initialTriggers?.length ?? 0) === 0
+        && (prepared.initialAccess?.grants.length ?? 0) === 0
+        && prepared.primaryTeamId == null
+        && prepared.discussionParticipant === undefined
+        && (prepared.teamCredentialBindings?.length ?? 0) === 0
         && authorization === undefined
         && authentication.sessionRuntimePrincipal === undefined
         && authentication.apiTokenGrant === undefined
@@ -295,11 +290,10 @@ export async function createOrRejoinLayout1SessionByTag(
     authentication: SessionAccessAuthentication,
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
 ): Promise<Layout1SessionCreateOutcome> {
-    // The cursor fence covers ordinary birth/rejoin and manager publication.
-    // Nonempty grants, Team resources, Discussion slots and trigger definitions
-    // still depend on predicates beyond those fences. Placement's active-resource
-    // checks are protected by the organization deletion owner's exclusive admission.
-    const isolationLevel = hasOnlyFencedCreationAdmission(prepared) ? undefined : "Serializable";
+    // Each composed owner rechecks mutable admission during terminal
+    // publication, including both sides of the Machine assignment/removal race.
+    // Placement deletion holds its existing exclusive Account admission.
+    const isolationLevel = "ReadCommitted";
     try {
         const fresh = hasOnlyAccountLocalCreationAdmission(prepared, authentication, sessionCreationAuthorization)
             ? await inTx(tx => tryCreateAccountLocalSessionInTx(tx, prepared, authentication), {

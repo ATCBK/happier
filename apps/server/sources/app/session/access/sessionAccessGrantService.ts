@@ -1,12 +1,13 @@
 import { resolveStructuralSessionAccessForAccountsInTx } from "./sessionAccess";
+import { isDeepStrictEqual } from "node:util";
 import { decodeBase64 } from "privacy-kit";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "./sessionRecipients";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelopeError } from "@/app/session/encryption/sessionDataKeyEnvelopeAdmission";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { beforeAccountChangePublication, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
     readSessionDataKeyEnvelopeInTx,
@@ -217,20 +218,35 @@ async function validateSessionContextTeamInTx(
     return null;
 }
 
-/** Apply creation-time grants as one materialization step. */
-export async function applyInitialSessionAccessInTx(
-    tx: Tx,
-    params: Readonly<{
-        creatorAccountId: string;
-        sessionId: string;
-        initialAccess: SessionInitialAccessMaterializedV1;
-        authentication: SessionAccessAuthentication;
-    }>,
-): Promise<Readonly<{
+type InitialSessionAccessInput = Readonly<{
+    creatorAccountId: string;
+    sessionId: string;
+    initialAccess: SessionInitialAccessMaterializedV1;
+    authentication: SessionAccessAuthentication;
+}>;
+
+/** A failed initial admission must unwind the newborn Session and all publications. */
+export class SessionInitialAccessError extends Error {
+    constructor(readonly code: SessionAccessGrantErrorCode | "session_initial_access_creator_mismatch") {
+        super(code);
+        this.name = "SessionInitialAccessError";
+    }
+}
+
+type InitialSessionAccessAdmission = Readonly<{
     ok: true;
-    effects: SessionAccessGrantEffects;
-    directShares: readonly SessionAccessDirectShareRow[];
-}> | Readonly<{ ok: false; error: SessionAccessGrantErrorCode | "session_initial_access_creator_mismatch" }>> {
+    session: Readonly<{ accountId: string; primaryTeamId: string | null; encryptionMode: string }>;
+    primaryTeam: Readonly<{ sessionCreationPolicy: TeamSessionCreationPolicy; archivedAt: Date | null }> | null;
+    resolved: readonly Readonly<{
+        subject: SessionAccessGrantSubject;
+        grant: SessionAccessGrantValue;
+        accountEnvelopeInput?: unknown;
+    }>[];
+    envelopeWrites: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
+}> | Readonly<{ ok: false; error: SessionAccessGrantErrorCode | "session_initial_access_creator_mismatch" }>;
+
+/** Pure creation admission, reused after terminal Account locking without applying grants. */
+async function admitInitialSessionAccessInTx(tx: Tx, params: InitialSessionAccessInput): Promise<InitialSessionAccessAdmission> {
     const session = await tx.session.findUnique({
         where: { id: params.sessionId },
         select: { accountId: true, primaryTeamId: true, encryptionMode: true },
@@ -327,6 +343,34 @@ export async function applyInitialSessionAccessInTx(
             authentication: params.authentication,
         });
         if (policyError) return { ok: false, error: policyError };
+    }
+
+    return { ok: true, session, primaryTeam, resolved, envelopeWrites };
+}
+
+/** Apply creation-time grants as one materialization step. */
+export async function applyInitialSessionAccessInTx(
+    tx: Tx,
+    params: InitialSessionAccessInput,
+): Promise<Readonly<{
+    ok: true;
+    effects: SessionAccessGrantEffects;
+    directShares: readonly SessionAccessDirectShareRow[];
+}> | Readonly<{ ok: false; error: SessionAccessGrantErrorCode | "session_initial_access_creator_mismatch" }>> {
+    const admission = await admitInitialSessionAccessInTx(tx, params);
+    if (!admission.ok) return admission;
+    const { session, primaryTeam, resolved, envelopeWrites } = admission;
+    if (params.initialAccess.grants.length > 0 || session.primaryTeamId !== null) {
+        beforeAccountChangePublication(tx, [params.creatorAccountId], async client => {
+            const current = await admitInitialSessionAccessInTx(client, params);
+            if (!current.ok) throw new SessionInitialAccessError(current.error);
+            // Policy changes may alter the implicit required grant/floor. Replay
+            // the whole materialization instead of committing the old grants.
+            if (!isDeepStrictEqual(current.resolved, resolved)
+                || teamPolicyRequiresGrant(current.primaryTeam) !== teamPolicyRequiresGrant(primaryTeam)) {
+                throw new TransactionReplayRequiredError("session-initial-access-admission-changed");
+            }
+        });
     }
 
     // A private creation with no requested grants has no access transition to

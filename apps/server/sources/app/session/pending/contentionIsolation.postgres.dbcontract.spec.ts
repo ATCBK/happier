@@ -3,12 +3,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { db, initDbPostgres } from '@/storage/db';
 import { getDbProviderFromEnv } from '@/storage/prisma';
-import type { Tx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
+import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 import { enqueuePendingMessageByAuthenticatedMachine } from './pendingMessageService';
 import { mutateSessionBoard } from '@/app/session/board/service';
 import { controlAutonomousExchange } from './autonomousExchangeControl';
-import { setSessionAttentionStanding, setSessionFolderAssignment, upsertSessionOrganizationFolder } from '@/app/session/organization/organizationMutations';
+import { deleteSessionOrganizationFolder, deleteSessionOrganizationLabel, setSessionAttentionStanding, setSessionFolderAssignment, upsertSessionOrganizationFolder } from '@/app/session/organization/organizationMutations';
+import { hashSessionOrganizationKey } from '@/app/session/organization/hashKeys';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import {
     initializeSessionSystemRecordsProtocolV1Activation,
@@ -25,6 +27,203 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         expect(await initializeSessionSystemRecordsProtocolV1Activation(db)).toBe(true);
     });
     afterAll(async () => { resetSessionSystemRecordsProtocolV1ActivationForTests(); await db.$disconnect(); });
+
+    it.each(['cursor advance', 'root archived'] as const)('readmits autonomous control after %s during discovery', async interleaving => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const [source, destination] = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', currentStorageState: 'hosted',
+        } })));
+        const originLocalId = `origin-${randomUUID()}`;
+        const state = { v: 1, observedStarts: 1, pauseAtStarts: 1, afterTurns: 1, stopped: false };
+        const root = await db.sessionMessage.create({ data: {
+            sessionId: source.id, localId: originLocalId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'original' } } },
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: account.id, sessionRelationship: 'owner' },
+            autonomousExchangeState: state,
+        } });
+        const pending = await db.sessionPendingMessage.create({ data: {
+            sessionId: destination.id, localId: `dependent-${randomUUID()}`, position: 1,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'dependent' } } },
+            requestedAction: { v: 1, kind: 'enqueue' }, status: 'queued',
+            deliveryState: 'blocked', deliveryBlockedReason: 'autonomous_check_in',
+            autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: originLocalId,
+            autonomousExchangeCause: 'agent_session',
+        } });
+        await db.session.update({ where: { id: destination.id }, data: { pendingCount: 1, pendingBlockedCount: 1 } });
+        const originalTransaction = db.$transaction;
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        let interleaved = false;
+        try {
+            // Interleave only at the real Prisma transport, preserving the
+            // production admission, state transition and publication owners.
+            db.$transaction = new Proxy(originalTransaction, {
+                apply(target, thisArg, args) {
+                    const operation: unknown = args[0];
+                    if (typeof operation !== 'function') return Reflect.apply(target, thisArg, args);
+                    return Reflect.apply(target, thisArg, [async (tx: Tx) => {
+                        const pendingMessages = new Proxy(tx.sessionPendingMessage, {
+                            get(owner, property, receiver) {
+                                const method: unknown = Reflect.get(owner, property, receiver);
+                                if (property !== 'findMany' || typeof method !== 'function') return method;
+                                return async (...values: unknown[]) => {
+                                    const rows: unknown = await Reflect.apply(method, owner, values);
+                                    if (!interleaved) {
+                                        interleaved = true;
+                                        if (interleaving === 'root archived') {
+                                            await db.session.update({ where: { id: source.id }, data: { archivedAt: new Date() } });
+                                        } else {
+                                            await inTx(client => markAccountChanged(client, {
+                                                accountId: account.id, kind: 'account', entityId: account.id,
+                                            }));
+                                        }
+                                    }
+                                    return rows;
+                                };
+                            },
+                        });
+                        return Reflect.apply(operation, undefined, [new Proxy(tx, {
+                            get(owner, property, receiver) {
+                                return property === 'sessionPendingMessage' ? pendingMessages : Reflect.get(owner, property, receiver);
+                            },
+                        })]);
+                    }, args[1]]);
+                },
+            });
+            const result = await controlAutonomousExchange({ actorUserId: account.id, sessionId: source.id,
+                originInputLocalId: originLocalId,
+                request: { control: 'continue', observedRevision: `session-message-row-revision:v1:${root.rowRevision}` },
+            });
+            expect(interleaved).toBe(true);
+            if (interleaving === 'root archived') {
+                expect(result).toEqual({ ok: false, error: 'forbidden' });
+                expect(await db.sessionMessage.findUniqueOrThrow({ where: { id: root.id } }))
+                    .toMatchObject({ autonomousExchangeState: state, rowRevision: root.rowRevision });
+                expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { id: pending.id } }))
+                    .toMatchObject({ deliveryState: 'blocked', deliveryBlockedReason: 'autonomous_check_in' });
+                expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+            } else {
+                expect(result).toMatchObject({ ok: true, state: { pauseAtStarts: 2 } });
+                expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { id: pending.id } }))
+                    .toMatchObject({ deliveryState: null, deliveryBlockedReason: null });
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ seq: 2 });
+            }
+        } finally {
+            db.$transaction = originalTransaction;
+            vi.unstubAllEnvs();
+            await db.sessionMessage.deleteMany({ where: { sessionId: { in: [source.id, destination.id] } } });
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('archives only the requested label when the Account cursor advances before publication', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const scopeKey = randomUUID();
+        const retainedScopeKey = randomUUID();
+        await db.sessionOrganizationLabel.createMany({ data: [scopeKey, retainedScopeKey].map(key => ({
+            accountId: account.id, labelKind: 'workspace', scopeKey: key, scopeHash: hashSessionOrganizationKey(key),
+        })) });
+        const originalTransaction = db.$transaction;
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        let advanced = false;
+        try {
+            db.$transaction = new Proxy(originalTransaction, {
+                apply(target, thisArg, args) {
+                    const operation: unknown = args[0];
+                    if (typeof operation !== 'function') return Reflect.apply(target, thisArg, args);
+                    return Reflect.apply(target, thisArg, [async (tx: Tx) => {
+                        return Reflect.apply(operation, undefined, [new Proxy(tx, {
+                            get(owner, property, receiver) {
+                                if (property !== '$queryRawUnsafe') return Reflect.get(owner, property, receiver);
+                                return (query: string, ...values: unknown[]) => {
+                                    const native = owner.$queryRawUnsafe(query, ...values);
+                                    if (advanced || !query.includes('FROM "Account"') || !query.includes('FOR UPDATE')) return native;
+                                    advanced = true;
+                                    let scheduled: Promise<unknown> | undefined;
+                                    const run = () => scheduled ??= (async () => {
+                                        // The aggregate owner now admits exclusively at entry.
+                                        // Let an independent cursor publisher win before it.
+                                        await inTx(client => markAccountChanged(client, { accountId: account.id, kind: 'account', entityId: account.id }));
+                                        return await native;
+                                    })();
+                                    return new Proxy(native, { get(promise, method, queryReceiver) {
+                                        if (method !== 'then' && method !== 'catch' && method !== 'finally') return Reflect.get(promise, method, queryReceiver);
+                                        return (...callbacks: unknown[]) => {
+                                            const queryPromise = run();
+                                            return Reflect.apply(Reflect.get(queryPromise, method, queryPromise), queryPromise, callbacks);
+                                        };
+                                    } });
+                                };
+                            },
+                        })]);
+                    }, args[1]]);
+                },
+            });
+            expect(await deleteSessionOrganizationLabel({ accountId: account.id, request: { labelKind: 'workspace', scopeKey } }))
+                .toEqual({ labelKind: 'workspace', scopeKey, archived: true });
+            expect(advanced).toBe(true);
+            const rows = await db.sessionOrganizationLabel.findMany({ where: { accountId: account.id } });
+            expect(rows.find(row => row.scopeKey === scopeKey)?.archivedAt).toBeInstanceOf(Date);
+            expect(rows.find(row => row.scopeKey === retainedScopeKey)?.archivedAt).toBeNull();
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ seq: 2 });
+        } finally {
+            db.$transaction = originalTransaction;
+            vi.unstubAllEnvs();
+            await db.sessionOrganizationLabel.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('rejects a folder deleted before folder-assignment admission', async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', currentStorageState: 'hosted',
+        } });
+        const created = await upsertSessionOrganizationFolder({ accountId: account.id, request: {
+            folderKey: randomUUID(), parentFolderId: null, parentFolderKey: null, sortKey: null, display: null,
+        } });
+        if ('error' in created) throw new Error(`Unexpected folder setup refusal: ${created.error}`);
+        const folderId = created.folder.folderId;
+        const originalTransaction = db.$transaction;
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        let deleted = false;
+        try {
+            db.$transaction = new Proxy(originalTransaction, {
+                apply(target, thisArg, args) {
+                    const operation: unknown = args[0];
+                    if (typeof operation !== 'function') return Reflect.apply(target, thisArg, args);
+                    return Reflect.apply(target, thisArg, [async (tx: Tx) => Reflect.apply(operation, undefined, [new Proxy(tx, {
+                        get(owner, property, receiver) {
+                            const method: unknown = Reflect.get(owner, property, receiver);
+                            if (property !== '$queryRawUnsafe' || typeof method !== 'function') return method;
+                            return async (...values: unknown[]) => {
+                                if (!deleted && typeof values[0] === 'string'
+                                    && values[0].includes('FROM "Account"') && /FOR (?:KEY SHARE|UPDATE)/.test(values[0])) {
+                                    // The canonical delete owns exclusive Account admission.
+                                    // Commit it immediately before this attempt's admission.
+                                    deleted = true;
+                                    await deleteSessionOrganizationFolder({ accountId: account.id, request: { folderId, assignmentBehavior: 'moveAssignmentsToParent' } });
+                                }
+                                return Reflect.apply(method, owner, values);
+                            };
+                        },
+                    })]), args[1]]);
+                },
+            });
+            expect(await setSessionFolderAssignment({ accountId: account.id, sessionId: session.id,
+                folderId, authentication: createPresentUserSessionAccessAuthentication() })).toEqual({ error: 'invalid-folder' });
+            expect(deleted).toBe(true);
+            expect(await db.sessionFolderAssignment.findUnique({ where: {
+                accountId_sessionId: { accountId: account.id, sessionId: session.id },
+            } })).toBeNull();
+        } finally {
+            db.$transaction = originalTransaction;
+            vi.unstubAllEnvs();
+            await db.session.delete({ where: { id: session.id } });
+            await db.sessionOrganizationFolder.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
 
     it('waits for every autonomous control Session before mutating its root or dependent Pending child', async () => {
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });

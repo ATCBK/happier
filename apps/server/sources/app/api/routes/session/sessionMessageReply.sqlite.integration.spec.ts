@@ -124,8 +124,15 @@ describe('original Session input reply custody', () => {
             content: { t: 'plain', v: { text: 'Exact final answer' } } } });
         const terminal = { v: 1 as const, sessionId: session.id, turnId, mutationId: randomUUID(),
             action: outcomeKind === 'cancelled' ? 'cancel' as const : 'complete' as const, observedAt: Date.now() + 1,
-            transcriptAnchors: { startSeqInclusive: input.seq, endSeqInclusive: final.seq, finalAssistantMessageSeq: final.seq } };
+            ...(outcomeKind === 'cancelled' ? {} : { transcriptAnchors: {
+                startSeqInclusive: input.seq, endSeqInclusive: final.seq, finalAssistantMessageSeq: final.seq } }) };
         expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });
+        // Cancel has no transcript payload; the durable final arrives through
+        // the canonical late-anchor operation and enriches the same outcome.
+        if (outcomeKind === 'cancelled') expect(await applySessionTurnMutation({ actorUserId: account.id, authentication,
+            mutation: { v: 1, sessionId: session.id, turnId, mutationId: randomUUID(), action: 'append_transcript_anchors',
+                observedAt: Date.now() + 2, transcriptAnchors: { startSeqInclusive: input.seq, endSeqInclusive: final.seq,
+                    finalAssistantMessageSeq: final.seq } } })).toMatchObject({ ok: true });
         await withAuthenticatedTestApp(registerSessionMessageRoutes, async app => {
             const url = `/v2/sessions/${session.id}/messages/by-local-id/${localId}/reply`;
             const headers = { 'x-test-user-id': account.id };

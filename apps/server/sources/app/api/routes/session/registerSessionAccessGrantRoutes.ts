@@ -9,7 +9,7 @@ import { projectReleasedDirectShareEvent, scheduleReleasedDirectShareEvent } fro
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { validateRequiredTeamVisibilityInTx } from "@/app/teams/credentials/sessionBinding";
 import { SessionTeamCredentialBindingRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { inspectSessionAccessCandidatesInTx, resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";
 import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
@@ -39,10 +39,10 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
         schema: { body: SessionAccessCandidatesInspectRequestV1Schema,
             response: { 200: SessionAccessCandidatesInspectResponseV1Schema, ...errors } },
     }, async (request, reply) => {
-        const result = await inTx((tx) => inspectSessionAccessCandidatesInTx({
+        const result = await inReadSnapshot((tx) => inspectSessionAccessCandidatesInTx({
             tx, actorAccountId: request.userId, ...request.body,
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }), { isolationLevel: 'Serializable', readOnly: true });
+        }));
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
         return reply.send(result.value);
     });
@@ -53,13 +53,13 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
             response: { 200: ResolveSessionAccessPrincipalsResponseV1Schema },
         },
     }, async (request, reply) => {
-        const value = await inTx((tx) => resolveSessionAccessPrincipalsInTx({
+        const value = await inReadSnapshot((tx) => resolveSessionAccessPrincipalsInTx({
             tx,
             actorAccountId: request.userId,
             subjects: request.body.subjects,
             ...(request.body.creationTeamId === undefined ? {} : { creationTeamId: request.body.creationTeamId }),
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */, readOnly: true });
+        }));
         return reply.send(value);
     });
     collaborationApp.post("/v2/sessions/access-grants/list", {

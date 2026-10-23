@@ -3,7 +3,7 @@ import { SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2, SessionLookupByTagsRequestV2Schema,
 import { z } from "zod/mini";
 import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
 
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import {
     createV2SessionOwnerRowSelect,
@@ -36,7 +36,7 @@ export function registerSessionLookupByTagsRoute(app: Fastify) {
         },
     }, async (request, reply) => {
         const userId = request.userId;
-        return await inTx(async (tx) => {
+        return await inReadSnapshot(async (tx) => {
             const sessions = await tx.session.findMany({
                 where: {
                     accountId: userId,
@@ -84,6 +84,6 @@ export function registerSessionLookupByTagsRoute(app: Fastify) {
                 }
                 throw error;
             }
-        }, { isolationLevel: "Serializable" /* Tag lookup combines storage mode, current access and Session projection from one snapshot. */, readOnly: true });
+        });
     });
 }

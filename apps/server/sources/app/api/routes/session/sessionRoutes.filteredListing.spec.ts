@@ -1,10 +1,25 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createDbMocks, inTxPostgresControlStatementMock } from '@/app/api/testkit/dbMocks';
 import { getRouteEntry } from '@/app/api/testkit/routeHarness';
 import { createRouteTestBuilder } from '@/app/api/testkit/routeTestBuilder';
 import { registerSessionFilteredListingRoute } from './registerSessionFilteredListingRoute';
 
+const boundary = vi.hoisted(() => ({ db: undefined as unknown }));
+// Replace only persistence; Home configuration and feature admission stay real.
+vi.mock('@/storage/db', () => ({ get db() { return boundary.db; } }));
+
 describe('POST /v2/sessions/query activation', () => {
+    beforeEach(() => {
+        vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+        const mocks = createDbMocks({ homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'],
+            simpleCache: ['findUnique'] });
+        mocks.db.homeSettings.findUnique.mockResolvedValue(null);
+        mocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
+        mocks.db.simpleCache.findUnique.mockResolvedValue({ value: 'srv_test_home' });
+        const reader = { ...mocks.db, ...inTxPostgresControlStatementMock };
+        boundary.db = { ...reader, $transaction: async (read: (tx: typeof reader) => Promise<unknown>) => read(reader) };
+    });
     afterEach(() => vi.unstubAllEnvs());
 
     it('declares only the reachable strict response contracts', () => {

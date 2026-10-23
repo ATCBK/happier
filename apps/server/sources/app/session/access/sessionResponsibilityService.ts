@@ -17,7 +17,7 @@ import { markCurrentSessionReadersChanged } from "@/app/session/changeTracking/m
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { AccountStatus, getDbProviderFromEnv } from "@/storage/prisma";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { afterAccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     assertSessionCapabilityInTx,
@@ -220,7 +220,7 @@ export async function setSessionResponsibility(params: Readonly<{
             responsibleAccount,
             autoFollowed,
         };
-    }, { isolationLevel: "Serializable" /* Responsibility admission and access-change cleanup depend on the same assignment and eligibility reads. */ });
+    }, { isolationLevel: "ReadCommitted" /* The canonical Session audience fence precedes actor and assignee admission. */ });
 }
 
 /**
@@ -361,7 +361,7 @@ export async function listSessionResponsibilityCandidates(params: Readonly<{
     const trimmedQuery = params.query?.trim();
     const query = trimmedQuery ? trimmedQuery : undefined;
 
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const sessionExists = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: { id: true, archivedAt: true },
@@ -440,5 +440,5 @@ export async function listSessionResponsibilityCandidates(params: Readonly<{
                 })
                 : null,
         };
-    }, { isolationLevel: "Serializable" /* Responsibility admission and access-change cleanup depend on the same assignment and eligibility reads. */ });
+    });
 }

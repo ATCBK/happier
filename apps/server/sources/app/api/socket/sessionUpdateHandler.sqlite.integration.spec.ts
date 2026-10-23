@@ -532,6 +532,7 @@ describe("session update handler on SQLite", () => {
     });
 
     it("advertises transcript observation support before the Antigravity publisher claim without admitting observations", async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         const owner = await db.account.create({
             // A Session-owning Account is current: terminal turn settlement
             // takes the canonical Account transition fence.
@@ -633,10 +634,19 @@ describe("session update handler on SQLite", () => {
         );
 
         const claimedObservationAcks: unknown[] = [];
-        await getSocketHandler(socket, "transcript-observation-v1")(
-            observation,
-            (value: unknown) => claimedObservationAcks.push(value),
-        );
+        const trace = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        try {
+            await getSocketHandler(socket, "transcript-observation-v1")(
+                observation,
+                (value: unknown) => {
+                    expect(trace).toHaveBeenCalledWith(expect.objectContaining({
+                        phase: 'socket.transcript-observation.ack', sessionId: session.id,
+                        requestId: expect.any(String),
+                    }), '[web-latency]');
+                    claimedObservationAcks.push(value);
+                },
+            );
+        } finally { trace.mockRestore(); vi.unstubAllEnvs(); }
 
         expect(capabilityAcks).toEqual([{
             ok: true,

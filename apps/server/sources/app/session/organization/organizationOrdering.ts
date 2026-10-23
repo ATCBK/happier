@@ -2,7 +2,7 @@ import type { ReorderSessionOrganizationRequest, ReorderSessionOrganizationRespo
 
 import { inTx } from "@/storage/inTx";
 import { hashSessionOrganizationKey } from "./hashKeys";
-import { markSessionOrganizationChanged } from "./changes";
+import { acquireSessionOrganizationMutationAdmissionInTx, markSessionOrganizationChanged } from "./changes";
 import { mapSessionOrganizationOrderEntry } from "./organizationSnapshot";
 import {
     validateSessionOrganizationOrderRequest,
@@ -52,6 +52,7 @@ export async function reorderSessionPinsInTx(tx: SessionOrganizationTx, params: 
     | ReorderSessionOrganizationResponse
     | { readonly error: "invalid-session-organization-order" }
 > {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     const valid = await validateSessionOrganizationSessionOrderItems({
         accountId: params.accountId,
         entries: params.request.entries,
@@ -105,7 +106,7 @@ export async function reorderSessionPins(params: Readonly<{
     | ReorderSessionOrganizationResponse
     | { readonly error: "invalid-session-organization-order" }
 > {
-    return await inTx(async (tx) => await reorderSessionPinsInTx(tx, params), { isolationLevel: "Serializable" /* Whole organization order replacement must serialize with membership and hierarchy writers. */ });
+    return await inTx(async (tx) => await reorderSessionPinsInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function reorderSessionOrganizationInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -113,6 +114,7 @@ export async function reorderSessionOrganizationInTx(tx: SessionOrganizationTx, 
     request: ReorderSessionOrganizationRequest;
     authentication: SessionAccessAuthentication;
 }>) {
+    await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
     const valid = await validateSessionOrganizationOrderRequest({
         accountId: params.accountId,
         request: params.request,
@@ -218,5 +220,5 @@ export async function reorderSessionOrganization(params: Readonly<{
     request: ReorderSessionOrganizationRequest;
     authentication: SessionAccessAuthentication;
 }>) {
-    return await inTx(async (tx) => await reorderSessionOrganizationInTx(tx, params), { isolationLevel: "Serializable" /* Whole organization order replacement must serialize with membership and hierarchy writers. */ });
+    return await inTx(async (tx) => await reorderSessionOrganizationInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }

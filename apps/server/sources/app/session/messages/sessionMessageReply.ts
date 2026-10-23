@@ -217,7 +217,7 @@ export async function createSessionInputReplyProgressInTx(tx: Tx, params: Readon
         if (params.reply.workflow) return { v: 1, ...params.reply, disposition: 'observing' };
         const question = await tx.discussionMessage.findUnique({ where: { id: params.reply.discussion.messageId }, select: { producerV1: true } });
         const producer = question?.producerV1 == null ? null : DiscussionProducerV1StoredSchema.safeParse(question.producerV1);
-        if (producer && !producer.success || !isDeepStrictEqual(producer?.success ? producer.data.sourceSession : undefined,
+        if (producer && !producer.success || !isDeepStrictEqual(producer?.success && producer.data.kind === 'agent' ? producer.data.sourceSession : undefined,
             params.reply.sourceSession)) return null;
         return { v: 1, ...params.reply, disposition: 'return_pending' };
     }
@@ -341,7 +341,8 @@ export async function readSessionInputDiscussionReplyReturnInTx(tx: Tx, params: 
     const workflowReturn = workflow !== undefined && params.workflow !== undefined && progress?.mode === 'wait'
         && params.workflow.runId === workflow.runId && params.workflow.invocationRecordId === workflow.invocationRecordId
         && params.requestLocalId === deriveWorkflowSessionInputLocalIdV2(workflow)
-        && invocation?.lifecycle === 'completed' && invocation.attempt.toString() === params.workflow.invocationAttempt
+        && (invocation?.lifecycle === 'completed' || invocation?.lifecycle === 'failed' || invocation?.lifecycle === 'cancelled')
+        && invocation.attempt.toString() === params.workflow.invocationAttempt
         && progress.outcome !== undefined;
     if (!progress?.discussion || (workflow ? !workflowReturn : progress.mode !== 'return' || params.workflow !== undefined)
         || progress.discussion.participantSessionId !== params.sessionId || progress.discussion.discussionId !== params.discussionId
@@ -351,7 +352,10 @@ export async function readSessionInputDiscussionReplyReturnInTx(tx: Tx, params: 
         || params.localId !== deriveSessionMessageReplyReturnLocalIdV1({ sessionId: params.sessionId,
             localId: params.requestLocalId, acceptedTurnId: params.acceptedTurnId })
         || !await isDiscussionReplyDestinationCurrentInTx(tx, { accountId: params.accountId, discussion: progress.discussion, workflow })) return null;
-    return progress;
+    // The accepted Workflow result owns the outward terminal fact, even when
+    // its native turn completed before result validation failed or Stop won.
+    return workflowReturn && (invocation?.lifecycle === 'failed' || invocation?.lifecycle === 'cancelled')
+        ? { ...progress, outcome: { kind: invocation.lifecycle } } : progress;
 }
 
 /** Called by the sole Discussion writer inside its publication transaction, never by a caller ACK. */

@@ -6,7 +6,7 @@ import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv'
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from '@/app/session/encryptionRejectionCodes';
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import { isPrismaErrorCode } from '@/storage/prisma';
 
@@ -309,7 +309,7 @@ export async function mutateSessionSubagentCustody(params: MutateSessionSubagent
     } catch (error) {
         if (isPrismaErrorCode(error, 'P2002')) {
             try {
-                const receipt = await inTx(async (tx) => {
+                const receipt = await inReadSnapshot(async (tx) => {
                     if (!(await assertSessionCapabilityInTx({ tx, accountId: params.actorUserId, sessionId: params.sessionId, capability: 'readTranscript', authentication: params.authentication })).ok) return undefined;
                     return tx.sessionSubagentCustodyReceipt.findUnique({
                         where: {
@@ -321,7 +321,7 @@ export async function mutateSessionSubagentCustody(params: MutateSessionSubagent
                             },
                         },
                     }) as Promise<ReceiptRow | null>;
-                }, { isolationLevel: "Serializable" /* Subagent source retirement and capacity admission must serialize with custody mutation. */ });
+                });
                 if (receipt === undefined) return { ok: false, error: 'session-not-found' };
                 if (!receipt || receipt.expiresAt <= new Date()) return { ok: false, error: 'cas-conflict' };
                 if (receipt.requestDigest !== digest) return { ok: false, error: 'idempotency-conflict' };

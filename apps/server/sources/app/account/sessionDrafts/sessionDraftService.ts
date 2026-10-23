@@ -12,7 +12,7 @@ import { eventRouter } from "@/app/events/eventRouter";
 import { acquireUserKvRowLockInTx, applyUserKvMutationsInTx, UserKvMutationConflictError } from "@/app/kv/kvMutate";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 
 import {
@@ -475,9 +475,7 @@ export async function readSessionDraft(params: Readonly<{
     epoch?: SessionDraftAddressEpoch;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftReadServiceResult> {
-    return await inTx((tx) => readSessionDraftInTx(tx, params), {
-        isolationLevel: "Serializable", // Session access and lifecycle admission must remain coherent.
-        readOnly: true,
+    return await inReadSnapshot((tx) => readSessionDraftInTx(tx, params), {
         transactionClass: "session-draft.read",
     });
 }
@@ -496,7 +494,7 @@ export async function listSessionDrafts(params: Readonly<{
     addressKinds?: readonly SessionDraftAddressKindV2[];
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftListResponseV2> {
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const epoch = params.epoch ?? "v1";
         const selectedKinds = epoch === "v2" && params.addressKinds
             ? new Set<SessionDraftAddressKindV2>(params.addressKinds)
@@ -569,8 +567,6 @@ export async function listSessionDrafts(params: Readonly<{
                 : canonicalSessionDraftAddressV2(last);
         return { items, ...(nextAfter ? { nextAfter } : {}) };
     }, {
-        isolationLevel: "Serializable", // Session access and lifecycle admission must remain coherent.
-        readOnly: true,
         transactionClass: "session-draft.list",
     });
 }

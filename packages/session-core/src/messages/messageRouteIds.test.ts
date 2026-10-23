@@ -33,6 +33,20 @@ function makeToolMessage(id: string): ToolCallMessage {
 }
 
 describe('messageRouteIds', () => {
+    it('resolves the durable server route emitted for a reduced assistant answer without a dedupe mapping', () => {
+        const reducerState = createReducer();
+        const answer = {
+            id: 'server-answer', localId: null, seq: 5, createdAt: 1,
+            role: 'agent', isSidechain: false, content: [{ type: 'text', text: 'Source answer' }],
+        } satisfies NormalizedMessage;
+        const reduced = reducer(reducerState, [answer]);
+        const message = reduced.messages.find(row => row.kind === 'agent-text')!;
+        const messagesById = Object.fromEntries(reduced.messages.map(row => [row.id, row]));
+        const routeMessageId = resolveMessageRouteIdForDisplay({ message, messagesById, reducerState });
+        expect(routeMessageId).toBe('server:server-answer');
+        expect(resolveSessionMessageRouteId({ routeMessageId, messagesById, reducerState })).toBe(message.id);
+        expect(resolveSessionMessageRouteId({ routeMessageId: 'server:absent', messagesById, reducerState })).toBeNull();
+    });
     it('preserves whitespace-distinct opaque local ids in stable routes', () => {
         expect(parseStableSessionMessageRouteId('local: request-1')).toEqual({
             kind: 'local',

@@ -19,7 +19,7 @@ import {
 } from "@/app/session/turns/parseSessionTurnState";
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { publishSessionTurnMutationUpdate } from "@/app/session/turns/publishSessionTurnMutationUpdate";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 
@@ -30,7 +30,7 @@ export async function readSessionTurns(input: Readonly<{ userId: string; session
     | { status: 404; body: { error: 'Session not found' } }
 > {
     const { userId, sessionId, authentication } = input;
-    const { session, rows, publication, currentlyAccessible } = await inTx(async (tx) => {
+    const { session, rows, publication, currentlyAccessible } = await inReadSnapshot(async (tx) => {
         const currentParticipantWhere = { AND: [{ id: sessionId }, await buildSessionAccessWhere({ tx, accountId: userId, capability: 'readTranscript', mode: 'effective_access_v1', authentication })] };
         const rows = await tx.sessionTurn.findMany({
             where: {
@@ -53,7 +53,7 @@ export async function readSessionTurns(input: Readonly<{ userId: string; session
             publication,
             currentlyAccessible: session !== null,
         };
-    }, { isolationLevel: "Serializable" /* Turn, Session and publication visibility must come from one admitted snapshot. */, readOnly: true });
+    });
     if (!session || !currentlyAccessible || (await readCurrentSessionAccessForOperation({
         accountId: userId, sessionId, authentication, capability: "readTranscript",
     })).status !== "allowed") {

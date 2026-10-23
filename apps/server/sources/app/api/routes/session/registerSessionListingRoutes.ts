@@ -7,7 +7,7 @@ import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessio
 import { SESSION_LIST_PAGE_DEFAULT_LIMIT, SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 import { V2SessionByIdNotFoundSchema, V2SessionByIdResponseSchema, V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { type Fastify } from "../../types";
 import {
@@ -251,7 +251,7 @@ export function registerSessionListingRoutes(app: Fastify) {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list") },
         schema: { response: { 200: z.strictObject({ sessionIds: z.array(z.string()) }) } },
     }, async (request, reply) => {
-        const sessionIds = await inTx(tx => listSessionMetadataPrivacyUpgradeIdsInTx(tx, request.userId), { isolationLevel: "Serializable" /* Metadata privacy upgrade census must observe storage tuple and access from one snapshot. */, readOnly: true });
+        const sessionIds = await inReadSnapshot(tx => listSessionMetadataPrivacyUpgradeIdsInTx(tx, request.userId));
         return reply.header("Cache-Control", "no-store").send({ sessionIds });
     });
 

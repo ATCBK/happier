@@ -27,6 +27,7 @@ import { resolveCurrentSessionPublisherFromServer } from "@/app/api/socket/exter
 import { blockPendingDelivery, enqueuePendingMessage, materializeNextPendingMessage, resolveAcceptedPendingDelivery } from "@/app/session/pending/pendingMessageService";
 import { logger } from '@/utils/logging/log';
 import { withWebLatencyTrace } from '@/utils/webLatencyTrace';
+import { hasExactCurrentPublisherAuthorityInTx } from '@/app/session/pending/hasExactCurrentPublisherAuthorityInTx';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -346,6 +347,44 @@ describe("session publisher presence on SQLite", () => {
             agentStateVersion: change === "heartbeat" ? 9 : 8,
             lastActiveAt: successor.committedFence,
         });
+    });
+
+    it.each(['heartbeat', 'replacement'] as const)("rechecks snapshot publisher authority after database admission (%s)", async change => {
+        const seeded = await seed();
+        let clock = seeded.fence;
+        const presence = createSessionPublisherPresence({ now: () => clock });
+        const socket = {};
+        const successorSocket = {};
+        expect(await presence.registerPublisher({ socket, binding: seeded.binding,
+            completeActivitySnapshot: { state: 'idle', activeCount: 0 } })).toMatchObject({ status: 'registered' });
+        let prepared = false;
+        try {
+            const result = await presence.runAsCurrentPublisherInTx({ socket,
+                authorityMode: 'snapshot', isolationLevel: 'Serializable',
+                // Database admission can await while the same socket heartbeat
+                // commits. Exercise that interval without sleeps or mocked logic.
+                prepare: async () => {
+                    if (!prepared) {
+                        prepared = true;
+                        clock = new Date(seeded.fence.getTime() + 1_000);
+                        if (change === 'heartbeat') {
+                            expect(await presence.touchPublisher({ socket })).toMatchObject({ status: 'touched' });
+                        } else {
+                            expect(await presence.registerPublisher({ socket: successorSocket, binding: seeded.binding,
+                                completeActivitySnapshot: { state: 'idle', activeCount: 0 } }))
+                                .toMatchObject({ status: 'registered' });
+                        }
+                    }
+                    return async () => {};
+                },
+                operation: async (authority, tx) => await hasExactCurrentPublisherAuthorityInTx(
+                    tx, authority, seeded.binding.accountId, seeded.binding.sessionId),
+            });
+            expect(result === true).toBe(change === 'heartbeat');
+        } finally {
+            await presence.forgetDisconnectedPublisher({ socket: successorSocket });
+            await presence.forgetDisconnectedPublisher({ socket });
+        }
     });
 
     it("expires a queued current-publisher operation without running it after the held neighbor settles", async () => {

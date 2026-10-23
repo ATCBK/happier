@@ -367,5 +367,5 @@ export async function applySessionDataKeyEnvelopes(input: Readonly<{
         }
 
         return { ok: true, appliedCount: validated.length };
-    }, { isolationLevel: "Serializable" /* Envelope admission must keep Account keys, storage mode and access in one snapshot. */ });
+    }, { isolationLevel: "ReadCommitted" /* Account key/mode transitions and grant changes share the admitted Account/Session locks. */ });
 }

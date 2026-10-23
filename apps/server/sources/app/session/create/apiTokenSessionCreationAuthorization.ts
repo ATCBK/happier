@@ -14,10 +14,11 @@ import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creat
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import { validateDiscussionParticipantBirthInTx } from '@/app/discussions/accessService';
+import { readDiscussionParticipantBirthAdmissionInTx } from '@/app/discussions/accessService';
 import { hasCurrentSessionActionRpcSourceBindingInTx } from '@/app/api/socket/sessionScopedBinding';
 import { readDiscussionSecondOpinionModelChildV1 } from '@happier-dev/protocol/discussions/secondOpinionActions';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
+import { beforeAccountChangePublication } from '@/app/changes/markAccountChanged';
 
 /** A typed, request-local native birth proof; the original signed binding is never rewritten. */
 export type SessionCreationExecutionAuthorization = ExternalActionExecutionAuthorizationBindingV1 | Readonly<{
@@ -78,7 +79,7 @@ async function isCurrentDiscussionModelBirthInTx(tx: Tx, accountId: string,
             sourceSessionId: binding.sessionActionOrigin.caller.sessionId }))) return false;
     const principal = await verifyCurrentExternalActionPrincipalInTx(tx, binding);
     if (!principal) return false;
-    return (await validateDiscussionParticipantBirthInTx(tx, { accountId, discussionParticipant: ref.data, launch: launch.data,
+    return (await readDiscussionParticipantBirthAdmissionInTx(tx, { accountId, discussionParticipant: ref.data, launch: launch.data,
         authentication: { env: modelBirth.env, authority: principal.authority,
             authenticationEvidence: principal.authenticationEvidence } })).ok;
 }
@@ -96,6 +97,16 @@ export async function readSessionCreationApiTokenIdInTx(
     if (binding.accountId !== accountId || !principal || ('modelBirth' in authorization
         ? !await isCurrentDiscussionModelBirthInTx(tx, accountId, authorization) : binding.actionId !== 'session.spawn_new')) {
         throw new ApiTokenOperationError("invalid_token");
+    }
+    if ('modelBirth' in authorization) {
+        beforeAccountChangePublication(tx, [accountId], async client => {
+            // Native Machine authority can change after the body proof's
+            // initial admission. Reuse the same pure proof and Discussion
+            // admission on current rows, without reacquiring resource locks.
+            if (!await isCurrentDiscussionModelBirthInTx(client, accountId, authorization)) {
+                throw new ApiTokenOperationError("invalid_token");
+            }
+        });
     }
     // This attribution proves that a newly created Session belongs to the
     // spawn-only child that may request a Session-scoped child credential.

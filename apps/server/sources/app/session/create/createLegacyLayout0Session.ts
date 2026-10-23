@@ -7,13 +7,14 @@ import { SessionOwnerEnvelopeError } from "./layout1SessionRowWrite";
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
 import type { SessionCreationExecutionAuthorization } from './apiTokenSessionCreationAuthorization';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 
 /**
  * Writes the released pre-Layout-1 Session row.
  *
  * Layout-0 creation remains a compatibility path for clients that predate the
- * owner-metadata envelope: it carries no owner envelope and no Account
- * owner-metadata fence. It lives beside the Layout-1 constructor so every
+ * owner-metadata envelope: it carries no owner envelope. Its existing Account
+ * admission orders lifecycle authority before reading it. It lives beside the Layout-1 constructor so every
  * Session insert stays with one owner, not so the two paths merge.
  */
 export async function createLegacyLayout0SessionInTx(
@@ -29,6 +30,7 @@ export async function createLegacyLayout0SessionInTx(
         sessionCreationAuthorization?: SessionCreationExecutionAuthorization;
     }>,
 ) {
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "content");
     const account = await tx.account.findUniqueOrThrow({
         where: { id: params.accountId },
         select: { status: true, encryptionMode: true },

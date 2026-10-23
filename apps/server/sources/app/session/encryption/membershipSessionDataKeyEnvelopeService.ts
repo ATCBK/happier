@@ -8,10 +8,11 @@ import {
 
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { buildMembershipHistorySessionAccessWhereInTx } from "@/app/session/access/sessionAccessWhere";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { getTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
 import { getTeamMemberForActorInTx } from "@/app/teams/memberships/memberAdministration";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 
 import {
     isStructurallyValidSessionDataKeyEnvelope,
@@ -324,7 +325,7 @@ export async function readMembershipSessionDataKeyEnvelopePage(input: Readonly<{
         return { ok: false, error: "invalid_cursor" };
     }
 
-    return await inTx(async tx => {
+    return await inReadSnapshot(async tx => {
         const subject = await resolveSubjectInTx(tx, input);
         if (!subject.ok) return { ok: false, error: subject.error };
 
@@ -504,7 +505,7 @@ export async function readMembershipSessionDataKeyEnvelopePage(input: Readonly<{
             exceptions,
             nextCursor,
         } };
-    }, { isolationLevel: "Serializable" /* Membership envelope admission must keep entitlement, keys and storage mode coherent. */ });
+    });
 }
 
 type ValidatedEntry = Readonly<{ sessionId: string; envelope: Uint8Array }>;
@@ -559,6 +560,14 @@ export async function applyMembershipSessionDataKeyEnvelopes(input: Readonly<{
     if (validated === null) return { ok: false, error: "invalid_request" };
 
     return await inTx(async tx => {
+        const discoveredSubject = await resolveSubjectInTx(tx, input);
+        if (!discoveredSubject.ok) return { ok: false, error: discoveredSubject.error };
+        const sessionIds = validated.entries.map(entry => entry.sessionId);
+        // Native membership changes fence affected Sessions before destroying
+        // their old entitlement. Key/lifecycle changes oppose Account admission.
+        // Admit every requested Session and both explicit Accounts together,
+        // then re-resolve the subject rather than using a discovery-time policy.
+        await acquireSessionAccountCursorLocksInTx(tx, sessionIds, [input.actorAccountId, discoveredSubject.recipientAccountId]);
         const subject = await resolveSubjectInTx(tx, input);
         if (!subject.ok) return { ok: false, error: subject.error };
 
@@ -578,7 +587,6 @@ export async function applyMembershipSessionDataKeyEnvelopes(input: Readonly<{
             return { ok: false, error: "recipient_key_unavailable" };
         }
 
-        const sessionIds = validated.entries.map(entry => entry.sessionId);
         const authorized = await tx.session.findMany({
             where: { AND: [eligibleSessionWhere(subject.where, null), { id: { in: sessionIds } }] },
             select: { id: true },
@@ -614,5 +622,5 @@ export async function applyMembershipSessionDataKeyEnvelopes(input: Readonly<{
         }
 
         return { ok: true, appliedCount: validated.entries.length };
-    }, { isolationLevel: "Serializable" /* Membership envelope admission must keep entitlement, keys and storage mode coherent. */ });
+    }, { isolationLevel: "ReadCommitted" });
 }
