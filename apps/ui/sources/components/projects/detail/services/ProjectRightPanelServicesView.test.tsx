@@ -9,7 +9,8 @@ import { ExternalActionMachineBootstrapV1Schema, ExternalActionExecutionAuthoriz
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
-import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { DaemonLocalServiceLauncherSnapshotResponseV1Schema, DaemonLocalServiceLauncherStartRequestV1Schema,
+    DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { DaemonLocalServicePublicPreviewCreateResponseV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import type { IModal } from '@/modal/types';
 import { buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localServices';
@@ -183,7 +184,18 @@ describe('ProjectRightPanelServicesView', () => {
         await installOwnMachineApprovalReplayBoundary({ harness: home, serverId, accountId: 'project-account', machineId: workspace.machineId,
             runtimeActionExecute: createDefaultRuntimeActionExecutor() });
         const running = { ...target, state: 'available' as const, serviceState: 'running' as const, actions: ['manage' as const] };
-        rpc.machine.mockImplementation(async ({ method }) => {
+        rpc.machine.mockImplementation(async ({ method, payload }) => {
+            if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT && payload.startReview) {
+                // Native review is a read-only daemon boundary before the real approval writer.
+                const request = DaemonLocalServiceLauncherStartRequestV1Schema.parse(payload.startReview.request);
+                return DaemonLocalServiceLauncherSnapshotResponseV1Schema.parse({ protocolVersion: 1,
+                    snapshot: { v: 1, machineId: workspace.machineId, updatedAt: 1, targets: [target] },
+                    startReview: { request, target: workspace, reviewedEffect: { command: 'echo web' },
+                        reviewedEffectDigest: 'b'.repeat(64), setup: { required: false,
+                            project: { serverId, projectId: workspace.workspaceId },
+                            reviewedEffect: { commands: [] }, reviewedEffectDigest: 'a'.repeat(64) } },
+                });
+            }
             if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) return DaemonLocalServiceLauncherStartResponseV1Schema.parse({
                 protocolVersion: 1, machineId: workspace.machineId, targetId: target.id, status: 'succeeded',
                 snapshot: { v: 1, machineId: workspace.machineId, updatedAt: 2, targets: [running] },
