@@ -16,6 +16,57 @@ function dragEvent(type: string, x = 50) {
 }
 
 describe('entity DOM carry boundary', () => {
+    it('admits each physical hover once across the source listener and nested DOM targets', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        let geometryReads = 0;
+        let admissions = 0;
+        let writes = 0;
+        let admitted = true;
+        runtime.registerSource({ id: 'source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'session', scope, address: { serverId: 'home', sessionId: 'child' } }) });
+        // A populated Board/sidebar realm; every redundant delivery repeats the entire hit test.
+        for (let index = 0; index < 50; index++) runtime.registerTarget({
+            id: `target-${index}`, scope, acceptedKinds: ['session'],
+            getBounds: () => { geometryReads++; return { x: index * 100, y: 0, width: 100, height: 100 }; },
+            resolve: () => { admissions++; if (!admitted) return { status: 'refused', reason: { code: 'revoked', message: 'Unavailable' } }; return { status: 'allowed', effect: {
+                actionId: 'workspace.tabs.open', input: {}, preview: { verb: 'Open', target: 'Session' },
+            } }; },
+            execute: async () => { writes++; return { status: 'applied' }; },
+        });
+        const sourceHook = await renderHook(() => useEntityDragDomBinding({ runtime, sourceId: 'source', enabled: true }));
+        const outerHook = await renderHook(() => useEntityDropDomBinding(runtime));
+        const innerHook = await renderHook(() => useEntityDropDomBinding(runtime));
+        const source = document.createElement('div');
+        const outer = document.createElement('div');
+        const inner = document.createElement('div');
+        outer.append(inner); document.body.append(source, outer);
+        act(() => { sourceHook.getCurrent()(source); outerHook.getCurrent()(outer); innerHook.getCurrent()(inner); });
+        try {
+            act(() => { source.dispatchEvent(dragEvent('dragstart')); });
+            geometryReads = 0; admissions = 0;
+            for (let frame = 0; frame < 100; frame++) {
+                const hover = dragEvent('dragover', 10 + frame % 80);
+                act(() => { inner.dispatchEvent(hover); });
+                expect(hover.defaultPrevented).toBe(true);
+            }
+            expect({ admissions, geometryReads, writes }).toEqual({ admissions: 100, geometryReads: 5000, writes: 0 });
+            // Event ownership must not turn into coordinate/admission caching.
+            admitted = false;
+            const changed = dragEvent('dragover', 10 + 99 % 80);
+            act(() => { inner.dispatchEvent(changed); });
+            expect(changed.defaultPrevented).toBe(false);
+            expect(runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'revoked' } });
+            admitted = true;
+            await act(async () => { inner.dispatchEvent(dragEvent('drop')); });
+            expect(writes).toBe(1);
+            source.dispatchEvent(dragEvent('dragend'));
+            expect(writes).toBe(1);
+        } finally {
+            runtime.cancel(); source.remove(); outer.remove();
+            await sourceHook.unmount(); await innerHook.unmount(); await outerHook.unmount();
+        }
+    });
     it('prepares a list source only on browser dragstart and delivers it through the same runtime', async () => {
         const runtime = createEntityDragDropRuntime();
         const scope = { serverId: 'home', accountId: 'account' };

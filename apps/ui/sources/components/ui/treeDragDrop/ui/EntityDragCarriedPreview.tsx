@@ -163,6 +163,13 @@ export function EntityDragCarriedPreview(props: EntityDragCarriedPreviewProps): 
         if (Platform.OS !== 'web' || typeof window === 'undefined') return;
         return installEntityDragCancellation(props.runtime, window);
     }, [props.runtime]);
+    // Native geometry is asynchronous. The realm batches its matching targets
+    // and admits once after they answer, rather than once per measured target.
+    // Web hit testing reads current DOM geometry synchronously.
+    React.useEffect(() => {
+        if (Platform.OS === 'web') return;
+        return props.runtime.subscribePointer(() => { void props.runtime.refreshMeasurements(); });
+    }, [props.runtime]);
     const content = React.useMemo(() => <CarriedCardPosition {...props} />, [props]);
     useNativeOverlayPortalNode({
         overlayPortal,

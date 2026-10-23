@@ -232,10 +232,6 @@ export function PluginEntityDropTargetView(props: DropTargetProps & Readonly<{ b
             getBounds, refreshBounds, parentId });
         setTargetId(mounted.current?.id ?? '');
     }, [binding, mountId, props.targetId, props.disabled, revision, parentId, getBounds, refreshBounds]);
-    React.useEffect(() => {
-        if (Platform.OS === 'web' || props.disabled) return;
-        return binding.runtime.subscribePointer(() => { void refreshBounds().then(binding.refresh); });
-    }, [binding, refreshBounds, props.disabled]);
     const attachDrop = useEntityDropDomBinding(props.disabled ? undefined : binding.runtime);
     const attach = React.useCallback((value: unknown) => { node.current = value; attachDrop(value); }, [attachDrop]);
     const snapshot = useEntityDropTargetState(binding.runtime, targetId);

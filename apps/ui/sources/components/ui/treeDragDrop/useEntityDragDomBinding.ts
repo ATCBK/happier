@@ -18,6 +18,19 @@ function blankDragImage(): HTMLImageElement {
 
 export type EntityDragDomCarry = Pick<EntityDragCarry, 'move' | 'cancel'> & Partial<Pick<EntityDragCarry, 'release'>>;
 
+// Window capture and nested targets receive the same browser event. Deliver its
+// pointer once per realm; a later event at the same coordinates still revalidates
+// current admission. Weak event keys retain neither the DOM target nor its carry.
+const pointerDeliveries = new WeakMap<DragEvent, WeakSet<EntityDragDropRuntime>>();
+function deliverDragPointer(runtime: EntityDragDropRuntime, event: DragEvent, move = runtime.move): void {
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    let delivered = pointerDeliveries.get(event);
+    if (delivered?.has(runtime)) return;
+    if (!delivered) { delivered = new WeakSet(); pointerDeliveries.set(event, delivered); }
+    delivered.add(runtime);
+    move({ x: event.clientX, y: event.clientY });
+}
+
 type EntityDragDomBindingInput = Readonly<{
     runtime: EntityDragDropRuntime;
     enabled: boolean;
@@ -68,7 +81,8 @@ export function useEntityDragDomBinding(input: EntityDragDomBindingInput): (node
         blankDragImage(); // Decoded before the first drag starts.
         element.setAttribute('draggable', latest.current.enabled ? 'true' : 'false');
         const move = (event: DragEvent) => {
-            if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) carry.current?.move({ x: event.clientX, y: event.clientY });
+            const active = carry.current;
+            if (active) deliverDragPointer(latest.current.runtime, event, active.move);
         };
         const start = (event: DragEvent) => {
             const current = latest.current;
@@ -135,7 +149,7 @@ export function useEntityDropDomBinding(runtime: EntityDragDropRuntime | undefin
         const over = (event: DragEvent) => {
             const owner = latest.current.runtime;
             if (!owner || owner.getSnapshot().phase !== 'carrying') return;
-            owner.move({ x: event.clientX, y: event.clientY });
+            deliverDragPointer(owner, event);
             if (!acceptsDelivery(owner)) return;
             event.preventDefault();
         };
@@ -143,7 +157,7 @@ export function useEntityDropDomBinding(runtime: EntityDragDropRuntime | undefin
             const owner = latest.current.runtime;
             if (!owner || owner.getSnapshot().phase !== 'carrying') return;
             latest.current.options?.beforeRelease?.();
-            owner.move({ x: event.clientX, y: event.clientY });
+            deliverDragPointer(owner, event);
             if (!acceptsDelivery(owner)) return;
             event.preventDefault();
             event.stopPropagation();

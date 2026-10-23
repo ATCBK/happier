@@ -8,6 +8,7 @@ import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
 import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { TreeDropOutline } from '@/components/ui/treeDragDrop/ui/TreeDropOutline';
+import { EntityDragCarriedPreview } from '@/components/ui/treeDragDrop/ui/EntityDragCarriedPreview';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { createPluginEntityDragDropBinding } from './pluginEntityDragDropBinding';
 import { PluginEntityDragSourceView, PluginEntityDropTargetView } from './PluginEntityDragDropView';
@@ -25,18 +26,19 @@ afterEach(async () => { for (const screen of screens.splice(0)) await screen.unm
 function fixture() {
     const runtime = createEntityDragDropRuntime();
     let writes = 0;
+    let admissions = 0;
     let current = true;
     const source = { descriptor: PluginDragSourceContributionV1Schema.parse({ id: 'pr', title: 'Pull request', client: { artifactId: 'ui', exportName: 'activate' }, platforms: ['web'],
         referenceSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } }),
         describe: () => ({ title: 'Review PR' }), isCurrent: () => current };
     const target = { descriptor: { id: 'detail', title: 'Detail', client: { artifactId: 'ui', exportName: 'activate' }, platforms: ['web' as const],
         acceptedKinds: ['plugin:acme.review/pr' as const], actions: [{ kind: 'plugin' as const, action: 'open' }] },
-        resolve: () => ({ status: 'allowed' as const, effect: { actionId: 'plugin:acme.review/open', input: {}, preview: { verb: 'Open', target: 'Detail' } } }),
+        resolve: () => { admissions++; return { status: 'allowed' as const, effect: { actionId: 'plugin:acme.review/open', input: {}, preview: { verb: 'Open', target: 'Detail' } } }; },
         isCurrent: () => current };
     const binding = createPluginEntityDragDropBinding({ runtime, pluginId: 'acme.review', mountKey: 'view', scope: { serverId: 'home', accountId: 'account' },
         isCurrent: () => current, readSource: () => source, readTarget: () => target,
         executeAction: async () => { writes++; return { status: 'applied' }; } });
-    return { runtime, binding, writes: () => writes, retire: () => { current = false; } };
+    return { runtime, binding, writes: () => writes, admissions: () => admissions, retire: () => { current = false; } };
 }
 
 function event(type: string) {
@@ -46,6 +48,34 @@ function event(type: string) {
 }
 
 describe('mounted plugin entity presentation', () => {
+    it('refreshes native target geometry as one owner pass per pointer frame, independent of target count', async () => {
+        Reflect.set(Platform, 'OS', 'ios');
+        const f = fixture();
+        let targetX = 0;
+        const source = f.binding.mountSource({ mountId: 'source', sourceId: 'pr', reference: { id: '42' } })!;
+        const screen = await renderScreen(<><EntityDragCarriedPreview runtime={f.runtime} />{Array.from({ length: 50 }, (_, index) =>
+            <PluginEntityDropTargetView key={index} binding={f.binding} targetId="detail" testID={`target-${index}`}><span>Detail</span></PluginEntityDropTargetView>)}</>,
+        { createNodeMock: node => typeof node.props?.testID === 'string' && node.props.testID.startsWith('target-') ? {
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(targetX, 0, 100, 100),
+        } : null });
+        screens.push(screen);
+        try {
+            await act(async () => { await f.binding.refreshMeasurements(); });
+            const carry = source.begin('pointer')!;
+            const before = f.admissions();
+            await act(async () => { carry.move({ x: 25, y: 25 }); });
+            // One synchronous hit test and one completed measurement batch, rather than
+            // a whole-realm hit test for each of the 50 native measure completions.
+            expect(f.admissions() - before).toBeLessThanOrEqual(2);
+            expect(f.runtime.getSnapshot().admission?.status).toBe('allowed');
+            // A scroll/ancestor move need not send this leaf another onLayout.
+            // The shared measurement pass must admit its new current location.
+            targetX = 200;
+            await act(async () => { carry.move({ x: 225, y: 25 }); });
+            expect(f.runtime.getSnapshot().admission?.status).toBe('allowed');
+            expect(f.writes()).toBe(0);
+        } finally { f.runtime.cancel(); f.binding.dispose(); }
+    });
     it('refreshes an open chooser when a mounted destination disappears or returns', async () => {
         Reflect.set(Platform, 'OS', 'ios');
         const f = fixture();
