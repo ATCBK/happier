@@ -34,6 +34,7 @@ import {
   ConversationBindingUpdateInputV1Schema,
   MAX_CONVERSATION_APPROVAL_REQUEST_ID_UTF8_BYTES,
   MAX_CONVERSATION_OBSERVATION_CLOCK_SKEW_MS,
+  MAX_CONVERSATION_RECEIVE_WAIT_MS,
   SessionPullRequestLinksV1Schema,
   resolveSessionPullRequestLinksV1,
 } from '@happier-dev/channels-protocol/v1';
@@ -4514,7 +4515,7 @@ pairingRequestId: 'pairing-request-1',
     expect(harness.rows.get(obligation.rowId)?.value).toMatchObject({ attention: false });
   });
 
-  it('keeps no-effect Automation admission retrying beyond five attempts with growing durable backoff', async () => {
+  it('keeps no-effect Automation admission retrying beyond five attempts with bounded durable backoff', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
@@ -4529,7 +4530,7 @@ pairingRequestId: 'pairing-request-1',
           .rejects.toMatchObject({ code: 'channels_ingress_admission_unsettled', retryable: true });
         const obligation = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation');
         if (obligation === undefined) throw new Error('Expected retained ingress custody');
-        const dueAt = attemptedAt + 1_000 * 2 ** (attemptCount - 1);
+        const dueAt = attemptedAt + Math.min(MAX_CONVERSATION_RECEIVE_WAIT_MS, 1_000 * 2 ** (attemptCount - 1));
         expect(obligation.value).toMatchObject({ terminal: false,
           payload: { lifecycle: { phase: 'retryDue', attemptCount, dueAt } } });
         vi.setSystemTime(dueAt);
@@ -8843,7 +8844,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
   });
 
-  it('recovers after more than five transient poll failures with growing backoff', async () => {
+  it('recovers after more than five transient poll failures with bounded growing backoff', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
@@ -8855,7 +8856,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       });
 
       for (let attemptCount = 1; attemptCount <= 7; attemptCount += 1) {
-        const retryDelayMs = 1_000 * 2 ** (attemptCount - 1);
+        const retryDelayMs = Math.min(MAX_CONVERSATION_RECEIVE_WAIT_MS, 1_000 * 2 ** (attemptCount - 1));
         await expect(runConversationCheckpointedPollForInvocation({
           connectionId: 'connection-1',
           waitMs: 0,
@@ -8955,12 +8956,13 @@ describe('Conversation checkpointed-poll ingress', () => {
     vi.setSystemTime(1_000);
     try {
       const harness = createIngressHarness({
-        pollResult: { kind: 'notReady', reason: 'providerConflict', retryAfterMs: 1_000 },
+        pollResult: { kind: 'notReady', reason: 'providerConflict', retryAfterMs: 120_000 },
       });
 
-      // Telegram's exclusive getUpdates slot may remain held across a restart.
+      // A contributed provider wait stays authoritative beyond the local cap.
+      // Telegram's getUpdates 409 adapter separately omits untrusted hints.
       for (let attemptCount = 1; attemptCount <= 7; attemptCount += 1) {
-        const retryDelayMs = 1_000;
+        const retryDelayMs = 120_000;
         await expect(runConversationCheckpointedPollForInvocation({
           connectionId: 'connection-1',
           waitMs: 0,
