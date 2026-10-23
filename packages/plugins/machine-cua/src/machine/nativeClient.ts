@@ -1,7 +1,6 @@
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ExecService, PluginExecSpawnRequest } from '@happier-dev/plugin-sdk/exec';
 import { createSecureTempDirectorySync, writeAtomicFile } from '@happier-dev/plugin-sdk/fs';
-import type { ManagedServiceSpec, ManagedServices } from '@happier-dev/plugin-sdk/managed-services';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +8,7 @@ import * as z from 'zod/mini';
 import { CuaLocalNameSchema } from './schemas.js';
 
 const uploadSchema = z.object({ direction: z.literal('upload'), size: z.number(), sha256: z.string() });
+const daemonStartSchema = z.object({ ok: z.literal(true), status: z.enum(['started', 'already_running']) });
 const privateDirectoryPattern = /^\/tmp\/happier-cua\.[A-Za-z0-9-]+$/u;
 function quote(value: string) { return `'${value.replaceAll("'", "'\\''")}'`; }
 function qualifiedSandboxId(value: string) {
@@ -26,6 +26,22 @@ function path(value: string) {
 function completed(result: Awaited<ReturnType<ExecService['run']>>) {
     return result.termination.observed.kind === 'exit' && result.termination.observed.exitCode === 0
         && result.termination.requestedBy.kind === 'none';
+}
+function detachedDaemonStartCommand(argv: readonly string[]) {
+    const foregroundSuffix = `${quote('daemon')} ${quote('start-sync')}`;
+    if (argv.length !== 3 || argv[0] !== 'sh' || argv[1] !== '-c'
+        || !argv[2].startsWith('exec env ') || !argv[2].endsWith(foregroundSuffix)) {
+        throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
+            message: 'Cua received an unqualified guest daemon start carrier.' });
+    }
+    return `${argv[2].slice(0, -foregroundSuffix.length)}${quote('daemon')} ${quote('start')} ${quote('--json')}`;
+}
+function confirmedDaemonStart(result: Awaited<ReturnType<ExecService['run']>>) {
+    if (!completed(result) || result.stdoutTruncated) return false;
+    try {
+        const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(result.stdout));
+        return daemonStartSchema.safeParse(value).success;
+    } catch { return false; }
 }
 
 export type CuaNativeOutcome<T> =
@@ -135,25 +151,20 @@ export function createCuaNativeClient(options: {
     }
     return {
         putGuestFile,
-        async configureGuestProcess(sandboxId: string, argv: readonly string[], services: ManagedServices, signal?: AbortSignal) {
-            const qualified = qualifiedSandboxId(sandboxId);
+        async configureGuestProcess(sandboxId: string, argv: readonly string[], signal?: AbortSignal) {
+            qualifiedSandboxId(sandboxId);
             if (!argv.length || argv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');
-            const [, name] = qualified.split(':');
-            // This managed process is the operation-scoped start carrier. Cua's
-            // noninteractive shell submits the guest process to cua-spacesd;
-            // the guest process is not owned by the host-side CLI lifetime.
-            const spec = {
-                id: `guest-daemon/local/${name}`,
-                mode: { kind: 'spawn', launch: { executable: options.executable,
-                    args: ['--embedded', 'sandbox', 'shell', qualified, argv.map(quote).join(' ')], env: environment },
-                endpoint: { kind: 'none' } },
-                healthCheck: { kind: 'none' },
-            } satisfies ManagedServiceSpec;
+            const command = detachedDaemonStartCommand(argv);
             try {
-                await services.supervise(spec, { signal });
+                // The finite guest command delegates detachment to Happier's
+                // canonical daemon-start owner and does not return until that
+                // detached daemon answers. cua-spacesd, not this carrier or the
+                // controller operation, then owns the guest process lifetime.
+                const started = await shell(sandboxId, command, signal, true);
+                if (!confirmedDaemonStart(started)) throw new Error('cua_guest_daemon_start_unconfirmed');
             } catch (error) {
                 throw new PluginError({ code: 'cua_guest_daemon_hold_unavailable',
-                    message: 'Cua could not establish the managed foreground guest daemon hold.' }, { cause: error });
+                    message: 'Cua could not confirm the detached guest daemon start.' }, { cause: error });
             }
         },
         async execGuest(sandboxId: string, argv: readonly string[], input?: Uint8Array, signal?: AbortSignal, timeoutMs?: number | null) {

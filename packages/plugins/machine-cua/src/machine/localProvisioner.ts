@@ -38,8 +38,8 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
         return value;
     }
     // The guest daemon is started through `cua sandbox shell`, which runs as the image's own user, so its home is read
-    // from that shell rather than assumed (the runc image's user is `cua`, not root). Cua owns the started guest
-    // process after this operation-scoped carrier exits; suspend/remove remain the guest-process lifetime boundary.
+    // from that shell rather than assumed (the runc image's user is `cua`, not root). Happier's daemon-start command
+    // detaches the guest process before this finite carrier exits; suspend/remove remain its lifetime boundary.
     async function guestShellHome(sandboxId: string) {
         const read = await native.execGuest(sandboxId, ['printenv', 'HOME'], undefined, signal);
         const home = new TextDecoder().decode(read.stdout).trim();
@@ -142,7 +142,7 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
                     throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
                         message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
                 }
-                await native.configureGuestProcess(value.sandboxId, argv, managedServices, signal);
+                await native.configureGuestProcess(value.sandboxId, argv, signal);
                 return { kind: 'process-configured' as const };
             }
             return native.execGuest(value.sandboxId, argv, inputBytes, signal, timeoutMs);

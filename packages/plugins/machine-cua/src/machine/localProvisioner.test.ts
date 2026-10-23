@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
@@ -292,25 +292,37 @@ describe('consumed Cua local provisioner roles', () => {
         await expect(gvisor.provider.bootstrap({ ...resource, runtimeId: 'gvisor' }))
             .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
     });
-    it('hands the exact runc foreground daemon hold to managed services again after controller replacement', async () => {
-        const specs: ManagedServiceSpec[] = [];
-        const supervise = async (spec: ManagedServiceSpec) => { specs.push(spec); return {}; };
+    it('waits for the finite runc start carrier to confirm a detached daemon before settling', async () => {
+        const requests: Array<{ request: PluginExecSpawnRequest; options: unknown }> = [];
+        const native = harness(false, 'runc');
+        let completeCarrier: ((value: PluginProcessResult) => void) | undefined;
+        const carrier = new Promise<PluginProcessResult>((resolve) => { completeCarrier = resolve; });
+        const run: ExecService['run'] = async (request, options) => {
+            requests.push({ request, options });
+            if (request.args?.at(-1)?.includes("'daemon' 'start' '--json'")) return carrier;
+            return native.run(request);
+        };
         const runc = { ...resource, runtimeId: 'runc' as const };
         const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' } };
         const argv = ['sh', '-c', "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start-sync'"];
-        const shellCommand = argv.map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
-        const first = await activated(true, undefined, new AbortController().signal, '0.5.0', supervise, 'runc');
-        await expect(first.action('sandbox-exec')({ resource: runc, argv, processConfig }, first.context))
-            .resolves.toEqual({ kind: 'process-configured' });
-        const replacement = await activated(true, undefined, new AbortController().signal, '0.5.0', supervise, 'runc');
-        await expect(replacement.action('sandbox-exec')({ resource: runc, argv, processConfig }, replacement.context))
-            .resolves.toEqual({ kind: 'process-configured' });
-        expect(specs).toHaveLength(2);
-        expect(specs[1]).toEqual(specs[0]);
-        expect(specs[0]).toMatchObject({ id: 'guest-daemon/local/owned', healthCheck: { kind: 'none' }, mode: { kind: 'spawn', launch: {
-            args: ['--embedded', 'sandbox', 'shell', 'local:owned', shellCommand],
-            env: { HOME: expect.any(String) },
-        }, endpoint: { kind: 'none' } } });
+        const first = await activated(true, run, new AbortController().signal, '0.5.0', undefined, 'runc');
+        let settled = false;
+        const configured = first.action('sandbox-exec')({ resource: runc, argv, processConfig }, first.context)
+            .then((value) => { settled = true; return value; });
+        await vi.waitFor(() => expect(requests.some(({ request }) => request.args?.at(-1)?.includes("'daemon' 'start' '--json'"))).toBe(true));
+        expect(settled).toBe(false);
+        completeCarrier?.(result({ ok: true, status: 'started', relay: 'https://example.test', relayId: 'example' }));
+        await expect(configured).resolves.toEqual({ kind: 'process-configured' });
+        const detachedCommand = "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start' '--json'";
+        expect(requests.find(({ request }) => request.args?.at(-1) === detachedCommand)).toMatchObject({
+            request: { args: ['--embedded', 'sandbox', 'shell', 'local:owned', detachedCommand], env: { HOME: expect.any(String) } },
+            options: { signal: first.context.signal, outputDelivery: 'invocation' },
+        });
+
+        const notReady = await activated(true, async (request) => request.args?.at(-1)?.includes("'daemon' 'start' '--json'")
+            ? result({ ok: true, status: 'starting' }) : native.run(request), new AbortController().signal, '0.5.0', undefined, 'runc');
+        await expect(notReady.action('sandbox-exec')({ resource: runc, argv, processConfig }, notReady.context))
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unavailable' });
     });
     it('refuses a foreground hold whose home is not the home the guest shell actually runs in', async () => {
         const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'runc');
