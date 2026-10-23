@@ -21,19 +21,28 @@ export async function inspectProjectToolFacts(input: Readonly<{
         file: candidate.source.file, ...(candidate.invocation.requestedVersion ? { requestedVersion: candidate.invocation.requestedVersion } : {}) });
     const facts: ProjectToolInspectionV1[] = [];
     const seen = new Set<string>();
+    // Every requirement asks the same unversioned installed-tool question at
+    // this root. Resolve the distinct tools once, retaining all file/version
+    // requirements. Observations belong only to this inspection, never the next.
+    const observations = new Map<string, Pick<ProjectToolInspectionV1, 'availability' | 'version'>>();
     for (const requirement of requirements) {
         const key = JSON.stringify(requirement);
         if (seen.has(key)) continue;
         seen.add(key);
         input.signal?.throwIfAborted();
-        try {
-            const installed = await input.io.resolveTool(requirement.tool, { cwd: input.root, ...(input.signal ? { signal: input.signal } : {}) });
-            input.signal?.throwIfAborted();
-            facts.push({ ...requirement, availability: installed ? 'available' : 'unavailable', ...(installed?.version ? { version: installed.version } : {}) });
-        } catch {
-            input.signal?.throwIfAborted();
-            facts.push({ ...requirement, availability: 'unresolved' });
+        let observation = observations.get(requirement.tool);
+        if (!observation) {
+            try {
+                const installed = await input.io.resolveTool(requirement.tool, { cwd: input.root, ...(input.signal ? { signal: input.signal } : {}) });
+                input.signal?.throwIfAborted();
+                observation = { availability: installed ? 'available' : 'unavailable', ...(installed?.version ? { version: installed.version } : {}) };
+            } catch {
+                input.signal?.throwIfAborted();
+                observation = { availability: 'unresolved' };
+            }
+            observations.set(requirement.tool, observation);
         }
+        facts.push({ ...requirement, ...observation });
     }
     return facts;
 }

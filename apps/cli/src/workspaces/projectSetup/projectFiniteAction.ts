@@ -287,9 +287,17 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             if (sourceAssociation.workspace.machineId !== runtime.machineId && !runtime.inspectSourceProjectManifest) {
                 throw coded('project_source_declaration_unavailable');
             }
-            const sourceDefinition: ProjectManifestFileSnapshot & Pick<ProjectDefinitionInspectOutput, 'commands' | 'environmentExecutionInputs'> = sourceAssociation.workspace.machineId === runtime.machineId
-                ? await readProjectManifest({ root: sourceAssociation.workspace.rootPath })
-                : await runtime.inspectSourceProjectManifest!({ source: sourceAssociation.workspace, signal });
+            // Both passive reads depend only on the admitted SOURCE address.
+            // Settle both before leaving this request; definition/currentness
+            // failures retain precedence and neither read authorizes execution.
+            const [definitionRead, policyRead] = await Promise.allSettled([
+                sourceAssociation.workspace.machineId === runtime.machineId
+                    ? readProjectManifest({ root: sourceAssociation.workspace.rootPath })
+                    : runtime.inspectSourceProjectManifest!({ source: sourceAssociation.workspace, signal }),
+                request.actionId === 'projects.prepare' ? null : readExecutionPolicy(),
+            ]);
+            if (definitionRead.status === 'rejected') throw definitionRead.reason;
+            const sourceDefinition: ProjectManifestFileSnapshot & Pick<ProjectDefinitionInspectOutput, 'commands' | 'environmentExecutionInputs'> = definitionRead.value;
             await assertCurrent();
             if (sourceDefinition.document?.status === 'invalid') throw coded('invalid_manifest');
             const sourceManifest = sourceDefinition.document?.manifest;
@@ -309,7 +317,9 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             if (request.actionId === 'projects.script.run' && request.input.selection.kind === 'named' && !named) throw coded('project_script_not_found');
             const execution = request.actionId === 'projects.compute.exec' ? 'portable'
                 : named?.execution ?? 'primary';
-            const policy = await readExecutionPolicy();
+            if (policyRead.status === 'rejected') throw policyRead.reason;
+            // projects.prepare returned above without reading preferences.
+            const policy = policyRead.value!;
             const placement = resolveProjectExecutionChoiceV1({ execution, sourceMachineId: sourceAssociation.workspace.machineId,
                 adHoc: request.actionId === 'projects.compute.exec',
                 ...(args.context.executionRunTargetMachineId ? { acceptedMachineId: args.context.executionRunTargetMachineId } : {}),
