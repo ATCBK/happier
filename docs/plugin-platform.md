@@ -573,6 +573,22 @@ Contribution-family membership and normalization are Protocol-owned. In developm
 
 The development-only `machineProvisioners` family declares native launch and resource schemas and same-plugin daemon Action roles through its [Protocol owner](../packages/protocol/src/plugins/contributions/machineProvisioners.ts). Discovery reads descriptors without importing provisioner leaves; selected or retained contribution demand activates only the needed leaf through the existing `activate(api)` Action ABI. Roles receive raw declared launch choices or resource values, and options receive the provider-declared query value. The host retains qualified resource references, controller and occurrence identity, current-row custody and captured credentials separately. Effectful roles require that private admission; ordinary contributed Action calls cannot supply it. Retained reads may use the same row custody, while initial checks and options can pin a private captured-account lease without inventing a managed row. Native enrollment accepts buffered argv/private-stdin execution through the same ordinary enrollment recipe; live output is optional. Buffered pairing uses the existing auth request, controller approval and auth wait producers, not another installer or enrollment authority. Only the selected guest process receives any invocation-private output observer and inherited task budget; captured preflight processes do not.
 
+In unreleased 0.3, native installer delivery reads the staged archive in sequential
+fragments through the existing `bootstrapTransport.putFile` Action. The shared
+role schema bounds its base64 field by the incumbent 32 MiB public Action body
+budget; the host subtracts the actual serialized resource/path metadata before
+deriving the raw fragment size. Private role dispatch remains in-process: this
+reuses that real protocol budget as its memory boundary rather than introducing
+an installer-size quota. The Action writes exactly the supplied fragment to the
+host-selected private guest path and returns `confirmed` only after native IO
+settles successfully. The host appends each confirmed fragment to its private
+archive staging file and atomically renames that file only after EOF. Cancellation,
+typed refusal or an uncertain write cannot publish a partial archive. The existing
+installer owns progress and removes staging after extraction; cancellation can
+leave private staging without authorizing further guest IO. First-party and externally installed
+provisioners consume the same schema and assembly recipe; no Lima-specific path,
+new Action role, retry, timer, or development compatibility shim is required.
+
 For an asynchronous native deletion, a reconciling provisioner's destroy Action may return the canonical `accepted` result with its declared native-operation reference. The managed-machine row remains the custody owner: it persists that reference with the submitted Delete intent, re-supplies it to the same destroy role, and clears the resource only after a `confirmed` result. Legacy provisioners may keep returning the synchronous power-result shape; an `unknown` result never discards retained deletion custody or proves absence.
 
 In current 0.3 development source, the shared configurator consumes the options Action's explicit `inputHints.fields` and current occurrence-pinned input schema through the existing Action form owner. A schema alone does not declare rendered fields. A field's optional JSON `defaultValue` seeds a missing initial form value; an explicit retained value, including `false`, `0` or an empty string, takes precedence. Defaults are applied once when the form opens, survive hint localization, and do not replace later edits or final Action validation. Editable selector paths must match the executable launch paths so retained recipes can revalidate through that same options role; the UI does not guess native wrappers or merge launch fragments. Selected native prices retain every line in the canonical configuration facts' `prices` vector, including optional localized labels, exact amount, currency, unit, source and observation time. The shared receipt renders that vector without adding totals, currency conversion or guessed monthly rates. Missing native declarations remain unavailable rather than implying UI support.
