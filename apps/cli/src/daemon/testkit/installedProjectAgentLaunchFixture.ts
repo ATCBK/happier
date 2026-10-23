@@ -24,6 +24,7 @@ import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER } from '@happier-dev/protocol/acti
 /** Installed Project/Account/Trust and native IO composition for cold launch seam tests. */
 export async function createInstalledProjectAgentLaunchFixture(options: Readonly<{
   accountActionCredentials?: StoredCredentials;
+  requesterCredentials?: StoredCredentials;
   prepareProject?: boolean;
 }> = {}) {
   const f = await createProjectSessionRuntimeFixture(options.accountActionCredentials
@@ -32,7 +33,7 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
       // CLI Run ingress remains unwaived and must retain setup review.
       accountSettings: { actionsSettingsV1: setActionApprovalOverride({ settings: { v: 1, actions: {} },
         actionId: 'projects.prepare', surface: 'rpc', approvalRequired: false }) } }
-    : { serverId: 'session-home', serverUrl: 'https://session-home.test' });
+    : { serverId: 'session-home', serverUrl: 'https://session-home.test', credentials: options.requesterCredentials });
   let accountActionCredentials: StoredCredentials | undefined;
   let accountActionSettings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>> | undefined;
   if (options.accountActionCredentials) {

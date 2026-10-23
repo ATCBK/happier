@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, onTestFinished } from 'vitest';
-import { readStoredCredentialsForServerId, writeCredentialsTokenOnly, writeStoredCredentialsForServerId } from '@/persistence';
+import { readStoredCredentialsForServerId, writeCredentialsTokenOnly, writeStoredCredentialsForServerId, type StoredCredentials } from '@/persistence';
 import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema, type AgentRuntimeDaemonServiceRequestV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import type { startDaemonControlServer } from '@/daemon/controlServer';
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
@@ -21,12 +21,13 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   controller?: PluginReloadController,
   requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>
     & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>
-    & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'credentials'>>) {
+    & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'credentials'>>
+    & { requesterCredentials?: StoredCredentials }) {
   const daemonCredentials = requesterOptions?.credentials ?? { token: 'custodian-token', encryption: null };
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
   const fixture = await createInstalledProjectAgentLaunchFixture(unassociated
-    ? { prepareProject: false } : { accountActionCredentials });
+    ? { prepareProject: false, requesterCredentials: requesterOptions?.requesterCredentials } : { accountActionCredentials });
   const { f, machine } = fixture;
   const signal: AbortSignal = fixture.signal;
   const runtimeController = controller ?? createPluginReloadController({ happyHomeDir: f.directory });

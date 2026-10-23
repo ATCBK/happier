@@ -12,10 +12,12 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { installAxiosRequestMethodAdapter } from '@/testkit/http/axiosAdapter';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import type { StoredCredentials } from '@/persistence';
 
 /** Real ordinary Session admission; only Home endpoints are substituted. */
 export async function createProjectSessionRuntimeFixture(options: Readonly<{
   serverId?: string; serverUrl?: string; accountSettings?: Readonly<Record<string, unknown>>; boundSessionId?: string;
+  credentials?: StoredCredentials;
 }> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'project-session-runtime-'));
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL']);
@@ -59,7 +61,7 @@ export async function createProjectSessionRuntimeFixture(options: Readonly<{
   });
   let currentBootstrap: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> = null;
   const createBootstrap = async () => {
-    const prepared = await prepareRequesterSessionBootstrap({ credentials: {
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: options.credentials ?? {
       token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester' })).toString('base64url')}.signature`, encryption: null },
       attribution: { serverId: 'session-home', accountId: 'requester', machineId: 'machine', installationId: installation.installationId },
       boundary: { serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test', happyHomeDir: directory },
