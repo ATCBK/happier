@@ -279,7 +279,8 @@ describe('phone Island shell clearance', () => {
                 screen!.findByTestId('companion-scroll-voice-presentation')!.props.onLayout({ nativeEvent: { layout: { y: 2, height: 180 } } });
                 screen!.findByTestId('companion-scroll')!.props.onScroll({ nativeEvent: { contentOffset: { y: scrollY }, layoutMeasurement: { height: 400 } } });
             });
-            await screen.pressByTestIdAsync('voice-top-bar-label');
+            const { setVoiceGlanceOpen } = await import('./voiceCompanionSectionReveal');
+            await act(async () => { setVoiceGlanceOpen(true); });
             expect(scrollY).toBe(0);
             expect(scrollTo).toHaveBeenCalledWith({ y: 0, animated: false });
             expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(false);

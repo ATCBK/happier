@@ -4,14 +4,29 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const platformBoundary = vi.hoisted(() => ({ os: 'web', openSettings: vi.fn(async () => undefined) }));
+const nativeCredentialValues = vi.hoisted(() => new Map<string, string>());
+// Native credentials use the OS keychain, separate from the browser storage installed by the Home harness.
+vi.mock('expo-secure-store', () => ({
+    getItemAsync: async (key: string) => nativeCredentialValues.get(key) ?? null,
+    setItemAsync: async (key: string, value: string) => { nativeCredentialValues.set(key, value); },
+    deleteItemAsync: async (key: string) => { nativeCredentialValues.delete(key); },
+}));
+
 vi.mock('react-native', async () => {
     const { getVitestNodeBuiltin } = await import('@/dev/vitestNodeBuiltins');
     const { createRequire } = getVitestNodeBuiltin<Pick<typeof import('node:module'), 'createRequire'>>('node:module');
     // Use the real installed browser renderer; the package-name entry is a Node shim.
-    return await vi.importActual(createRequire(import.meta.url).resolve('react-native-web'));
+    const actual = await vi.importActual<typeof import('react-native')>(createRequire(import.meta.url).resolve('react-native-web'));
+    return { ...actual, Platform: { ...actual.Platform, get OS() { return platformBoundary.os; } },
+        Linking: { ...actual.Linking, openSettings: platformBoundary.openSettings } };
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/components/ui/popover', async original =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(original));
+vi.mock('react-native-reanimated', async () =>
+    (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock({ settleTimingCallbacks: true }));
 
 import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
 import { setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
@@ -26,7 +41,7 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { executeVoiceConversationAction } from './voiceConversationAction';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, createSessionListRenderableSessionFixture, pressTestInstanceAsync, renderScreen, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
 import { getFocusedSessionAddress, setFocusedSessionId } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
@@ -66,7 +81,12 @@ beforeEach(async () => { const { Modal } = await import('@/modal'); vi.spyOn(Mod
 
 const runtimeCleanup: Array<() => Promise<void>> = [];
 let homeFixtureOrdinal = 0;
+async function pressVoiceControl(screen: RenderScreenResult, testID: string) {
+    // Use RN's public onPress port; the installed browser adapter's onClick expects a DOM event.
+    await pressTestInstanceAsync(screen.findAllByTestId(testID).find(node => typeof node.props.onPress === 'function'), testID);
+}
 afterEach(async () => { await standardCleanup(); await resetVoiceSessionRuntimeStateForTests();
+    platformBoundary.os = 'web';
     for (const cleanup of runtimeCleanup.splice(0).reverse()) await cleanup();
     resetServerFeaturesClientForTests(); vi.restoreAllMocks(); });
 
@@ -219,6 +239,226 @@ async function createHarness(start = true, featureEnabled = true) {
 }
 
 describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it.each(['open', 'close'] as const)('applies exact glance policy to the top-bar %s control', async operation => {
+        const { lifecycle } = await createHarness(false);
+        const { VoiceTopBarPresence } = await import('@/components/voice/presence/VoiceTopBarPresence');
+        const { buildVoicePresenceFixture } = await import('@/components/dev/voicePresence/voicePresenceFixtures');
+        const { setVoiceGlanceOpen } = await import('@/components/voice/presence/voiceCompanionSectionReveal');
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const setDisabled = async (actionId: string | null) => act(async () => storage.setState(state => ({ settings: {
+            ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: actionId
+                ? { [actionId]: { disabledSurfaces: ['ui'] } } : {} }),
+        } })));
+        // Presentation input is the canonical specimen projection; no live audio is required to open a glance.
+        const screen = await renderScreen(React.createElement(VoiceTopBarPresence, { voice: buildVoicePresenceFixture('listening') }));
+        try {
+            if (operation === 'open') {
+                await setDisabled('ui.voice_global.glance.open');
+                await pressVoiceControl(screen, 'voice-top-bar-label');
+                expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(false);
+            }
+            expect(await createDefaultActionExecutor().execute('ui.voice_global.get', {}, { surface: 'ui' })).toMatchObject({ ok: true });
+            await setDisabled(null);
+            await pressVoiceControl(screen, 'voice-top-bar-label');
+            await vi.waitFor(() => expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(true));
+            await setDisabled('ui.voice_global.glance.close');
+            const { VoiceGlanceOverlay } = await import('@/components/voice/presence/VoiceGlancePopover');
+            await act(async () => screen.tree.root.findByType(VoiceGlanceOverlay).props.onRequestClose());
+            expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(true);
+            await setDisabled(null);
+            await act(async () => screen.tree.root.findByType(VoiceGlanceOverlay).props.onRequestClose());
+            await vi.waitFor(() => expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(false));
+            expect(setVoiceGlanceOpen(false)).toBe(true);
+        } finally { await screen.unmount(); await lifecycle.dispose(); }
+    });
+    it.each(['open', 'close', 'escape', 'microphone'] as const)('applies exact setup policy to the %s control', async operation => {
+        const { lifecycle } = await createHarness(false);
+        const { useVoiceSetupBlock } = await import('@/voice/settings/setup/VoiceSetupItem');
+        const { SetupBlockGrid } = await import('@/components/ui/setupBlocks/SetupBlockGrid');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const setDisabled = async (actionId: string | null) => act(async () => storage.setState(state => ({ settings: {
+            ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: actionId
+                ? { [actionId]: { disabledSurfaces: ['ui'] } } : {} }),
+        } })));
+        function Setup() {
+            const item = useVoiceSetupBlock({ layout: 'card' });
+            return React.createElement(SetupBlockGrid, { items: item ? [item] : [], testID: 'voice-setup-policy' });
+        }
+        const screen = await renderScreen(React.createElement(InjectedAuthProvider, { credentials: null, children: React.createElement(Setup) }));
+        try {
+            if (operation === 'open') {
+                await setDisabled('ui.voice_global.setup.open');
+                await pressVoiceControl(screen, 'hub-setup.voice.action');
+                expect(screen.findByTestId('hub-setup.voice:setup')).toBeNull();
+            }
+            await setDisabled(null);
+            await pressVoiceControl(screen, 'hub-setup.voice.action');
+            await vi.waitFor(() => expect(screen.findByTestId('hub-setup.voice:setup.close')).not.toBeNull());
+            if (operation === 'microphone') {
+                const capture = vi.mocked(navigator.mediaDevices.getUserMedia);
+                capture.mockClear();
+                await setDisabled('ui.voice_global.setup.microphone.permission.request');
+                await act(async () => screen.findAllByTestId('hub-setup.voice:setup').find(node => node.props.actions)!.props.actions.onAllowMicrophone());
+                expect(capture).not.toHaveBeenCalled();
+                await setDisabled(null);
+                await act(async () => screen.findAllByTestId('hub-setup.voice:setup').find(node => node.props.actions)!.props.actions.onAllowMicrophone());
+                await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+            }
+            await setDisabled('ui.voice_global.setup.close');
+            if (operation === 'escape') {
+                const { dispatchEscapeToLayerStack } = await import('@/keyboard/escape');
+                await act(async () => { expect(dispatchEscapeToLayerStack({ key: 'Escape' })).toBe(true); });
+            } else {
+                await pressVoiceControl(screen, 'hub-setup.voice:setup.close');
+            }
+            expect(screen.findByTestId('hub-setup.voice:setup.close')).not.toBeNull();
+            await setDisabled(null);
+            await pressVoiceControl(screen, 'hub-setup.voice:setup.close');
+            await vi.waitFor(() => expect(screen.findByTestId('hub-setup.voice:setup')).toBeNull());
+        } finally { await screen.unmount(); await lifecycle.dispose(); }
+    });
+    it('admits setup microphone permission separately from opening setup and returns the observed platform state', async () => {
+        const { lifecycle } = await createHarness(false);
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const { registerVoiceSetupPresentation } = await import('@/components/voice/presence/voiceCompanionSectionReveal');
+        const open = vi.fn(() => true);
+        const unregister = registerVoiceSetupPresentation(open);
+        const capture = vi.mocked(navigator.mediaDevices.getUserMedia);
+        capture.mockClear();
+        const executor = createDefaultActionExecutor();
+        try {
+            storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.setup.microphone.permission.request': { disabledSurfaces: ['ui'] },
+                } }),
+            } }));
+            expect(await executor.execute('ui.voice_global.setup.microphone.permission.request', {}, { surface: 'ui' }))
+                .toMatchObject({ ok: false });
+            expect(capture).not.toHaveBeenCalled();
+            expect(await executor.execute('ui.voice_global.setup.open', {}, { surface: 'ui' })).toMatchObject({ ok: true });
+            expect(open).toHaveBeenCalledWith(true);
+            storage.setState(state => ({ settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({}) } }));
+            const result = await executor.execute('ui.voice_global.setup.microphone.permission.request', {}, { surface: 'ui' });
+            expect(result).toMatchObject({ ok: true, result: { status: 'completed', permission: 'granted' } });
+            expect(capture).toHaveBeenCalledOnce();
+            expect(VoiceConversationActionOutputSchemas['ui.voice_global.setup.microphone.permission.request'].safeParse(result.ok ? result.result : null).success).toBe(true);
+            capture.mockRejectedValueOnce(Object.assign(new Error('No microphone'), { name: 'NotFoundError' }));
+            const unavailable = await executor.execute('ui.voice_global.setup.microphone.permission.request', {}, { surface: 'ui' });
+            expect(unavailable).toMatchObject({ ok: true, result: { status: 'unavailable', code: 'voice_microphone_unavailable', permission: 'unavailable' } });
+            expect(VoiceConversationActionOutputSchemas['ui.voice_global.setup.microphone.permission.request'].safeParse(unavailable.ok ? unavailable.result : null).success).toBe(true);
+        } finally { unregister(); await lifecycle.dispose(); }
+    });
+    it('applies exact setup policy to the system-settings link and refuses unavailable web settings', async () => {
+        const { lifecycle, serverId } = await createHarness(false);
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const serverUrl = getActiveServerSnapshot().serverUrl;
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+        if (!credentials) throw new Error('Expected the served Home credential');
+        let nativeCredential: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> | null = null;
+        const openSettings = platformBoundary.openSettings;
+        openSettings.mockClear();
+        const executor = createDefaultActionExecutor();
+        try {
+            platformBoundary.os = 'ios';
+            nativeCredential = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId }, credentials);
+            storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.setup.system_settings.open': { disabledSurfaces: ['ui'] },
+                } }),
+            } }));
+            expect(await executor.execute('ui.voice_global.setup.system_settings.open', {}, { surface: 'ui' }))
+                .toMatchObject({ ok: false });
+            expect(openSettings).not.toHaveBeenCalled();
+            storage.setState(state => ({ settings: { ...state.settings, actionsSettingsV1: normalizeActionsSettingsV1({}) } }));
+            const opened = await executor.execute('ui.voice_global.setup.system_settings.open', {}, { surface: 'ui' });
+            expect(opened).toMatchObject({ ok: true, result: { status: 'completed' } });
+            expect(openSettings).toHaveBeenCalledOnce();
+            platformBoundary.os = 'web';
+            expect(await executor.execute('ui.voice_global.setup.system_settings.open', {}, { surface: 'ui' }))
+                .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'voice_system_settings_unavailable' } });
+            expect(openSettings).toHaveBeenCalledOnce();
+        } finally {
+            platformBoundary.os = 'ios';
+            await nativeCredential?.rollback();
+            platformBoundary.os = 'web';
+            await lifecycle.dispose();
+        }
+    });
+    it('retains the Agent Ask floor before setup microphone permission can prompt', async () => {
+        const { lifecycle, serverId, artifacts } = await createHarness(false);
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const capture = vi.mocked(navigator.mediaDevices.getUserMedia);
+        capture.mockClear();
+        const executor = createDefaultActionExecutor();
+        const cancellation = new AbortController();
+        const pending = executor.execute('ui.voice_global.setup.microphone.permission.request', {}, { surface: 'agent', serverId,
+            defaultSessionId: 'session-original', actionRequestId: 'setup-microphone-request', signal: cancellation.signal,
+            actionCaller: { kind: 'session', sessionId: 'session-original', starterDepth: 0, turnDepth: 0 } });
+        try {
+            await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1));
+            expect(capture).not.toHaveBeenCalled();
+            expect(await executor.execute('approval.request.decide', { artifactId: artifacts.list()[0]!.id, decision: 'cancel' }, { surface: 'ui', serverId }))
+                .toMatchObject({ ok: true });
+            expect(await pending).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(capture).not.toHaveBeenCalled();
+        } finally { cancellation.abort(); await pending; await lifecycle.dispose(); }
+    });
+    it('retains setup Done dismissal through a refused close and a later approved close', async () => {
+        const { lifecycle, serverId, artifacts } = await createHarness(false);
+        const { useVoiceSetupBlock } = await import('@/voice/settings/setup/VoiceSetupItem');
+        const { SetupBlockGrid } = await import('@/components/ui/setupBlocks/SetupBlockGrid');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { buildHomeHubArtifactIdV1, HomeHubLayoutV1Schema } = await import('@happier-dev/protocol/home');
+        const { listHiddenHomeSetupSteps } = await import('@/components/hub/layout/homeHubLayout');
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        const credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl, { serverId });
+        if (!credentials) throw new Error('Expected the served Home credential');
+        function Setup() {
+            const item = useVoiceSetupBlock({ layout: 'card' });
+            return React.createElement(SetupBlockGrid, { items: item ? [item] : [], testID: 'voice-setup-done' });
+        }
+        const screen = await renderScreen(React.createElement(InjectedAuthProvider, { credentials, children: React.createElement(Setup) }));
+        const homeId = buildHomeHubArtifactIdV1('voice-action-account');
+        const done = () => screen.findAllByTestId('hub-setup.voice:setup').find(node => node.props.actions)!.props.actions.onDone();
+        try {
+            await pressVoiceControl(screen, 'hub-setup.voice.action');
+            await vi.waitFor(() => expect(screen.findByTestId('hub-setup.voice:setup.close')).not.toBeNull());
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.setup.close': { disabledSurfaces: ['ui'] },
+                } }),
+            } })));
+            await act(async () => { done(); });
+            expect(screen.findByTestId('hub-setup.voice:setup.close')).not.toBeNull();
+            expect(artifacts.readPlainBody(homeId)).toBeNull();
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.setup.close': { approvalRequiredSurfaces: ['ui'] },
+                } }),
+            } })));
+            await act(async () => { done(); });
+            await vi.waitFor(() => expect(artifacts.list().some(row => JSON.parse(artifacts.readPlainBody(row.id) ?? '{}').status === 'open')).toBe(true));
+            const request = artifacts.list().find(row => JSON.parse(artifacts.readPlainBody(row.id) ?? '{}').status === 'open')!;
+            expect(screen.findByTestId('hub-setup.voice:setup.close')).not.toBeNull();
+            expect(artifacts.readPlainBody(homeId)).toBeNull();
+            expect(await decideApprovalAsInbox(serverId, request.id, 'approve')).toMatchObject({ ok: true });
+            await vi.waitFor(() => {
+                const body = artifacts.readPlainBody(homeId);
+                expect(body).not.toBeNull();
+                expect(listHiddenHomeSetupSteps(HomeHubLayoutV1Schema.parse(JSON.parse(body!)))).toContain('setup:voice');
+                expect(screen.findByTestId('hub-setup.voice:setup')).toBeNull();
+            });
+        } finally {
+            for (const row of artifacts.list()) {
+                if (JSON.parse(artifacts.readPlainBody(row.id) ?? '{}').status === 'open') await decideApprovalAsInbox(serverId, row.id, 'cancel');
+            }
+            await screen.unmount(); await lifecycle.dispose();
+        }
+    });
     it('retains the Agent Start approval default and an explicit person Ask-first preference', async () => {
         const { lifecycle, serverId, artifacts } = await createHarness(false);
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');

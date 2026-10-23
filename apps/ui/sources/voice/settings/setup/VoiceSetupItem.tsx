@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { AppState, Linking, Platform, View } from 'react-native';
+import { AppState, Platform, View } from 'react-native';
+import { VoiceConversationActionOutputSchemas, VoiceSetupMicrophonePermissionActionResultSchema } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 import { StyleSheet } from 'react-native-unistyles';
 import { planetLightForProgress } from '@happier-dev/brand/planet';
 
@@ -17,17 +18,18 @@ import { VoiceMarkArt } from '@/components/voice/presence/VoiceMark';
 import { VoiceStatusLine } from '@/components/voice/presence/VoiceStatusLine';
 import { VoiceTransport } from '@/components/voice/presence/VoiceTransport';
 import { registerVoiceSetupPresentation } from '@/components/voice/presence/voiceCompanionSectionReveal';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
-import { storage } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { t } from '@/text';
 import {
     checkMicrophonePermission,
     readMicrophonePermissionState,
-    requestMicrophonePermission,
     type MicrophonePermissionState,
 } from '@/utils/platform/microphonePermissions';
 import { findVoiceConversationSessionId } from '@/voice/persistence/voiceConversationSystemSessionLookup';
@@ -54,6 +56,8 @@ import { isVoiceSetupFailed, readVoiceSetupLight, readVoiceSetupNextStep } from 
 export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; span?: SetupBlockItem['span'] }>): SetupBlockItem | null {
     const router = useRouter();
     const voiceEnabled = useFeatureEnabled('voice');
+    const accountScope = useActiveServerAccountScope();
+    const { executeValue } = useMountedActionExecution(accountScope, { openOnRequest: true });
     const [panelOpen, setPanelOpen] = React.useState(false);
     const [voiceSettings, setVoiceSettings] = useVoiceSettingsMutable();
     const inputs = useVoiceConversationsReadinessInputs(voiceSettings, { probeMachine: panelOpen });
@@ -67,7 +71,7 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
         executionMachineSelectionKind: inputs.executionMachine.selectionKind,
     });
     const readiness = readinessModel.selectedProviderReadiness ?? null;
-    const microphone = useObservedMicrophonePermission();
+    const microphone = useObservedMicrophonePermission(executeValue);
     const conversationSessionAddress = useVoiceHomeConversationAddress();
     const voice = useVoiceAttemptControl(VOICE_ATTEMPT_IDLE_TARGET_GLOBAL);
     const shortcutLabel = useKeyboardShortcutLabel('voice.toggle') ?? null;
@@ -95,18 +99,30 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
     const tryIt = React.useCallback(() => {
         if (!live && canStart) onToggle();
     }, [canStart, live, onToggle]);
-    const actions = React.useMemo((): Omit<VoiceSetupPanelActions, 'onClose'> => ({
+    const closePanel = React.useCallback(() => {
+        fireAndForget(executeValue('ui.voice_global.setup.close', {}), { tag: 'VoiceSetup.close' });
+    }, [executeValue]);
+    const actions = React.useMemo((): VoiceSetupPanelActions => ({
         onSelectService: readinessModel.selectService,
         onRecover: () => recoverVoiceSettingsReadiness(recoveryAction, (action) => {
             const focus = resolveVoiceSettingsRecoveryFocus(action) ?? 'provider';
             router.push({ pathname: SETTINGS_ROUTES.voiceConversations, params: { focus } } as never);
         }),
         onAllowMicrophone: allow,
-        onOpenSystemSettings: Platform.OS === 'web' ? null : () => { void Linking.openSettings().catch(() => {}); },
+        onOpenSystemSettings: Platform.OS === 'web' ? null : () => {
+            fireAndForget(executeValue('ui.voice_global.setup.system_settings.open', {}), { tag: 'VoiceSetup.systemSettings' });
+        },
         onTry: tryIt,
-        onDone: dismiss,
+        onDone: () => {
+            fireAndForget((async () => {
+                const result = VoiceConversationActionOutputSchemas['ui.voice_global.setup.close'].parse(
+                    await executeValue('ui.voice_global.setup.close', {}));
+                if (result.status === 'completed') await dismiss();
+            })(), { tag: 'VoiceSetup.done' });
+        },
+        onClose: closePanel,
         onOpenSettings: () => router.push(SETTINGS_ROUTES.voice as never),
-    }), [allow, dismiss, readinessModel.selectService, recoveryAction, router, tryIt]);
+    }), [allow, closePanel, dismiss, executeValue, readinessModel.selectService, recoveryAction, router, tryIt]);
 
     const model = React.useMemo((): VoiceSetupPanelModel => ({
         facts: setup.facts,
@@ -123,38 +139,27 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
     return {
         id: VOICE_SETUP_STEP_ID,
         span: input.span,
+        requestClose: closePanel,
         registerPresentation: ({ open, close }) => registerVoiceSetupPresentation((expanded) => {
             if (!(expanded ? open() : close())) return false;
             setPanelOpen(expanded);
             return true;
         }),
-        renderTile: ({ open }) => (
+        renderTile: () => (
             <VoiceSetupTile
                 layout={input.layout}
                 facts={setup.facts}
                 onOpen={() => {
-                    setPanelOpen(true);
-                    open();
+                    fireAndForget(executeValue('ui.voice_global.setup.open', {}), { tag: 'VoiceSetup.open' });
                 }}
                 onDismiss={dismiss}
             />
         ),
-        renderPanel: ({ close }) => (
+        renderPanel: () => (
             <VoiceSetupPanel
                 testID="hub-setup.voice:setup"
                 model={model}
-                actions={{
-                    ...actions,
-                    onDone: () => {
-                        actions.onDone();
-                        setPanelOpen(false);
-                        close();
-                    },
-                    onClose: () => {
-                        setPanelOpen(false);
-                        close();
-                    },
-                }}
+                actions={actions}
                 renderTry={<VoiceSetupTryReadout voice={voice} />}
             />
         ),
@@ -228,7 +233,7 @@ const VoiceSetupTryReadout = React.memo(function VoiceSetupTryReadout(props: Rea
  * mounts and again when the app comes back to the foreground (the person may have just allowed it in
  * system settings). `allow` is the only path that prompts, and only on a press.
  */
-function useObservedMicrophonePermission(): Readonly<{ permission: MicrophonePermissionState; allow: () => void }> {
+function useObservedMicrophonePermission(executeValue: ReturnType<typeof useMountedActionExecution>['executeValue']): Readonly<{ permission: MicrophonePermissionState; allow: () => void }> {
     const [permission, setPermission] = React.useState<MicrophonePermissionState>('unknown');
     const read = React.useCallback(() => {
         void checkMicrophonePermission().then((result) => {
@@ -247,8 +252,12 @@ function useObservedMicrophonePermission(): Readonly<{ permission: MicrophonePer
         return () => subscription.remove();
     }, [read]);
     const allow = React.useCallback(() => {
-        void requestMicrophonePermission().then((result) => setPermission(readMicrophonePermissionState(result)));
-    }, []);
+        fireAndForget((async () => {
+            const result = VoiceSetupMicrophonePermissionActionResultSchema.parse(
+                await executeValue('ui.voice_global.setup.microphone.permission.request', {}));
+            setPermission(result.permission);
+        })(), { tag: 'VoiceSetup.microphone' });
+    }, [executeValue]);
     return { permission, allow };
 }
 

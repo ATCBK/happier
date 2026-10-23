@@ -31,6 +31,8 @@ export type SetupBlockItem = Readonly<{
     renderPanel?: (controls: Readonly<{ close: () => void }>) => React.ReactNode;
     /** Borrow this grid's actual open/close controls while the item is mounted. */
     registerPresentation?: (controls: Readonly<{ open: () => boolean; close: () => boolean }>) => () => void;
+    /** A user dismissal enters the item's admission owner; registered close remains its implementation. */
+    requestClose?: () => void;
 }>;
 
 const PanelWidthContext = React.createContext<number | null>(null);
@@ -233,7 +235,9 @@ export const SetupBlockGrid = React.memo(function SetupBlockGrid(props: Readonly
         priority: ESCAPE_LAYER_PRIORITIES.overlay,
         enabled: open?.phase === 'open',
         onEscape: () => {
-            close();
+            const item = props.items.find(item => item.id === open?.id);
+            if (item?.requestClose) item.requestClose();
+            else close();
             return true;
         },
     });

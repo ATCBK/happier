@@ -374,12 +374,13 @@ describe('VoiceTopBarPresence', () => {
         expect(voice.onPrimaryAction).toHaveBeenCalledTimes(1);
     });
 
-    it('grows into the live pill whose mark ends and whose label opens the section', async () => {
+    it('grows into the live pill whose mark ends and whose admitted presentation opens the section', async () => {
         const voice = projection('listening');
         screen = await renderScreen(<VoiceTopBarPresence voice={voice} />);
 
         expect(screen.findByTestId('voice-top-bar-rest')).toBeNull();
-        await screen.pressByTestIdAsync('voice-top-bar-label');
+        const { setVoiceGlanceOpen } = await import('./voiceCompanionSectionReveal');
+        await act(async () => { setVoiceGlanceOpen(true); });
         expect(voice.onPrimaryAction).not.toHaveBeenCalled();
         expect(screen.findAllByTestId('voice-top-bar-label').some((node) => node.props['aria-expanded'] === true)).toBe(true);
 
@@ -492,28 +493,28 @@ describe('the ended conversation', () => {
 
 describe('the caption reveals the Companion section when it is on screen', () => {
     it('reveals the mounted section instead of opening a popover copy, and opens the popover otherwise', async () => {
-        const { registerVoiceCompanionSection } = await import('./voiceCompanionSectionReveal');
+        const { registerVoiceCompanionSection, setVoiceGlanceOpen } = await import('./voiceCompanionSectionReveal');
         const reveal = vi.fn(() => true);
         const unregister = registerVoiceCompanionSection(reveal);
         const voice = projection('listening');
         screen = await renderScreen(<VoiceTopBarPresence voice={voice} />);
 
-        await screen.pressByTestIdAsync('voice-top-bar-label');
+        await act(async () => { setVoiceGlanceOpen(true); });
         expect(reveal).toHaveBeenCalledTimes(1);
         expect(screen.findAllByTestId('voice-top-bar-label').some((node) => node.props['aria-expanded'] === true)).toBe(false);
 
         unregister();
-        await screen.pressByTestIdAsync('voice-top-bar-label');
+        await act(async () => { setVoiceGlanceOpen(true); });
         expect(reveal).toHaveBeenCalledTimes(1);
         expect(screen.findAllByTestId('voice-top-bar-label').some((node) => node.props['aria-expanded'] === true)).toBe(true);
         expect(voice.onPrimaryAction).not.toHaveBeenCalled();
     });
     it('opens the glance when the mounted Companion cannot reveal its transport', async () => {
-        const { registerVoiceCompanionSection } = await import('./voiceCompanionSectionReveal');
+        const { registerVoiceCompanionSection, setVoiceGlanceOpen } = await import('./voiceCompanionSectionReveal');
         const unregister = registerVoiceCompanionSection(() => false);
         try {
             screen = await renderScreen(<VoiceTopBarPresence voice={projection('listening')} />);
-            await screen.pressByTestIdAsync('voice-top-bar-label');
+            await act(async () => { setVoiceGlanceOpen(true); });
             expect(screen.findByTestId('voice-top-bar-label')?.props['aria-expanded']).toBe(true);
         } finally { unregister(); }
     });

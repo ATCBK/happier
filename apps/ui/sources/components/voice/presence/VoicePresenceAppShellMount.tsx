@@ -84,7 +84,9 @@ function VoiceFloatingPresenceRuntime(props: Readonly<{ container: 'island' | 'o
     const selectedPetPackage = useSelectedPetPackage();
     const anchorRef = React.useRef<View | null>(null);
     const [open, setOpen] = React.useState(false);
-    const close = React.useCallback(() => setOpen(false), []);
+    const close = React.useCallback(() => {
+        fireAndForget(executePresentationAction('ui.voice_global.glance.close', {}), { tag: 'VoicePresence.glance.close' });
+    }, []);
     // A container's caption shows the Voice section in the Companion when it is beside the work,
     // otherwise as a popover anchored to the container.
     const toggleSection = React.useCallback(() => {

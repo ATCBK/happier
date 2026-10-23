@@ -12,6 +12,8 @@ import {
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { t } from '@/text';
+import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { VoiceGlancePopover } from './VoiceGlancePopover';
 import { VoiceMark, VoiceMarkArt } from './VoiceMark';
@@ -23,6 +25,7 @@ import { useVoicePresenceContainer } from './useVoicePresenceContainer';
 
 import { VoiceTopBarAnatomy, VOICE_TOP_BAR_PILL_HEIGHT as PILL_HEIGHT } from './voicePresenceAnatomy';
 const MARK_SIZE = 20;
+const executePresentationAction = createFrontDoorUiActionExecutor();
 
 /**
  * Voice in the desktop top bar (§4.3, lab R/A/C).
@@ -76,15 +79,14 @@ const VoiceTopBarPill = React.memo(function VoiceTopBarPill(props: Readonly<{
     React.useLayoutEffect(() => registerVoiceGlancePresentation((expanded) => {
         if (!expanded || !revealVoiceCompanionSection()) setOpen(expanded);
     }), []);
-    const close = React.useCallback(() => setOpen(false), []);
+    const close = React.useCallback(() => {
+        fireAndForget(executePresentationAction('ui.voice_global.glance.close', {}), { tag: 'VoiceTopBar.glance.close' });
+    }, []);
     // The label shows the Voice section: in the Companion when it is beside the work, otherwise
     // anchored under the pill. The mark never does this — it is always start/end.
     const toggleOpen = React.useCallback(() => {
-        if (open) {
-            setOpen(false);
-            return;
-        }
-        if (!revealVoiceCompanionSection()) setOpen(true);
+        fireAndForget(executePresentationAction(open ? 'ui.voice_global.glance.close' : 'ui.voice_global.glance.open', {}),
+            { tag: 'VoiceTopBar.glance' });
     }, [open]);
     return (
         <VoiceTopBarAnatomy anchorRef={anchorRef} testID={props.testID}
