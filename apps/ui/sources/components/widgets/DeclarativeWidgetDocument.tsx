@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { PluginDeclarativeDocumentV1Schema, type PluginDeclarativeDocumentV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarative-document-authoring';
+import type { PluginDeclarativeDocumentV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarative-document-authoring';
 import { PluginDeclarativeNodeV2Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';
 import type { PluginDeclarativeDataNodeV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -191,14 +191,14 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
     const widgetPresentation = useWidgetPresentation();
     const presentationTheme = usePluginUiTheme(theme);
     const [mountInstanceKey] = React.useState(randomUUID);
-    const parsed = React.useMemo(() => PluginDeclarativeDocumentV1Schema.safeParse(props.document), [props.document]);
+    // Definition ingress already admitted the complete document, including data-field semantics.
+    const document = props.document;
     const context: DeclarativeNodeRenderContext = { colors: theme.colors, presentationTheme, widgetPresentation,
         minimumTouchTarget: resolveMinimumInteractiveTargetSize(Platform.OS), localize: readDeclarativeText,
         markdownProfile: 'widget', resolveAction: () => null, renderField: () => null, renderCollectionList: () => null };
     const [freshness] = React.useState(createDataFreshnessStore);
     // Post a snapshot reads exactly what this document shows, only when the person asks for it.
-    const document = parsed.success ? parsed.data : null;
-    const readSnapshot = React.useMemo(() => document ? (): WidgetSnapshotCapture => {
+    const readSnapshot = React.useMemo(() => (): WidgetSnapshotCapture => {
             const reports = [...freshness.getSnapshot()];
             return { document, frozenByPath: new Map(reports.map(([path, report]) => [path, report.shown])),
                 readIdentity: JSON.stringify([props.accountLifetime.scope, props.sessionId, props.input, document,
@@ -207,7 +207,7 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
                 digests: reports.flatMap(([, report]) => (report.digest ? [report.digest] : [])),
                 current: props.isCurrent() && props.accountLifetime.isCurrent() && reports.every(([, report]) => report.state === 'fresh'),
                 refresh: () => Promise.all(reports.map(([, report]) => report.refresh())) };
-        } : null, [document, freshness, props.isCurrent, props.accountLifetime, props.sessionId, props.input]);
+        }, [document, freshness, props.isCurrent, props.accountLifetime, props.sessionId, props.input]);
     useDeclarativeWidgetSnapshotCapture(readSnapshot, freshness.subscribe);
     const renderDataNode = (value: Readonly<Record<string, unknown>>, path: string): React.ReactNode => {
         const { path: _path, order: _order, ...authored } = value;
@@ -217,7 +217,7 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
             : <ResourceDataNode key={path} reportKey={path} {...props} node={node.data} context={context} mountInstanceKey={mountInstanceKey} />;
     };
     return <PluginContextualResourceStoreProvider><DataFreshnessContext.Provider value={freshness}><View testID={props.testID}>
-        {parsed.success ? renderDeclarativeNode(parsed.data.root, { ...context, renderDataNode }) : null}
+        {renderDeclarativeNode(document.root, { ...context, renderDataNode })}
         <DataFreshnessLine testID={props.testID} />
     </View></DataFreshnessContext.Provider></PluginContextualResourceStoreProvider>;
 }
