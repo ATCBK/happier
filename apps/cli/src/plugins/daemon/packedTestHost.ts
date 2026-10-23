@@ -4,6 +4,11 @@ import { dirname, resolve } from 'node:path';
 
 import fastify from 'fastify';
 import { isPidPresent } from '@happier-dev/cli-common/process';
+import {
+  PluginAvailabilityActionHttpPathsV1,
+  PluginAvailabilityIntentReadActionInputV1Schema,
+  PluginAvailabilityIntentReadActionOutputV1Schema,
+} from '@happier-dev/protocol/plugins/availability/actions';
 
 import { createDaemonControlAuthGuard } from '@/daemon/controlAuth';
 import { configuration } from '@/configuration';
@@ -29,6 +34,11 @@ export type PackedTestDaemonReady = Readonly<{
   controlToken: string;
   incarnationId: string;
 }>;
+
+const packedTestAccountCredentials = {
+  token: 'packed-test-account-token',
+  encryption: null,
+} satisfies StoredCredentials;
 
 function readRequiredOption(args: readonly string[], name: string): string {
   const index = args.indexOf(name);
@@ -56,10 +66,7 @@ function readOptionalOption(args: readonly string[], name: string): string | nul
  * while only its authenticated HTTP/system port is supplied by the harness.
  */
 function createPackedTestAccountStorageDependencies(): AccountPluginDataStorageHostDependencies {
-  const fixtureCredentials = {
-    token: 'packed-test-account-token',
-    encryption: null,
-  } satisfies StoredCredentials;
+  const fixtureCredentials = packedTestAccountCredentials;
 
   return {
     readCredentials: async () => fixtureCredentials,
@@ -120,16 +127,44 @@ export async function runPackedTestDaemonHost(args: readonly string[]): Promise<
     runtimeRegistry: pluginReloadController,
   });
   const accountStorageDependencies = createPackedTestAccountStorageDependencies();
+  const app = fastify({ logger: false });
+  let capturedServerUrl: string | null = null;
+  const managedResourceHomeId = 'packed-test-home';
+  const managedResourceController = { machineId: 'packed-test-machine', installationId: 'packed-test-installation' };
   const runtimeOwner = createDaemonPluginRuntimeOwner({
     happyHomeDir,
     staleCandidateCleanup: 'exclusiveHome',
     reloadController: pluginReloadController,
     connectedAccounts: connectedAccounts.owner,
     accountStorageDependencies,
+    managedResourcePreflight: {
+      credentials: packedTestAccountCredentials,
+      get serverUrl() {
+        if (!capturedServerUrl) throw new Error('Packed test HTTP boundary is not listening');
+        return capturedServerUrl;
+      },
+      homeId: managedResourceHomeId,
+      controller: managedResourceController,
+    },
     reconcileConnectedAccountPurposePublication:
       connectedAccounts.reconcileRegistryPublication,
   });
-  const app = fastify({ logger: false });
+  // The same isolated Account boundary supports canonical removal preflight.
+  // It cannot model managed machines, so provider declarations fail closed.
+  app.post(PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], async (request, reply) => {
+    if (request.headers.authorization !== `Bearer ${packedTestAccountCredentials.token}`) return reply.code(401).send();
+    const parsed = PluginAvailabilityIntentReadActionInputV1Schema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send();
+    const input = parsed.data;
+    if (input.includeManagedResources !== true || input.homeId !== managedResourceHomeId
+      || input.controller?.machineId !== managedResourceController.machineId
+      || input.controller.installationId !== managedResourceController.installationId) return reply.code(403).send();
+    const plugin = (await runtimeOwner.readCatalog()).find(entry => entry.pluginId === input.pluginId);
+    if (!plugin?.manifest || (plugin.manifest.contributes?.machineProvisioners?.length ?? 0) > 0) return reply.code(409).send();
+    return PluginAvailabilityIntentReadActionOutputV1Schema.parse({ availabilityCursor: 0,
+      hostingCapability: { enabled: false }, intent: null, release: null, uiArtifacts: [], packageAssets: [],
+      managedResources: [], managedResourcesReviewed: true });
+  });
   const requireControlAuth = createDaemonControlAuthGuard(controlToken);
   registerDaemonPluginChangeRoutes(app, {
     service: runtimeOwner.changeService,
@@ -175,6 +210,7 @@ export async function runPackedTestDaemonHost(args: readonly string[]): Promise<
     }
     await runtimeOwner.initialize();
     const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    capturedServerUrl = address;
     const parsedAddress = new URL(address);
     const httpPort = Number.parseInt(parsedAddress.port, 10);
     const ready: PackedTestDaemonReady = Object.freeze({
