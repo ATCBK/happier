@@ -1575,6 +1575,7 @@ export const SESSION_TRANSCRIPT_GET_MAX_LIMIT = 100;
 
 const SessionTranscriptGetInputShape = {
   sessionId: z.string().check(z.minLength(1)),
+  messageId: z.optional(z.string().check(z.minLength(1))),
   projection: z.optional(SessionTranscriptGetExternalShareableProjectionSchema),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(SESSION_TRANSCRIPT_GET_MAX_LIMIT))),
   cursor: z.optional(z.nullable(z.string().check(z.minLength(1)))),
@@ -1592,8 +1593,17 @@ const SessionTranscriptGetInputShape = {
   maxRawPayloadChars: z.optional(z.nullable(z.number().check(z.int(), z.minimum(1), z.maximum(32768)))),
 };
 
+function isSessionTranscriptSelectionValid(value: Readonly<{
+  messageId?: string; cursor?: string | null; direction?: string; limit?: number; projection?: string;
+}>): boolean {
+  return value.messageId === undefined || (value.cursor === undefined && value.direction === undefined
+    && value.limit === undefined && value.projection === undefined);
+}
+const exactTranscriptSelectionMessage = 'messageId cannot be combined with cursor, direction, limit or projection';
+
 /** Closed semantic transcript input exposed to PAT/API/SDK callers. */
-const SessionTranscriptGetPublicInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.omit(z.object(SessionTranscriptGetInputShape), { projection: true })));
+const SessionTranscriptGetPublicInputSchema = lazyZodSchema(() => z.omit(z.strictObject(SessionTranscriptGetInputShape),
+  { projection: true }).check(z.refine(isSessionTranscriptSelectionValid, { message: exactTranscriptSelectionMessage })));
 
 /** Exact public input for the closed external-shareable transcript projection. */
 export const SessionTranscriptGetExternalShareableInputV1Schema = lazyZodSchema(() => z.strictObject({
@@ -1606,7 +1616,8 @@ export type SessionTranscriptGetExternalShareableInputV1 = z.infer<
   typeof SessionTranscriptGetExternalShareableInputV1Schema
 >;
 
-export const SessionTranscriptGetInputSchema = lazyZodSchema(() => z.looseObject(SessionTranscriptGetInputShape).check(z.superRefine((value, context) => {
+export const SessionTranscriptGetInputSchema = lazyZodSchema(() => z.looseObject(SessionTranscriptGetInputShape).check(
+  z.refine(isSessionTranscriptSelectionValid, { message: exactTranscriptSelectionMessage }), z.superRefine((value, context) => {
   if (value.projection !== 'externalShareableV1') return;
   const allowedKeys = new Set(['sessionId', 'projection', 'cursor', 'limit']);
   for (const key of Object.keys(value)) {
@@ -11067,7 +11078,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     id: 'session.transcript.get', approval: {result: 'required'},
     title: 'Get session transcript',
     sideEffectClass: 'read',
-    description: 'Read the semantic transcript for a session as clean user/assistant messages with optional tool/reasoning/event flags.',
+    description: 'Read a semantic transcript page, or select one committed message by messageId, with optional tool/reasoning/event flags.',
     safety: 'safe',
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'getSessionTranscript', mcpToolName: 'session_transcript_get' },
@@ -11088,6 +11099,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       title: 'Get session transcript',
       fields: [
         { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
+        { path: 'messageId', title: 'Committed message id', description: 'Select one message instead of paging.', widget: 'text' },
         { path: 'limit', title: 'Limit', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         {

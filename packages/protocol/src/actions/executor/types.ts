@@ -2019,6 +2019,7 @@ export type ActionExecutorDeps = Readonly<{
   sessionTranscriptGet?: (args: Readonly<{
     context: ActionExecutorContext;
     sessionId: string;
+    messageId?: string;
     projection?: 'externalShareableV1';
     callerPluginId?: string;
     limit?: number;

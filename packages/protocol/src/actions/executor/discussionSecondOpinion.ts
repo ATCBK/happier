@@ -82,27 +82,22 @@ export async function readDiscussionSecondOpinionSourceV1(source: DiscussionSeco
         revision: doc.data.artifact.revision }).state !== 'exact') refuse('discussion_content_unavailable');
     return source.passage.quote;
   }
-  let cursor: string | null = null;
-  for (;;) {
-    const result = await execute('session.transcript.get', { sessionId: source.message.session.sessionId,
-      ...(cursor ? { cursor } : {}), includeTools: false, includeReasoning: false, includeEvents: false,
-      maxCharsPerMessage: null }, context);
-    if (!result.ok) refuse(result.errorCode);
-    const parsed = SessionTranscriptGetResultSchema.safeParse(result.result);
-    if (!parsed.success) refuse('invalid_action_output');
-    const value = parsed.data;
-    if (!value.ok) refuse(value.errorCode);
-    if (!('items' in value) || 'projection' in value || value.sessionId !== source.message.session.sessionId) refuse('discussion_content_unavailable');
-    const item = value.items.find(row => row.id === source.message.messageId);
-    if (item) {
-      if (item.truncated || item.semanticRole !== 'assistant' || typeof item.text !== 'string' || !item.text.trim()) {
-        refuse('discussion_content_unavailable');
-      }
-      return item.text.normalize('NFC');
-    }
-    if (!value.hasMore || !value.nextCursor || value.nextCursor === cursor) refuse('discussion_content_unavailable');
-    cursor = value.nextCursor;
+  const result = await execute('session.transcript.get', { sessionId: source.message.session.sessionId,
+    messageId: source.message.messageId, includeTools: false, includeReasoning: false, includeEvents: false,
+    maxCharsPerMessage: null }, context);
+  if (!result.ok) refuse(result.errorCode);
+  const parsed = SessionTranscriptGetResultSchema.safeParse(result.result);
+  if (!parsed.success) refuse('invalid_action_output');
+  const value = parsed.data;
+  if (!value.ok) refuse(value.errorCode);
+  if (!('items' in value) || 'projection' in value || value.sessionId !== source.message.session.sessionId
+    || value.items.length !== 1 || value.hasMore || value.nextCursor !== null) refuse('discussion_content_unavailable');
+  const item = value.items[0];
+  if (!item || item.id !== source.message.messageId || item.truncated || item.semanticRole !== 'assistant'
+    || typeof item.text !== 'string' || !item.text.trim()) {
+    refuse('discussion_content_unavailable');
   }
+  return item.text.normalize('NFC');
 }
 
 /** A grant already committed by this retry may fill a planned gap; it may never add a new disclosure recipient. */

@@ -1989,6 +1989,16 @@ describe('Action Spec Registry', () => {
   });
 
   it('keeps public transcript and wait inputs closed and their outputs exact', () => {
+    const selectedMessage = { sessionId: 'session-1', messageId: 'committed-answer', maxCharsPerMessage: null };
+    expect(PUBLIC_ACTION_INPUT_SCHEMAS['session.transcript.get'].parse(selectedMessage)).toEqual(selectedMessage);
+    expect(getActionSpec('session.transcript.get').inputSchema.parse(selectedMessage)).toEqual(selectedMessage);
+    for (const paging of [{ cursor: null }, { direction: 'before' }, { limit: 1 }, { projection: 'externalShareableV1' }]) {
+      expect(getActionSpec('session.transcript.get').inputSchema.safeParse({ ...selectedMessage, ...paging }).success).toBe(false);
+      expect(PUBLIC_ACTION_INPUT_SCHEMAS['session.transcript.get'].safeParse({ ...selectedMessage, ...paging }).success).toBe(false);
+    }
+    expect(PLUGIN_ACTION_INPUT_SCHEMAS['session.transcript.get'].safeParse({
+      ...selectedMessage, projection: 'externalShareableV1',
+    }).success).toBe(false);
     expect(PUBLIC_ACTION_INPUT_SCHEMAS['session.transcript.get'].safeParse({
       sessionId: 'session-1',
       limit: 20,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from './actionExecutor.js';
 import { ActionIdSchema } from './actionIds.js';
-import { getActionSpec } from './actionSpecs.js';
+import { getActionSpec, type SessionTranscriptGetItem } from './actionSpecs.js';
 import type { ActionExecutorDeps } from './executor/types.js';
 import { DiscussionCreateResultV1Schema, DiscussionOpenedMessageV1Schema, DiscussionInviteInputV1Schema } from '../discussions/actions.js';
 import { DiscussionSecondOpinionPreviewV1Schema } from '../discussions/secondOpinion.js';
@@ -28,6 +28,9 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   reviewer?: DiscussionSecondOpinionReviewerV1; sourcePages?: 'paged' | 'truncated'; lostGrant?: boolean;
   publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean;
   reviewers?: readonly DiscussionSecondOpinionReviewerV1[];
+  sourceText?: () => string;
+  sourceReadable?: () => boolean;
+  sourceMessageCount?: number;
   interceptActionExecution?: ActionExecutorDeps['interceptActionExecution'];
   routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'] } = {}) {
   const events: string[] = [];
@@ -38,6 +41,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   const reviewer = options.reviewer ?? request.reviewers[0];
   const reviewers = options.reviewers ?? [reviewer];
   const workflowAdmissions: unknown[] = [];
+  const sourceCost = { reads: 0, rows: 0 };
   const resolveServerProfileScopeId = (identifier: string) => ['stack_qa', 'home'].includes(identifier) ? 'home' : null;
   let grantReady = !options.needsGrant, createLost = false, postLost = false, grantLost = false;
   const preview = () => DiscussionSecondOpinionPreviewV1Schema.parse({
@@ -120,7 +124,27 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     },
     sessionTranscriptGet: async args => {
       events.push('read-source');
-      const firstPage = options.sourcePages === 'paged' && !args.cursor;
+      sourceCost.reads++;
+      if (options.sourceReadable?.() === false) return { ok: false, errorCode: 'session_access_denied', errorMessage: 'session_access_denied' };
+      if (typeof options.sourceMessageCount === 'number') {
+        // The semantic transcript transport owns paging. All Action composition
+        // and admission remain real; the source is behind 209 unrelated rows.
+        const sourceRows = options.sourceMessageCount;
+        const inventory = Array.from({ length: sourceRows }, (_, index): SessionTranscriptGetItem => ({
+          id: index === sourceRows - 1 ? 'answer' : `unrelated-${index}`,
+          semanticRole: 'assistant', role: 'assistant', kind: 'message', createdAt: 1,
+          text: index === sourceRows - 1 ? options.sourceText?.() ?? 'Exact source answer' : 'Unrelated answer',
+        }));
+        const offset = args.cursor ? Number(args.cursor) : 0;
+        const exactId = 'messageId' in args && typeof args.messageId === 'string' ? args.messageId : undefined;
+        const items = exactId ? inventory.filter(row => row.id === exactId) : inventory.slice(offset, offset + 20);
+        sourceCost.rows += items.length;
+        const hasMore = !exactId && offset + items.length < inventory.length;
+        return { ok: true, sessionId: 'source', items, hasMore,
+          nextCursor: hasMore ? String(offset + items.length) : null,
+          diagnostics: { rawRowsScanned: items.length, pagesFetched: 1, scanLimitReached: false, payloadTruncations: 0 } };
+      }
+      const firstPage = options.sourcePages === 'paged' && !args.cursor && !args.messageId;
       return { ok: true, sessionId: 'source', items: firstPage ? [] : [{ id: 'answer', semanticRole: 'assistant', role: 'assistant', kind: 'message',
         createdAt: 1, text: 'Exact source answer', ...(options.sourcePages === 'truncated' ? { truncated: true } : {}) }],
         nextCursor: firstPage ? 'next-source-page' : null, hasMore: firstPage,
@@ -169,10 +193,34 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
       'discussion.second_opinion.start': ['ui'], 'discussion.create': ['ui'], 'discussion.invite': ['ui'],
       'discussion.post': ['ui'], 'session.access.grant.set': ['ui'], 'session.transcript.get': ['ui'], 'session.spawn_new': ['ui'],
     } }) };
-  return { executor, context, events, creates, posts, preview, births, invites, approvals, workflowAdmissions };
+  return { executor, context, events, creates, posts, preview, births, invites, approvals, workflowAdmissions, sourceCost };
 }
 
 describe('Second opinion canonical Action composition', () => {
+  it('selects one source for preview and rereads one for fresh Ask among 210 committed messages', async () => {
+    let sourceText = 'Exact source answer';
+    const f = fixture({ sourceMessageCount: 210, sourceText: () => sourceText });
+    expect(await f.executor.execute('discussion.second_opinion.start', request, f.context)).toMatchObject({ ok: true,
+      result: { status: 'preview', sourceText: 'Exact source answer' } });
+    sourceText = 'Freshly read source answer';
+    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask',
+      confirmedPreview: f.preview() }, f.context)).toMatchObject({ ok: true, result: { status: 'asked' } });
+    expect(f.creates).toHaveLength(1);
+    expect(f.creates[0]).toMatchObject({ firstMessage: { content: { parts: [{ t: 'text', text: sourceText }] } } });
+    expect(f.sourceCost).toEqual({ reads: 2, rows: 2 });
+  });
+  it('does not use a preview quote after source admission is revoked before Ask', async () => {
+    let readable = true;
+    const f = fixture({ sourceMessageCount: 210, sourceReadable: () => readable });
+    expect(await f.executor.execute('discussion.second_opinion.start', request, f.context)).toMatchObject({ ok: true,
+      result: { status: 'preview' } });
+    readable = false;
+    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask',
+      confirmedPreview: f.preview() }, f.context)).toMatchObject({ ok: true,
+      result: { status: 'pending', errorCode: 'session_access_denied' } });
+    expect(f.creates).toEqual([]);
+    expect(f.posts).toEqual([]);
+  });
   it('previews for a present CLI user under the default policy without weakening Ask or automation authority', async () => {
     const f = fixture();
     const context = { ...f.context, surface: 'cli' as const, bypassApprovals: false,

@@ -10281,6 +10281,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await deps.sessionTranscriptGet({
             context: ctx,
             sessionId,
+            ...(typeof data.messageId === 'string' ? { messageId: data.messageId } : {}),
             ...(data.projection === 'externalShareableV1' ? { projection: data.projection } : {}),
             ...(data.projection === 'externalShareableV1' && ctx.actionCaller?.kind === 'plugin'
               ? { callerPluginId: ctx.actionCaller.pluginId }
