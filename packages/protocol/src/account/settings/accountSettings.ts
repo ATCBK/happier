@@ -15,6 +15,8 @@ import { UsageCoachPreferencesV1Schema, DEFAULT_USAGE_COACH_PREFERENCES_V1 } fro
 import { UsageModelPriceOverridesV1Schema } from '../../usage/usageModelPriceSchemas.js';
 import { UsageNightHoursV1Schema } from '../../usage/usageWorkIntervals.js';
 import { PetAccountReferenceV1Schema } from '../../pets/selection.js';
+import { DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES_V1, MAX_ATTACHMENT_UPLOAD_FILE_BYTES_V1 } from '../../transfers/attachments/attachmentLimitsV1.js';
+import { normalizeAttachmentRelativePathV1 } from '../../transfers/attachments/attachmentPathV1.js';
 
 import {
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
@@ -178,11 +180,7 @@ export type FavoriteBackendTargetKeysV1 = z.infer<typeof FavoriteBackendTargetKe
 
 /** The upload-folder control and its Action admit the same workspace-relative directory. */
 export function normalizeAttachmentsUploadsWorkspaceRelativeDir(input: string): string | null {
-  const trimmed = input.trim();
-  if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
-  const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
-  if (parts.some(part => part === '.' || part === '..')) return null;
-  return parts.join('/');
+  return normalizeAttachmentRelativePathV1(input);
 }
 
 export const ForegroundBehaviorSchema = lazyZodSchema(() => classicZ.enum(['full', 'silent', 'off']));
@@ -956,7 +954,7 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     }),
     attachmentsUploadsVcsIgnoreStrategy: accountPreference(z.enum(['git_info_exclude', 'gitignore', 'none']), 'git_info_exclude', 'attachment uploads'),
     attachmentsUploadsVcsIgnoreWritesEnabled: accountPreference(z.boolean(), true, 'attachment uploads'),
-    attachmentsUploadsMaxFileBytes: accountPolicy(z.number().check(z.int(), z.minimum(1), z.maximum(512 * 1024 * 1024)), 25 * 1024 * 1024, 'attachment uploads'),
+    attachmentsUploadsMaxFileBytes: accountPolicy(z.number().check(z.int(), z.minimum(1), z.maximum(MAX_ATTACHMENT_UPLOAD_FILE_BYTES_V1)), DEFAULT_ATTACHMENT_UPLOAD_MAX_FILE_BYTES_V1, 'attachment uploads'),
     sessionTagsEnabled: accountPreference(z.boolean(), true, 'session list presentation'),
     sessionListWorkingStatusAnimatedTextEnabled: accountPreference(z.boolean(), true, 'session list presentation'),
     mobileWorkspaceExperienceV1: accountPreference(z.enum(['classic', 'cockpit']), 'cockpit', 'mobile workspace presentation'),
