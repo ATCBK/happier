@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { I18nManager, Image, Platform, Pressable, ScrollView, View, type LayoutChangeEvent } from 'react-native';
+import { I18nManager, Image, Platform, Pressable, ScrollView, View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import { useEventCallback } from '@/hooks/ui/useEventCallback';
 import { Typography } from '@/constants/Typography';
 import { PinIcon } from '@/components/sessions/shell/sessionPinIcons';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -13,15 +14,15 @@ import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle, isHappierFocusVisible, resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_FOCUS_RING_V1, happierFocusRingStyle, isHappierFocusVisible, resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
-import { shadowLevelStyle } from '@/shadowElevation';
 import type { EntityDragItemV1, EntityDragKindV1, EntityDragScopeV1, EntityDropAdmissionV1, EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { measureWindowBounds, readWindowBounds, useEntityDragSource, useEntityDropTarget, useEntityDropTargetState, type EntityDragDropRuntime, type EntityDragInput, type WindowBounds } from '@/components/ui/treeDragDrop';
 import { isSecondaryEntityRowControl, useEntityDragDomBinding, useEntityDropDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
 import { TreeDropIndicatorLine } from '@/components/ui/treeDragDrop/ui/TreeDropIndicatorLine';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
 import { resolveTreeDropAutoscrollTarget } from '@/components/ui/treeDragDrop/autoscroll/useTreeDropAutoscroll';
@@ -142,10 +143,11 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
     /** `rail` only: what follows the last tab inside the scroll (the "Synced" note). */
     railTrailing?: React.ReactNode;
     /**
-     * `bar` only. `raised`: the open tab is lifted onto paper — the focused pane's tab, the one
-     * focus signal. `quiet`: the open tab of a pane that is not focused takes a selection tint.
+     * `bar` only. `focused` (the default): the open tab takes the full soft ink fill — the focused
+     * pane's tab, the one focus signal. `unfocused`: the open tab of a pane that is not focused takes
+     * half that fill and secondary ink.
      */
-    activeEmphasis?: 'raised' | 'quiet';
+    activeEmphasis?: 'focused' | 'unfocused';
     /** `bar` and `rail`: a tab's menu, from a right click or a long press. */
     onTabMenu?: (key: string, event: unknown) => void;
     /** Retire an open press menu when this tab becomes the carried source. */
@@ -180,8 +182,19 @@ export const DOCUMENT_TAB_BAR_METRICS = Object.freeze({
     stripGapPx: 2,
 });
 const B = DOCUMENT_TAB_BAR_METRICS;
-/** Room above and below the bar's tabs, inside its scroll clip, for the raised tab's shadow. */
-const BAR_SCROLL_BLEED_PX = 4;
+/**
+ * Room above and below the bar's tabs, inside its scroll clip, for a tab's keyboard focus ring (drawn
+ * outside the tab at the shared ring's width and gap). The open tab is a flat fill, so nothing else
+ * paints past a tab's box.
+ */
+const BAR_SCROLL_BLEED_PX = HAPPIER_FOCUS_RING_V1.widthPx + HAPPIER_FOCUS_RING_V1.gapPx;
+/** Web only: a closed tab's hover fill eases in and out; the open tab's fill applies at once. */
+const BAR_TAB_HOVER_PAINT = Platform.OS === 'web' ? {
+    transitionProperty: 'background-color',
+    transitionDuration: `${motionTokens.durationMs.hover}ms`,
+    transitionTimingFunction: motionTokens.easingCss.standard,
+// react-native-web transition style keys; React Native's ViewStyle does not declare them.
+} as unknown as ViewStyle : null;
 
 // Details lab 2 (`dl-strip`): tabs sit borderless on the strip; the open one takes the selection
 // fill, a preview tab reads in italics, a pinned tab shows its pin and an edited one its dot.
@@ -281,7 +294,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: B.stripGapPx,
-        // Room inside the clip for the raised tab's shadow and, at either end, the insertion mark
+        // Room inside the clip for a tab's focus ring and, at either end, the insertion mark
         // (DnD lab C2), so the strip never reflows when a carry starts.
         paddingVertical: BAR_SCROLL_BLEED_PX,
         paddingHorizontal: B.stripGapPx,
@@ -307,9 +320,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         maxWidth: B.tabMaxWidthPx,
         flexShrink: 1,
-        // Every tab reserves the raised tab's hairline, so raising one never shifts its neighbours.
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: 'transparent',
     },
     barTabPinned: {
         minWidth: 0,
@@ -318,20 +328,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     barTabOpen: {
         flexShrink: 0,
     },
-    // Hover and the open tab of a pane that is not focused take the strip's own control hover
-    // (the same fill as the back/forward buttons beside them); only the focused pane's open tab is
-    // raised (workspace lab T: "that is the whole focus indicator").
+    // Hover takes the strip's own control hover (the same fill as the back/forward buttons beside
+    // them). The open tab is a soft ink fill one step above it, with no edge or lift (calm-shell
+    // `cstabs.T1`); in a pane that is not focused it takes half that fill and secondary ink, so focus
+    // between split panes still reads ("that is the whole focus indicator", workspace lab T).
     barTabHovered: {
         backgroundColor: theme.colors.surface.selected,
     },
-    barTabQuiet: {
-        backgroundColor: theme.colors.surface.selected,
+    barTabOpenUnfocused: {
+        backgroundColor: theme.colors.surface.selectedUnfocused,
     },
-    barTabRaised: {
-        backgroundColor: theme.colors.surface.pressed,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
-        ...shadowLevelStyle(theme.colors.shadowLevels[1]),
+    barTabOpenFocused: {
+        backgroundColor: theme.colors.surface.selectedFocused,
     },
     entityTab: {
         flexShrink: 1,
@@ -428,13 +436,92 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+
+type DocumentTabRowProps<T extends DocumentTabItem> = Readonly<{
+    tab: T;
+    index: number;
+    active: boolean;
+    unsaved: boolean;
+    faviconUrl: string | null;
+    isLoading: boolean;
+    statusTone: DocumentTabStatus['tone'] | null;
+    statusLabel: string;
+    tabTestID?: string;
+    pinTestID?: string;
+    unpinTestID?: string;
+    closeTestID?: string;
+    faviconTestID?: string;
+    spinnerTestID?: string;
+    unsavedTestID?: string;
+    statusTestID?: string;
+    tabNativeID: string;
+    panelNativeID: string;
+    renderLeadingIcon: DocumentTabStripProps<T>['renderLeadingIcon'];
+    wrapTab: DocumentTabStripProps<T>['wrapTab'];
+    onActivate: (key: string) => void;
+    onPin: (key: string) => void;
+    onUnpin: (key: string) => void;
+    onClose: (key: string) => void;
+    onTabMenu: DocumentTabStripProps<T>['onTabMenu'];
+    onDismissTabMenu: DocumentTabStripProps<T>['onDismissTabMenu'];
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => void;
+    registerFocusTarget: (key: string, target: { focus?: () => void } | null) => void;
+    entitySource: DocumentTabEntityDragSource | undefined;
+    entityDrop: DocumentTabEntityDragDrop | undefined;
+    dragEnabled: boolean;
+}>;
+
+/**
+ * Registrations already own current callbacks. Keep their binding identity tied
+ * to the same runtime and exact Home/Account, not to inline event closures.
+ */
+function useDocumentTabEntityBindings(source: DocumentTabEntityDragSource | undefined, drop: DocumentTabEntityDragDrop | undefined) {
+    const current = React.useRef({ source, drop });
+    current.current = { source, drop };
+    const runtime = source?.runtime;
+    const id = source?.id;
+    const serverId = source?.scope.serverId;
+    const accountId = source?.scope.accountId;
+    const nativeDragAxis = source?.nativeDragAxis;
+    const hasDrop = drop !== undefined;
+    return React.useMemo(() => {
+        if (!runtime || id === undefined || serverId === undefined || accountId === undefined) {
+            return { source: undefined, drop: undefined };
+        }
+        const read = () => {
+            const candidate = current.current.source;
+            return candidate?.runtime === runtime && candidate.id === id
+                && candidate.scope.serverId === serverId && candidate.scope.accountId === accountId
+                && candidate.nativeDragAxis === nativeDragAxis ? candidate : null;
+        };
+        const readDrop = () => {
+            const candidate = current.current.drop;
+            return candidate && candidate === read() ? candidate : null;
+        };
+        const binding: DocumentTabEntityDragSource = {
+            runtime, id, scope: { serverId, accountId }, nativeDragAxis,
+            getItem: key => read()?.getItem(key) ?? null,
+            isCurrent: () => {
+                const candidate = read();
+                return candidate !== null && candidate.isCurrent?.() !== false;
+            },
+        };
+        const dropBinding: DocumentTabEntityDragDrop | undefined = hasDrop ? {
+            ...binding,
+            get acceptedKinds() { return readDrop()?.acceptedKinds ?? []; },
+            resolve: input => readDrop()?.resolve(input)
+                ?? { status: 'refused', reason: { code: 'target-missing', message: 'target-missing' } },
+            execute: async effect => readDrop()?.execute(effect)
+                ?? { status: 'refused', reason: { code: 'target-missing', message: 'target-missing' } },
+        } : undefined;
+        return { source: dropBinding ?? binding, drop: dropBinding };
+    }, [runtime, id, serverId, accountId, nativeDragAxis, hasDrop]);
+}
+
 export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabStripProps<T>) {
-    const entitySource = props.entityDragDrop ?? props.entityDragSource;
-    const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
-    const styles = { ...stylesheet, tabActive: [stylesheet.tabActive, { backgroundColor: materialColor(theme.colors.surface.elevated) }] };
-    // A finger gets the platform touch floor; a precise pointer keeps the dense strip (details lab 2),
-    // with its pin and close still at least the WCAG 2.5.8 target.
+    // Keep theme-driven container styles live as well as each row's material.
+    useUnistyles();
+    const bindings = useDocumentTabEntityBindings(props.entityDragDrop ?? props.entityDragSource, props.entityDragDrop);
     const touchFloorPx = resolveTouchTargetFloorPx(Platform.OS);
     const interactiveTargetStyle = React.useMemo(() => (touchFloorPx === null ? null : {
         minWidth: touchFloorPx,
@@ -445,13 +532,19 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
         void props.entityDragDrop?.runtime.refreshMeasurements();
     }, [props.entityDragDrop?.runtime]);
     const tabFocusTargetsRef = React.useRef(new Map<string, { focus?: () => void }>());
-    const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => {
-        const key = event.key;
+    const registerFocusTarget = React.useCallback((key: string, target: { focus?: () => void } | null) => {
+        if (target) tabFocusTargetsRef.current.set(key, target);
+        else tabFocusTargetsRef.current.delete(key);
+    }, []);
+    const onActivate = useEventCallback(props.onActivate);
+    const onPin = useEventCallback(props.onPin);
+    const onUnpin = useEventCallback(props.onUnpin);
+    const onClose = useEventCallback(props.onClose);
+    const onTabMenu = useEventCallback((key: string, event: unknown) => props.onTabMenu?.(key, event));
+    const onDismissTabMenu = useEventCallback((key: string) => props.onDismissTabMenu?.(key));
+    const handleKeyDown = useEventCallback((event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => {
         const nextIndex = resolveHappierTabKeySelection({
-            tabs: props.tabs,
-            key,
-            currentIndex,
-            rtl: I18nManager.isRTL,
+            tabs: props.tabs, key: event.key, currentIndex, rtl: I18nManager.isRTL,
         });
         if (nextIndex === null) return;
         event.preventDefault();
@@ -459,175 +552,196 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
         if (!nextTab) return;
         props.onActivate(nextTab.key);
         if (nextIndex !== currentIndex) tabFocusTargetsRef.current.get(nextTab.key)?.focus?.();
-    }, [props.tabs, props.onActivate]);
-
-    if (props.variant === 'rail') {
-        return <DocumentRail strip={props} actionSize={actionSize} onKeyDown={handleKeyDown} focusTargets={tabFocusTargetsRef.current} />;
-    }
-
-    if (props.variant === 'bar') {
-        return <DocumentBar strip={props} actionSize={actionSize} onKeyDown={handleKeyDown} focusTargets={tabFocusTargetsRef.current} />;
-    }
-
+    });
+    // Project render facts here; event-only closures never invalidate every row.
+    // Icon/wrapper renderers remain real visual inputs rather than latest refs.
+    const rowProps = (tab: T, index: number): DocumentTabRowProps<T> => {
+        const safeKey = toTestIdSafeValue(tab.key);
+        const presentation = props.resolveTabPresentation?.(tab);
+        return {
+            tab, index, active: props.activeTabKey ? tab.key === props.activeTabKey : false,
+            unsaved: props.unsavedTabKeys?.has(tab.key) === true,
+            faviconUrl: presentation?.faviconUrl ?? null, isLoading: presentation?.isLoading === true,
+            statusTone: presentation?.status?.tone ?? null, statusLabel: presentation?.status?.label ?? '',
+            tabTestID: props.testIds?.tab?.(safeKey) ?? undefined,
+            pinTestID: props.testIds?.tabPin?.(safeKey) ?? undefined,
+            unpinTestID: props.testIds?.tabUnpin?.(safeKey) ?? undefined,
+            closeTestID: props.testIds?.tabClose?.(safeKey) ?? undefined,
+            faviconTestID: props.testIds?.tabFavicon?.(safeKey) ?? undefined,
+            spinnerTestID: props.testIds?.tabSpinner?.(safeKey) ?? undefined,
+            unsavedTestID: props.testIds?.tabUnsaved?.(safeKey) ?? undefined,
+            statusTestID: props.testIds?.tabStatus?.(safeKey) ?? undefined,
+            tabNativeID: props.tabNativeId(tab.key), panelNativeID: props.panelNativeId(tab.key),
+            renderLeadingIcon: props.renderLeadingIcon, wrapTab: props.wrapTab,
+            onActivate, onPin, onUnpin, onClose,
+            onTabMenu: props.onTabMenu ? onTabMenu : undefined,
+            onDismissTabMenu: props.onDismissTabMenu ? onDismissTabMenu : undefined,
+            onKeyDown: handleKeyDown, registerFocusTarget,
+            entitySource: bindings.source, entityDrop: bindings.drop,
+            dragEnabled: bindings.source?.isCurrent?.() !== false && bindings.source?.getItem(tab.key) != null,
+        };
+    };
+    if (props.variant === 'rail') return <DocumentRail strip={props} actionSize={actionSize} rowProps={rowProps} />;
+    if (props.variant === 'bar') return <DocumentBar strip={props} actionSize={actionSize} rowProps={rowProps} />;
     return (
-        <ScrollView
-            horizontal
-            style={styles.tabsScroll}
-            contentContainerStyle={styles.tabsContent}
-            showsHorizontalScrollIndicator={false}
-            accessibilityRole="tablist"
-            accessibilityLabel={props.accessibilityLabel}
-            onLayout={refreshDropMeasurements}
-            onScroll={refreshDropMeasurements}
-        >
-            {props.tabs.map((tab, tabIndex) => {
-                const isActive = props.activeTabKey ? tab.key === props.activeTabKey : false;
-                const isUnsaved = props.unsavedTabKeys?.has(tab.key) === true;
-                const safeTabKey = toTestIdSafeValue(tab.key);
-                const presentation = props.resolveTabPresentation?.(tab) ?? null;
-                const content = (
-                    <View
-                        key={tab.key}
-                        style={[styles.tab, isActive ? styles.tabActive : null]}
-                    >
-                        <DocumentTabWebPressable
-                            ref={(target) => {
-                                if (target) tabFocusTargetsRef.current.set(tab.key, target);
-                                else tabFocusTargetsRef.current.delete(tab.key);
-                            }}
-                            onPress={() => props.onActivate(tab.key)}
-                            onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, props.onClose) : undefined}
-                            onKeyDown={Platform.OS === 'web'
-                                ? (event) => handleKeyDown(event, tabIndex)
-                                : undefined}
-                            testID={props.testIds?.tab?.(safeTabKey) ?? undefined}
-                            style={[
-                                styles.tabContent,
-                                interactiveTargetStyle,
-                            ]}
-                            accessibilityRole="tab"
-                            accessibilityLabel={presentation?.status
-                                ? `${t('session.detailsPanel.openTabA11y', { title: tab.title })}, ${presentation.status.label}`
-                                : t('session.detailsPanel.openTabA11y', { title: tab.title })}
-                            accessibilityState={{ selected: isActive }}
-                            aria-selected={isActive}
-                            nativeID={props.tabNativeId(tab.key)}
-                            aria-controls={props.panelNativeId(tab.key)}
-                            tabIndex={isActive ? 0 : -1}
-                        >
-                            {presentation?.isLoading ? (
-                                <ActivitySpinner
-                                    size={M.tabGlyphPx - 3}
-                                    color={theme.colors.text.secondary}
-                                    testID={props.testIds?.tabSpinner?.(safeTabKey) ?? undefined}
-                                />
-                            ) : presentation?.faviconUrl ? (
-                                <Image
-                                    source={{ uri: presentation.faviconUrl }}
-                                    style={styles.favicon}
-                                    testID={props.testIds?.tabFavicon?.(safeTabKey) ?? undefined}
-                                />
-                            ) : props.renderLeadingIcon(tab, isActive)}
-                            <View style={styles.tabCopy}>
-                                <Text
-                                    style={[
-                                        styles.tabLabel,
-                                        isActive ? styles.tabLabelActive : null,
-                                        tab.isPreview ? styles.tabLabelPreview : null,
-                                    ]}
-                                    numberOfLines={1}
-                                >
-                                    {tab.title}
-                                </Text>
-                                {typeof tab.subtitle === 'string' && tab.subtitle.trim().length > 0 ? (
-                                    <Text style={styles.tabSubtitle} numberOfLines={1}>
-                                        {tab.subtitle}
-                                    </Text>
-                                ) : null}
-                            </View>
-                        </DocumentTabWebPressable>
-                        <View style={styles.tabActions}>
-                            {presentation?.status && (tab.isPinned || !isActive) ? (
-                                <DocumentTabStatusMark
-                                    status={presentation.status}
-                                    compact={tab.isPinned}
-                                    testID={props.testIds?.tabStatus?.(safeTabKey) ?? undefined}
-                                    spinnerTestID={props.testIds?.tabSpinner?.(safeTabKey) ?? undefined}
-                                />
-                            ) : null}
-                            {tab.isPreview || tab.canPin ? (
-                                <IconButton
-                                    onPress={(event: unknown) => {
-                                        if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
-                                            (event as ScrollPropagationEvent).stopPropagation?.();
-                                        }
-                                        props.onPin(tab.key);
-                                    }}
-                                    testID={props.testIds?.tabPin?.(safeTabKey) ?? undefined}
-                                    accessibilityLabel={`${t('session.detailsPanel.pinTabA11y')}: ${tab.title}`}
-                                    tooltip={`${t('session.detailsPanel.pinTabA11y')}: ${tab.title}`}
-                                    variant="plain"
-                                    size={actionSize}
-                                    minimumInteractiveTargetSize={actionSize}
-                                    iconSize={12}
-                                    icon={<PinIcon size={12} color={theme.colors.text.tertiary} />}
-                                />
-                            ) : tab.isPinned ? (
-                                <IconButton
-                                    onPress={(event: unknown) => {
-                                        if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
-                                            (event as ScrollPropagationEvent).stopPropagation?.();
-                                        }
-                                        props.onUnpin(tab.key);
-                                    }}
-                                    testID={props.testIds?.tabUnpin?.(safeTabKey) ?? undefined}
-                                    accessibilityLabel={`${t('session.detailsPanel.unpinTabA11y')}: ${tab.title}`}
-                                    tooltip={`${t('session.detailsPanel.unpinTabA11y')}: ${tab.title}`}
-                                    variant="plain"
-                                    size={actionSize}
-                                    minimumInteractiveTargetSize={actionSize}
-                                    iconSize={12}
-                                    icon={<PinIcon size={12} color={theme.colors.text.secondary} />}
-                                />
-                            ) : null}
-                            <IconButton
-                                onPress={(event: unknown) => {
-                                    if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
-                                        (event as ScrollPropagationEvent).stopPropagation?.();
-                                    }
-                                    props.onClose(tab.key);
-                                }}
-                                testID={props.testIds?.tabClose?.(safeTabKey) ?? undefined}
-                                accessibilityLabel={`${isUnsaved
-                                    ? t('detailsSurface.chrome.closeUnsavedTabA11y')
-                                    : t('session.detailsPanel.closeTabA11y')}: ${tab.title}`}
-                                tooltip={`${isUnsaved
-                                    ? t('detailsSurface.chrome.closeUnsavedTabA11y')
-                                    : t('session.detailsPanel.closeTabA11y')}: ${tab.title}`}
-                                variant="plain"
-                                size={actionSize}
-                                minimumInteractiveTargetSize={actionSize}
-                                iconSize={M.tabCloseGlyphPx}
-                                icon={isUnsaved ? (
-                                    <View
-                                        testID={props.testIds?.tabUnsaved?.(safeTabKey) ?? undefined}
-                                        style={styles.unsavedDot}
-                                    />
-                                ) : (
-                                    <Icon name="x" size={M.tabCloseGlyphPx} color={theme.colors.text.tertiary} />
-                                )}
-                            />
-                        </View>
-                    </View>
-                );
-                const wrapped = props.wrapTab ? props.wrapTab(tab, content) : content;
-                return <React.Fragment key={tab.key}>{entitySource
-                    ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={props.entityDragDrop} gapPx={M.tabGapPx} first={tabIndex === 0}>{wrapped}</DocumentEntityTab>
-                    : wrapped}</React.Fragment>;
-            })}
+        <ScrollView horizontal style={stylesheet.tabsScroll} contentContainerStyle={stylesheet.tabsContent}
+            showsHorizontalScrollIndicator={false} accessibilityRole="tablist" accessibilityLabel={props.accessibilityLabel}
+            onLayout={refreshDropMeasurements} onScroll={refreshDropMeasurements}>
+            {props.tabs.map((tab, index) => <DocumentDetailsTab key={tab.key} {...rowProps(tab, index)}
+                actionSize={actionSize} interactiveTargetStyle={interactiveTargetStyle} />)}
         </ScrollView>
     );
 }
+
+function DocumentDetailsTabRow<T extends DocumentTabItem>(props: DocumentTabRowProps<T> & Readonly<{
+    actionSize: number;
+    interactiveTargetStyle: { minWidth: number; minHeight: number } | null;
+}>) {
+    const { theme } = useUnistyles();
+    const materialColor = useHappierMaterialColorResolver();
+    const styles = { ...stylesheet, tabActive: [stylesheet.tabActive, { backgroundColor: materialColor(theme.colors.surface.elevated) }] };
+    const { tab, active: isActive, unsaved: isUnsaved, actionSize, interactiveTargetStyle } = props;
+    const presentation = { isLoading: props.isLoading, faviconUrl: props.faviconUrl,
+        status: props.statusTone ? { tone: props.statusTone, label: props.statusLabel } : null };
+    const content = (
+        <View
+            key={tab.key}
+            style={[styles.tab, isActive ? styles.tabActive : null]}
+        >
+            <DocumentTabWebPressable
+                ref={(target) => props.registerFocusTarget(tab.key, target)}
+                onPress={() => props.onActivate(tab.key)}
+                onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, props.onClose) : undefined}
+                onKeyDown={Platform.OS === 'web'
+                    ? (event) => props.onKeyDown(event, props.index)
+                    : undefined}
+                testID={props.tabTestID}
+                style={[
+                    styles.tabContent,
+                    interactiveTargetStyle,
+                ]}
+                accessibilityRole="tab"
+                accessibilityLabel={presentation?.status
+                    ? `${t('session.detailsPanel.openTabA11y', { title: tab.title })}, ${presentation.status.label}`
+                    : t('session.detailsPanel.openTabA11y', { title: tab.title })}
+                accessibilityState={{ selected: isActive }}
+                aria-selected={isActive}
+                nativeID={props.tabNativeID}
+                aria-controls={props.panelNativeID}
+                tabIndex={isActive ? 0 : -1}
+            >
+                {presentation?.isLoading ? (
+                    <ActivitySpinner
+                        size={M.tabGlyphPx - 3}
+                        color={theme.colors.text.secondary}
+                        testID={props.spinnerTestID}
+                    />
+                ) : presentation?.faviconUrl ? (
+                    <Image
+                        source={{ uri: presentation.faviconUrl }}
+                        style={styles.favicon}
+                        testID={props.faviconTestID}
+                    />
+                ) : props.renderLeadingIcon(tab, isActive)}
+                <View style={styles.tabCopy}>
+                    <Text
+                        style={[
+                            styles.tabLabel,
+                            isActive ? styles.tabLabelActive : null,
+                            tab.isPreview ? styles.tabLabelPreview : null,
+                        ]}
+                        numberOfLines={1}
+                    >
+                        {tab.title}
+                    </Text>
+                    {typeof tab.subtitle === 'string' && tab.subtitle.trim().length > 0 ? (
+                        <Text style={styles.tabSubtitle} numberOfLines={1}>
+                            {tab.subtitle}
+                        </Text>
+                    ) : null}
+                </View>
+            </DocumentTabWebPressable>
+            <View style={styles.tabActions}>
+                {presentation?.status && (tab.isPinned || !isActive) ? (
+                    <DocumentTabStatusMark
+                        status={presentation.status}
+                        compact={tab.isPinned}
+                        testID={props.statusTestID}
+                        spinnerTestID={props.spinnerTestID}
+                    />
+                ) : null}
+                {tab.isPreview || tab.canPin ? (
+                    <IconButton
+                        onPress={(event: unknown) => {
+                            if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
+                                (event as ScrollPropagationEvent).stopPropagation?.();
+                            }
+                            props.onPin(tab.key);
+                        }}
+                        testID={props.pinTestID}
+                        accessibilityLabel={`${t('session.detailsPanel.pinTabA11y')}: ${tab.title}`}
+                        tooltip={`${t('session.detailsPanel.pinTabA11y')}: ${tab.title}`}
+                        variant="plain"
+                        size={actionSize}
+                        minimumInteractiveTargetSize={actionSize}
+                        iconSize={12}
+                        icon={<PinIcon size={12} color={theme.colors.text.tertiary} />}
+                    />
+                ) : tab.isPinned ? (
+                    <IconButton
+                        onPress={(event: unknown) => {
+                            if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
+                                (event as ScrollPropagationEvent).stopPropagation?.();
+                            }
+                            props.onUnpin(tab.key);
+                        }}
+                        testID={props.unpinTestID}
+                        accessibilityLabel={`${t('session.detailsPanel.unpinTabA11y')}: ${tab.title}`}
+                        tooltip={`${t('session.detailsPanel.unpinTabA11y')}: ${tab.title}`}
+                        variant="plain"
+                        size={actionSize}
+                        minimumInteractiveTargetSize={actionSize}
+                        iconSize={12}
+                        icon={<PinIcon size={12} color={theme.colors.text.secondary} />}
+                    />
+                ) : null}
+                <IconButton
+                    onPress={(event: unknown) => {
+                        if (event && typeof (event as ScrollPropagationEvent).stopPropagation === 'function') {
+                            (event as ScrollPropagationEvent).stopPropagation?.();
+                        }
+                        props.onClose(tab.key);
+                    }}
+                    testID={props.closeTestID}
+                    accessibilityLabel={`${isUnsaved
+                        ? t('detailsSurface.chrome.closeUnsavedTabA11y')
+                        : t('session.detailsPanel.closeTabA11y')}: ${tab.title}`}
+                    tooltip={`${isUnsaved
+                        ? t('detailsSurface.chrome.closeUnsavedTabA11y')
+                        : t('session.detailsPanel.closeTabA11y')}: ${tab.title}`}
+                    variant="plain"
+                    size={actionSize}
+                    minimumInteractiveTargetSize={actionSize}
+                    iconSize={M.tabCloseGlyphPx}
+                    icon={isUnsaved ? (
+                        <View
+                            testID={props.unsavedTestID}
+                            style={styles.unsavedDot}
+                        />
+                    ) : (
+                        <Icon name="x" size={M.tabCloseGlyphPx} color={theme.colors.text.tertiary} />
+                    )}
+                />
+            </View>
+        </View>
+    );
+    const wrapped = props.wrapTab ? props.wrapTab(tab, content) : content;
+    return props.entitySource
+        ? <DocumentEntityTab tab={tab} binding={props.entitySource} dropBinding={props.entityDrop}
+            enabled={props.dragEnabled} gapPx={M.tabGapPx} first={props.index === 0}>{wrapped}</DocumentEntityTab>
+        : wrapped;
+}
+const DocumentDetailsTab = React.memo(DocumentDetailsTabRow) as typeof DocumentDetailsTabRow;
 
 /**
  * Keeps the open tab in view in a strip that scrolls sideways: when it changes (a tab opened from
@@ -691,8 +805,7 @@ type WheelLikeEvent = Readonly<{ deltaX?: number; deltaY?: number; nativeEvent?:
 function DocumentBar<T extends DocumentTabItem>(props: Readonly<{
     strip: DocumentTabStripProps<T>;
     actionSize: number;
-    onKeyDown: (event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => void;
-    focusTargets: Map<string, { focus?: () => void }>;
+    rowProps: (tab: T, index: number) => DocumentTabRowProps<T>;
 }>) {
     const styles = stylesheet;
     const { strip } = props;
@@ -724,18 +837,11 @@ function DocumentBar<T extends DocumentTabItem>(props: Readonly<{
     }, []);
     const scrollBinding = React.useMemo(() => ({ containsPointer, autoscroll, measure: measureViewport }), [autoscroll, containsPointer, measureViewport]);
     const tabProps = (tab: T) => {
-        const index = strip.tabs.indexOf(tab);
-        return {
-            tab, index,
-            active: strip.activeTabKey ? tab.key === strip.activeTabKey : false,
-            emphasis: strip.activeEmphasis ?? 'raised',
-            unsaved: strip.unsavedTabKeys?.has(tab.key) === true,
-            heightPx, actionSize: props.actionSize, strip, onKeyDown: props.onKeyDown,
-            registerFocusTarget: (target: { focus?: () => void } | null) => {
-                if (target) props.focusTargets.set(tab.key, target);
-                else props.focusTargets.delete(tab.key);
-            },
-        } as const;
+        const row = props.rowProps(tab, strip.tabs.indexOf(tab));
+        return { ...row, emphasis: row.active ? strip.activeEmphasis ?? 'focused' : 'unfocused',
+            heightPx, actionSize: props.actionSize,
+            dropRing: strip.dropRingTabKey === tab.key,
+            endMark: strip.dropSlot === true && row.index === strip.tabs.length - 1 } as const;
     };
     const onWheel = React.useCallback((event: WheelLikeEvent) => {
         const deltaX = event.deltaX ?? event.nativeEvent?.deltaX ?? 0;
@@ -809,8 +915,7 @@ const RAIL_HIT_SLOP = { top: 7, bottom: 7 } as const;
 function DocumentRail<T extends DocumentTabItem>(props: Readonly<{
     strip: DocumentTabStripProps<T>;
     actionSize: number;
-    onKeyDown: (event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => void;
-    focusTargets: Map<string, { focus?: () => void }>;
+    rowProps: (tab: T, index: number) => DocumentTabRowProps<T>;
 }>) {
     const styles = stylesheet;
     const { strip } = props;
@@ -840,22 +945,8 @@ function DocumentRail<T extends DocumentTabItem>(props: Readonly<{
                     frames.current.set(tab.key, { x, width });
                     if (tab.key === strip.activeTabKey) reveal(tab.key, false);
                 }}>
-                    <DocumentBarTab
-                        rail
-                        tab={tab}
-                        index={tabIndex}
-                        active={strip.activeTabKey ? tab.key === strip.activeTabKey : false}
-                        emphasis="quiet"
-                        unsaved={strip.unsavedTabKeys?.has(tab.key) === true}
-                        heightPx={B.tabHeightPx}
-                        actionSize={props.actionSize}
-                        strip={strip}
-                        onKeyDown={props.onKeyDown}
-                        registerFocusTarget={(target) => {
-                            if (target) props.focusTargets.set(tab.key, target);
-                            else props.focusTargets.delete(tab.key);
-                        }}
-                    />
+                    <DocumentBarTab {...props.rowProps(tab, tabIndex)} rail emphasis="unfocused"
+                        heightPx={B.tabHeightPx} actionSize={props.actionSize} dropRing={false} endMark={false} />
                 </View>
             ))}
             {strip.railTrailing ?? null}
@@ -884,18 +975,13 @@ function documentTabSourceId(bindingId: string, tabKey: string): string {
  * One tab of the bar variant. Its own hover state reveals close in the reserved trailing slot, so the
  * tab never changes width under the pointer (workspace lab: "hover never changes width").
  */
-function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
-    tab: T;
-    index: number;
-    active: boolean;
-    emphasis: 'raised' | 'quiet';
-    unsaved: boolean;
+function DocumentBarTabRow<T extends DocumentTabItem>(props: DocumentTabRowProps<T> & Readonly<{
+    emphasis: 'focused' | 'unfocused';
     heightPx: number;
     actionSize: number;
-    strip: DocumentTabStripProps<T>;
-    onKeyDown: (event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => void;
-    registerFocusTarget: (target: { focus?: () => void } | null) => void;
     rail?: boolean;
+    dropRing: boolean;
+    endMark: boolean;
     onLayout?: (event: LayoutChangeEvent) => void;
 }>) {
     const { theme } = useUnistyles();
@@ -904,18 +990,16 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
     const styles = {
         ...stylesheet,
         barTabHovered: [stylesheet.barTabHovered, selectedPaint],
-        barTabQuiet: [stylesheet.barTabQuiet, selectedPaint],
-        barTabRaised: [stylesheet.barTabRaised, { backgroundColor: materialColor(theme.colors.surface.pressed) }],
         railTabOpen: [stylesheet.railTabOpen, selectedPaint],
     };
     const [hovered, setHovered] = React.useState(false);
     // The ring is for keyboard focus and belongs on the drawn tab, at its radius, not on the hit box.
     const [focusVisible, setFocusVisible] = React.useState(false);
-    const { tab, strip } = props;
+    const { tab } = props;
     const draggedDuringPress = React.useRef(false);
-    const dismissMenu = React.useRef(strip.onDismissTabMenu);
-    dismissMenu.current = strip.onDismissTabMenu;
-    const entitySource = strip.entityDragDrop ?? strip.entityDragSource;
+    const dismissMenu = React.useRef(props.onDismissTabMenu);
+    dismissMenu.current = props.onDismissTabMenu;
+    const entitySource = props.entitySource;
     const runtime = entitySource?.runtime;
     const sourceId = entitySource ? documentTabSourceId(entitySource.id, tab.key) : null;
     React.useEffect(() => {
@@ -930,15 +1014,15 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
             }
         });
     }, [runtime, sourceId, tab.key]);
-    const safeTabKey = toTestIdSafeValue(tab.key);
-    const presentation = strip.resolveTabPresentation?.(tab) ?? null;
+    const presentation = { isLoading: props.isLoading, faviconUrl: props.faviconUrl,
+        status: props.statusTone ? { tone: props.statusTone, label: props.statusLabel } : null };
     const pinned = tab.isPinned;
     const status = presentation?.status ?? null;
     const showClose = !pinned && ((hovered && !props.rail) || props.active || (!status && props.unsaved));
-    const openMenu = strip.onTabMenu
+    const openMenu = props.onTabMenu
         ? (event: unknown) => {
             (event as { preventDefault?: () => void } | null)?.preventDefault?.();
-            strip.onTabMenu?.(tab.key, event);
+            props.onTabMenu?.(tab.key, event);
         }
         : undefined;
     const closeLabel = `${props.unsaved
@@ -953,7 +1037,9 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 pinned ? [styles.barTabPinned, { width: props.heightPx }] : null,
                 props.active ? styles.barTabOpen : null,
                 hovered && !props.active ? styles.barTabHovered : null,
-                props.active && !props.rail ? (props.emphasis === 'raised' ? styles.barTabRaised : styles.barTabQuiet) : null,
+                // Hover paints in and out on the hover curve; selecting a tab fills it at once.
+                !props.active ? BAR_TAB_HOVER_PAINT : null,
+                props.active && !props.rail ? (props.emphasis === 'focused' ? styles.barTabOpenFocused : styles.barTabOpenUnfocused) : null,
                 props.rail ? [styles.railTab, props.active ? styles.railTabOpen : null] : null,
                 happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus }),
             ]}
@@ -963,9 +1049,9 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
             } : null)}
         >
             <DocumentTabWebPressable
-                ref={(target) => props.registerFocusTarget(target as { focus?: () => void } | null)}
-                onPress={() => strip.onActivate(tab.key)}
-                onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, strip.onClose) : undefined}
+                ref={(target) => props.registerFocusTarget(tab.key, target as { focus?: () => void } | null)}
+                onPress={() => props.onActivate(tab.key)}
+                onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, props.onClose) : undefined}
                 onPressIn={() => { draggedDuringPress.current = false; }}
                 onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
                 onBlur={() => setFocusVisible(false)}
@@ -975,7 +1061,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 onKeyDown={Platform.OS === 'web'
                     ? (event) => props.onKeyDown(event, props.index)
                     : undefined}
-                testID={strip.testIds?.tab?.(safeTabKey) ?? undefined}
+                testID={props.tabTestID}
                 style={[styles.barTabPress, pinned ? styles.barTabPressPinned : null, { height: props.heightPx }, HAPPIER_FOCUS_RING_DELEGATED_STYLE]}
                 accessibilityRole="tab"
                 accessibilityLabel={status
@@ -983,8 +1069,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                     : t('session.detailsPanel.openTabA11y', { title: tab.title })}
                 accessibilityState={{ selected: props.active }}
                 aria-selected={props.active}
-                nativeID={strip.tabNativeId(tab.key)}
-                aria-controls={strip.panelNativeId(tab.key)}
+                nativeID={props.tabNativeID}
+                aria-controls={props.panelNativeID}
                 tabIndex={props.active ? 0 : -1}
             >
                 <View style={styles.barGlyph}>
@@ -992,18 +1078,18 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                         <ActivitySpinner
                             size={M.tabGlyphPx - 3}
                             color={theme.colors.text.secondary}
-                            testID={strip.testIds?.tabSpinner?.(safeTabKey) ?? undefined}
+                            testID={props.spinnerTestID}
                         />
                     ) : presentation?.faviconUrl ? (
                         <Image
                             source={{ uri: presentation.faviconUrl }}
                             style={styles.favicon}
-                            testID={strip.testIds?.tabFavicon?.(safeTabKey) ?? undefined}
+                            testID={props.faviconTestID}
                         />
-                    ) : strip.renderLeadingIcon(tab, props.active || hovered)}
+                    ) : props.renderLeadingIcon(tab, props.active || hovered)}
                     {pinned && status ? (
                         <View style={styles.pinnedStatus}>
-                            <DocumentTabStatusMark status={status} compact testID={strip.testIds?.tabStatus?.(safeTabKey) ?? undefined} />
+                            <DocumentTabStatusMark status={status} compact testID={props.statusTestID} />
                         </View>
                     ) : null}
                 </View>
@@ -1011,7 +1097,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                     <Text
                         style={[
                             styles.tabLabel,
-                            props.active || hovered ? { color: theme.colors.text.primary } : null,
+                            // A pane that is not focused keeps its open tab's name in secondary ink.
+                            (props.active && (props.rail || props.emphasis === 'focused')) || hovered ? { color: theme.colors.text.primary } : null,
                             props.active ? styles.tabLabelActive : null,
                             tab.isPreview ? styles.tabLabelPreview : null,
                             tab.isUnavailable ? styles.tabLabelUnavailable : null,
@@ -1032,16 +1119,16 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                         {!showClose && status ? (
                             <DocumentTabStatusMark
                                 status={status}
-                                testID={strip.testIds?.tabStatus?.(safeTabKey) ?? undefined}
-                                spinnerTestID={strip.testIds?.tabSpinner?.(safeTabKey) ?? undefined}
+                                testID={props.statusTestID}
+                                spinnerTestID={props.spinnerTestID}
                             />
                         ) : showClose ? (
                             <IconButton
                                 onPress={(event: unknown) => {
                                     stopPropagation(event);
-                                    strip.onClose(tab.key);
+                                    props.onClose(tab.key);
                                 }}
-                                testID={strip.testIds?.tabClose?.(safeTabKey) ?? undefined}
+                                testID={props.closeTestID}
                                 accessibilityLabel={closeLabel}
                                 tooltip={closeLabel}
                                 tooltipPlacement="bottom"
@@ -1051,7 +1138,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                                 iconSize={M.tabCloseGlyphPx}
                                 icon={props.unsaved && !hovered ? (
                                     <View
-                                        testID={strip.testIds?.tabUnsaved?.(safeTabKey) ?? undefined}
+                                        testID={props.unsavedTestID}
                                         style={styles.unsavedDot}
                                     />
                                 ) : (
@@ -1062,15 +1149,17 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                     </View>
                 </View>
             )}
-            {strip.dropRingTabKey === tab.key ? <DocumentTabGoToRing /> : null}
+            {props.dropRing ? <DocumentTabGoToRing /> : null}
         </View>
     );
     return entitySource
-        ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
+        ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={props.entityDrop} enabled={props.dragEnabled} gapPx={B.stripGapPx} first={props.index === 0}
             fixed={pinned && !props.rail}
-            endMark={strip.dropSlot === true && props.index === strip.tabs.length - 1}>{content}</DocumentEntityTab>
+            endMark={props.endMark}>{content}</DocumentEntityTab>
         : content;
 }
+
+const DocumentBarTab = React.memo(DocumentBarTabRow) as typeof DocumentBarTabRow;
 
 function DocumentTabStatusMark(props: Readonly<{
     status: DocumentTabStatus;
@@ -1091,6 +1180,7 @@ function DocumentEntityTab(props: Readonly<{
     tab: DocumentTabItem;
     binding: DocumentTabEntityDragSource;
     dropBinding?: DocumentTabEntityDragDrop;
+    enabled: boolean;
     /** The strip's gap: the insertion mark sits in the gap before this tab. */
     gapPx: number;
     first: boolean;
@@ -1121,7 +1211,7 @@ function DocumentEntityTab(props: Readonly<{
         describe: () => ({ title: tab.title }),
         getBounds: bounds,
     });
-    const enabled = binding.isCurrent?.() !== false && binding.getItem(tab.key) !== null;
+    const enabled = props.enabled;
     const sourceRef = useEntityDragDomBinding({ runtime: binding.runtime, sourceId,
         enabled,
         describe: () => tab.title,

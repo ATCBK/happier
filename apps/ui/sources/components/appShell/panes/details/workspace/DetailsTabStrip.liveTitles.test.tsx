@@ -75,10 +75,15 @@ describe('Details live instance titles', () => {
         const profile = await upsertServerProfile({ serverUrl: 'https://titles.example.test', name: 'Titles' });
         const address = { serverId: profile.id, sessionId: 'titles-session' };
         const tab = { ...createSessionDiscussionDetailsTab({ kind: 'discussion', address, discussionId: 'd1', title: 'Saved discussion' }), isPinned: false, isPreview: false };
-        const screen = await renderStrip(tab, address.sessionId, address.serverId);
+        const sibling = { ...createSessionDiscussionDetailsTab({ kind: 'discussion', address, discussionId: 'd2', title: 'Saved sibling' }), isPinned: false, isPreview: false };
+        const resolveIcon = vi.fn((_tab: DetailsTabState) => 'circle');
+        const screen = await renderScreen(<DetailsTabStrip sessionId={address.sessionId} serverId={address.serverId}
+            pane={{ setActiveDetailsTab: vi.fn(), pinDetailsTab: vi.fn(), unpinDetailsTab: vi.fn(), closeDetailsTab: vi.fn() }}
+            group={{ id: 'titles', tabKeys: [tab.key, sibling.key], activeTabKey: tab.key, tabs: [tab, sibling], isFocused: true }}
+            resolveTabIconName={resolveIcon} />);
         expect(text(screen)).toContain('Saved discussion');
-        const summary = (title: string): DiscussionOpenedSummaryV1 => ({
-            id: 'd1', ownerAccountId: 'titles-account', encryptionMode: 'plain', anchor: null,
+        const summary = (id: string, title: string): DiscussionOpenedSummaryV1 => ({
+            id, ownerAccountId: 'titles-account', encryptionMode: 'plain', anchor: null,
             access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId: null, title,
             latestMessage: { id: 'message-1', localId: null, seq: 1, authorAccountId: null, accountActor: null, producerV1: null, createdAt: 1 },
             messageSeq: 1, lastReadSeq: 1, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt: null,
@@ -88,8 +93,8 @@ describe('Details live instance titles', () => {
         let currentTitle = 'Live discussion';
         const unavailable = async () => ({ kind: 'failed' as const, errorCode: 'unavailable' });
         const client: DiscussionRepositoryClient = {
-            list: async () => ({ kind: 'succeeded', value: { v: 1, serverId: address.serverId, discussions: [summary(currentTitle)], nextCursor: null, incomplete: false } }),
-            rename: async (_id, title) => { currentTitle = title; return { kind: 'succeeded', value: { v: 1, serverId: address.serverId, discussion: summary(title) } }; },
+            list: async () => ({ kind: 'succeeded', value: { v: 1, serverId: address.serverId, discussions: [summary('d1', currentTitle), summary('d2', 'Sibling discussion')], nextCursor: null, incomplete: false } }),
+            rename: async (_id, title) => { currentTitle = title; return { kind: 'succeeded', value: { v: 1, serverId: address.serverId, discussion: summary('d1', title) } }; },
             attention: unavailable, get: unavailable, read: unavailable, create: unavailable, post: unavailable, archive: unavailable, restore: unavailable, readState: unavailable,
             participants: unavailable, setParticipantPolicy: unavailable, invite: unavailable, inviteExecutableParticipant: unavailable, removeParticipant: unavailable, leave: unavailable,
             getSettings: unavailable, setSettings: unavailable,
@@ -98,8 +103,12 @@ describe('Details live instance titles', () => {
         const repository = getDiscussionRepository({ scope: { serverId: address.serverId, accountId: 'titles-account' }, address, client });
         await act(async () => repository.refreshList('active'));
         await vi.waitFor(() => expect(text(screen)).toContain('Live discussion'));
+        expect(text(screen)).toContain('Sibling discussion');
+        resolveIcon.mockClear();
         await act(async () => { await repository.rename('d1', 'Renamed discussion'); });
         expect(text(screen)).toContain('Renamed discussion');
+        expect(text(screen)).toContain('Sibling discussion');
+        expect(resolveIcon).toHaveBeenCalledOnce();
         expect(text(screen)).not.toContain('Live discussion');
         expect(repository.isMounted()).toBe(false);
         currentTitle = 'Other Account discussion';

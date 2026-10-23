@@ -6,7 +6,7 @@ import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/deta
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
-import { DocumentTabStrip, type DocumentTabItem, type DocumentTabPresentation } from '@/components/ui/navigation/DocumentTabStrip';
+import { DocumentTabStrip, type DocumentTabPresentation } from '@/components/ui/navigation/DocumentTabStrip';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -17,6 +17,7 @@ import {
     type SessionTerminalDescriptor,
     type SessionTerminalTabDescriptor,
 } from '../presentation/describeSessionTerminal';
+import { useSessionTerminalDocumentTabs, type SessionTerminalDocumentTab } from '../presentation/useSessionTerminalDocumentTabs';
 import { renderSessionTerminalMark, SESSION_TERMINAL_STATUS_TONE } from './sessionTerminalMenus';
 import { SessionTerminalLivePill } from './SessionTerminalLivePill';
 import { SessionTerminalTrustNotice, type SessionTerminalTrustNoticeContent } from './SessionTerminalTrustNotice';
@@ -32,9 +33,6 @@ export const SESSION_TERMINAL_STRIP_METRICS = Object.freeze({
     chevronWidthPx: 16,
 });
 const S = SESSION_TERMINAL_STRIP_METRICS;
-
-type TerminalTabItem = DocumentTabItem & Readonly<{ descriptor: SessionTerminalTabDescriptor }>;
-
 
 export type SessionTerminalStripProps = Readonly<{
     tabs: readonly SessionTerminalTabDescriptor[];
@@ -69,16 +67,13 @@ export const SessionTerminalStrip = React.memo(function SessionTerminalStrip(pro
     const [paneMenuOpen, setPaneMenuOpen] = React.useState(false);
     const testId = (suffix: string) => `${props.testIdPrefix ?? 'terminal-strip'}-${suffix}`;
 
-    const items = React.useMemo((): readonly TerminalTabItem[] => props.tabs.map((descriptor) => ({
-        key: descriptor.tabId,
-        title: descriptor.title,
-        isPreview: false,
-        isPinned: false,
-        descriptor,
-    })), [props.tabs]);
-    const resolvePresentation = React.useCallback((tab: TerminalTabItem): DocumentTabPresentation | null => (
-        tab.descriptor.status ? { status: { tone: SESSION_TERMINAL_STATUS_TONE[tab.descriptor.status], label: describeSessionTerminalStatus(tab.descriptor.status) } } : null
+    const items = useSessionTerminalDocumentTabs(props.tabs);
+    const resolvePresentation = React.useCallback((tab: SessionTerminalDocumentTab): DocumentTabPresentation | null => (
+        tab.status ? { status: { tone: SESSION_TERMINAL_STATUS_TONE[tab.status], label: describeSessionTerminalStatus(tab.status) } } : null
     ), []);
+    const renderLeadingIcon = React.useCallback((tab: SessionTerminalDocumentTab, emphasized: boolean) => renderSessionTerminalMark(
+        tab.mark, M.tabGlyphPx - 1, emphasized ? theme.colors.text.primary : theme.colors.text.secondary,
+    ), [theme.colors.text.primary, theme.colors.text.secondary]);
 
     const glyphColor = theme.colors.text.secondary;
     const active = props.activeTerminal;
@@ -100,7 +95,6 @@ export const SessionTerminalStrip = React.memo(function SessionTerminalStrip(pro
                     <DocumentTabStrip
                         variant="bar"
                         barTabHeightPx={S.tabHeightPx}
-                        activeEmphasis="quiet"
                         tabs={items}
                         activeTabKey={props.activeTabId}
                         accessibilityLabel={t('terminalWorkspace.stripA11y')}
@@ -110,9 +104,7 @@ export const SessionTerminalStrip = React.memo(function SessionTerminalStrip(pro
                         onClose={props.onCloseTab}
                         onTabMenu={props.onTabMenu}
                         resolveTabPresentation={resolvePresentation}
-                        renderLeadingIcon={(tab, emphasized) => renderSessionTerminalMark(
-                            tab.descriptor.mark, M.tabGlyphPx - 1, emphasized ? theme.colors.text.primary : glyphColor,
-                        )}
+                        renderLeadingIcon={renderLeadingIcon}
                         tabNativeId={(key) => `terminal-tab-${toTestIdSafeValue(key)}`}
                         panelNativeId={(key) => `terminal-panel-${toTestIdSafeValue(key)}`}
                         testIds={{

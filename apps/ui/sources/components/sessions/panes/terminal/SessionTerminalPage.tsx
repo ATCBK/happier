@@ -7,7 +7,7 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
-import { DocumentTabStrip, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
+import { DocumentTabStrip } from '@/components/ui/navigation/DocumentTabStrip';
 import { resolvePointerMenuAnchor } from '@/components/ui/popover/resolvePointerMenuAnchor';
 import type { PopoverAnchor } from '@/components/ui/popover';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -24,6 +24,7 @@ import {
     useSessionTerminalDescribeContext,
     useSessionTerminalTabDescriptors,
 } from '@/components/sessions/terminal/presentation/useSessionTerminalPresentation';
+import { useSessionTerminalDocumentTabs, type SessionTerminalDocumentTab } from '@/components/sessions/terminal/presentation/useSessionTerminalDocumentTabs';
 import { renderSessionTerminalMark, SESSION_TERMINAL_STATUS_TONE } from '@/components/sessions/terminal/strip/sessionTerminalMenus';
 import { useSessionTerminalTabMenu } from '@/components/sessions/terminal/strip/useSessionTerminalTabMenu';
 import { useSessionTerminalWorkspace } from '@/components/sessions/terminal/useSessionTerminalWorkspace';
@@ -31,8 +32,6 @@ import { useOpenTerminalJump } from '@/components/sessions/terminal/jump/useOpen
 import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
-
-type ChipItem = DocumentTabItem & Readonly<{ descriptor: SessionTerminalTabDescriptor }>;
 
 /** A horizontal swipe this long on the terminal moves a split tab to its next or previous half. */
 const PAGER_SWIPE_PX = 48;
@@ -115,20 +114,10 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
     const focusedDescriptor = activeDescriptor?.members[focusedIndex] ?? null;
     const memberCount = activeTab?.terminals.length ?? 0;
 
-    const chips = React.useMemo((): readonly ChipItem[] => tabs.map((tab) => {
-        const split = tab.members.length > 1;
-        const tabModel = workspace.tabs.find((item) => item.id === tab.tabId);
-        const index = split && tabModel ? Math.max(0, tabModel.terminals.findIndex((member) => member.id === tabModel.focusedTerminalId)) : 0;
-        return {
-            key: tab.tabId,
-            // A split chip names the half that shows, and counts its halves (lab B2p: "zsh 1 of 2").
-            title: split ? tab.members[index]?.title ?? tab.title : tab.title,
-            subtitle: split ? t('terminalWorkspace.keys.pagerA11y', { index: index + 1, count: tab.members.length }) : null,
-            isPreview: false,
-            isPinned: false,
-            descriptor: tab,
-        };
-    }), [tabs, workspace.tabs]);
+    const chips = useSessionTerminalDocumentTabs(tabs, workspace);
+    const renderLeadingIcon = React.useCallback((tab: SessionTerminalDocumentTab, active: boolean) => renderSessionTerminalMark(
+        tab.mark, ICON_SIZE.sm, active ? theme.colors.text.primary : theme.colors.text.secondary,
+    ), [theme.colors.text.primary, theme.colors.text.secondary]);
 
     const focusTerminal = React.useCallback((terminalId: string) => {
         onAction('session.terminals.focus', { terminalId });
@@ -200,9 +189,9 @@ export const SessionTerminalPageView = React.memo(function SessionTerminalPageVi
                     onUnpin={() => undefined}
                     onClose={closeChip}
                     onTabMenu={props.onOpenJump ?? (props.tabMenu ? (tabId, event) => setMenu({ tabId, anchor: resolvePointerMenuAnchor(event) }) : undefined)}
-                    renderLeadingIcon={(tab, active) => renderSessionTerminalMark(tab.descriptor.mark, ICON_SIZE.sm, active ? theme.colors.text.primary : theme.colors.text.secondary)}
-                    resolveTabPresentation={(tab) => (tab.descriptor.status ? {
-                        status: { tone: SESSION_TERMINAL_STATUS_TONE[tab.descriptor.status], label: describeSessionTerminalStatus(tab.descriptor.status) },
+                    renderLeadingIcon={renderLeadingIcon}
+                    resolveTabPresentation={(tab) => (tab.status ? {
+                        status: { tone: SESSION_TERMINAL_STATUS_TONE[tab.status], label: describeSessionTerminalStatus(tab.status) },
                     } : null)}
                     tabNativeId={(key) => `session-terminal-chip-${toTestIdSafeValue(key)}`}
                     panelNativeId={(key) => `session-terminal-panel-${toTestIdSafeValue(key)}`}

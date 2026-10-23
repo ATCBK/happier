@@ -8,7 +8,7 @@ import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/deta
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import type { DetailsTabState, DetailsWorkspaceGroupView } from './detailsWorkspaceTypes';
-import { hrefForDestinationRef, useDestinationInstanceTitles } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, useDestinationInstanceTitles, type DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
@@ -35,25 +35,58 @@ export function detailsTabPanelNativeId(groupId: string, tabKey: string): string
     return `details-${toTestIdSafeValue(groupId)}-panel-${toTestIdSafeValue(tabKey)}`;
 }
 
+function detailsTabDestinationRef(tab: DetailsTabState, sessionId: string, serverId: string | null | undefined): DestinationRef {
+    return {
+        kind: tab.kind === 'session' ? 'session' : 'sessionDetails',
+        params: { id: sessionId, ...(serverId ? { serverId } : {}), ...buildActiveDetailsRouteParams([tab], tab.key) },
+    };
+}
+
 /** Details owns resource semantics; DocumentTabStrip owns the shared document chrome. */
 export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
     const { theme } = useUnistyles();
+    const { sessionId, serverId, resolveTabHref, resolveTabIconName } = props;
     const closeTab = React.useCallback((tabKey: string) => {
         void runGuardedTabNavigation([tabKey], () => props.pane.closeDetailsTab(tabKey));
     }, [props.pane.closeDetailsTab]);
-    const entries = React.useMemo(() => props.sessionId ? props.group.tabs.map(tab => ({ key: tab.key, fallbackTitle: tab.title, ref: {
-        kind: tab.kind === 'session' ? 'session' : 'sessionDetails',
-        params: { id: props.sessionId!, ...(props.serverId ? { serverId: props.serverId } : {}), ...buildActiveDetailsRouteParams([tab], tab.key) },
-    } })) : [], [props.group.tabs, props.serverId, props.sessionId]);
+    const entries = React.useMemo(() => sessionId ? props.group.tabs.map(tab => ({
+        key: tab.key, fallbackTitle: tab.title, ref: detailsTabDestinationRef(tab, sessionId, serverId),
+    })) : [], [props.group.tabs, serverId, sessionId]);
     const titles = useDestinationInstanceTitles(EMPTY_CATALOG, entries);
-    const hrefs = React.useMemo(() => props.resolveTabHref
-        ? new Map(props.group.tabs.map(tab => [tab.key, props.resolveTabHref!(tab)]))
-        : new Map(entries.map(entry => [entry.key, hrefForDestinationRef(EMPTY_CATALOG, entry.ref)])),
-    [entries, props.group.tabs, props.resolveTabHref]);
-    const tabs = React.useMemo(() => props.group.tabs.map(tab => {
-        const title = titles.get(tab.key);
-        return title && title !== tab.title ? { ...tab, title } : tab;
-    }), [props.group.tabs, titles]);
+    const previousTitleRows = React.useRef<ReadonlyMap<DetailsTabState, DetailsTabState>>(new Map());
+    const tabs = React.useMemo(() => {
+        const nextTitleRows = new Map<DetailsTabState, DetailsTabState>();
+        const rows = props.group.tabs.map(tab => {
+            const title = titles.get(tab.key);
+            if (!title || title === tab.title) return tab;
+            // Another title changing must not replace an unchanged derived row.
+            // Exact source identity keeps every other visual field current.
+            const previous = previousTitleRows.current.get(tab);
+            const row = previous?.title === title ? previous : { ...tab, title };
+            nextTitleRows.set(tab, row);
+            return row;
+        });
+        previousTitleRows.current = nextTitleRows;
+        return rows;
+    }, [props.group.tabs, titles]);
+    const primaryColor = theme.colors.text.primary;
+    const secondaryColor = theme.colors.text.secondary;
+    const renderLeadingIcon = React.useCallback((tab: DetailsTabState, active: boolean) => {
+        if (tab.kind === 'file') return <FileIcon fileName={tab.title} size={M.tabGlyphPx}
+            testID={`session-details-tab-file-icon-${toTestIdSafeValue(tab.key)}`} />;
+        const iconName = resolveTabIconName?.(tab) ?? ({
+            commit: 'git-commit', scmReview: 'diff', scmStash: 'archive',
+            scmPullRequest: 'git-pull-request', terminal: 'terminal', executionRunLauncher: 'play',
+        }[tab.kind] ?? 'circle');
+        return <Icon name={iconName as IconName} size={M.tabGlyphPx}
+            color={active ? primaryColor : secondaryColor} />;
+    }, [resolveTabIconName, primaryColor, secondaryColor]);
+    const wrapTab = React.useCallback((tab: DetailsTabState, content: React.ReactNode) => {
+        const href = resolveTabHref ? resolveTabHref(tab)
+            : sessionId ? hrefForDestinationRef(EMPTY_CATALOG, detailsTabDestinationRef(tab, sessionId, serverId)) : null;
+        return <WorkspaceDestinationRow href={href} middleClickBehavior="passthrough"
+            onOpened={() => closeTab(tab.key)}>{content}</WorkspaceDestinationRow>;
+    }, [closeTab, resolveTabHref, serverId, sessionId]);
     return <DocumentTabStrip
         tabs={tabs}
         activeTabKey={props.group.activeTabKey}
@@ -67,18 +100,8 @@ export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
         testIds={props.testIds}
         tabNativeId={(key) => detailsTabNativeId(props.group.id, key)}
         panelNativeId={(key) => detailsTabPanelNativeId(props.group.id, key)}
-        renderLeadingIcon={(tab, active) => {
-            if (tab.kind === 'file') return <FileIcon fileName={tab.title} size={M.tabGlyphPx}
-                testID={`session-details-tab-file-icon-${toTestIdSafeValue(tab.key)}`} />;
-            const iconName = props.resolveTabIconName?.(tab) ?? ({
-                commit: 'git-commit', scmReview: 'diff', scmStash: 'archive',
-                scmPullRequest: 'git-pull-request', terminal: 'terminal', executionRunLauncher: 'play',
-            }[tab.kind] ?? 'circle');
-            return <Icon name={iconName as IconName} size={M.tabGlyphPx}
-                color={active ? theme.colors.text.primary : theme.colors.text.secondary} />;
-        }}
-        wrapTab={(tab, content) => <WorkspaceDestinationRow href={hrefs.get(tab.key) ?? null} middleClickBehavior="passthrough"
-            onOpened={() => closeTab(tab.key)}>{content}</WorkspaceDestinationRow>}
+        renderLeadingIcon={renderLeadingIcon}
+        wrapTab={wrapTab}
     />;
 });
 

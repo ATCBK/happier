@@ -3,6 +3,7 @@ import Color from 'color';
 import { HAPPIER_SKELETON_INK_ALPHA } from '@happier-dev/plugin-ui/environment';
 import { buildRaisedEdgeColors, deriveRaisedEdgeInk, deriveSurfaceFinishInk } from '../raisedEdge';
 import { createVerticalGradient } from '../verticalGradient';
+import { deriveSelectionFocusInk } from '../selectionInk';
 
 type ThemeControlGradient = Theme['colors']['button']['primary']['gradient'];
 
@@ -103,6 +104,9 @@ export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverri
             surface: {
                 ...theme.colors.surface,
                 skeleton: deriveSkeletonInk(theme, explicitOverrides),
+                // The open tab's fills always follow the profile's own text ink.
+                selectedFocused: deriveSelectionFocusInk(theme.colors.text.primary, theme.dark).focused,
+                selectedUnfocused: deriveSelectionFocusInk(theme.colors.text.primary, theme.dark).unfocused,
             },
             effect: {
                 ...theme.colors.effect,

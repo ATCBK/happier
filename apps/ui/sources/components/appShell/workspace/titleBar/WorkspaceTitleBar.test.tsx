@@ -19,6 +19,7 @@ import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMat
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
 import { invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
 import { View } from 'react-native';
+import { DocumentTabStrip, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -87,7 +88,7 @@ function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number
     };
     return <WorkspaceNavigationContext.Provider value={value}>
         <WorkspaceBarGeometryContext.Provider value={geometry}>
-            {React.createElement('WorkspaceStateProbe', { state })}
+            {React.createElement('WorkspaceStateProbe', { state, dispatch })}
             {props.chromeActive === undefined ? <>
                 <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
                 <WorkspaceShell catalog={[]} />
@@ -122,6 +123,45 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('changes only the affected document descriptor across a 120-tab title, pin and selection publication', async () => {
+        let initial = createWorkspaceState(tab('document-0'));
+        initial = reduceWorkspaceState(initial, { type: 'setFallbackTitle', tabId: 'document-0', title: 'Document 0' });
+        for (let index = 1; index < 120; index += 1) initial = reduceWorkspaceState(initial, {
+            type: 'openTab', groupId: 'group:1', tab: tab(`document-${index}`), fallbackTitle: `Document ${index}`,
+        });
+        const frames = windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 },
+            'workspace-group-group_1': { x: 300, width: 1100 } });
+        const screen = await renderScreen(<Harness initial={initial} clusterEndPx={200} />, { createNodeMock: frames });
+        // Renderer props are the boundary output of the actual descriptor producer, not a mocked projection.
+        const rows = (): readonly DocumentTabItem[] => screen.root.findByType(DocumentTabStrip).props.tabs;
+        const dispatch = async (action: Parameters<typeof reduceWorkspaceState>[1]) => act(async () => {
+            screen.root.findByType('WorkspaceStateProbe' as unknown as React.ElementType).props.dispatch(action);
+        });
+        const changedKeys = (before: readonly DocumentTabItem[]) => rows()
+            .filter((row, index) => row !== before[index]).map(row => row.key);
+        try {
+            const initialRows = rows();
+            expect(initialRows).toHaveLength(120);
+            expect(initialRows[37].title).toBe('Document 37');
+            await dispatch({ type: 'setFallbackTitle', tabId: 'document-37', title: 'Release checklist' });
+            expect(rows()[37].title).toBe('Release checklist');
+            expect(changedKeys(initialRows)).toEqual(['document-37']);
+
+            const titledRows = rows();
+            await dispatch({ type: 'setPinned', tabId: 'document-47', pinned: true });
+            expect(rows()[47].isPinned).toBe(true);
+            expect(changedKeys(titledRows)).toEqual(['document-47']);
+
+            const pinnedRows = rows();
+            await dispatch({ type: 'activateTab', groupId: 'group:1', tabId: 'document-12' });
+            expect(changedKeys(pinnedRows)).toEqual([]);
+            expect(screen.findHostByTestId('workspace-tab-document-12')?.props.accessibilityState.selected).toBe(true);
+
+            const selectedRows = rows();
+            await screen.update(<Harness initial={initial} clusterEndPx={200} />);
+            expect(changedKeys(selectedRows)).toEqual([]);
+        } finally { await screen.unmount(); }
+    });
     it('retains its document tabs when hidden strip measurements report zero width', async () => {
         const initial = createWorkspaceState(tab('kept'));
         const body = (chromeActive: boolean) => <Harness initial={initial} clusterEndPx={200} chromeActive={chromeActive} />;
@@ -244,7 +284,7 @@ describe('WorkspaceTitleBar', () => {
         expect(top && hasTestId(top, 'workspace-tabs-group_1')).toBe(false);
         expect(below && hasTestId(below, 'workspace-tab-d')).toBe(true);
 
-        // The raised tab is the whole focus signal: panes draw no card, ring or controls of their own.
+        // The focused pane's filled tab is the whole focus signal: panes draw no card, ring or controls of their own.
         expect(screen.root.findAll((node) => typeof node.props?.testID === 'string'
             && /^split-canvas-leaf-(maximize|close)-/.test(node.props.testID))).toHaveLength(0);
 

@@ -24,7 +24,11 @@ export const PHONE_OPEN_TABS_RAIL_TEST_ID = 'phone-open-tabs-rail';
 /** The rail is a set the person chose to keep, so it appears once a second tab is open (lab R). */
 const MINIMUM_TABS = 2;
 
-type RailItem = DocumentTabItem & Readonly<{ source: PhoneWorkspaceTab }>;
+type RailItem = DocumentTabItem & Readonly<{
+    icon: NonNullable<PhoneWorkspaceTab['icon']>;
+    sessionId: string | null;
+    serverId: string | null;
+}>;
 
 const styles = StyleSheet.create((theme) => ({
     root: {
@@ -98,22 +102,38 @@ export const PhoneOpenTabsRail = React.memo(function PhoneOpenTabsRail() {
     const workspace = useOptionalWorkspaceNavigation();
     const syncStatus = useOptionalWorkspaceNavigation()?.tabSyncStatus;
     const { theme } = useUnistyles();
-    const items = React.useMemo((): readonly RailItem[] => phoneTabs.tabs.map((tab) => ({
-        key: tab.id,
-        title: tab.title,
-        // A desktop split is one tab here; its count says it holds more than one pane.
-        subtitle: tab.panes.length > 1 ? String(tab.panes.length) : null,
-        isPreview: tab.preview,
-        isPinned: tab.pinned,
-        isUnavailable: tab.unavailable,
-        source: tab,
-    })), [phoneTabs.tabs]);
+    // Keep only the rail's own visible facts, not the upstream pane/state objects.
+    // A different active tab or one changed title must not replace every strip row.
+    const itemsRef = React.useRef<readonly RailItem[]>([]);
+    const items = React.useMemo((): readonly RailItem[] => {
+        const previous = itemsRef.current;
+        const byKey = new Map(previous.map(item => [item.key, item]));
+        const next = phoneTabs.tabs.map((tab): RailItem => {
+            const item: RailItem = {
+                key: tab.id,
+                title: tab.title,
+                // A desktop split is one tab here; its count says it holds more than one pane.
+                subtitle: tab.panes.length > 1 ? String(tab.panes.length) : null,
+                isPreview: tab.preview,
+                isPinned: tab.pinned,
+                isUnavailable: tab.unavailable,
+                icon: tab.unavailable ? 'cloud-slash' : tab.icon ?? 'file',
+                sessionId: tab.unavailable ? null : tab.session?.sessionId ?? null,
+                serverId: tab.unavailable ? null : tab.session?.serverId ?? null,
+            };
+            const held = byKey.get(item.key);
+            return held && held.title === item.title && held.subtitle === item.subtitle
+                && held.isPreview === item.isPreview && held.isPinned === item.isPinned
+                && held.isUnavailable === item.isUnavailable && held.icon === item.icon
+                && held.sessionId === item.sessionId && held.serverId === item.serverId ? held : item;
+        });
+        itemsRef.current = previous.length === next.length && next.every((item, index) => item === previous[index]) ? previous : next;
+        return itemsRef.current;
+    }, [phoneTabs.tabs]);
     const renderLeadingIcon = React.useCallback((item: RailItem, active: boolean) => {
-        const tab = item.source;
-        const color = tab.unavailable ? theme.colors.text.tertiary : active ? theme.colors.text.primary : theme.colors.text.secondary;
-        if (tab.unavailable) return <Icon name="cloud-slash" size={14} color={color} />;
-        if (tab.session) return <RailSessionMark sessionId={tab.session.sessionId} serverId={tab.session.serverId} />;
-        return <Icon name={tab.icon ?? 'file'} size={14} color={color} />;
+        const color = item.isUnavailable ? theme.colors.text.tertiary : active ? theme.colors.text.primary : theme.colors.text.secondary;
+        if (item.sessionId !== null) return <RailSessionMark sessionId={item.sessionId} serverId={item.serverId} />;
+        return <Icon name={item.icon} size={14} color={color} />;
     }, [theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary]);
     const synced = syncStatus === 'synced' || syncStatus === 'pending';
     const trailing = React.useMemo(() => (synced ? (

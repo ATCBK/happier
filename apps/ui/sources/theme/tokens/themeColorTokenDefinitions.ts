@@ -304,10 +304,15 @@ export const THEME_COLOR_TOKEN_CLASSIFICATIONS = [
         reason: 'A step of the dark surface ladder (page < card < floating): the page lifted by the theme\'s own ink on dark themes, the page itself on light ones (theme/raisedEdge.ts).',
     } as const)),
 
+    ...(['selectedFocused', 'selectedUnfocused'] as const).map((leaf) => ({
+        path: ['surface', leaf],
+        status: 'derived',
+        reason: 'The open tab\'s fill in a focused or unfocused pane: the profile\'s own text ink at a fixed strength (theme/selectionInk.ts).',
+    } as const)),
     { path: ['feed', 'card', 'background'], status: 'derived', reason: 'Tool feed card surface derived from surface.elevated so private transcript chrome follows active theme profiles.' },
     { path: ['shadow', 'color'], status: 'internal', reason: 'Legacy tint helper for computed shadows, not a standalone editable color token.' },
     { path: ['shadowPopoverArrowBoxShadow'], status: 'internal', reason: 'Popover arrow shadow recipe string, not a standalone editable color token.' },
-    { path: ['shadowSeamCastBoxShadow'], status: 'internal', reason: 'Sideways cast for the seam between a docked pane and the content sheet beside it; internal chrome recipe rather than a standalone editable color token.' },
+    { path: ['shadowSeamCastBoxShadow'], status: 'internal', reason: 'Sideways cast from the page sheet onto the navigation plane beside it; internal chrome recipe rather than a standalone editable color token.' },
     { path: ['glass', 'border'], status: 'internal', reason: 'Floating glass surface rim recipe (GlassPanel); V1 exposes shared border tokens rather than feature-specific chrome details.' },
     { path: ['glass', 'innerShadow'], status: 'internal', reason: 'Floating glass surface inner shadow recipe string (GlassPanel), not a standalone editable color token.' },
     { path: ['glass', 'composerInnerShadow'], status: 'internal', reason: 'Reduced-opacity inner shadow recipe for the opt-in glass composer surface only; internal chrome recipe rather than a standalone editable color token.' },

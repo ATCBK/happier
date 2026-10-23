@@ -5,13 +5,72 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
-import { DocumentTabStrip } from './DocumentTabStrip';
+import { DocumentTabStrip, type DocumentTabItem, type DocumentTabPresentation } from './DocumentTabStrip';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
+import { createRenderCommitCounter, useRenderCommitCounter } from '@/dev/testkit/performance/counts';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { storage } from '@/sync/domains/state/storageStore';
 
 /** The node mock sees React Native's host ScrollView by its mocked host name. */
 const isHostScrollView = (type: unknown) => type === 'ScrollView';
 
 installPanelCommonModuleMocks();
+
+// Resolve the real material graph during collection, rather than charging its
+// first source transform to one interaction test's deadline on a busy worker.
+const { AppShellMaterialFrame } = await import('@/components/navigation/shell/AppShellMaterialFrame');
+const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
+const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+
+function TabRenderProbe(props: Readonly<{ counter: ReturnType<typeof createRenderCommitCounter>; id: string }>) {
+    useRenderCommitCounter(props.counter);
+    return <View testID={`probe-${props.id}`} />;
+}
+
+function LiveTabStripFixture(props: Readonly<{
+    variant: 'strip' | 'bar' | 'rail';
+    tabs: readonly DocumentTabItem[];
+    active?: string;
+    unsaved?: ReadonlySet<string>;
+    presentations?: Readonly<Record<string, DocumentTabPresentation>>;
+    renderIcon: (tab: DocumentTabItem, active: boolean) => React.ReactNode;
+    runtime: ReturnType<typeof createEntityDragDropRuntime>;
+    events: string[];
+    current?: boolean;
+    namespace?: string;
+    testIdPrefix?: string;
+    accountId?: string;
+    acceptsTabs?: boolean;
+}>) {
+    // This real root-store subscription deliberately reproduces the Workspace
+    // caller's unrelated Session publication; no internal selector is mocked.
+    const sessions = storage(state => state.sessions);
+    const version = sessions['tab-strip-background']?.updatedAt ?? 0;
+    const scope = { serverId: 'home', accountId: props.accountId ?? 'account' };
+    return <DocumentTabStrip variant={props.variant} tabs={props.tabs} activeTabKey={props.active ?? 'tab-0'}
+        accessibilityLabel="Documents" unsavedTabKeys={props.unsaved}
+        onActivate={key => props.events.push(`activate:${version}:${key}`)}
+        onPin={key => props.events.push(`pin:${version}:${key}`)}
+        onUnpin={key => props.events.push(`unpin:${version}:${key}`)}
+        onClose={key => props.events.push(`close:${version}:${key}`)}
+        onTabMenu={key => props.events.push(`menu:${version}:${key}`)}
+        onDismissTabMenu={key => props.events.push(`dismiss:${version}:${key}`)}
+        renderLeadingIcon={props.renderIcon}
+        resolveTabPresentation={tab => props.presentations?.[tab.key] ?? null}
+        tabNativeId={key => `${props.namespace ?? 'tab'}-${key}`}
+        panelNativeId={key => `${props.namespace ?? 'panel'}-${key}`}
+        testIds={{ tab: key => `${props.testIdPrefix ?? 'live'}-${key}`, tabClose: key => `close-${key}`,
+            tabPin: key => `pin-${key}`, tabUnpin: key => `unpin-${key}`,
+            tabStatus: key => `status-${key}`, tabUnsaved: key => `unsaved-${key}` }}
+        entityDragDrop={{ runtime: props.runtime, id: 'live-strip', scope, acceptedKinds: props.acceptsTabs === false ? [] : ['workspace-tab'],
+            isCurrent: () => props.current !== false,
+            getItem: tabId => ({ kind: 'workspace-tab', scope, tabId }),
+            resolve: ({ beforeTabId }) => ({ status: 'allowed', effect: { actionId: 'workspace.tabs.open',
+                input: { beforeTabId, version }, preview: { verb: 'Move', target: beforeTabId ?? 'End' } } }),
+            execute: async effect => { props.events.push(`drop:${version}:${JSON.stringify(effect.input)}`); return { status: 'applied' }; },
+        }} />;
+}
 
 function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail'; sourceOnly?: boolean }>) {
     const [menu, setMenu] = React.useState<string | null>(null);
@@ -39,6 +98,98 @@ function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof create
 }
 
 describe('DocumentTabStrip actions', () => {
+    it.each(['bar', 'rail', 'strip'] as const)('does no unchanged %s tab rendering for unrelated real Session publications', async variant => {
+        const original = storage.getState();
+        const tabs = Array.from({ length: 120 }, (_, index) => ({ key: `tab-${index}`, title: `Document ${index}`, isPinned: false, isPreview: false }));
+        const counters = tabs.map(() => createRenderCommitCounter());
+        const iconCalls: string[] = [];
+        const renderIcon = (tab: DocumentTabItem) => {
+            iconCalls.push(tab.key);
+            return <TabRenderProbe id={tab.key} counter={counters[Number(tab.key.slice(4))]} />;
+        };
+        const props = { variant, tabs, renderIcon, runtime: createEntityDragDropRuntime(), events: [] as string[] };
+        const screen = await renderScreen(<LiveTabStripFixture {...props} />);
+        try {
+            expect(iconCalls).toHaveLength(120);
+            iconCalls.length = 0;
+            counters.forEach(counter => counter.reset());
+            for (let version = 1; version <= 3; version++) {
+                await act(async () => { storage.getState().applySessions([createSessionFixture({ id: 'tab-strip-background', updatedAt: version })]); });
+            }
+            expect(iconCalls).toEqual([]);
+            expect(counters.map(counter => counter.read())).toEqual(tabs.map(() => ({ renders: 0, commits: 0 })));
+            await act(async () => { screen.findHostByTestId('live-tab-2')!.props.onPress(); });
+            expect(props.events).toContain('activate:3:tab-2');
+
+            const renamed = tabs.map(tab => tab.key === 'tab-7' ? { ...tab, title: 'Renamed document' } : tab);
+            await screen.update(<LiveTabStripFixture {...props} tabs={renamed} />);
+            expect(iconCalls).toEqual(['tab-7']);
+            iconCalls.length = 0;
+            await screen.update(<LiveTabStripFixture {...props} tabs={renamed}
+                presentations={{ 'tab-8': { status: { tone: 'attention', label: 'Needs you' } } }} />);
+            expect(iconCalls).toEqual(['tab-8']);
+            expect(screen.findHostByTestId('live-tab-8')!.props.accessibilityLabel).toContain('Needs you');
+            iconCalls.length = 0;
+            await screen.update(<LiveTabStripFixture {...props} tabs={renamed} active="tab-1"
+                unsaved={new Set(['tab-9'])} presentations={{ 'tab-8': { status: { tone: 'attention', label: 'Needs you' } } }} />);
+            expect(iconCalls.sort()).toEqual(['tab-0', 'tab-1', 'tab-9']);
+        } finally {
+            await screen.unmount();
+            storage.setState(original, true);
+        }
+    });
+
+    it.each(['bar', 'rail', 'strip'] as const)('keeps %s visual callbacks, native identity and live drag admission current', async variant => {
+        const original = storage.getState();
+        const runtime = createEntityDragDropRuntime();
+        const tabs = Array.from({ length: 3 }, (_, index) => ({ key: `tab-${index}`, title: `Document ${index}`, isPinned: false, isPreview: false }));
+        const icons: string[] = [];
+        const renderIcon = (tab: DocumentTabItem) => { icons.push(tab.key); return <View testID={`old-icon-${tab.key}`} />; };
+        const events: string[] = [];
+        const props = { variant, tabs, runtime, renderIcon, events };
+        const screen = await renderScreen(<LiveTabStripFixture {...props} />);
+        try {
+            await act(async () => { storage.getState().applySessions([createSessionFixture({ id: 'tab-strip-background', updatedAt: 31 })]); });
+            const sourceId = JSON.stringify(['document-tab', 'live-strip', 'tab-0', 'source']);
+            const target = runtime.getDestinations(sourceId).find(destination => destination.label === 'Document 2')!;
+            await act(async () => { expect(await runtime.perform(sourceId, target.targetId, target.destination)).toEqual({ status: 'applied' }); });
+            expect(events).toContain('drop:31:{"beforeTabId":"tab-2","version":31}');
+            await act(async () => { screen.findHostByTestId('close-tab-0')!.props.onPress({}); });
+            expect(events).toContain('close:31:tab-0');
+
+            icons.length = 0;
+            await screen.update(<LiveTabStripFixture {...props} renderIcon={tab => {
+                icons.push(tab.key); return <View testID={`new-icon-${tab.key}`} />;
+            }} namespace="new-native" testIdPrefix="new-test" />);
+            expect(icons).toEqual(tabs.map(tab => tab.key));
+            expect(screen.findHostByTestId('new-icon-tab-2')).toBeTruthy();
+            expect(screen.findHostByTestId('new-test-tab-2')!.props).toMatchObject({ nativeID: 'new-native-tab-2', 'aria-controls': 'new-native-tab-2' });
+            const activated = events.length;
+            await act(async () => { screen.findHostByTestId('new-test-tab-0')!.props.onKeyDown({ key: 'ArrowRight', preventDefault() {} }); });
+            expect(events.slice(activated)).toEqual(['activate:31:tab-1']);
+            await screen.update(<LiveTabStripFixture {...props} acceptsTabs={false} />);
+            expect(runtime.getDestinations(sourceId)).toEqual([]);
+            await screen.update(<LiveTabStripFixture {...props} />);
+            let oldCarry!: NonNullable<ReturnType<typeof runtime.begin>>;
+            await act(async () => {
+                oldCarry = runtime.begin(sourceId, 'keyboard')!;
+                oldCarry.choose(target.targetId, target.destination);
+            });
+            const beforeScopeChange = events.length;
+            const renamed = tabs.map(tab => tab.key === 'tab-0' ? { ...tab, title: 'Current source title' } : tab);
+            await screen.update(<LiveTabStripFixture {...props} tabs={renamed} accountId="replacement-account" />);
+            await act(async () => { expect(await oldCarry.release()).toBeNull(); });
+            expect(events.slice(beforeScopeChange)).toEqual([]);
+            expect(runtime.describeSource(sourceId)?.title).toBe('Current source title');
+            await screen.update(<LiveTabStripFixture {...props} current={false} />);
+            expect(runtime.begin(sourceId, 'keyboard')).toBeNull();
+            expect(runtime.getDestinations(sourceId)).toEqual([]);
+        } finally {
+            await screen.unmount();
+            storage.setState(original, true);
+        }
+    });
+
     it.each([['bar', false], ['rail', false], ['rail', true]] as const)('retires the %s press menu on a real carry (source only: %s) and suppresses that press through drag end', async (variant, sourceOnly) => {
         const runtime = createEntityDragDropRuntime();
         const screen = await renderScreen(<TabPressMenuFixture runtime={runtime} variant={variant} sourceOnly={sourceOnly} />);
@@ -65,33 +216,38 @@ describe('DocumentTabStrip actions', () => {
         expect(screen.findAllByTestId('open-tab-menu')).toHaveLength(1);
         await screen.unmount();
     });
-    it('keeps active strip and raised tabs as ink within the containing material', async () => {
-        const { AppShellMaterialFrame } = await import('@/components/navigation/shell/AppShellMaterialFrame');
-        const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
-        const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
-        const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+    it('keeps active strip and focused bar tabs as ink within the containing material', async () => {
         const { useUnistyles } = await import('react-native-unistyles');
         const { theme } = useUnistyles();
-        for (const reduceTransparency of [false, true]) for (const variant of ['strip', 'bar'] as const) {
-            const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ desktopWindow: true, nativeWindowMaterialLive: true, reduceTransparency }}>
+        for (const variant of ['strip', 'bar', 'rail'] as const) {
+            // The same element and callbacks survive the material change: a
+            // context update, not incidental prop churn, must repaint the row.
+            const strip = <DocumentTabStrip variant={variant} tabs={[{ key: 'active', title: 'Active', isPinned: false, isPreview: false }]} activeTabKey="active" accessibilityLabel="Documents"
+                onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}} renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+                testIds={{ tab: id => `material-tab-${id}` }} />;
+            const frame = (reduceTransparency: boolean) => <GlassRuntimeEnvironmentProvider value={{ desktopWindow: true, nativeWindowMaterialLive: true, reduceTransparency }}>
                 <GlassMaterialSettingsProvider value={{ glassBlurEnabled: true, glassSurfaceMaterials: glassPresetMaterials('everywhere') }}>
                     <AppShellMaterialFrame showChrome={false} dragEnabled={false} leftOffsetPx={0} sidebarWidth={320} titleStrip={null} rail={null} column={null} peek={null}>
-                        <DocumentTabStrip variant={variant} tabs={[{ key: 'active', title: 'Active', isPinned: false, isPreview: false }]} activeTabKey="active" accessibilityLabel="Documents"
-                            onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}} renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
-                            testIds={{ tab: id => `material-tab-${id}` }} />
+                        {strip}
                     </AppShellMaterialFrame>
                 </GlassMaterialSettingsProvider>
-            </GlassRuntimeEnvironmentProvider>);
-            let node = screen.findHostByTestId('material-tab-active');
-            let paint: string | undefined;
-            while (node && paint === undefined) {
-                const color = StyleSheet.flatten(node.props.style)?.backgroundColor;
-                if (typeof color === 'string') paint = color;
-                else node = node.parent;
+            </GlassRuntimeEnvironmentProvider>;
+            const screen = await renderScreen(frame(false));
+            for (const reduceTransparency of [false, true]) {
+                if (reduceTransparency) await screen.update(frame(true));
+                let node = screen.findHostByTestId('material-tab-active');
+                let paint: string | undefined;
+                while (node && paint === undefined) {
+                    const color = StyleSheet.flatten(node.props.style)?.backgroundColor;
+                    if (typeof color === 'string') paint = color;
+                    else node = node.parent;
+                }
+                expect(paint).toBeDefined();
+                // The focused bar tab is a soft ink fill: the same ink over any material, never a solid coat.
+                if (variant === 'bar') expect(Color(paint).hexa()).toBe(Color(theme.colors.surface.selectedFocused).hexa());
+                else if (reduceTransparency) expect(Color(paint).hexa()).toBe(Color(variant === 'strip' ? theme.colors.surface.elevated : theme.colors.surface.selected).hexa());
+                else expect(Color(paint).alpha()).toBeLessThan(1);
             }
-            expect(paint).toBeDefined();
-            if (reduceTransparency) expect(Color(paint).hexa()).toBe(Color(variant === 'strip' ? theme.colors.surface.elevated : theme.colors.surface.pressed).hexa());
-            else expect(Color(paint).alpha()).toBeLessThan(1);
             await screen.unmount();
         }
     });

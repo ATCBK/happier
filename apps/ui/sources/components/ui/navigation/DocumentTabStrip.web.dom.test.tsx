@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import * as React from 'react';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -19,7 +21,8 @@ const matchMedia = (media: string): MediaQueryList => ({
 vi.stubGlobal('matchMedia', matchMedia);
 beforeEach(() => { vi.stubGlobal('matchMedia', matchMedia); });
 const { createUnistylesElement } = await vi.importActual<typeof import('react-native-unistyles')>(
-    '../../../../node_modules/react-native-unistyles/src/core/createUnistylesElement',
+    join(dirname(createRequire(import.meta.url).resolve('react-native-unistyles/package.json')),
+        'src/core/createUnistylesElement.tsx'),
 );
 vi.doMock('react-native', () => ({ ...native, View: createUnistylesElement(native.View) }));
 const { DocumentTabStrip } = await import('./DocumentTabStrip');

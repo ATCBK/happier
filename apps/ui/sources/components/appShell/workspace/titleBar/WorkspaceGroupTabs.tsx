@@ -71,6 +71,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
         : titleEntries, [overflowOpen, titleEntries, workspace.state.recentlyClosed]);
     const liveTitles = useDestinationInstanceTitles(props.catalog, titleResolutionEntries);
     const hasRecentlyClosed = workspace.state.recentlyClosed.length > 0;
+    const previousTabs = React.useRef<ReadonlyMap<string, WorkspaceDocumentTab>>(new Map());
     const tabs = React.useMemo(() => {
         const byId = new Map<string, WorkspaceDocumentTab>();
         for (const id of group.tabIds) {
@@ -78,18 +79,31 @@ export function WorkspaceGroupTabs(props: Readonly<{
             if (!tab) continue;
             const href = hrefForDestinationRef(props.catalog, tab.target);
             const destination = href ? resolveCurrentAppDestination(props.catalog, href) : null;
-            byId.set(id, {
+            const next: WorkspaceDocumentTab = {
                 key: tab.id,
                 title: liveTitles.get(id) ?? t(href ? 'common.loading' : 'common.unavailable'),
                 isPinned: tab.pinned, isPreview: tab.preview, canPin: !tab.pinned,
                 icon: destination?.icon ?? 'file',
-            });
+            };
+            const previous = previousTabs.current.get(id);
+            byId.set(id, previous
+                && previous.title === next.title
+                && previous.isPinned === next.isPinned
+                && previous.isPreview === next.isPreview
+                && previous.canPin === next.canPin
+                && previous.icon === next.icon ? previous : next);
         }
+        // Reconcile the lightweight projection so another tab's publication leaves this tab unchanged.
+        previousTabs.current = byId;
         return byId;
     }, [group.tabIds, liveTitles, props.catalog, workspace.state.fallbackTitlesByTabId, workspace.state.tabs]);
 
-    const stripTabs = group.tabIds.flatMap((id) => tabs.get(id) ?? []);
+    const stripTabs = React.useMemo(() => group.tabIds.flatMap((id) => tabs.get(id) ?? []), [group.tabIds, tabs]);
     const livePresentations = useDestinationInstanceTabPresentations(titleEntries);
+    const renderLeadingIcon = React.useCallback((tab: WorkspaceDocumentTab, emphasized: boolean) => (
+        <Icon name={tab.icon} size={M.tabGlyphPx}
+            color={emphasized ? theme.colors.text.primary : theme.colors.text.secondary} />
+    ), [theme.colors.text.primary, theme.colors.text.secondary]);
 
     const execute = React.useCallback((request: Parameters<typeof executeWorkspaceUiAction>[0]) => {
         fireAndForget(executeWorkspaceUiAction(request, href => {
@@ -232,7 +246,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 variant="bar"
                 barTabHeightPx={tabHeightPx}
                 barFadeColor={theme.colors.background.canvas}
-                activeEmphasis={props.focused ? 'raised' : 'quiet'}
+                activeEmphasis={props.focused ? 'focused' : 'unfocused'}
                 tabs={stripTabs}
                 activeTabKey={group.activeTabId}
                 resolveTabPresentation={(tab) => livePresentations.get(tab.key)}
@@ -246,8 +260,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 entityDragDrop={entityDragDrop}
                 dropSlot={dropCue.slot}
                 dropRingTabKey={dropCue.pulseTabKey}
-                renderLeadingIcon={(tab, emphasized) => <Icon name={tab.icon} size={M.tabGlyphPx}
-                    color={emphasized ? theme.colors.text.primary : theme.colors.text.secondary} />}
+                renderLeadingIcon={renderLeadingIcon}
                 tabNativeId={(key) => `workspace-${safeGroup}-tab-${toTestIdSafeValue(key)}`}
                 panelNativeId={(key) => `workspace-${safeGroup}-panel-${toTestIdSafeValue(key)}`}
                 testIds={{ tab: (key) => `workspace-tab-${key}`, tabClose: (key) => `workspace-tab-close-${key}` }}

@@ -85,6 +85,45 @@ const testIds = {
 await import('./DetailsTabStrip');
 
 describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
+    it('keeps 120 Details tab visual callbacks local to the changed tab', async () => {
+        const { DetailsTabStrip } = await import('./DetailsTabStrip');
+        const { WorkspaceDestinationRow } = await import('@/components/appShell/workspace/WorkspaceDestinationRow');
+        const pane = createPane();
+        const tabs: DetailsTabState[] = Array.from({ length: 120 }, (_, index) => ({
+            ...browserViewTab(), key: `browser-view:bs:view-${index}`, title: `Document ${index}`,
+            resource: { kind: 'browser-view', browserSessionId: 'bs', viewId: `view-${index}`,
+                target: { kind: 'externalUrl', targetId: `target-${index}`, url: `https://docs.test/page/${index}` } },
+        }));
+        const originalGroup = { ...group(tabs[0]!), tabs, tabKeys: tabs.map(tab => tab.key) };
+        const resolveIcon = vi.fn((_tab: DetailsTabState) => 'circle');
+        const resolveHref = vi.fn((tab: DetailsTabState) => `/docs?title=${encodeURIComponent(tab.title)}`);
+        const screen = await renderScreen(<DetailsTabStrip pane={pane} group={originalGroup}
+            resolveTabIconName={resolveIcon} resolveTabHref={resolveHref} testIds={testIds} />);
+        try {
+            expect(resolveIcon).toHaveBeenCalledTimes(120);
+            resolveIcon.mockClear(); resolveHref.mockClear();
+            await screen.update(<DetailsTabStrip pane={pane} group={{ ...originalGroup, isFocused: false }}
+                resolveTabIconName={resolveIcon} resolveTabHref={resolveHref} testIds={testIds} />);
+            const focusWork = [resolveIcon.mock.calls.length, resolveHref.mock.calls.length];
+            resolveIcon.mockClear(); resolveHref.mockClear();
+            const renamed = tabs.map((tab, index) => index === 42 ? { ...tab, title: 'Renamed document' } : tab);
+            const renamedGroup = { ...originalGroup, isFocused: false, tabs: renamed };
+            await screen.update(<DetailsTabStrip pane={pane} group={renamedGroup}
+                resolveTabIconName={resolveIcon} resolveTabHref={resolveHref} testIds={testIds} />);
+            expect([focusWork, [resolveIcon.mock.calls.length, resolveHref.mock.calls.length]])
+                .toEqual([[0, 0], [1, 1]]);
+            expect(screen.findAllByType(WorkspaceDestinationRow)[42]!.props.href).toBe('/docs?title=Renamed%20document');
+
+            // Visual callback changes are real inputs, not hidden behind latest-value refs.
+            const replacementIcon = vi.fn((_tab: DetailsTabState) => 'terminal');
+            const replacementHref = (tab: DetailsTabState) => `/replacement/${tab.key}`;
+            await screen.update(<DetailsTabStrip pane={pane} group={renamedGroup}
+                resolveTabIconName={replacementIcon} resolveTabHref={replacementHref} testIds={testIds} />);
+            expect(replacementIcon).toHaveBeenCalledTimes(120);
+            expect(screen.findAllByType(WorkspaceDestinationRow)[42]!.props.href).toBe(`/replacement/${renamed[42]!.key}`);
+        } finally { await screen.unmount(); }
+    });
+
     it.each([
         ['keepEditing', 'x'], ['save', 'x'], ['discard', 'x'],
         ['keepEditing', 'middle'], ['save', 'middle'], ['discard', 'middle'],

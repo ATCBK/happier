@@ -17,6 +17,7 @@ import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from
 import { PhoneOpenTabsRail } from './PhoneOpenTabsRail';
 import type { TestGestureChain } from '@/dev/testkit/mocks/gestureHandler';
 import { ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
+import { DocumentTabStrip, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
 
 const platformBoundary = vi.hoisted(() => ({ os: 'web' }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
@@ -70,6 +71,37 @@ function harness(pair = false) {
 afterEach(async () => { act(() => { runtime.cancel(); storage.setState({ profileScope: previousScope }); }); platformBoundary.os = 'web'; await standardCleanup(); });
 
 describe('phone production tab carry', () => {
+    it('changes only one lightweight strip descriptor for one of 120 restored fallback titles and none for selection', async () => {
+        storage.setState({ profileScope: scope });
+        const h = harness();
+        const ids = ['session-tab', 'inbox-tab', ...Array.from({ length: 118 }, (_, index) => `restored-${index + 2}`)];
+        for (const [index, id] of ids.entries()) {
+            const target = { kind: 'unavailable-restored-document', params: { id } };
+            h.workspace.dispatch(index < 2 ? { type: 'setTarget', tabId: id, target }
+                : { type: 'openTab', groupId: 'group:1', tab: { id, target, pinned: false, preview: false } });
+            h.workspace.dispatch({ type: 'setFallbackTitle', tabId: id, title: `Restored document ${index}` });
+        }
+        const frame = () => <WorkspaceNavigationContext.Provider value={{ ...h.workspace, state: h.workspace.state }}><PhoneOpenTabsRail /></WorkspaceNavigationContext.Provider>;
+        const screen = await renderScreen(frame());
+        const readTabs = (): readonly DocumentTabItem[] => screen.root.findByType(DocumentTabStrip).props.tabs;
+        const before = readTabs();
+        expect(before).toHaveLength(120);
+        expect(before.find(tab => tab.key === 'restored-60')?.title).toBe('Restored document 60');
+        await act(async () => {
+            h.workspace.dispatch({ type: 'setFallbackTitle', tabId: 'restored-60', title: 'Renamed document' });
+            await screen.update(frame());
+        });
+        const renamed = readTabs();
+        expect(renamed.find(tab => tab.key === 'restored-60')?.title).toBe('Renamed document');
+        expect(renamed.filter((tab, index) => tab !== before[index]).map(tab => tab.key)).toEqual(['restored-60']);
+        await act(async () => {
+            h.workspace.dispatch({ type: 'activateTab', groupId: 'group:1', tabId: 'restored-61' });
+            await screen.update(frame());
+        });
+        expect(readTabs()).toBe(renamed);
+        expect(screen.root.findByType(DocumentTabStrip).props.activeTabKey).toBe('restored-61');
+        await screen.unmount();
+    });
     it('reveals the active wrapped tab from its rail position rather than its local source position', async () => {
         storage.setState({ profileScope: scope });
         const h = harness();

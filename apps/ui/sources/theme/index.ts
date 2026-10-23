@@ -12,6 +12,7 @@ import {
     buildShadowPopoverArrowBoxShadow,
 } from '../shadowElevation';
 import { withRaisedEdgeColors } from './raisedEdge';
+import { deriveSelectionFocusInk } from './selectionInk';
 import { DEFAULT_THEME_STYLE_SCALES } from './themeStyleScales';
 import { createVerticalGradient } from './verticalGradient';
 
@@ -127,6 +128,9 @@ const lightThemeBase = {
             pressed: '#fafafa',
             // Selection is ink (DESIGN.md → "Borders, dividers and selection are ink"), never a grey.
             selected: 'rgba(0, 0, 0, 0.055)',
+            // The open tab: the focused pane's, and a half step for a pane that is not focused (`selectionInk.ts`).
+            selectedFocused: deriveSelectionFocusInk(HAPPIER_DEFAULT_SURFACE_COLORS.light.foreground, false).focused,
+            selectedUnfocused: deriveSelectionFocusInk(HAPPIER_DEFAULT_SURFACE_COLORS.light.foreground, false).unfocused,
             pressedOverlay: '#fafafa',
             // Barely-there grouped-section tint. Baked as an opacity overlay (not a
             // solid inset) so it reads a hair off the base surface; a runtime opacity
@@ -504,6 +508,8 @@ const darkThemeBase = {
             skeleton: 'rgba(239, 239, 239, 0.16)',
             pressed: '#302727',
             selected: 'rgba(255, 255, 255, 0.065)',
+            selectedFocused: deriveSelectionFocusInk(HAPPIER_DEFAULT_SURFACE_COLORS.dark.foreground, true).focused,
+            selectedUnfocused: deriveSelectionFocusInk(HAPPIER_DEFAULT_SURFACE_COLORS.dark.foreground, true).unfocused,
             pressedOverlay: 'rgba(255,255,255,0.036)',
             sectionTint: 'rgba(255,255,255,0.014)',
         },
