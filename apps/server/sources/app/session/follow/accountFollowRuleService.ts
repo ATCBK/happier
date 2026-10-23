@@ -19,6 +19,7 @@ import { markSessionFollowsChangedInTx } from './changes';
 import type { AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { UserKvMutationConflictError } from '@/app/kv/kvMutate';
+import { portableQueryChunks } from '@/storage/portableQueryChunks';
 
 export async function markAccountFollowRulesChangedInTx(tx: Tx, input: Readonly<{ accountId: string }>): Promise<AccountChangePublication> {
     return markSessionFollowsChangedInTx(tx, input);
@@ -55,9 +56,21 @@ export async function readAccountFollowRuleInTx(tx: Tx, input: Readonly<{ accoun
 }
 export async function listAccountFollowRuleRowsInTx(tx: Tx, input: Readonly<{ accountId: string }>) {
     const result = await listReservedAccountScopedKvRowsInTx(tx, { ...input, physicalPrefix: SESSION_FOLLOW_RULE_ACCOUNT_PREFIX_V1, domain: accountFollowRuleRowDomain });
-    return result.status === 'listed' ? { ...result, rows: await Promise.all(result.rows.map(async row => ({ ...row,
-        envelope: row.envelope && await withRuleInceptionInTx(tx, input.accountId, row.physicalKey, row.envelope),
-    }))) } : result;
+    if (result.status !== 'listed') return result;
+    const missing = result.rows.filter(row => row.envelope && !row.envelope.inception).map(row => row.physicalKey);
+    if (!missing.length) return result;
+    const inceptionByKey = new Map<string, number>();
+    // Same-snapshot creation facts; chunks reserve the Account and Prisma OFFSET binds at the portable SQL boundary.
+    for (const keys of portableQueryChunks({ values: missing, bindingsPerValue: 1, fixedBindings: 2 })) {
+        const rows = await tx.userKVStore.findMany({ where: { accountId: input.accountId, key: { in: [...keys] } },
+            select: { key: true, createdAt: true } });
+        for (const row of rows) inceptionByKey.set(row.key, row.createdAt.getTime());
+    }
+    return { ...result, rows: result.rows.map(row => {
+        const createdAt = inceptionByKey.get(row.physicalKey);
+        return row.envelope && !row.envelope.inception && createdAt !== undefined
+            ? { ...row, envelope: { ...row.envelope, inception: { createdAt } } } : row;
+    }) };
 }
 async function admitAccount(tx: Tx, input: Scope): Promise<SessionFollowRuleFailureV1 | null> {
     if (input.authentication.sessionRuntimePrincipal
@@ -69,7 +82,10 @@ async function admitAccount(tx: Tx, input: Scope): Promise<SessionFollowRuleFail
 /** Content-free private membership for the existing batched Session projection, not another rule census. */
 export async function readAccountFollowRuleReceiverCountsInTx(tx: Tx, input: Scope): Promise<ReadonlyMap<string, number> | null> {
     if (await admitAccount(tx, input)) return null;
-    const listed = await listAccountFollowRuleRowsInTx(tx, input);
+    // Receiver counts need admitted envelopes, not each retained rule's creation instant.
+    const listed = await listReservedAccountScopedKvRowsInTx(tx, {
+        accountId: input.accountId, physicalPrefix: SESSION_FOLLOW_RULE_ACCOUNT_PREFIX_V1, domain: accountFollowRuleRowDomain,
+    });
     if (listed.status !== 'listed') return null;
     const counts = new Map<string, number>();
     for (const row of listed.rows) {
