@@ -16,6 +16,7 @@ import {
 } from '../targets/resolveTransferUploadInitTarget';
 import type { ComposerMediaStageUploadTargetDeps } from '../targets/resolveComposerMediaStageUploadTarget';
 import { registerUploadTransferLifecycleHandlers } from './registerUploadTransferLifecycleHandlers';
+import { sniffSessionMediaMimeTypeFromFile } from '@/session/media/mime';
 
 type TransferUploadInitResponse =
   | Readonly<{ success: true; uploadId: string; chunkSizeBytes: number; recipientPublicKeyBase64: string; expiresAt?: number }>
@@ -111,6 +112,8 @@ export function registerTransferUploadRpcHandlers(
           ? {
               ...resolved.target,
               finalizeUpload: async (input) => {
+                const mimeType = uploadRequest.directoryEntries === undefined
+                  ? await sniffSessionMediaMimeTypeFromFile(input.tempPath) : null;
                 const finalized = await resolved.target.finalizeUpload(input);
                 if (finalized.success) {
                   if (uploadRequest.directoryEntries !== undefined) deps.store.issueDirectoryAttachment({
@@ -126,6 +129,7 @@ export function registerTransferUploadRpcHandlers(
                     displayPath: finalized.path,
                     sizeBytes: finalized.sizeBytes,
                     sha256: input.sha256,
+                    ...(mimeType ? { mimeType } : {}),
                     ...(uploadRequest.attachmentId ? { attachmentId: uploadRequest.attachmentId } : {}),
                   });
                 }

@@ -1,3 +1,5 @@
+import { open } from 'node:fs/promises';
+
 export type SupportedSessionMediaImageMimeType =
   | 'image/png'
   | 'image/jpeg'
@@ -9,6 +11,9 @@ export type SupportedSessionMediaVideoMimeType = 'video/webm';
 export type SupportedSessionMediaMimeType =
   | SupportedSessionMediaImageMimeType
   | SupportedSessionMediaVideoMimeType;
+
+// WebP's bytes 8..11 are the longest signature inspected by the shared sniffer.
+const IMAGE_SIGNATURE_BYTES = 12;
 
 const IMAGE_EXTENSIONS_BY_MIME: Record<SupportedSessionMediaImageMimeType, string> = {
   'image/png': '.png',
@@ -89,12 +94,24 @@ export function sniffSessionMediaMimeType(bytes: Uint8Array): SupportedSessionMe
     const header = Buffer.from(bytes.subarray(0, 6)).toString('ascii');
     if (header === 'GIF87a' || header === 'GIF89a') return 'image/gif';
   }
-  if (bytes.length >= 12) {
+  if (bytes.length >= IMAGE_SIGNATURE_BYTES) {
     const riff = Buffer.from(bytes.subarray(0, 4)).toString('ascii');
     const webp = Buffer.from(bytes.subarray(8, 12)).toString('ascii');
     if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp';
   }
   return null;
+}
+
+/** A staged upload can declare a name without an extension; bytes determine its image kind. */
+export async function sniffSessionMediaMimeTypeFromFile(filePath: string): Promise<SupportedSessionMediaMimeType | null> {
+  const file = await open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(IMAGE_SIGNATURE_BYTES);
+    const { bytesRead } = await file.read(header, 0, header.length, 0);
+    return sniffSessionMediaMimeType(header.subarray(0, bytesRead));
+  } finally {
+    await file.close();
+  }
 }
 
 export function resolveSessionMediaMimeType(input: Readonly<{
