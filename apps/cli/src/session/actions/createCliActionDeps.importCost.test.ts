@@ -14,6 +14,7 @@ async function observeDependencyComposition() {
   const cliRoot = projectPath();
   const owner = pathToFileURL(join(cliRoot, 'src/session/actions/createCliActionDeps.ts')).href;
   const child = spawnTestProcess(process.execPath, [
+    '--conditions=happier-source',
     '--import', pathToFileURL(join(cliRoot, '../../packages/cli-common/registerSourceRuntime.mjs')).href,
     '--input-type=module', '--eval', `
       import { Session } from 'node:inspector';
@@ -50,12 +51,12 @@ it('constructs Action ports synchronously without loading unrelated executable f
   expect(observation.synchronous).toBe(true);
   expect(observation.previewUnchanged).toBe(true);
   expect(observation.ports).toContain('sessionSpawnNew');
-  // Shared refusal/currentness classes retain the current public SDK entry.
-  // Its broad facade is separately routed to the SDK owner; this contract
-  // rejects unrelated CLI implementations, not required shared support.
+  // Shared refusal/currentness support uses the same public error class,
+  // without evaluating the SDK's root contribution facade.
   expect(observation.scripts.some(url => /\/packages\/plugin-sdk\/(?:src|dist)\/errors\.(?:ts|js)$/.test(url))).toBe(true);
   const forbidden = observation.scripts.filter(url =>
     /\/packages\/agents\/(?:src|dist)\/index\.(?:ts|js)$/.test(url)
+    || /\/packages\/plugin-sdk\/(?:src|dist)\/index\.(?:ts|js)$/.test(url)
     || /\/packages\/sdk\/(?:src|dist)\//.test(url)
     || /\/packages\/plugins\/[^/]+\/(?:src|dist)\/(?:agent|provider)\//.test(url)
     || /\/apps\/cli\/src\/daemon\/workflows\/(?:production|coordinator)\.ts$/.test(url)
