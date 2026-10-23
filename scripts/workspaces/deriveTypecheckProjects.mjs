@@ -14,6 +14,25 @@ export function readTypecheckProject(path) {
   return { config: config.config, parsed };
 }
 
+/** The CLI test runner emits these UI references before its consumer projects.
+ * Admission reads the same declared graph without enumerating source files. */
+export function readReferencedUiTypecheckProjects(projects, cwd) {
+  const references = new Set();
+  for (const project of projects) {
+    const authored = project.authoredProject ?? project.project;
+    if (!authored || !basename(authored).startsWith('tsconfig.test')
+      || basename(dirname(resolve(cwd, authored))) !== 'cli') continue;
+    const configPath = resolve(cwd, project.project);
+    const config = ts.readConfigFile(configPath, ts.sys.readFile);
+    if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
+    for (const reference of config.config.references ?? []) {
+      const path = resolve(dirname(configPath), reference.path);
+      if (basename(path) === 'tsconfig.source.json' && basename(dirname(path)) === 'ui') references.add(path);
+    }
+  }
+  return [...references];
+}
+
 export function resolveTypecheckPrimaryTypeReferences({ configPath, parsed }) {
   const names = parsed.options.types ?? ts.getAutomaticTypeDirectiveNames(parsed.options, ts.sys);
   return new Map(names.map(name => [name,

@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
-import { readTypecheckAmbientModules, readTypecheckProject } from './deriveTypecheckProjects.mjs';
+import { readReferencedUiTypecheckProjects, readTypecheckAmbientModules, readTypecheckProject } from './deriveTypecheckProjects.mjs';
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { readWorkspaceBuildInputs, readWorkspaceComponentDependencyGraph } from './ensureWorkspacePackagesBuilt.mjs';
 import { readBuildInputIdentity } from './buildInputConvergence.mjs';
@@ -302,25 +302,18 @@ export async function prepareReferencedTypecheckDeclarations(projects, cwd, inve
     return ambientModules.get(file);
   };
   const preparedOwners = new Set();
-  for (const consumer of consumers) {
-    const configPath = resolve(cwd, consumer.project);
-    const { config } = readTypecheckProject(configPath);
-    for (const reference of config.references ?? []) {
-      const referencePath = resolve(dirname(configPath), reference.path);
-      if (basename(referencePath) !== 'tsconfig.source.json' || basename(dirname(referencePath)) !== 'ui') continue;
-      if (redirects.has(referencePath)) continue;
-      const uiDir = dirname(referencePath);
-      const uiProjects = ['foundation', 'core', 'source'].map(name => {
-        const project = resolve(uiDir, `tsconfig.${name}.json`);
-        const args = ['--singleThreaded', '--project', project];
-        return { project, authoredProject: project, args, authoredArgs: args };
-      });
-      const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
-      await prepareUiTypecheckProjects(uiProjects, cwd);
-      producers.push(...uiProjects);
-      redirects.set(referencePath, uiProjects.at(-1).project);
-      preparedOwners.add(resolve(uiDir, 'tsconfig.json'));
-    }
+  for (const referencePath of readReferencedUiTypecheckProjects(consumers, cwd)) {
+    const uiDir = dirname(referencePath);
+    const uiProjects = ['foundation', 'core', 'source'].map(name => {
+      const project = resolve(uiDir, `tsconfig.${name}.json`);
+      const args = ['--singleThreaded', '--project', project];
+      return { project, authoredProject: project, args, authoredArgs: args };
+    });
+    const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+    await prepareUiTypecheckProjects(uiProjects, cwd);
+    producers.push(...uiProjects);
+    redirects.set(referencePath, uiProjects.at(-1).project);
+    preparedOwners.add(resolve(uiDir, 'tsconfig.json'));
   }
   for (const foreign of inventory?.foreignProjects ?? []) {
     if (preparedOwners.has(foreign.configPath)) continue;
