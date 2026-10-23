@@ -12,6 +12,16 @@ export type ResolvedRuntimePackage = Readonly<{
 
 export function parsePackageNameSegments(packageName: unknown): string[];
 
+export function isPrepublicationAuthorPackage(rawPackageJson: unknown): boolean;
+
+export const PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS: Readonly<Record<string, readonly string[]>>;
+
+export function isPublicSdkGeneratedGovernanceRecord(packageName: unknown, relativePath: string): boolean;
+
+export function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: unknown): string[];
+
+export function resolveWorkspacePackageDeclaredFileEntries(packageDir: string, relativePrefix?: string): string[];
+
 export function collectBundledPrepublicationAuthorPackageNames(packageJson: unknown): readonly string[];
 
 export function omitWorkspaceSourceCondition(value: unknown): unknown;
@@ -64,6 +74,7 @@ export function publishStagedDirectoryMountedSync(params: Readonly<{
 
 export function vendorRuntimeDependencyTree(params: Readonly<{
   excludeRootDependencies?: readonly string[];
+  inspectOnly?: boolean;
   packageJsonPath: string;
   resolveFromPackageJsonPath?: string;
   destNodeModulesDir: string;

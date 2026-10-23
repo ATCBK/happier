@@ -54,7 +54,9 @@ export async function refreshLocalBundledWorkspacePackages(cliRootDir, opts = {}
     buildMode: process.env[WORKSPACE_BUILD_MODE_ENV] ?? 'source-dev', env: process.env,
   }) };
   const syncModulePath = resolveBundledWorkspaceSyncModulePath(cliRoot);
-  if (await bundledWorkspacePackagesAreHealthy({
+  // Installed health cannot establish currentness against newly resolved vendor
+  // dependencies. Let the canonical copier make that decision when available.
+  if (!syncModulePath && await bundledWorkspacePackagesAreHealthy({
     repoRoot,
     hostPackageDir: cliRoot,
     ensureWorkspacePackagesBuiltByName: opts.ensureWorkspacePackagesBuiltByName,

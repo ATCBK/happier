@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, r
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 
 import {
@@ -15,6 +15,17 @@ import {
   vendorBundledPackageRuntimeDependenciesFallback,
 } from './syncBundledWorkspacePackages.mjs';
 import * as workspaceRuntimeDependencies from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
+
+function copySyncVerificationInputs(sourceRepoRoot, repoRoot) {
+  for (const path of [
+    'packages/cli-common/bundledPluginResources.mjs',
+    'packages/cli-common/packageBuildOutputTargets.mjs',
+    'apps/stack/scripts/utils/fs/cached_file_digest.mjs',
+  ]) {
+    mkdirSync(dirname(resolve(repoRoot, path)), { recursive: true });
+    cpSync(resolve(sourceRepoRoot, path), resolve(repoRoot, path));
+  }
+}
 
 test('canonical mounted publication restores the exact prior tree after a mid-publication failure', () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'happier-mounted-publication-rollback-'));
@@ -169,6 +180,7 @@ test('CLI and SDK nested consumers retain usable exports on rejected preparation
 test('bootstrap publication preserves conditional package imports without compiled cli-common', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'workspace-imports-bootstrap-'));
   const sourceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  copySyncVerificationInputs(sourceRepoRoot, repoRoot);
   try {
     const scriptsDir = resolve(repoRoot, 'scripts', 'workspaces');
     const commonDir = resolve(repoRoot, 'packages', 'cli-common');
@@ -185,8 +197,14 @@ test('bootstrap publication preserves conditional package imports without compil
     mkdirSync(resolve(sourceDir, 'dist'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'runtime'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'src/private'), { recursive: true });
+    mkdirSync(resolve(sourceDir, 'assets'), { recursive: true });
+    writeFileSync(resolve(sourceDir, 'assets/message.txt'), 'bootstrap resource\n');
+    mkdirSync(resolve(sourceDir, '.happier-plugin'), { recursive: true });
+    writeFileSync(resolve(sourceDir, '.happier-plugin/plugin.json'), JSON.stringify({
+      contributes: { resources: [{ path: 'assets/message.txt' }] },
+    }));
     const imports = { '#http': { 'happier-source': './src/http.js', node: './runtime/node.js', default: './dist/fetch.js' }, '#fs': 'fs', '#disabled': null };
-    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: {
+    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', files: ['dist', 'assets'], exports: {
       '.': { 'happier-source': './src/connect.js', default: './dist/connect.js' },
       // Only an exported runtime source tree belongs in the prepared package.
       './source-runtime': './src/index.js',
@@ -211,6 +229,26 @@ test('bootstrap publication preserves conditional package imports without compil
       ...imports, '#http': { node: './runtime/node.js', default: './dist/fetch.js' },
     });
     assert.equal(readFileSync(resolve(destinationDir, 'dist/fetch.js'), 'utf8'), 'export const transport = "fetch";\n');
+    const fs = createRequire(import.meta.url)('node:fs');
+    const originalCopy = fs.copyFileSync;
+    let bodiesCopied = 0;
+    fs.copyFileSync = (...args) => { bodiesCopied += 1; return originalCopy(...args); };
+    syncBuiltinESMExports();
+    try {
+      bootstrap.syncBundledWorkspacePackages({ repoRoot, packages: ['sdk'], hostApps: ['cli'] });
+    } finally {
+      fs.copyFileSync = originalCopy;
+      syncBuiltinESMExports();
+    }
+    assert.equal(bodiesCopied, 0, 'unchanged bootstrap sync must not stage package bodies');
+    assert.equal(readFileSync(resolve(destinationDir, 'assets/message.txt'), 'utf8'), 'bootstrap resource\n');
+    writeFileSync(resolve(sourceDir, 'assets/message.txt'), 'changed bootstrap resource\n');
+    bootstrap.syncBundledWorkspacePackages({ repoRoot, packages: ['sdk'], hostApps: ['cli'] });
+    assert.equal(readFileSync(resolve(destinationDir, 'assets/message.txt'), 'utf8'), 'changed bootstrap resource\n');
+    rmSync(resolve(sourceDir, 'assets/message.txt'));
+    assert.throws(() => bootstrap.syncBundledWorkspacePackages({ repoRoot, packages: ['sdk'], hostApps: ['cli'] }),
+      /resources|missing/);
+    assert.equal(readFileSync(resolve(destinationDir, 'assets/message.txt'), 'utf8'), 'changed bootstrap resource\n');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -1392,6 +1430,7 @@ test('vendorBundledPackageRuntimeDependenciesFallback vendors runtime dependenci
 test('no-dist bootstrap automatically delegates canonical vendoring with rollback and exported runtime ownership', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-no-dist-bootstrap-'));
   const sourceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  copySyncVerificationInputs(sourceRepoRoot, repoRoot);
   try {
     const workspaceScriptsDir = resolve(repoRoot, 'scripts', 'workspaces');
     const srcPackageDir = resolve(repoRoot, 'packages', 'cli-common');
@@ -1507,6 +1546,7 @@ test('no-dist bootstrap automatically delegates canonical vendoring with rollbac
 test('explicit fresh workspaces helpers override a stale top-level helper during final publication', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-fresh-helper-'));
   const sourceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  copySyncVerificationInputs(sourceRepoRoot, repoRoot);
   try {
     const workspaceScriptsDir = resolve(repoRoot, 'scripts', 'workspaces');
     const cliCommonDir = resolve(repoRoot, 'packages', 'cli-common');
@@ -1709,7 +1749,7 @@ test('vendorBundledPackageRuntimeDependenciesFallback preserves a valid npm alia
   }
 });
 
-test('vendorBundledPackageRuntimeDependenciesFallback terminates cyclic dependency ancestry', () => {
+test('vendorBundledPackageRuntimeDependenciesFallback terminates cyclic dependency ancestry and permits read-only inspection', () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'happier-sync-bundled-workspaces-fallback-cycle-'));
   try {
     const srcPackageDir = resolve(repoRoot, 'packages', 'protocol');
@@ -1734,6 +1774,35 @@ test('vendorBundledPackageRuntimeDependenciesFallback terminates cyclic dependen
       version: '1.0.0',
       dependencies: { 'package-a': '^1.0.0' },
     }));
+
+    const inspectVisits = [];
+    workspaceRuntimeDependencies.vendorRuntimeDependencyTree({
+      packageJsonPath: srcPackageJsonPath,
+      destNodeModulesDir: resolve(destPackageDir, 'node_modules'),
+      dereferenceRootDir: repoRoot,
+      inspectOnly: true,
+      copyResolvedPackage: ({ sourcePackageDir, destPackageDir }) => {
+        inspectVisits.push({ sourcePackageDir, destPackageDir });
+      },
+    });
+    assert.equal(existsSync(destPackageDir), false,
+      'Read-only inspection must not create any destination directories');
+    assert.deepEqual(inspectVisits, [
+      { sourcePackageDir: packageADir, destPackageDir: resolve(destPackageDir, 'node_modules', 'package-a') },
+      { sourcePackageDir: packageBDir, destPackageDir: resolve(destPackageDir, 'node_modules', 'package-a', 'node_modules', 'package-b') },
+    ]);
+    const defaultVisits = [];
+    workspaceRuntimeDependencies.vendorRuntimeDependencyTree({
+      packageJsonPath: srcPackageJsonPath,
+      destNodeModulesDir: resolve(destPackageDir, 'node_modules'),
+      dereferenceRootDir: repoRoot,
+      copyResolvedPackage: ({ sourcePackageDir, destPackageDir }) => {
+        defaultVisits.push({ sourcePackageDir, destPackageDir });
+      },
+    });
+    assert.deepEqual(defaultVisits, inspectVisits);
+    assert.equal(existsSync(resolve(destPackageDir, 'node_modules', 'package-a', 'node_modules', 'package-b', 'node_modules')), true,
+      'Default traversal must retain destination preparation');
 
     assert.doesNotThrow(() => vendorBundledPackageRuntimeDependenciesFallback({
       srcPackageJsonPath,

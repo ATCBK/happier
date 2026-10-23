@@ -2,7 +2,6 @@ import {
   copyFileSync,
   type Dirent,
   existsSync,
-  globSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -22,12 +21,21 @@ import {
   assertResolvedRuntimeDependencyMatchesDeclaration,
   collectBundledPrepublicationAuthorPackageNames,
   collectExternalRuntimeDependencies,
+  collectWorkspacePackageDeclaredFileEntries,
   copyDirDereferenceContainedSync,
+  isPrepublicationAuthorPackage,
+  isPublicSdkGeneratedGovernanceRecord,
   omitWorkspaceSourceCondition,
   parsePackageNameSegments,
   publishStagedDirectoryMountedSync,
   resolveInstalledRuntimePackage,
+  resolveWorkspacePackageDeclaredFileEntries,
   vendorRuntimeDependencyTree as vendorRuntimeDependencyTreeCanonical,
+} from '../../workspaceRuntimeDependencies.mjs';
+export {
+  PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS,
+  isPublicSdkGeneratedGovernanceRecord,
+  resolveWorkspacePackageDeclaredFileEntries,
 } from '../../workspaceRuntimeDependencies.mjs';
 import {
   findUnservableBundledPluginPackageResources,
@@ -78,22 +86,6 @@ function stripInternalBundledWorkspaceDependencies(value: any): any {
   return out;
 }
 
-function isPrepublicationAuthorPackage(rawPackageJson: any): boolean {
-  const happier = rawPackageJson?.happier;
-  const publicSdkRelease = happier?.publicSdkRelease;
-  return (
-    !!happier
-    && typeof happier === 'object'
-    && !Array.isArray(happier)
-    && Object.keys(happier).length === 1
-    && Object.prototype.hasOwnProperty.call(happier, 'publicSdkRelease')
-    && !!publicSdkRelease
-    && typeof publicSdkRelease === 'object'
-    && !Array.isArray(publicSdkRelease)
-    && publicSdkRelease.posture === 'developer_preview'
-  );
-}
-
 function sleepSync(ms: number): void {
   if (!ms || ms <= 0) return;
   const buf = new SharedArrayBuffer(4);
@@ -125,25 +117,6 @@ function isRetryableCopyError(err: unknown): boolean {
     || code === 'EPERM'
     || code === 'EACCES'
   );
-}
-
-/**
- * Public SDK API-governance records that are generated on demand and never
- * committed (W3 ruling c, 2026-09-24). The npm tarball receives them from the
- * package's `prepack`; runtime bundles neither copy nor declare them, and the
- * binary artifact finalizer strips them. This is the one list both consult.
- * `capability-matrix.json` and `API.md` are committed runtime/author assets and
- * are deliberately absent.
- */
-export const PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  '@happier-dev/plugin-sdk': Object.freeze(['api-declarations.md', 'api-surface.json']),
-  '@happier-dev/plugin-ui': Object.freeze(['api-declarations.md', 'api-surface.json']),
-  '@happier-dev/sdk': Object.freeze(['api-declarations.md', 'api-surface.json']),
-});
-
-export function isPublicSdkGeneratedGovernanceRecord(packageName: unknown, relativePath: string): boolean {
-  if (typeof packageName !== 'string') return false;
-  return PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS[packageName]?.includes(relativePath) === true;
 }
 
 export function sanitizeBundledPackageJson(raw: any): any {
@@ -634,42 +607,6 @@ function collectWorkspacePackageReferencedFiles(rawPackageJson: any, includeType
     referencedFiles.add('src');
   }
   return referencedFiles;
-}
-
-function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string[] {
-  if (rawPackageJson?.files === undefined) return [];
-  if (!Array.isArray(rawPackageJson.files) || rawPackageJson.files.some((entry: unknown) => typeof entry !== 'string')) {
-    throw new Error('Bundled workspace package files must be an array of relative paths or patterns');
-  }
-  return [...new Set(rawPackageJson.files as string[])].filter((entry) => {
-    if (
-      !entry
-      || entry.includes('\\')
-      || entry.startsWith('/')
-      || entry.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-      || (isPrepublicationAuthorPackage(rawPackageJson) && /[*?{}[\]]/u.test(entry))
-    ) {
-      throw new Error(`Bundled workspace package file must be an exact relative path: '${entry}'`);
-    }
-    return entry !== 'package.json'
-      && entry !== 'dist'
-      && !entry.startsWith('dist/')
-      && !isPublicSdkGeneratedGovernanceRecord(rawPackageJson.name, entry);
-  });
-}
-
-/** Resolve the package-owned files declaration for both workspace and native payload staging. */
-export function resolveWorkspacePackageDeclaredFileEntries(packageDir: string, relativePrefix?: string): string[] {
-  const entries = collectWorkspacePackageDeclaredFileEntries(readJson(resolve(packageDir, 'package.json')));
-  return [...new Set(entries
-    .filter((entry) => !relativePrefix || entry === relativePrefix || entry.startsWith(`${relativePrefix}/`))
-    .flatMap((entry) => {
-      if (!/[*?{}[\]]/u.test(entry)) return [entry];
-      const matches = globSync(entry, { cwd: packageDir }).sort();
-      // Keep missing declarations visible: publication rejects them, while
-      // health/identity readers retain their existing missing-input behavior.
-      return matches.length > 0 ? matches : [entry];
-    }))];
 }
 
 function collectPrepublicationAuthoringFileEntries(rawPackageJson: any): string[] | undefined {

@@ -6,6 +6,7 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -13,10 +14,14 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 
 import { vendorBundledPackageRuntimeDependenciesFallback } from './vendorBundledWorkspaceRuntimeDependenciesFallback.mjs';
-import { omitWorkspaceSourceCondition } from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
+import { assertPhysicalPathWithinApprovedRoot, omitWorkspaceSourceCondition, resolveWorkspacePackageDeclaredFileEntries, vendorRuntimeDependencyTree } from '../../packages/cli-common/workspaceRuntimeDependencies.mjs';
+import { findUnservableBundledPluginPackageResources, readBundledPluginPackageResourceRelativePaths } from '../../packages/cli-common/bundledPluginResources.mjs';
+import { fileDigestMetadataIdentity, readCachedFileDigestSync } from '../../apps/stack/scripts/utils/fs/cached_file_digest.mjs';
+import { WORKSPACE_PACKAGE_BUILD_INPUT_RECORD } from '../../packages/cli-common/packageBuildOutputTargets.mjs';
 
 const EXTENSIONS_WORKSPACE_PREFIX = 'plugins-';
 
@@ -72,12 +77,21 @@ function syncBundledWorkspaceReferencedFiles({ srcPackageDir, destPackageDir, pa
   const contentTargets = new Set([...relativeTargets].map((relPath) => (
     relPath.startsWith('src/') ? 'src' : relPath
   )));
+  const declaredFiles = hasInjectedFileSystemOps(fsOps)
+    ? new Set() : new Set(resolveWorkspacePackageDeclaredFileEntries(srcPackageDir));
+  if (!hasInjectedFileSystemOps(fsOps)) {
+    for (const path of ['README.md', '.happier-plugin', ...declaredFiles,
+      ...readBundledPluginPackageResourceRelativePaths(srcPackageDir)]) contentTargets.add(path);
+  }
   for (const relPath of contentTargets) {
     // `dist/**` is synced separately with extra staging/atomicity; skip it here.
     if (relPath.startsWith('dist/')) continue;
 
     const srcPath = resolve(srcPackageDir, relPath);
-    if (!exists(srcPath)) continue;
+    if (!exists(srcPath)) {
+      if (declaredFiles.has(relPath)) throw new Error(`Bundled workspace package declared file is missing: ${relPath}`);
+      continue;
+    }
     const destPath = resolve(destPackageDir, relPath);
 
     try {
@@ -176,6 +190,156 @@ export function sanitizeBundledWorkspacePackageJson(raw) {
 }
 
 export { vendorBundledPackageRuntimeDependenciesFallback };
+
+// Worker-local verification belongs to this copy, never to a producer inode.
+// The producer's output record contributes semantic digests, not builtAt.
+// Change this version when copy/currentness policy changes; old proofs verify cold.
+const COPY_RECORD_VERSION = 2;
+
+function bundleCopyRecordPath(packageDir) {
+  // Keep machine-local paths/inode proofs outside the package's published tree.
+  return resolve(dirname(dirname(packageDir)), '.cache', 'happier-bundled-workspaces', `${basename(packageDir)}.json`);
+}
+
+function readCopyRecord(packageDir) {
+  try {
+    const record = JSON.parse(readFileSync(bundleCopyRecordPath(packageDir), 'utf8'));
+    return record.version === COPY_RECORD_VERSION && Array.isArray(record.cache)
+      && record.cache.every(entry => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string')
+      ? record : null;
+  } catch {
+    return null;
+  }
+}
+
+function snapshotBundlePath(path, cache, { dereferenceRootDir, active = new Set(), seen, packageDir, proof } = {}) {
+  let stats;
+  try { stats = lstatSync(path, { bigint: true }); } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+      proof?.set(path, null);
+      return ['missing'];
+    }
+    throw error;
+  }
+  proof?.set(path, { lstat: fileDigestMetadataIdentity(stats) });
+  if (stats.isSymbolicLink()) {
+    if (!dereferenceRootDir) return ['link', readlinkSync(path)];
+    assertPhysicalPathWithinApprovedRoot({ approvedRootDir: dereferenceRootDir,
+      sourcePath: path, dependencyName: path });
+    stats = statSync(path, { bigint: true });
+    if (proof) proof.get(path).stat = fileDigestMetadataIdentity(stats);
+  }
+  if (stats.isDirectory()) {
+    const physical = realpathSync(path);
+    if (active.has(physical)) throw new Error(`Bundled dependency directory cycle: ${path}`);
+    const next = new Set(active).add(physical);
+    return ['directory', readdirSync(path).sort().filter(name => {
+      if (!packageDir) return true;
+      const child = relative(packageDir, resolve(path, name)).split(sep).join('/');
+      return child !== `dist/${WORKSPACE_PACKAGE_BUILD_INPUT_RECORD}`
+        && !(child.startsWith('dist/') && child.endsWith('.tsbuildinfo'));
+    }).map(name => [name, snapshotBundlePath(resolve(path, name), cache, { dereferenceRootDir, active: next, seen, packageDir, proof })])];
+  }
+  if (!stats.isFile()) throw new Error(`Unsupported bundled package content: ${path}`);
+  const digest = readCachedFileDigestSync(path, stats, { cache });
+  if (!/^[0-9a-f]{64}$/u.test(digest)) throw new Error(`Cannot verify bundled package content: ${path}`);
+  seen?.add(path);
+  return ['file', String(stats.mode), digest];
+}
+
+function bundleInputIdentity({ srcPackageDir, destPackageDir, repoRoot, cache, raw, resolveDeclaredFiles, pruneStale, seen, proof }) {
+  const targets = new Set(['dist', 'README.md', '.happier-plugin']);
+  const referenced = new Set();
+  for (const field of ['main', 'module', 'types', 'exports', 'imports']) {
+    collectPackageJsonRelativeFileTargets(omitWorkspaceSourceCondition(raw[field]), referenced);
+  }
+  for (const path of referenced) targets.add(path.startsWith('src/') ? 'src' : path);
+  for (const path of resolveDeclaredFiles(srcPackageDir)) targets.add(path);
+  for (const path of readBundledPluginPackageResourceRelativePaths(srcPackageDir)) targets.add(path);
+  targets.delete('package.json');
+  const contents = [...targets].sort().map(path => {
+    const sourcePath = resolve(srcPackageDir, path);
+    const rel = relative(srcPackageDir, sourcePath);
+    if (rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('Bundled package input escapes its root');
+    return [path, snapshotBundlePath(sourcePath, cache, { seen, packageDir: srcPackageDir, proof })];
+  });
+  let outputs = null;
+  try {
+    const recordPath = resolve(srcPackageDir, 'dist', WORKSPACE_PACKAGE_BUILD_INPUT_RECORD);
+    proof.set(recordPath, { lstat: fileDigestMetadataIdentity(lstatSync(recordPath, { bigint: true })) });
+    const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+    outputs = Array.isArray(record.outputs)
+      ? record.outputs.map(({ path, digest }) => ({ path, digest })).sort((a, b) => a.path.localeCompare(b.path)) : null;
+  } catch (error) {
+    if (error.code === 'ENOENT') proof.set(resolve(srcPackageDir, 'dist', WORKSPACE_PACKAGE_BUILD_INPUT_RECORD), null);
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+  }
+  const dependencies = [];
+  vendorRuntimeDependencyTree({
+    packageJsonPath: resolve(srcPackageDir, 'package.json'),
+    destNodeModulesDir: resolve(destPackageDir, 'node_modules'),
+    dereferenceRootDir: repoRoot,
+    inspectOnly: true,
+    copyResolvedPackage({ sourcePackageDir, destPackageDir: dependencyDestDir }) {
+      dependencies.push([relative(destPackageDir, dependencyDestDir).split(sep).join('/'),
+        snapshotBundlePath(sourcePackageDir, cache, { dereferenceRootDir: repoRoot, seen, proof })]);
+    },
+  });
+  return createHash('sha256').update(JSON.stringify({
+    manifest: sanitizeBundledWorkspacePackageJson(raw), outputs, contents, dependencies, pruneStale,
+  })).digest('hex');
+}
+
+function prepareBundleVerification({ srcPackageDir, destPackageDir, repoRoot, resolveDeclaredFiles, pruneStale }) {
+  const previous = readCopyRecord(destPackageDir);
+  const cache = new Map(previous?.cache ?? []);
+  const sourceFiles = new Set();
+  const sourceProof = new Map();
+  const manifestPath = resolve(srcPackageDir, 'package.json');
+  sourceProof.set(manifestPath, { lstat: fileDigestMetadataIdentity(lstatSync(manifestPath, { bigint: true })) });
+  const raw = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const input = bundleInputIdentity({ srcPackageDir, destPackageDir, repoRoot, cache, raw, resolveDeclaredFiles, pruneStale,
+    seen: sourceFiles, proof: sourceProof });
+  const destination = snapshotBundlePath(destPackageDir, cache, { packageDir: destPackageDir });
+  return { cache, input, sourceFiles, sourceProof,
+    unchanged: previous?.input === input && JSON.stringify(previous.destination) === JSON.stringify(destination) };
+}
+
+function recordBundleVerification(destPackageDir, verification) {
+  for (const [path, before] of verification.sourceProof) {
+    let after;
+    try {
+      const stats = lstatSync(path, { bigint: true });
+      after = { lstat: fileDigestMetadataIdentity(stats),
+        ...(before?.stat ? { stat: fileDigestMetadataIdentity(statSync(path, { bigint: true })) } : {}) };
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      after = null;
+    }
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      // A concurrent producer may have changed and restored the same bytes.
+      // Do not retain a proof of an intermediate copy; the next completion repairs it.
+      rmSync(bundleCopyRecordPath(destPackageDir), { force: true });
+      return;
+    }
+  }
+  // Capture final mounted files; staging inode metadata is never reusable here.
+  const currentFiles = new Set(verification.sourceFiles);
+  const destination = snapshotBundlePath(destPackageDir, verification.cache, { seen: currentFiles, packageDir: destPackageDir });
+  const record = { version: COPY_RECORD_VERSION, input: verification.input, destination,
+    cache: [...verification.cache].filter(([path]) => currentFiles.has(path)) };
+  const path = bundleCopyRecordPath(destPackageDir);
+  const contents = `${JSON.stringify(record)}\n`;
+  if (existsSync(path) && readFileSync(path, 'utf8') === contents) return;
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(temporaryPath, contents);
+    renameSync(temporaryPath, path);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
 
 let syncSequence = 0;
 const DEFAULT_STALE_SWAP_DIR_AGE_MS = 60_000;
@@ -570,6 +734,10 @@ export function bundleWorkspacePackageFallbackTransactionally({
       packageJsonRaw: raw,
       fsOps: { strict: true },
     });
+    if (existsSync(resolve(preparedDir, '.happier-plugin'))) {
+      const problems = findUnservableBundledPluginPackageResources(preparedDir);
+      if (problems.length > 0) throw new Error(`Bundled plugin package cannot serve its resources:\n${problems.join('\n')}`);
+    }
     if (hasExternalRuntimeDependencies(raw)) {
       vendorBundledPackageRuntimeDependencies({
         srcPackageJsonPath,
@@ -654,6 +822,20 @@ export function syncBundledWorkspacePackages(opts = {}) {
 
     for (const hostPackageDir of hostPackageDirs) {
       const destPackageDir = resolve(hostPackageDir, 'node_modules', '@happier-dev', pkg);
+      if (opts.pruneStale !== true && !hasInjectedPackageSyncOps(opts) && existsSync(destPackageDir)
+        && realpathSync(destPackageDir) === realpathSync(srcPackageDir)) {
+        // A live canonical workspace link already consumes the producer. Never
+        // mount a sanitized physical copy over it or mutate its source tree.
+        continue;
+      }
+      const verification = !hasInjectedPackageSyncOps(opts) && !opts.validatePreparedPackage
+        ? prepareBundleVerification({ srcPackageDir, destPackageDir, repoRoot,
+          resolveDeclaredFiles: resolveWorkspacePackageDeclaredFileEntries,
+          pruneStale: opts.pruneStale === true }) : null;
+      if (verification?.unchanged) {
+        recordBundleVerification(destPackageDir, verification);
+        continue;
+      }
       if (useCanonicalPackageBundle) {
         bundleWorkspacePackageWithRuntimeDependencies({
           packageName: `@happier-dev/${pkg}`,
@@ -666,6 +848,7 @@ export function syncBundledWorkspacePackages(opts = {}) {
           pruneStale: opts.pruneStale === true,
           validatePreparedPackage: opts.validatePreparedPackage,
         });
+        if (verification) recordBundleVerification(destPackageDir, verification);
         continue;
       }
 
@@ -681,6 +864,7 @@ export function syncBundledWorkspacePackages(opts = {}) {
           vendorBundledPackageRuntimeDependencies,
           validatePreparedPackage: opts.validatePreparedPackage,
         });
+        if (verification) recordBundleVerification(destPackageDir, verification);
         continue;
       }
 

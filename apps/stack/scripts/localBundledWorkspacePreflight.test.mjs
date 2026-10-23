@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -247,47 +248,54 @@ test('local bundled workspace preflight builds missing source dist when the fast
   }
 });
 
-test('local bundled workspace preflight skips sync and bundleWorkspaceDeps when cli-common reports bundles healthy', async () => {
-  const { bundledProtocolDir, fixtureDir, hostPackageDir, protocolSrcDir, repoRoot } = createFixtureRepo('local-bundled-preflight-healthy-');
-  const syncMarkerPath = join(fixtureDir, 'sync.json');
-  const healthMarkerPath = join(fixtureDir, 'health.json');
-  const bundleMarkerPath = join(fixtureDir, 'bundle.json');
-  const bundleStubPath = writeBundleWorkspaceDepsStub({ fixtureDir, markerPath: bundleMarkerPath });
-  const loaderPath = writeBundleWorkspaceDepsLoader({ fixtureDir, bundleStubPath });
-
-  writeProtocolWorkspacePackage({
-    protocolSrcDir,
-    bundledProtocolDir,
-    workspacePackageJson: {
-      name: '@happier-dev/protocol',
-      version: '0.0.0',
-      type: 'module',
-      exports: { '.': { default: './dist/index.js' } },
-    },
-    bundledPackageJson: {
-      name: '@happier-dev/protocol',
-      version: '0.0.0',
-      private: true,
-      type: 'module',
-      exports: { '.': { default: './dist/index.js' } },
-    },
-  });
-  writeSyncHelper({ repoRoot, markerPath: syncMarkerPath });
-  writeCliCommonHealthModule({
-    repoRoot,
-    markerPath: healthMarkerPath,
-    bodyLines: ['return true;'],
-  });
-
+test('local bundled workspace preflight refreshes a changed producer runtime dependency before wrapper imports', async () => {
+  const { fixtureDir, hostPackageDir, protocolSrcDir, repoRoot } = createFixtureRepo('local-bundled-preflight-vendor-refresh-');
   try {
-    const res = await runPreflight({ cwd: repoRoot, hostPackageDir, loaderPath });
-
-    assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
-    const healthOptions = JSON.parse(readFileSync(healthMarkerPath, 'utf8'));
-    assert.equal(healthOptions.repoRoot, repoRoot);
-    assert.equal(healthOptions.hostPackageDir, hostPackageDir);
-    assert.equal(existsSync(syncMarkerPath), false, 'expected healthy bundles to skip monorepo sync');
-    assert.equal(existsSync(bundleMarkerPath), false);
+    const sourceRepo = resolve(stackDir, '../..');
+    for (const path of [
+      'scripts/workspaces/syncBundledWorkspacePackages.mjs',
+      'scripts/workspaces/vendorBundledWorkspaceRuntimeDependenciesFallback.mjs',
+      'packages/cli-common/dist/workspaces/index.js',
+      'packages/cli-common/workspaceRuntimeDependencies.mjs',
+      'packages/cli-common/bundledPluginResources.mjs',
+      'packages/cli-common/packageBuildOutputTargets.mjs',
+      'apps/stack/scripts/utils/fs/cached_file_digest.mjs',
+    ]) {
+      mkdirSync(dirname(resolve(repoRoot, path)), { recursive: true });
+      cpSync(resolve(sourceRepo, path), resolve(repoRoot, path));
+    }
+    cpSync(resolve(sourceRepo, 'node_modules/semver'), resolve(repoRoot, 'node_modules/semver'), { recursive: true });
+    writeJson(resolve(protocolSrcDir, 'package.json'), {
+      name: '@happier-dev/protocol', version: '0.0.0', type: 'module',
+      exports: { '.': './dist/index.js' }, dependencies: { 'fixture-runtime': '^1.0.0' },
+    });
+    writeFileSync(resolve(protocolSrcDir, 'dist/index.js'), 'export { generation } from "fixture-runtime";\n');
+    const runtime = resolve(protocolSrcDir, 'node_modules/fixture-runtime');
+    mkdirSync(runtime, { recursive: true });
+    const publishDependency = generation => {
+      writeJson(resolve(runtime, 'package.json'), {
+        name: 'fixture-runtime', version: generation === 'previous' ? '1.0.0' : '1.1.0',
+        type: 'module', main: './index.js',
+      });
+      writeFileSync(resolve(runtime, 'index.js'), `export const generation = ${JSON.stringify(generation)};\n`);
+    };
+    publishDependency('previous');
+    const copier = await import(pathToFileURL(resolve(repoRoot, 'scripts/workspaces/syncBundledWorkspacePackages.mjs')).href);
+    copier.syncBundledWorkspacePackages({ repoRoot, hostApps: ['stack'], packages: ['protocol'] });
+    publishDependency('current');
+    mkdirSync(resolve(hostPackageDir, 'bin'), { recursive: true });
+    for (const file of ['happier.mjs', 'localSourceRuntimeBootstrap.mjs']) {
+      cpSync(resolve(stackDir, 'bin', file), resolve(hostPackageDir, 'bin', file));
+    }
+    // Relocate the entry without replacing any preflight or health logic.
+    writeFileSync(resolve(hostPackageDir, 'bin/localBundledWorkspacePreflight.mjs'),
+      `export * from ${JSON.stringify(pathToFileURL(preflightModulePath).href)};\n`);
+    mkdirSync(resolve(hostPackageDir, 'scripts'), { recursive: true });
+    writeFileSync(resolve(hostPackageDir, 'scripts/happier_main.mjs'),
+      'process.stdout.write((await import("@happier-dev/protocol")).generation);\n');
+    const loaded = execFileSync(process.execPath, [resolve(hostPackageDir, 'bin/happier.mjs')],
+    { cwd: hostPackageDir, env: { ...process.env, NODE_OPTIONS: '' }, encoding: 'utf8' });
+    assert.equal(loaded, 'current');
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
   }

@@ -13,6 +13,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
+import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,6 +21,77 @@ import semver from 'semver';
 
 const PACKAGE_NAME_SEGMENT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/u;
 const PREPUBLICATION_AUTHOR_PACKAGE_VERSION = '0.0.0';
+
+export function isPrepublicationAuthorPackage(rawPackageJson) {
+  const happier = rawPackageJson?.happier;
+  const publicSdkRelease = happier?.publicSdkRelease;
+  return (
+    !!happier
+    && typeof happier === 'object'
+    && !Array.isArray(happier)
+    && Object.keys(happier).length === 1
+    && Object.prototype.hasOwnProperty.call(happier, 'publicSdkRelease')
+    && !!publicSdkRelease
+    && typeof publicSdkRelease === 'object'
+    && !Array.isArray(publicSdkRelease)
+    && publicSdkRelease.posture === 'developer_preview'
+  );
+}
+
+/**
+ * Public SDK API-governance records that are generated on demand and never
+ * committed (W3 ruling c, 2026-09-24). The npm tarball receives them from the
+ * package's `prepack`; runtime bundles neither copy nor declare them, and the
+ * binary artifact finalizer strips them. This is the one list both consult.
+ * `capability-matrix.json` and `API.md` are committed runtime/author assets and
+ * are deliberately absent.
+ */
+export const PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS = Object.freeze({
+  '@happier-dev/plugin-sdk': Object.freeze(['api-declarations.md', 'api-surface.json']),
+  '@happier-dev/plugin-ui': Object.freeze(['api-declarations.md', 'api-surface.json']),
+  '@happier-dev/sdk': Object.freeze(['api-declarations.md', 'api-surface.json']),
+});
+
+export function isPublicSdkGeneratedGovernanceRecord(packageName, relativePath) {
+  if (typeof packageName !== 'string') return false;
+  return PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS[packageName]?.includes(relativePath) === true;
+}
+
+export function collectWorkspacePackageDeclaredFileEntries(rawPackageJson) {
+  if (rawPackageJson?.files === undefined) return [];
+  if (!Array.isArray(rawPackageJson.files) || rawPackageJson.files.some((entry) => typeof entry !== 'string')) {
+    throw new Error('Bundled workspace package files must be an array of relative paths or patterns');
+  }
+  return [...new Set(rawPackageJson.files)].filter((entry) => {
+    if (
+      !entry
+      || entry.includes('\\')
+      || entry.startsWith('/')
+      || entry.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+      || (isPrepublicationAuthorPackage(rawPackageJson) && /[*?{}[\]]/u.test(entry))
+    ) {
+      throw new Error(`Bundled workspace package file must be an exact relative path: '${entry}'`);
+    }
+    return entry !== 'package.json'
+      && entry !== 'dist'
+      && !entry.startsWith('dist/')
+      && !isPublicSdkGeneratedGovernanceRecord(rawPackageJson.name, entry);
+  });
+}
+
+/** Resolve the package-owned files declaration for both workspace and native payload staging. */
+export function resolveWorkspacePackageDeclaredFileEntries(packageDir, relativePrefix) {
+  const entries = collectWorkspacePackageDeclaredFileEntries(readJson(resolve(packageDir, 'package.json')));
+  return [...new Set(entries
+    .filter((entry) => !relativePrefix || entry === relativePrefix || entry.startsWith(`${relativePrefix}/`))
+    .flatMap((entry) => {
+      if (!/[*?{}[\]]/u.test(entry)) return [entry];
+      const matches = fs.globSync(entry, { cwd: packageDir }).sort();
+      // Keep missing declarations visible: publication rejects them, while
+      // health/identity readers retain their existing missing-input behavior.
+      return matches.length > 0 ? matches : [entry];
+    }))];
+}
 
 /** Select declared packages supplied by the host's prepublication author closure. */
 export function collectBundledPrepublicationAuthorPackageNames(packageJson) {
@@ -664,6 +736,7 @@ export function vendorRuntimeDependencyTree({
   validateResolvedPackage,
   dereferenceRootDir,
   excludeRootDependencies = [],
+  inspectOnly = false,
 }) {
   const packageJson = readJson(packageJsonPath);
   const dependencies = collectExternalRuntimeDependencies(packageJson);
@@ -681,7 +754,7 @@ export function vendorRuntimeDependencyTree({
     dependencies.push(commonDependency);
     commonResolveFromPackageJsonPath = nodeRuntime.packageJsonPath;
   }
-  mkdirSync(destNodeModulesDir, { recursive: true });
+  if (!inspectOnly) mkdirSync(destNodeModulesDir, { recursive: true });
 
   for (const dependency of dependencies) {
     if (excludeRootDependencies.includes(dependency.name)) continue;
@@ -739,6 +812,7 @@ export function vendorRuntimeDependencyTree({
       activeSourcePackageDirs: nextActiveSourcePackageDirs,
       validateResolvedPackage,
       dereferenceRootDir,
+      inspectOnly,
     });
   }
 }

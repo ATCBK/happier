@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 const fileDigestCache = new Map();
 
 /** @param {FileDigestMetadata} stats */
-function metadataIdentity(stats) {
+export function fileDigestMetadataIdentity(stats) {
   return `${stats.size}\0${stats.mtimeNs}\0${stats.ctimeNs}\0${stats.dev}\0${stats.ino}`;
 }
 
@@ -27,7 +27,7 @@ export function forgetCachedFileDigest(path) {
  * @param {{ cache?: Map<string, { identity?: unknown, digest?: unknown }> }} options
  */
 export function readCachedFileDigestSync(path, stats, { cache = fileDigestCache } = {}) {
-  const identity = metadataIdentity(stats);
+  const identity = fileDigestMetadataIdentity(stats);
   const cached = cache.get(path);
   if (cached?.identity === identity && typeof cached.digest === 'string' && /^[0-9a-f]{64}$/u.test(cached.digest)) return cached.digest;
   try {
@@ -41,7 +41,7 @@ export function readCachedFileDigestSync(path, stats, { cache = fileDigestCache 
 
 /** @param {string} path @param {FileDigestMetadata} stats */
 export async function readCachedFileDigest(path, stats) {
-  const identity = metadataIdentity(stats);
+  const identity = fileDigestMetadataIdentity(stats);
   const cached = fileDigestCache.get(path);
   if (cached?.identity === identity) return cached.digest;
   try {
