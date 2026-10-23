@@ -38,6 +38,7 @@ import { HappyError } from '@/utils/errors/errors';
 import type { Artifact, ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { resolveHomeTarget as resolveCapturedHomeTarget, resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
+import { isActionEffectResult as isEffectResult } from '@/sync/domains/scope/actionAccountScopeError';
 
 function artifactContentUnavailable(): Error & Readonly<{ code: 'content_unavailable' }> {
     return Object.assign(new Error('Artifact content is unavailable'), { code: 'content_unavailable' as const });
@@ -67,7 +68,6 @@ export type RawSettingsMutationOptions = Readonly<{
     observeOutcome?: boolean;
     capture?: (transition: AccountSettingsMutationCapture) => unknown;
 }>;
-const isEffectResult = (effectClass: ActionEffectClass) => effectClass === 'write' || effectClass === 'external' || effectClass === 'danger';
 
 /** A refreshed Account bearer keeps authority; replacement identity, keys and restricted credentials do not. */
 function retainsActionAccountCredential(original: AuthCredentials | null, next: AuthCredentials | null | undefined): boolean {
