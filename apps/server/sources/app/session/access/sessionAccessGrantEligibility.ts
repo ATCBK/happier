@@ -198,11 +198,13 @@ export async function resolveSessionAccessGrantSubjectsInTx(
     const groupsById = new Map(groups.map((group) => [group.id, group]));
     const needsDiscovery = !params.removingExistingGrant && !params.hasExistingGrant;
     const grantableTeamIds = needsDiscovery ? await resolveGrantableTeamsForActorInTx(tx, {
-        actorAccountId: params.actorAccountId, teamIds,
+        actorAccountId: params.actorAccountId,
+        teamIds: [...teamIds, ...params.subjects.flatMap(subject => subject.kind === "group" ? [subject.teamId] : [])],
     }) : new Set<string>();
     const grantableGroups = needsDiscovery ? await resolveGrantableTeamGroupsForActorInTx(tx, {
         actorAccountId: params.actorAccountId,
         groups: params.subjects.flatMap(subject => subject.kind === "group" ? [subject] : []),
+        grantableTeamIds,
     }) : new Map<string, never>();
     const results: { eligibility: SessionAccessGrantSubjectResolution; removalEligibility: SessionAccessGrantSubjectResolution }[] = [];
     for (const subject of params.subjects) {

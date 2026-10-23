@@ -9,11 +9,13 @@ import {
 } from '@/testkit/lightSqliteHarness';
 import { HOME_GOVERNANCE_POLICY_ID } from '@/app/home/governance/governancePolicy';
 import type { HomeRole } from '@/storage/enums.generated';
+import { resolveTeamActorContextsInTx, type TeamActorContext } from './actorContext';
 
 import { archiveTeamInTx, readTeamSummaryForActorInTx } from './lifecycle';
 import {
   listTeamsForActorInTx,
   resolveGrantableTeamForActorInTx,
+  resolveGrantableTeamsForActorInTx,
 } from './queries';
 
 describe('Team directory (SQLite integration)', () => {
@@ -675,6 +677,34 @@ describe('Team directory (SQLite integration)', () => {
     expect(await list(viewer.id)).toEqual({
       ok: false,
       error: 'team_forbidden',
+    });
+  });
+
+  it('falls back to current authority for absent or mismatched admitted Team contexts', async () => {
+    const viewer = await account('owner');
+    const stranger = await account();
+    const mine = await team(`Context mine ${crypto.randomUUID()}`, [viewer]);
+    const foreign = await team(`Context foreign ${crypto.randomUUID()}`, [stranger]);
+    await inTx(async tx => {
+      const contexts = await resolveTeamActorContextsInTx(tx, {
+        actorAccountId: viewer.id, teamIds: [mine.id, foreign.id],
+      });
+      const strangerContexts = await resolveTeamActorContextsInTx(tx, {
+        actorAccountId: stranger.id, teamIds: [foreign.id],
+      });
+      const ownContext = contexts.get(mine.id);
+      const strangerContext = strangerContexts.get(foreign.id);
+      if (!ownContext || !strangerContext) throw new Error('Fixture Team contexts must exist');
+      for (const actorContexts of [
+        contexts,
+        new Map([[foreign.id, strangerContext]]),
+        new Map([[foreign.id, ownContext]]),
+        new Map<string, TeamActorContext>(),
+      ]) {
+        expect([...await resolveGrantableTeamsForActorInTx(tx, {
+          actorAccountId: viewer.id, teamIds: [mine.id, foreign.id], actorContexts,
+        })]).toEqual([mine.id]);
+      }
     });
   });
 

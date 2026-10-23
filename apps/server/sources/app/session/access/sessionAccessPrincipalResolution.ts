@@ -84,11 +84,12 @@ export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{
     });
     const qualifiedTeamIds = teamIds.filter(teamId => qualifications.get(teamId)?.ok);
     const grantableTeamIds = await resolveGrantableTeamsForActorInTx(input.tx, {
-        actorAccountId: input.actorAccountId, teamIds: qualifiedTeamIds,
+        actorAccountId: input.actorAccountId, teamIds: qualifiedTeamIds, actorContexts: contexts,
     });
     const grantableGroups = await resolveGrantableTeamGroupsForActorInTx(input.tx, {
         actorAccountId: input.actorAccountId,
         groups: groupSubjects.filter(subject => grantableTeamIds.has(subject.teamId)),
+        grantableTeamIds,
     });
     const result: ResolveSessionAccessPrincipalsResponseV1["principals"] = [];
     for (const subject of subjects) {

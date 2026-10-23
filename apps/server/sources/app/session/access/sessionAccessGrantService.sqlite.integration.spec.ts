@@ -109,7 +109,7 @@ describe("Session access grant service (SQLite integration)", () => {
         ]);
     });
 
-    it("resolves initial collective grant eligibility with one membership-set read for 120 Groups", async () => {
+    it("resolves initial collective grant eligibility with one membership-set read for a Team and its 120 Groups", async () => {
         const actor = await createAccount("eligibility-cost");
         const team = await db.team.create({ data: { name: "Initial grant cost" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "owner" } });
@@ -124,9 +124,9 @@ describe("Session access grant service (SQLite integration)", () => {
             });
             const result = await resolveSessionAccessGrantSubjectsInTx(instrumentedTx, {
                 actorAccountId: actor.id, sessionOwnerAccountId: actor.id, hasExistingGrant: false,
-                subjects: groups.map(group => ({ kind: "group", teamId: team.id, groupId: group.id })),
+                subjects: [{ kind: "team", teamId: team.id }, ...groups.map(group => ({ kind: "group" as const, teamId: team.id, groupId: group.id }))],
             });
-            expect(result).toHaveLength(120);
+            expect(result).toHaveLength(121);
             expect(result.every(row => row.eligibility.ok)).toBe(true);
             expect(membershipReads).toHaveBeenCalledTimes(1);
         });

@@ -9,6 +9,7 @@ import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import {
     composeTeamActorContext,
     qualifyTeamProjectionReadAuthenticationsInTx,
+    type TeamActorContext,
     type TeamOperationAuthenticationContext,
 } from "./actorContext";
 import { resolveTeamCapabilitiesV1 } from "./capabilities";
@@ -58,10 +59,25 @@ export async function resolveGrantableTeamForActorInTx(
 /** The same structural grantability decision for explicitly selected Teams. */
 export async function resolveGrantableTeamsForActorInTx(
     tx: Tx,
-    input: Readonly<{ actorAccountId: string; teamIds: readonly string[] }>,
+    input: Readonly<{
+        actorAccountId: string;
+        teamIds: readonly string[];
+        /** Already admitted in this operation's exact transaction; never retain across requests. */
+        actorContexts?: ReadonlyMap<string, TeamActorContext>;
+    }>,
 ): Promise<ReadonlySet<string>> {
-    const teamIds = [...new Set(input.teamIds)];
-    if (teamIds.length === 0) return new Set();
+    const grantableTeamIds = new Set<string>();
+    const teamIds = [...new Set(input.teamIds)].filter(teamId => {
+        const context = input.actorContexts?.get(teamId);
+        if (!context || context.actorAccountId !== input.actorAccountId || context.team.id !== teamId) return true;
+        if (context.membership && isEffectiveTeamMembership({
+            accountStatus: context.accountStatus,
+            membershipStatus: context.membership.status,
+            teamArchivedAt: context.team.archivedAt,
+        })) grantableTeamIds.add(teamId);
+        return false;
+    });
+    if (teamIds.length === 0) return grantableTeamIds;
     const memberships = (await Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 2 }).map(ids => tx.teamMembership.findMany({
         where: { accountId: input.actorAccountId, teamId: { in: [...ids] } },
         select: {
@@ -70,11 +86,14 @@ export async function resolveGrantableTeamsForActorInTx(
             team: { select: { id: true, archivedAt: true } },
         },
     })))).flat();
-    return new Set(memberships.filter(membership => isEffectiveTeamMembership({
-        accountStatus: membership.account.status,
-        membershipStatus: membership.status,
-        teamArchivedAt: membership.team.archivedAt,
-    })).map(membership => membership.team.id));
+    for (const membership of memberships) {
+        if (isEffectiveTeamMembership({
+            accountStatus: membership.account.status,
+            membershipStatus: membership.status,
+            teamArchivedAt: membership.team.archivedAt,
+        })) grantableTeamIds.add(membership.team.id);
+    }
+    return grantableTeamIds;
 }
 
 export async function listTeamsForActorInTx(

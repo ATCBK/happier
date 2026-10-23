@@ -154,10 +154,12 @@ export async function resolveGrantableTeamGroupsForActorInTx(
     input: Readonly<{
         actorAccountId: string;
         groups: readonly Readonly<{ teamId: string; groupId: string }>[];
+        /** Only the canonical Team reader's result for this actor in this exact operation/transaction. */
+        grantableTeamIds?: ReadonlySet<string>;
     }>,
 ): Promise<ReadonlyMap<string, Readonly<{ teamId: string; groupId: string; name: string }>>> {
     if (input.groups.length === 0) return new Map();
-    const grantableTeamIds = await resolveGrantableTeamsForActorInTx(tx, {
+    const grantableTeamIds = input.grantableTeamIds ?? await resolveGrantableTeamsForActorInTx(tx, {
         actorAccountId: input.actorAccountId, teamIds: input.groups.map(group => group.teamId),
     });
     const groupIds = [...new Set(input.groups.filter(group => grantableTeamIds.has(group.teamId)).map(group => group.groupId))];

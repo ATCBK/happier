@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { admitTeamMemberInTx } from "@/app/teams/memberships/membershipService";
+import { resolveSessionAccessPrincipalsInTx } from "@/app/session/access/sessionAccessPrincipalResolution";
 import { registerSessionAccessGrantRoutes } from "./registerSessionAccessGrantRoutes";
 import { SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 
@@ -72,6 +73,20 @@ describe("Selected Session access principals (SQLite HTTP integration)", () => {
         ] });
         expect(response.body).not.toContain(hidden.username);
         expect(response.body).not.toContain(unrequestedGroup.id);
+        await inTx(async tx => {
+            const membershipReads = vi.fn(tx.teamMembership.findMany.bind(tx.teamMembership));
+            const instrumentedTx = Object.assign(Object.create(tx), {
+                teamMembership: Object.assign(Object.create(tx.teamMembership), { findMany: membershipReads }),
+            });
+            const resolved = await resolveSessionAccessPrincipalsInTx({
+                tx: instrumentedTx, actorAccountId: actor.id,
+                subjects: [{ kind: "team", teamId: team.id }, { kind: "group", teamId: team.id, groupId: group.id }],
+            });
+            expect(resolved.principals).toHaveLength(2);
+            // The actor membership and active-owner set are distinct facts;
+            // neither fact needs another acquisition for Team/Group grantability.
+            expect(membershipReads).toHaveBeenCalledTimes(2);
+        });
         const unauthorized = await app.inject({ method: "POST", url: "/v1/session-access/principals/resolve", payload: { v: 1, subjects: [] } });
         expect(unauthorized.statusCode).toBe(401);
     });
@@ -107,6 +122,16 @@ describe("Selected Session access principals (SQLite HTTP integration)", () => {
             { kind: "group", teamId: team.id, groupId: group.id, name: group.name, teamName: team.name },
         ]);
         await db.teamMembership.update({ where: { teamId_accountId: { teamId: team.id, accountId: actor.id } }, data: { status: "suspended" } });
+        expect((await resolve(true)).json()).toEqual({ v: 1, principals: [] });
+        await db.teamMembership.update({ where: { teamId_accountId: { teamId: team.id, accountId: actor.id } }, data: { status: "active", role: "guest" } });
+        expect((await resolve(true)).json().principals).toEqual(admitted.json().principals);
+        await db.account.update({ where: { id: actor.id }, data: { status: "suspended" } });
+        expect((await resolve(true)).json()).toEqual({ v: 1, principals: [] });
+        await db.account.update({ where: { id: actor.id }, data: { status: "active", homeRole: "owner" } });
+        await db.teamMembership.delete({ where: { teamId_accountId: { teamId: team.id, accountId: actor.id } } });
+        expect((await resolve(true)).json()).toEqual({ v: 1, principals: [] });
+        const otherTeam = await db.team.create({ data: { name: "Another selected Team" } });
+        await db.teamMembership.create({ data: { teamId: otherTeam.id, accountId: actor.id, role: "admin" } });
         expect((await resolve(true)).json()).toEqual({ v: 1, principals: [] });
     });
 
