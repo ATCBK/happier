@@ -1,4 +1,5 @@
 import type { DiscussionOpenedSummaryV1 } from '@happier-dev/protocol/discussions/actions';
+import type { InboxItemAttentionTypeV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { readOpenApprovalDiscussionAttention } from '@/sync/domains/artifacts/approvalArtifacts';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -7,6 +8,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 
 export type DiscussionListAttention = Readonly<{
     attentionReason: 'draft_waiting' | 'approval_pending' | 'mentioned' | null;
+    attentionType: InboxItemAttentionTypeV1 | null;
     approvalArtifactIds: readonly string[];
     /** Other Homes' private Artifact inventory is never interpreted as an empty approval set. */
     approvalAttentionAvailable: boolean;
@@ -37,11 +39,12 @@ export function buildDiscussionListAttention<T extends Pick<DiscussionOpenedSumm
         const ids = approvals.get(item.id) ?? [];
         const attentionReason: DiscussionListAttention['attentionReason'] = drafts.has(item.id) ? 'draft_waiting' : ids.length ? 'approval_pending'
             : item.unreadMentionCount > 0 ? 'mentioned' : null;
+        const attentionType: DiscussionListAttention['attentionType'] = ids.length > 0 ? 'approval' : item.unreadMentionCount > 0 ? 'mention' : null;
         const old = before.get(item.id);
-        if (old && old.attentionReason === attentionReason && old.approvalAttentionAvailable === available
+        if (old && old.attentionReason === attentionReason && old.attentionType === attentionType && old.approvalAttentionAvailable === available
             && old.approvalArtifactIds.length === ids.length && old.approvalArtifactIds.every((id, index) => id === ids[index])
             && Object.entries(item).every(([key, value]) => Reflect.get(old, key) === value)) return old;
-        return { ...item, attentionReason, approvalArtifactIds: ids, approvalAttentionAvailable: available };
+        return { ...item, attentionReason, attentionType, approvalArtifactIds: ids, approvalAttentionAvailable: available };
     });
     return previous.length === rows.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
 }

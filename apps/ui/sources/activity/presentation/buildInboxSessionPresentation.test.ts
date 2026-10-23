@@ -41,6 +41,13 @@ function candidate(
 }
 
 describe('buildInboxSessionPresentation', () => {
+    it('does not publish a request type when the candidate has no admitted Inbox section', () => {
+        const permission = candidate('quiet-permission', ['permission_required']);
+        expect(classifyInboxSessionCandidate({ ...permission, hasAttention: false }))
+            .toEqual({ section: null, type: null });
+        expect(classifyInboxSessionCandidate(candidate('quiet', [])))
+            .toEqual({ section: null, type: null });
+    });
     it.each(['ready', 'cancelled', 'failed'] as const)('retains the accepted original %s completion while a newer turn is working, anchoring only known source context', (event) => {
         for (const transcriptSeq of [18, 0, undefined]) {
             const onceDelivery = PersonalFollowOnceOccurrenceV1Schema.parse({ event, turnId: 'original-turn',
@@ -261,8 +268,8 @@ describe('buildInboxSessionPresentation', () => {
     });
 
     it('presents a completed unseen turn as ready for review through the canonical operational state', () => {
-        const completedUnread = candidate('completed-unread', ['unread'], 'server-a', {
-            active: false,
+        const completedUnread = candidate('completed-unread', ['ready_after_read'], 'server-a', {
+            active: true, activeAt: 1_000, presence: 'online',
             latestTurnStatus: 'completed',
             lastTurnCompletedAt: 900,
         });
@@ -271,7 +278,7 @@ describe('buildInboxSessionPresentation', () => {
             overview: buildActivityOverviewFromCandidates([completedUnread]),
         });
 
-        expect(completedUnread.attentionState).toBe('ready');
+        expect(completedUnread.attentionState).toBe('finished_unseen');
         expect(presentation.readySessions.map((entry) => entry.sessionId)).toEqual(['completed-unread']);
         expect(presentation.markAllReadTargets.map((target) => target.sessionId)).toEqual(['completed-unread']);
     });

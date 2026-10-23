@@ -9,7 +9,7 @@ import {
     buildLiveActivityInstanceKey,
     type LiveActivityIdentity,
 } from '../liveActivities/liveActivityIdentity';
-import { resolveLiveActivityUpdateBudget } from '../liveActivities/resolveLiveActivityUpdateBudget';
+import { resolveLiveActivityRelevanceScore, resolveLiveActivityUpdateBudget } from '../liveActivities/resolveLiveActivityUpdateBudget';
 
 const BackgroundWakeActivityKeySchema = z.strictObject({
     serverId: z.string().check(z.trim(), z.minLength(1)),
@@ -63,23 +63,6 @@ export function resolveLiveActivityBackgroundWakePayloadActivityInstanceKey(payl
     return buildLiveActivityInstanceKey(buildIdentity(parsed.data.activityKey));
 }
 
-function resolveRelevanceScore(snapshot: Pick<LiveActivitySnapshot, 'attentionState'>): number {
-    if (snapshot.attentionState === 'permission_required' || snapshot.attentionState === 'action_required') {
-        return 100;
-    }
-    if (snapshot.attentionState === 'thinking') {
-        return 50;
-    }
-    if (
-        snapshot.attentionState === 'pending'
-        || snapshot.attentionState === 'attention'
-        || snapshot.attentionState === 'unread'
-    ) {
-        return 30;
-    }
-    return 10;
-}
-
 function buildIdentity(activityKey: z.infer<typeof BackgroundWakeActivityKeySchema>): LiveActivityIdentity {
     return {
         serverId: activityKey.serverId,
@@ -111,7 +94,7 @@ function buildSnapshot(
 
     return {
         ...snapshot,
-        relevanceScore: resolveRelevanceScore(snapshot),
+        relevanceScore: resolveLiveActivityRelevanceScore(snapshot.attentionState),
     };
 }
 

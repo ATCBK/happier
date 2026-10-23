@@ -10,10 +10,6 @@ import type { ActivitySurfaceSessionViewModel } from '@/activity/presentation/ac
 import { createLiveActivitySelectionSpec } from '@/activity/selection/activitySurfaceSelectionTypes';
 import { resolveActivitySurfaceSlots } from '@/activity/selection/resolveActivitySurfaceSlots';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import {
-    MAX_SESSION_LIST_ATTENTION_RANK,
-    resolveSessionListAttentionRank,
-} from '@/sync/domains/session/listing/deriveSessionListActivity';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
 
@@ -22,7 +18,7 @@ import {
     buildLiveActivityInstanceKey,
     type LiveActivityIdentity,
 } from './liveActivityIdentity';
-import { resolveLiveActivityUpdateBudget } from './resolveLiveActivityUpdateBudget';
+import { resolveLiveActivityRelevanceScore, resolveLiveActivityUpdateBudget } from './resolveLiveActivityUpdateBudget';
 
 const LIVE_ACTIVITY_STALE_AFTER_MS = 30 * 60_000;
 
@@ -185,20 +181,6 @@ function resolvePreferredPrimaryActivityInstances(params: Readonly<{
             buildSelectedCandidateActivityInstanceKey(candidate) !== params.preferredPrimaryActivityInstanceKey
         ),
     ].slice(0, params.selectedSessions.length);
-}
-
-/**
- * ActivityKit picks which Live Activity to surface by relevance, so this is an ordering of the
- * same semantic states — not an independent judgement. It is scaled from the canonical rank
- * rather than re-listed: the hand-written ladder it replaces scored a failed session lowest of
- * all, hiding the one state a person most needs to see.
- */
-function resolveLiveActivityRelevanceScore(
-    attentionState: ActivitySurfaceSessionViewModel['attentionState'],
-): number {
-    return Math.round(
-        (resolveSessionListAttentionRank(attentionState) / MAX_SESSION_LIST_ATTENTION_RANK) * 100,
-    );
 }
 
 export function buildStableLiveActivitySnapshotFingerprint(snapshot: LiveActivitySnapshot): string {

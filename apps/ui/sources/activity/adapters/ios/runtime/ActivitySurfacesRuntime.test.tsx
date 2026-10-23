@@ -10,7 +10,7 @@ import {
 import { settingsParse } from '@/sync/domains/settings/settings';
 import type { LiveActivitySnapshot } from '../liveActivities/buildLiveActivitySnapshots';
 
-import { createSessionFixture as createBaseSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture as createBaseSessionFixture, createSessionOwnerViewerFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen as renderActivityScreen, standardCleanup } from '@/dev/testkit';
 import { ActivityPersonalSessionMembershipProvider } from '@/activity/source/activityPersonalSessionMembership';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -60,6 +60,7 @@ function createSessionFixture(
         ...(typeof overrides.seq === 'number' && overrides.latestReadyEventSeq === undefined
             ? { latestReadyEventSeq: overrides.seq }
             : {}),
+        ...(overrides.active === true && overrides.activeAt === undefined ? { activeAt: observedAt } : {}),
         ...(overrides.thinking === true && overrides.thinkingAt === undefined
             ? { thinkingAt: observedAt }
             : {}),
@@ -869,7 +870,7 @@ describe('ActivitySurfacesRuntime', () => {
                 sessionId: 'permission',
                 title: 'Permission work',
                 previewText: 'Permission work',
-                statusText: 'Awaiting updates',
+                statusText: 'Permission required',
                 defaultTarget: 'open-session:permission?serverId=server-a',
             }),
             '/session/permission?serverId=server-a',
@@ -1306,6 +1307,26 @@ describe('ActivitySurfacesRuntime', () => {
         await act(async () => {});
 
         expect(liveActivityEnd).toHaveBeenCalled();
+    });
+
+    it('ends an urgent failed activity immediately using its canonical snapshot template', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-03T12:00:00.000Z'));
+        sessionsState.value = [createSessionFixture({ id: 'failed', seq: 10,
+            viewer: createSessionViewerFixture({ latestFailureSeq: 10,
+                readState: { state: 'tracking', lastViewedSessionSeq: 9, unreadSince: 10 },
+                attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' } }),
+            lastViewedSessionSeq: 9, active: true, activeAt: Date.now(), presence: 'online',
+            latestTurnStatus: 'failed', latestTurnStatusObservedAt: Date.now(),
+        })];
+        const { ActivitySurfacesRuntime } = await import('./ActivitySurfacesRuntime');
+        const screen = await renderScreen(React.createElement(ActivitySurfacesRuntime));
+        await act(async () => {});
+        expect(liveActivityStart).toHaveBeenCalledTimes(1);
+        sessionsState.value = [];
+        await act(async () => { await screen.update(React.createElement(ActivitySurfacesRuntime)); });
+        expect(liveActivityEnd).toHaveBeenCalledWith('immediate', undefined, new Date('2026-05-03T12:00:00.000Z'));
+        await act(async () => { screen.tree.unmount(); });
     });
 
     it('ends non-urgent live activities with a short grace dismissal policy', async () => {

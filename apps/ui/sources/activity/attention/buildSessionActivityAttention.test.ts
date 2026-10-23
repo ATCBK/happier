@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 
@@ -17,6 +17,18 @@ function createMetadata(overrides: Partial<NonNullable<Session['metadata']>> = {
 }
 
 describe('buildSessionActivityAttention', () => {
+    it('does not resurrect an acknowledged failure from the operational history', () => {
+        const session = createSessionFixture({ active: true, activeAt: 1_000, encryptionMode: 'plain',
+            latestTurnStatus: 'failed', metadata: createMetadata(),
+            viewer: { readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
+                relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' } },
+        });
+        const result = buildSessionActivityAttention({ session, nowMs: 1_000 });
+        expect(result.hasAttention).toBe(false);
+        expect(result.attentionState).not.toBe('failed');
+    });
     it('classifies a working Session for summaries without reading private display details', () => {
         const session = createSessionFixture({ active: true, presence: 'online', thinking: true, thinkingAt: 950,
             encryptionMode: 'plain', metadata: createMetadata() });
@@ -154,7 +166,7 @@ describe('buildSessionActivityAttention', () => {
     });
 
     it('surfaces canonical discussion attention without inventing transcript unread', () => {
-        const session = Object.assign(createSessionFixture({ seq: 20, lastViewedSessionSeq: 20 }), {
+        const session = Object.assign(createSessionFixture({ active: true, activeAt: 1_000, presence: 'online', seq: 20, lastViewedSessionSeq: 20 }), {
             viewer: {
                 readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
@@ -189,7 +201,7 @@ describe('buildSessionActivityAttention', () => {
     it.each(['manual', 'reminder_due'] as const)(
         'presents canonical %s attention without mislabeling it as unread',
         (reason) => {
-            const session = Object.assign(createSessionFixture({ seq: 20, lastViewedSessionSeq: 20 }), {
+            const session = Object.assign(createSessionFixture({ active: true, activeAt: 1_000, presence: 'online', seq: 20, lastViewedSessionSeq: 20 }), {
                 viewer: {
                     readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                     relevance: { relevant: true, reasons: ['followed_by_me'] },
@@ -201,7 +213,7 @@ describe('buildSessionActivityAttention', () => {
 
             expect(buildSessionActivityAttention({ session, nowMs: 1_000 })).toMatchObject({
                 hasAttention: true,
-                attentionState: 'attention',
+                attentionState: 'unread',
                 reasons: { hasUnread: false },
             });
         },
@@ -211,6 +223,7 @@ describe('buildSessionActivityAttention', () => {
         'preserves canonical %s presentation when the operational projection is ready',
         (reason) => {
             const session = Object.assign(createSessionFixture({
+                active: true, activeAt: 1_000, presence: 'online',
                 latestTurnStatus: 'completed',
                 lastTurnCompletedAt: 900,
             }), {
@@ -223,7 +236,7 @@ describe('buildSessionActivityAttention', () => {
                 },
             } as const);
 
-            expect(buildSessionActivityAttention({ session, nowMs: 1_000 }).attentionState).toBe('attention');
+            expect(buildSessionActivityAttention({ session, nowMs: 1_000 }).attentionState).toBe('unread');
         },
     );
 
@@ -311,7 +324,7 @@ describe('buildSessionActivityAttention', () => {
 
         expect(attention).toMatchObject({
             sessionId: 'session-inactive',
-            attentionState: 'quiet',
+            attentionState: 'waiting',
             hasAttention: false,
             reasons: {
                 hasPendingPermissionRequests: false,
@@ -327,6 +340,7 @@ describe('buildSessionActivityAttention', () => {
                 encryptionMode: 'plain',
                 id: 'session-pending',
                 active: true,
+                activeAt: 1_000,
                 presence: 'online',
                 pendingCount: 2,
                 pendingPermissionRequestCount: 0,
@@ -336,11 +350,12 @@ describe('buildSessionActivityAttention', () => {
                     path: '/Users/tester/project/packages/app',
                 }),
             }),
+            nowMs: 1_000,
         });
 
         expect(attention).toMatchObject({
             sessionId: 'session-pending',
-            attentionState: 'pending',
+            attentionState: 'pending_input',
             hasAttention: false,
             reasons: {
                 hasQueuedUserInput: true,
@@ -396,7 +411,7 @@ describe('buildSessionActivityAttention', () => {
 
         expect(attention).toMatchObject({
             sessionId: 'session-turn-complete',
-            attentionState: 'quiet',
+            attentionState: 'disconnected',
             hasAttention: false,
             lastTurnCompletedAt: 980,
             reasons: {
@@ -426,7 +441,7 @@ describe('buildSessionActivityAttention', () => {
 
         expect(attention).toMatchObject({
             sessionId: 'session-stale-turn-complete',
-            attentionState: 'quiet',
+            attentionState: 'disconnected',
             hasAttention: false,
             lastTurnCompletedAt: 1_000,
         });
@@ -437,6 +452,7 @@ describe('buildSessionActivityAttention', () => {
             session: Object.assign(createSessionFixture({
                 encryptionMode: 'plain',
                 id: 'session-runtime-failed',
+                viewer: createSessionViewerFixture({ attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' } }),
                 active: false,
                 presence: 'online',
                 seq: 5,

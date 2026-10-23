@@ -1,4 +1,5 @@
 import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
+import { resolveInboxItemAttentionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import type {
     ActivitySurfaceSelectionSpec,
@@ -18,22 +19,12 @@ function isUrgentCandidate(candidate: SessionActivityAttention, selection: Pick<
         return false;
     }
 
-    switch (candidate.attentionState) {
-        case 'failed':
-        case 'permission_required':
-        case 'action_required':
-        case 'pending':
-            return selection.includeUrgent;
-        case 'ready':
-        case 'attention':
-        case 'mentioned':
-        case 'unread':
-            return selection.includeReady;
-        case 'thinking':
-        case 'quiet':
-        default:
-            return false;
-    }
+    const type = candidate.workStatus.attentionType;
+    if (type === null) return false;
+    // Availability is presentation, not request admission. A locked request still owns a
+    // privacy-safe card; the view-model owner suppresses its private content separately.
+    return resolveInboxItemAttentionV1(type).interrupt || candidate.attentionState === 'failed'
+        ? selection.includeUrgent : selection.includeReady;
 }
 
 function isRunningCandidate(candidate: SessionActivityAttention, selection: Pick<
@@ -48,13 +39,13 @@ function isRunningCandidate(candidate: SessionActivityAttention, selection: Pick
         return false;
     }
 
-    if (selection.includeThinking && candidate.attentionState === 'thinking') {
+    if (selection.includeThinking && (candidate.attentionState === 'thinking' || candidate.attentionState === 'background_active')) {
         return true;
     }
 
     return (
         selection.includeQuietActive &&
-        candidate.attentionState === 'quiet' &&
+        candidate.attentionState === 'waiting' &&
         candidate.session.active === true
     );
 }

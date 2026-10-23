@@ -21,6 +21,7 @@ import { ACTIVITY_SURFACE_TARGETS, createActivitySurfaceSessionTarget } from '@/
 import type { ActivitySurfaceSnapshot } from '@/activity/presentation/activitySurfaceSnapshot';
 import type { ActivitySurfaceSessionViewModel } from '@/activity/presentation/activitySurfaceViewModels';
 import { activityInstanceKey } from '@/sync/domains/session/sessionAddress';
+import { resolveLiveActivityUpdateBudget } from '../liveActivities/resolveLiveActivityUpdateBudget';
 
 export type ActivitySurfaceWidgetPreset = 'focus' | 'sessions';
 
@@ -52,7 +53,7 @@ type ActivitySurfaceRenderableSession = Pick<
 export function isActivitySurfaceUrgentAttentionState(
     attentionState: ActivitySurfaceSessionViewModel['attentionState'],
 ): boolean {
-    return attentionState === 'permission_required' || attentionState === 'action_required';
+    return resolveLiveActivityUpdateBudget({ attentionState, runtimeVisibility: 'foreground_unlocked' }).template === 'urgentAttention';
 }
 
 export function resolveActivitySurfaceAttentionSymbol(
@@ -65,15 +66,13 @@ export function resolveActivitySurfaceAttentionSymbol(
             return 'exclamationmark.bubble.fill';
         case 'thinking':
             return Math.floor(Date.now() / 1_000) % 2 === 0 ? 'sparkles' : 'sparkles.rectangle.stack.fill';
-        case 'pending':
+        case 'pending_input':
             return 'clock.badge.exclamationmark';
-        case 'attention':
-            return 'bell.fill';
         case 'mentioned':
             return 'at.circle.fill';
         case 'unread':
             return 'tray.full.fill';
-        case 'quiet':
+        case 'waiting':
         default:
             return 'circle.dotted';
     }
@@ -89,13 +88,13 @@ export function resolveActivitySurfaceAttentionTintName(
             return 'systemOrange';
         case 'thinking':
             return 'systemBlue';
-        case 'pending':
+        case 'pending_input':
             return 'systemYellow';
-        case 'attention':
+        case 'finished_unseen':
         case 'mentioned':
         case 'unread':
             return 'systemIndigo';
-        case 'quiet':
+        case 'waiting':
         default:
             return 'secondaryLabel';
     }

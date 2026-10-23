@@ -11,11 +11,9 @@ import type { SessionAttentionOptions } from '@/sync/domains/session/attention/s
 import type { Message } from "@happier-dev/session-core/messages";
 import { readStoredSessionMessagesFromStateLike } from "@happier-dev/session-core/messages";
 import {
-    listSessionListLookupServerSessions,
-    findSessionListLookupSession,
     type SessionServerLookupStateLike,
 } from '@/sync/domains/session/listing/sessionListLookupState';
-import { isSessionListQueryHomeCoverageComplete } from '@/sync/domains/session/listing/sessionListHomeObservation';
+import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import {
@@ -30,10 +28,9 @@ import { isVoiceConversationCustodySessionMetadata } from '@/voice/persistence/v
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionPersonalAttentionExpirationsForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import { classifyInboxSessionCandidate } from '@/activity/presentation/buildInboxSessionPresentation';
+import { resolveInboxItemAttentionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import {
     activityInstanceKey,
-    normalizeSessionAddress,
-    sessionAddressKey,
     type SessionAddress,
 } from '@/sync/domains/session/sessionAddress';
 import {
@@ -44,7 +41,8 @@ import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/sessi
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
-import { readActivityPersonalRuleSnapshot, readActivitySessionRulePolicies } from './readActivitySessionRulePolicies';
+import { readActivitySessionRulePolicies } from './readActivitySessionRulePolicies';
+import { collectActivitySourceSessionAddresses } from './activitySourceSessionAddresses';
 
 const NO_SOURCE_ATTENTION_MESSAGES: readonly Message[] = [];
 
@@ -130,85 +128,6 @@ function buildLookupState(source: ActivityAttentionSource): SessionServerLookupS
     };
 }
 
-function collectLookupSessionAddresses(
-    source: ActivityAttentionSource,
-    includeWarmSourceWhenNotReady: boolean,
-): readonly SessionAddress[] {
-    if (!source.isDataReady && !includeWarmSourceWhenNotReady) {
-        return [];
-    }
-
-    const lookupState = buildLookupState(source);
-    const addresses: SessionAddress[] = [];
-    const seenAddresses = new Set<string>();
-    // Ordinary membership is intentionally last-known-good and may outlive a
-    // viewer's Follow/relevance row. Only a fully drained strict query can
-    // subtract from that retained corpus, and its authority is exact-Home: an
-    // offline or partial sibling must keep rendering its truthful stale rows.
-    const authoritativePersonalMembershipByServerId = new Map<string, ReadonlySet<string>>();
-    for (const [serverId, membership] of Object.entries(
-        source.personalSessionListMembershipByServerId ?? {},
-    )) {
-        const state = source.personalSessionListQueryStatesByServerId?.[serverId];
-        if (!state || !isSessionListQueryHomeCoverageComplete({
-            state,
-            requestedQueryKey: state.requestedQueryKey,
-        })) {
-            continue;
-        }
-        authoritativePersonalMembershipByServerId.set(serverId, new Set(membership ?? []));
-    }
-
-    const addAddress = (serverId: unknown, sessionId: unknown) => {
-        const address = normalizeSessionAddress(serverId, sessionId);
-        if (!address) return;
-        const key = sessionAddressKey(address);
-        if (seenAddresses.has(key)) return;
-        seenAddresses.add(key);
-        addresses.push(address);
-    };
-
-    for (const entry of listSessionListLookupServerSessions(lookupState)) {
-        const authoritativeMembership = authoritativePersonalMembershipByServerId.get(entry.serverId);
-        if (authoritativeMembership && !authoritativeMembership.has(entry.session.id)) {
-            const rules = readActivityPersonalRuleSnapshot(source, entry.serverId);
-            // Candidacy only: the shared matcher below admits the current relationship/filter facts.
-            if (rules?.status !== 'ready' || !rules.rules.some(rule => rule.receiver.kind === 'account' && rule.definition.enabled)
-                && !Object.values(rules.defaultPreferences ?? {}).some(Boolean)) continue;
-        }
-        addAddress(entry.serverId, entry.session.id);
-    }
-
-    for (const [serverId, sessionIds] of Object.entries(
-        source.personalSessionListMembershipByServerId ?? {},
-    )) {
-        for (const sessionId of sessionIds ?? []) {
-            addAddress(serverId, sessionId);
-        }
-    }
-
-    // User-facing indexes intentionally omit hidden system sessions, so the
-    // canonical hydrated session map is the only complete discovery source for
-    // post-Voice permission/result custody. Admit only the bounded Voice-owned
-    // marker family here; unrelated hidden sessions remain excluded.
-    for (const sessionIdKey in source.sessionsById) {
-        if (!Object.prototype.hasOwnProperty.call(source.sessionsById, sessionIdKey)) {
-            continue;
-        }
-        const session = source.sessionsById[sessionIdKey];
-        const sessionId = session?.id?.trim() ?? '';
-        if (
-            !sessionId
-            || !isVoiceConversationCustodySessionMetadata(readSessionOwnerMetadataView(session))
-        ) {
-            continue;
-        }
-        addAddress(session.serverId ?? (source.activeServer?.serverId ?? source.activeServerId), sessionId);
-    }
-
-    return addresses;
-}
-
 export type ActivitySourceSessionEntry = Readonly<{
     address: SessionAddress;
     session: Session;
@@ -257,14 +176,15 @@ export function collectSourceSessions(
     source: ActivityAttentionSource,
     includeWarmSourceWhenNotReady: boolean,
     preferCurrentListProjection = false,
+    /** An exact subset previously collected by this source's address owner. */
+    addresses?: readonly SessionAddress[],
 ): readonly ActivitySourceSessionEntry[] {
     const sessions: ActivitySourceSessionEntry[] = [];
-    const lookupState = buildLookupState(source);
 
-    for (const address of collectLookupSessionAddresses(source, includeWarmSourceWhenNotReady)) {
+    for (const address of addresses ?? collectActivitySourceSessionAddresses(source, includeWarmSourceWhenNotReady)) {
         const session = readHydratedSourceSession(source, address);
-        const lookupEntry = findSessionListLookupSession(lookupState, address);
-        const renderable = lookupEntry?.session ?? null;
+        // Attention needs the keyed row, never the presentation index's server-label scan.
+        const renderable = readSessionListRowForServerId(source.sessionListRowsByServerId, address.serverId, address.sessionId) ?? null;
         if (session) {
             const summaryProjectionMatchesHydrated = preferCurrentListProjection
                 && renderable !== null
@@ -538,11 +458,14 @@ export function forEachActivitySummaryCandidate(params: Readonly<{
     /** Badges retain opened-transcript pending evidence; list-only summaries omit that detail. */
     includeHydratedMessages?: boolean;
     includeWarmSourceWhenNotReady?: boolean;
+    /** Exact changed addresses from collectActivitySourceSessionAddresses; classification stays here. */
+    addresses?: readonly SessionAddress[];
 }>, visit: (candidate: ActivitySummaryCandidate) => void): void {
     for (const entry of collectSourceSessions(
         params.source,
         params.includeWarmSourceWhenNotReady === true,
         params.includeHydratedMessages !== true,
+        params.addresses,
     )) {
         const followRulePolicies = readActivitySessionRulePolicies(params.source, entry.address, entry.session, params.nowMs);
         if (!isSessionAdmittedToPersonalActivity(entry.session, followRulePolicies)) continue;
@@ -574,11 +497,10 @@ export function forEachActivitySummaryCandidate(params: Readonly<{
     }
 }
 
-/** "Needs you": a permission, an action, or a blocked delivery waits on the person. */
-export function isActivityCandidateAwaitingPerson(candidate: Readonly<{ reasons: SessionActivityAttention['reasons'] }>): boolean {
-    return candidate.reasons.hasPendingPermissionRequests
-        || candidate.reasons.hasPendingUserActionRequests
-        || candidate.reasons.hasBlockedPendingDelivery;
+/** C1 owns whether an admitted candidate is waiting on the person, rather than viewer news. */
+export function isActivityCandidateAwaitingPerson(candidate: Pick<SessionActivityAttention, 'workStatus'>): boolean {
+    const type = candidate.workStatus.attentionType;
+    return type !== null && resolveInboxItemAttentionV1(type).interrupt;
 }
 
 /**

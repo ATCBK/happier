@@ -1,5 +1,5 @@
-import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol';
-import { resolvePersonalFollowOnceAttentionV1, type PersonalFollowOnceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { resolvePersonalFollowOnceAttentionV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { resolveSessionInboxAttentionV1, type SessionInboxAttentionClassificationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { Message } from "@happier-dev/session-core/messages";
@@ -30,71 +30,26 @@ export type InboxSessionPresentation = Readonly<{
     pendingRequestHydrationTargets: readonly SessionAddress[];
 }>;
 
-export type InboxSessionCandidateClassification = Readonly<{
-    section: 'needs_attention' | 'ready' | null;
-    type: 'approval' | 'decision' | 'blocked' | 'mention' | 'update';
-    onceDelivery?: PersonalFollowOnceOccurrenceV1;
-}>;
+export type InboxSessionCandidateClassification = SessionInboxAttentionClassificationV1;
 
 /**
- * Owns both Inbox admission and row kind, without constructing rows or loading
- * pending-request details. Manual attention belongs in Updates and survives a
- * session read; its attention-section membership does not make it a decision.
+ * Normalize the existing Activity owner facts for C1 without loading request details.
  */
 export function classifyInboxSessionCandidate(
     candidate: SessionActivityAttention,
     questionType?: NonNullable<PendingPermissionRequest['questionV1']>['type'],
 ): InboxSessionCandidateClassification {
-    const reasons = candidate.personalAttention.reasons;
-    const type = reasons.includes('permission_required') ? 'approval'
-        : reasons.includes('user_action_required') ? questionType ?? 'decision'
-        : candidate.reasons.hasBlockedPendingDelivery ? 'blocked'
-        : reasons.includes('mentioned') ? 'mention' : 'update';
-    if (!candidate.hasAttention) return { section: null, type };
-
     const delivery = candidate.session.viewer?.follow.onceDelivery;
-    const onceReason = resolvePersonalFollowOnceAttentionV1({ delivery });
-    const onceDelivery = type === 'update' && onceReason && reasons.includes(onceReason) ? delivery : undefined;
-    const hasSessionReadAttention = reasons.some(isClearedBySessionManualRead);
-    const hasOtherAttention = reasons.some((reason) => !isClearedBySessionManualRead(reason));
-    const isWorking = candidate.awareness.operational.reasons.includes('working')
-        || candidate.awareness.operational.reasons.includes('background_activity');
-    // Accepted completion custody names the original turn even while a newer
-    // turn is working. Ordinary unread still waits for the current turn.
-    const hasReadyForReviewAttention = hasSessionReadAttention
-        && (onceDelivery !== undefined && onceReason === 'ready_after_read' || !isWorking && (
-            candidate.attentionState === 'ready'
-            || reasons.includes('ready_after_read')
-            || candidate.awareness.operational.reasons.includes('ready')
-        ));
-
-    return { section: hasOtherAttention ? 'needs_attention' : hasReadyForReviewAttention ? 'ready' : null, type,
-        ...(onceDelivery ? { onceDelivery } : {}) };
-}
-
-/**
- * Which canonical Activity reasons a session-scoped manual read actually clears.
- *
- * Total over the Protocol union on purpose: a new reason is a compile error here
- * rather than silently joining one of the two sections. `unread_discussion` and
- * `mentioned` are Discussion-owned and survive a session read cursor, so Inbox
- * must never offer them to the session mark-read operation.
- */
-function isClearedBySessionManualRead(reason: SessionPersonalAttentionReasonV1): boolean {
-    switch (reason) {
-        case 'unread':
-        case 'ready_after_read':
-            return true;
-        case 'failed':
-        case 'permission_required':
-        case 'user_action_required':
-        case 'pending_blocked':
-        case 'mentioned':
-        case 'unread_discussion':
-        case 'reminder_due':
-        case 'manual':
-            return false;
-    }
+    return resolveSessionInboxAttentionV1({
+        personalAttention: { ...candidate.personalAttention, needsAttention: candidate.hasAttention },
+        hasBlockedPendingDelivery: candidate.reasons.hasBlockedPendingDelivery,
+        questionType,
+        working: candidate.awareness.operational.reasons.includes('working')
+            || candidate.awareness.operational.reasons.includes('background_activity'),
+        ready: candidate.attentionState === 'ready' || candidate.awareness.operational.reasons.includes('ready'),
+        onceDelivery: delivery,
+        onceAttentionReason: resolvePersonalFollowOnceAttentionV1({ delivery }),
+    });
 }
 
 /**

@@ -60,6 +60,20 @@ function createWakePayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe('applyLiveActivityBackgroundWakePayload', () => {
+    it('admits the canonical failure facet on the strict wake contract and preserves its strongest relevance', async () => {
+        const { resolveLiveActivityBackgroundWakePayloadApplication } = await import('./applyLiveActivityBackgroundWakePayload');
+        const failed = resolveLiveActivityBackgroundWakePayloadApplication({
+            payload: createWakePayload({ contentState: createContentState({ attentionState: 'failed' }) }), current: null,
+        });
+        const permission = resolveLiveActivityBackgroundWakePayloadApplication({
+            payload: createWakePayload({ contentState: createContentState({ attentionState: 'permission_required' }) }), current: null,
+        });
+        expect(failed.action).toBe('apply_update');
+        expect(permission.action).toBe('apply_update');
+        if (failed.action !== 'apply_update' || permission.action !== 'apply_update') throw new Error('Canonical wake facets must be accepted');
+        expect(failed.snapshot.relevanceScore).toBeGreaterThan(permission.snapshot.relevanceScore);
+        expect(failed.snapshot.relevanceScore).toBe(100);
+    });
     it('applies a sanitized background wake snapshot when it is newer than local state', async () => {
         const mod = await loadModule();
         expect(mod).not.toBeNull();

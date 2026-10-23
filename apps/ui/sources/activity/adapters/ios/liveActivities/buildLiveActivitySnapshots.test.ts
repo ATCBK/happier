@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveActivitySurfacePolicy } from '@/activity/attention/resolveActivitySurfacePolicy';
 import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
 
@@ -560,6 +560,7 @@ describe('buildLiveActivitySnapshots', () => {
                 createSessionFixture({
                     encryptionMode: 'plain',
                     id: 'failed',
+                    viewer: createSessionViewerFixture({ attention: { needsAttention: true, reasons: ['failed'], primary: 'failed', presentation: 'full' } }),
                     serverId: 'server-a',
                     active: true,
                     presence: 'online',

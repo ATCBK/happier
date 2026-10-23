@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildActivityOverviewSnapshot } from '@/activity/attention/buildActivityOverviewSnapshot';
@@ -10,6 +10,10 @@ import {
     createWidgetSelectionSpec,
 } from './activitySurfaceSelectionTypes';
 import { resolveActivitySurfaceSlots } from './resolveActivitySurfaceSlots';
+import { sessionRuntimeObservations } from '@/sync/domains/session/sessionRuntimeObservation';
+import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
+
+afterEach(() => sessionRuntimeObservations.clear());
 
 function pendingAgentState(kind: 'permission' | 'user_action', createdAt = 950) {
     return {
@@ -26,6 +30,29 @@ function pendingAgentState(kind: 'permission' | 'user_action', createdAt = 950) 
 }
 
 describe('resolveActivitySurfaceSlots', () => {
+    it.each(['runtime', 'content', 'stale'] as const)('keeps dwell recency separate from runtime freshness: %s', (recency) => {
+        const now = 1_000_000;
+        const previous = createSessionFixture({ id: 'previous-dwell', serverId: 'server-a',
+            active: true, activeAt: 1, presence: 'online', thinking: false, thinkingAt: 1,
+            updatedAt: recency === 'content' ? now : 1,
+            pendingUserActionRequestCount: 1, agentState: pendingAgentState('user_action') });
+        const next = createSessionFixture({ id: 'next-dwell', serverId: 'server-a',
+            active: true, presence: 'online', updatedAt: now,
+            pendingPermissionRequestCount: 1, agentState: pendingAgentState('permission') });
+        sessionRuntimeObservations.observe({ serverId: 'server-a', sessionId: previous.id }, {
+            active: true, thinking: false, activeAt: recency === 'runtime' ? now : 1, presence: 'online',
+        });
+        const overview = buildActivityOverviewSnapshot({ sessions: [next, previous], nowMs: now });
+        const slots = resolveActivitySurfaceSlots({ overview, nowMs: now,
+            previousPrimaryAddress: { serverId: 'server-a', sessionId: previous.id },
+            previousPrimaryChangedAtMs: now - 1_000,
+            selection: { ...createLiveActivitySelectionSpec(resolveActivitySurfacePolicy({
+                liveActivitiesMode: 'attention', liveActivitiesStrategy: 'dynamic_primary',
+            })), dwellMs: 90_000, staleAfterMs: 120_000 },
+        });
+        expect(slots.primarySession?.sessionId).toBe(recency === 'stale' ? next.id : previous.id);
+        expect(projectUiSessionAwareness(previous, now).freshness).toBe(recency === 'runtime' ? 'live' : 'stale');
+    });
     it('excludes ready unread sessions from focused live-activity selection when includeReady is disabled', () => {
         const overview = buildActivityOverviewSnapshot({
             sessions: [

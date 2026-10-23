@@ -40,6 +40,7 @@ import { resolveActivitySurfacePolicy } from '@/activity/attention/resolveActivi
 import {
     resolveActivitySurfaceAttentionTintName,
     resolveActivitySurfaceAttentionSymbol,
+    isActivitySurfaceUrgentAttentionState,
     resolveActivitySurfaceCompactLabel,
     renderActivitySurfaceCounts,
     resolveActivitySurfaceSessionCardButtonStyle,
@@ -90,6 +91,10 @@ function collectTextValues(node: React.ReactNode): React.ReactNode[] {
 }
 
 describe('activitySurfacePresentation helpers', () => {
+    it('uses the shared delivery urgency for an unseen failure without changing native glyph choices', () => {
+        expect(isActivitySurfaceUrgentAttentionState('failed')).toBe(true);
+        expect(isActivitySurfaceUrgentAttentionState('unread')).toBe(false);
+    });
     it('renders overflow badges with pill chrome instead of plain text', () => {
         const overflowBadge = renderActivitySurfaceOverflowBadge(2);
         expect(overflowBadge).toBeTruthy();
@@ -129,7 +134,7 @@ describe('activitySurfacePresentation helpers', () => {
         expect(resolveActivitySurfaceAttentionTintName('permission_required')).toBe('systemRed');
         expect(resolveActivitySurfaceAttentionTintName('action_required')).toBe('systemOrange');
         expect(resolveActivitySurfaceAttentionTintName('thinking')).toBe('systemBlue');
-        expect(resolveActivitySurfaceAttentionTintName('quiet')).toBe('secondaryLabel');
+        expect(resolveActivitySurfaceAttentionTintName('waiting')).toBe('secondaryLabel');
     });
 
     it('uses a shared plain button style so the session chrome comes from the custom surface', () => {

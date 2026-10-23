@@ -1,6 +1,5 @@
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { getSessionStatus, readLockedSessionName } from '@/utils/sessions/sessionUtils';
+import { readLockedSessionName } from '@/utils/sessions/sessionUtils';
 
 import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
 import { normalizeActivityPreviewText } from '@/activity/attention/buildActivityPreviewText';
@@ -109,10 +108,7 @@ export function buildActivitySurfaceViewModel(params: Readonly<{
     const contentReadable = isSessionAwarenessContentReadableV1(params.candidate.awareness.encryption);
     const mayShowPrivateContent = !isStatusOnly && contentReadable;
     const mayShowWorkspace = params.showMachinePath && mayShowPrivateContent && privacyMode === 'include_preview';
-    const status = getSessionStatus(
-        buildSessionListRenderableFromSession(params.candidate.session),
-        params.nowMs,
-    );
+    const statusText = params.candidate.workStatus.word;
     const contextLine = resolveSessionContextLine(params.candidate.context, {
         showWorkspace: mayShowWorkspace,
     });
@@ -127,7 +123,7 @@ export function buildActivitySurfaceViewModel(params: Readonly<{
             candidate: params.candidate,
             mayShowPrivateContent,
             candidateNamesContent: contentReadable,
-            statusText: status.statusText,
+            statusText,
             privacyMode,
         }),
         subtitle: resolveViewModelSubtitle({
@@ -141,7 +137,7 @@ export function buildActivitySurfaceViewModel(params: Readonly<{
             showPreviewText: params.showPreviewText,
         }),
         statusText: resolveViewModelStatusText({
-            statusText: status.statusText,
+            statusText,
             privacyMode,
         }),
         attentionState: params.candidate.attentionState,

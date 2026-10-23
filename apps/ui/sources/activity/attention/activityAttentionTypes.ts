@@ -4,7 +4,8 @@ import type {
 } from '@happier-dev/protocol';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionAttentionOptions } from '@/sync/domains/session/attention/sessionAttention';
-import type { SessionListAttentionState } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import type { SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import type { WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionContextPresentation } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
@@ -34,7 +35,8 @@ export type SessionActivityAttention = Readonly<{
     surfaceTiming?: ActivitySurfaceTimingBySurface;
     title: string;
     subtitle: string;
-    attentionState: SessionListAttentionState;
+    attentionState: SessionAwarenessPresentationStateV1;
+    workStatus: WorkStatusPresentation;
     /** Canonical viewer-facing reasons; downstream surfaces classify, never re-derive them. */
     personalAttention: SessionPersonalAttentionProjectionV1;
     /** Private rule matches admitted by the existing source evaluator, never viewer mutations. */

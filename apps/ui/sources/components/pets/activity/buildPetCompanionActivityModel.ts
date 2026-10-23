@@ -1,6 +1,7 @@
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readSessionRuntimeObservation } from '@/sync/domains/session/sessionRuntimeObservation';
 import {
     projectUiSessionRuntimeAwareness,
     SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
@@ -104,10 +105,13 @@ function resolveCandidate(
     signals: PetCompanionSessionSignals | undefined,
     nowMs: number | undefined,
 ): SessionActivityCandidate | null {
+    session = readSessionRuntimeObservation({ ...session, id: address.sessionId, serverId: address.serverId });
     if (!isSessionAdmittedToPersonalActivity(session)) return null;
     const runtimeNowMs = isFiniteTimestamp(nowMs) ? nowMs : Date.now();
     const personal = resolveSessionPersonalAttentionForViewer(session, runtimeNowMs);
     const runtimePresentation = projectUiSessionRuntimeAwareness({
+        id: address.sessionId,
+        serverId: address.serverId,
         active: session.active,
         activeAt: session.activeAt,
         archivedAt: session.archivedAt ?? null,

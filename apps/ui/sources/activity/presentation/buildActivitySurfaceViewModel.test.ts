@@ -7,6 +7,23 @@ import { resolveActivitySurfacePolicy } from '@/activity/attention/resolveActivi
 import { buildActivitySurfaceViewModel } from './buildActivitySurfaceViewModel';
 
 describe('buildActivitySurfaceViewModel', () => {
+    it('uses the admitted candidate word without reintroducing filtered viewer news', () => {
+        const session = createSessionFixture({ active: true, activeAt: 1_000, encryptionMode: 'plain',
+            viewer: {
+                readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
+                relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null },
+                notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['unread'], primary: 'unread', presentation: 'full' },
+            },
+        });
+        const candidate = buildSessionActivityAttention({ session, nowMs: 1_000, sessionOptions: { showUnread: false } });
+        const view = buildActivitySurfaceViewModel({ candidate,
+            policy: resolveActivitySurfacePolicy({ activitySurfacePrivacyMode: 'include_preview' }),
+            showMachinePath: false, showPreviewText: false, isPrimary: true, nowMs: 1_000,
+        });
+        expect(view.statusText).toBe(candidate.workStatus.word);
+    });
     it.each([
         { encryptionMode: 'plain', encryptedContentAvailability: 'ready', presentation: 'status_only' },
         { encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending', presentation: 'full' },

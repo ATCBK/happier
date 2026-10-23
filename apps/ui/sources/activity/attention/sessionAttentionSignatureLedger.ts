@@ -8,6 +8,7 @@ import {
     type PendingRequestObservedAtCacheEntry,
 } from '@/sync/domains/session/pending/pendingRequestObservedAtCache';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readSessionRuntimeObservation } from '@/sync/domains/session/sessionRuntimeObservation';
 import type { StorageState } from '@/sync/store/types';
 
 type SessionMessagesValue = StorageState['sessionMessages'][string] | undefined;
@@ -189,9 +190,10 @@ export function createSessionRuntimeFreshnessLedger(): SessionRuntimeFreshnessLe
                     sessionSignature: input.readSessionSignature(id),
                     sessionMessagesSignature: input.readSessionMessagesSignature(id),
                 });
+                const runtime = readSessionRuntimeObservation(session);
                 const probe = probeFreshness([
-                    session.activeAt,
-                    session.thinkingAt,
+                    runtime.activeAt,
+                    runtime.thinkingAt,
                     session.latestTurnStatusObservedAt,
                     pendingRequestObservedAt,
                 ], input.nowMs);

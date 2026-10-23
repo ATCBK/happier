@@ -36,6 +36,30 @@ function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords:
 }
 
 describe('createActivityAttentionStoreSourceSelector', () => {
+    it('uses held Section assignments for rule preview and invalidates only affected membership', () => {
+        const base = storage.getState();
+        const session = createSessionFixture({ id: 'section-source', serverId: 'home-a', viewer: createSessionViewerFixture() });
+        const key = buildSessionOrganizationSessionKey('home-a', session.id);
+        const state = { ...base, sessions: { [session.id]: session }, sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: { 'home-a': [session.id] } };
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false, includeFollowRuleFacts: true });
+        const first = selector(state);
+        const assignment = { sessionId: session.id, folderId: 'section-a' };
+        const changed = selector({ ...state, sessionOrganizationFolderAssignmentsBySessionKey: { [key]: assignment } });
+        expect(changed).not.toBe(first);
+        expect(selector({ ...state, sessionOrganizationFolderAssignmentsBySessionKey: { [key]: assignment,
+            [buildSessionOrganizationSessionKey('home-a', 'unloaded')]: { sessionId: 'unloaded', folderId: 'other' } } })).toBe(changed);
+        const source = { ...changed, personalFollowRulesByServerId: { 'home-a': { status: 'ready' as const, accountId: 'alice', rules: [{
+            ruleId: 'section', receiver: { kind: 'account' as const }, version: 0,
+            definition: { v: 1 as const, enabled: true, policy: { preset: 'important' as const }, filter: normalizeSessionListFilterV1({
+                scope: 'all_accessible', homeServerIds: ['home-a'], startedBy: ['you', 'triggers', 'agents'],
+                sections: { include: [{ serverId: 'home-a', sectionId: 'section-a' }], exclude: [] },
+            }) },
+        }] } } };
+        const address = { serverId: 'home-a', sessionId: session.id };
+        expect(readActivitySessionRulePolicies(source, address, session, 1_000)).toEqual([{ preset: 'important' }]);
+        expect(readActivitySessionRulePolicies({ ...source, followRuleFolderAssignmentsBySessionKey: {} }, address, session, 1_000)).toEqual([]);
+    });
     it('invalidates demanded rule facts after a tag-only assignment change', () => {
         const base = storage.getState();
         const session = createSessionFixture({ id: 'tagged', serverId: 'home-a', viewer: createSessionViewerFixture() });

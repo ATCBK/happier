@@ -75,7 +75,6 @@ function joinSignatureParts(parts: readonly unknown[]): string {
 function buildWorkspaceDisplaySettingsSignature(state: StorageState, includeFollowRuleFacts: boolean): string {
     const ruleWorkspaceRefs = includeFollowRuleFacts ? readProjectAccountWorkspaceRefs(state) : undefined;
     return joinSignatureParts([
-        state.settings.workspacePathDisplayModeV1,
         includeFollowRuleFacts ? ruleWorkspaceRefs === undefined ? 'unavailable' : 'available' : '',
         ...readProjectWorkspaceRefs(state).map((ref) => joinSignatureParts([
             ref.id,
@@ -465,7 +464,7 @@ function buildActivityRowsSignature(
     }));
 }
 
-function buildSourceFromState(
+export function readActivityAttentionStoreSource(
     state: StorageState,
     includeSessionMessages: boolean,
     includeFollowRuleFacts: boolean,
@@ -482,7 +481,7 @@ function buildSourceFromState(
         workspaceRefsV1: readProjectWorkspaceRefs(state),
         ...(includeFollowRuleFacts ? { followRuleWorkspaceRefsV1: readProjectAccountWorkspaceRefs(state),
             followRuleTagAssignmentsBySessionKey: state.sessionOrganizationTagAssignmentsBySessionKey } : {}),
-        workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
+        workspacePathDisplayModeV1: 'name',
     };
 }
 
@@ -502,7 +501,7 @@ export function createActivityAttentionStoreSourceSelector(
     const includeFollowRuleFacts = options.includeFollowRuleFacts === true;
 
     return (state) => {
-        const inputs = buildSourceFromState(state, includeSessionMessages, includeFollowRuleFacts);
+        const inputs = readActivityAttentionStoreSource(state, includeSessionMessages, includeFollowRuleFacts);
         const sessionsChanged = !previousInputs || previousInputs.sessionsById !== inputs.sessionsById;
         const membershipChanged = !previousInputs
             || previousInputs.ordinarySessionListMembershipByServerId !== inputs.ordinarySessionListMembershipByServerId;

@@ -1,4 +1,5 @@
 import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
+import { sessionRuntimeObservations } from '@/sync/domains/session/sessionRuntimeObservation';
 
 import type { ActivitySurfaceSelectionSpec } from './activitySurfaceSelectionTypes';
 import {
@@ -47,7 +48,8 @@ function isCandidateFresh(
     if (staleAfterMs === null) {
         return true;
     }
-    return nowMs - candidate.session.updatedAt < staleAfterMs;
+    const observation = candidate.address ? sessionRuntimeObservations.read(candidate.address) : undefined;
+    return nowMs - Math.max(candidate.session.updatedAt, observation?.activeAt ?? 0) < staleAfterMs;
 }
 
 export function applyActivitySelectionDwell(params: Readonly<{

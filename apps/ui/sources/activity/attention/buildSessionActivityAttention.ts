@@ -4,14 +4,12 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import { isUnreadContentAttentionReason } from '@/sync/domains/session/readState/sessionViewer';
-import { getSessionName, getSessionSubtitle, readLockedSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionSubtitle, presentSessionAwarenessV1, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
-import {
-    presentSessionPersonalAttentionReason,
-    resolveSessionListAttentionRank,
-    resolveSessionListAttentionState,
-} from '@/sync/domains/session/listing/deriveSessionListActivity';
+import { readSessionAwarenessPresentationRankV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
+import { sessionWorkStatusFactsFromStatus } from '@/components/work/status/sessionWorkStatusFacts';
 
 import type { SessionActivityAttention } from './activityAttentionTypes';
 import { isSessionAdmittedToPersonalActivity } from './isSessionAdmittedToPersonalActivity';
@@ -45,23 +43,16 @@ export function buildSessionActivityAttention(params: Readonly<{
     const mayShowPrivateContent = isSessionAwarenessContentReadableV1(awareness.encryption);
     const admitted = isSessionAdmittedToPersonalActivity(params.session, params.followRulePolicies);
     const operational = admitted ? awareness.operational.primary : 'none';
-    const operationalAttentionState = resolveSessionListAttentionState({
-        operational,
-        hasUnreadMessages: personalReasons.some(isUnreadContentAttentionReason),
-    });
-    const primaryPersonalReason = personalReasons[0] ?? null;
-    const personalAttentionState = presentSessionPersonalAttentionReason(primaryPersonalReason);
-    // Reuse the Session list's operational-vs-transcript-read composition only
-    // for the read-like reasons it was designed to compose. Server-authoritative
-    // manual/reminder/actionable reasons keep their own presentation even when
-    // an operational ready fact exists alongside them.
-    const isTranscriptReadPresentation = primaryPersonalReason === 'unread'
-        || primaryPersonalReason === 'ready_after_read';
-    const attentionState = primaryPersonalReason === null
-        ? operationalAttentionState
-        : isTranscriptReadPresentation && operationalAttentionState !== 'quiet'
-            ? operationalAttentionState
-            : personalAttentionState;
+    const personalAttention = personalReasons.length === personal.reasons.length ? personal : {
+        ...personal, reasons: personalReasons, needsAttention: personal.needsAttention && personalReasons.length > 0,
+        primary: personalReasons[0] ?? null,
+    };
+    const presented = presentSessionAwarenessV1({ ...awareness, viewer: { attention: personalAttention } });
+    const facts = sessionWorkStatusFactsFromStatus(params.session, {
+        awareness, state: presented.state, statusText: includeDisplayDetails ? presented.statusText : '',
+    }, { nowMs, personalAttention });
+    const workStatus = resolveWorkStatusTone({ kind: 'session', facts });
+    const attentionState = presented.state;
     const address = normalizeSessionAddress(params.session.serverId, params.session.id);
     return {
         session: params.session,
@@ -71,15 +62,11 @@ export function buildSessionActivityAttention(params: Readonly<{
         title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : readLockedSessionName(),
         subtitle: includeDisplayDetails && mayShowPrivateContent ? getSessionSubtitle(params.session) : '',
         attentionState,
-        personalAttention: {
-            ...personal,
-            reasons: personalReasons,
-            needsAttention: personal.needsAttention && personalReasons.length > 0,
-            primary: personalReasons[0] ?? null,
-        },
+        workStatus,
+        personalAttention,
         ...(params.followRulePolicies?.length ? { followRulePolicies: params.followRulePolicies } : {}),
         hasAttention: personal.needsAttention && personalReasons.length > 0,
-        priority: resolveSessionListAttentionRank(attentionState),
+        priority: readSessionAwarenessPresentationRankV1(attentionState),
         lastTurnCompletedAt: params.session.lastTurnCompletedAt ?? null,
         reasons: {
             hasUnread: personalReasons.some(isUnreadContentAttentionReason),

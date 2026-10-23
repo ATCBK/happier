@@ -175,6 +175,20 @@ describe('buildActivityOverviewFromSource', () => {
             expect(buildActivityOverviewSummaryFromSource({ source: { ...tagged, followRuleTagAssignmentsBySessionKey: assignments }, nowMs: 1_000 }).needsYouCount).toBe(0);
         }
     });
+    it('refuses stored list-only attention in an Activity rule even when UI attention is known', () => {
+        const session = createSessionFixture({ id: 'unsupported', serverId: 'server-a',
+            viewer: createSessionViewerFixture({ attention: { needsAttention: true, reasons: ['user_action_required'],
+                primary: 'user_action_required', presentation: 'full' } }) });
+        const source = { ...createSource({ sessions: [session] }), personalFollowRulesByServerId: {
+            'server-a': { status: 'ready' as const, accountId: 'alice', rules: [{
+                ruleId: 'attention', receiver: { kind: 'account' as const }, version: 0,
+                definition: { v: 1 as const, enabled: true, policy: { preset: 'important' as const },
+                    filter: normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['server-a'],
+                        startedBy: ['you', 'triggers', 'agents'], attention: 'needs_my_attention' }) },
+            }] },
+        } };
+        expect(readActivitySessionRulePolicies(source, { serverId: 'server-a', sessionId: session.id }, session, 1_000)).toEqual([]);
+    });
     it('uses protected participation reasons for an involving-me rule without treating a mention or Follow as participation', () => {
         const session = createSessionFixture({ id: 'participant', serverId: 'server-a', active: true, activeAt: 950, updatedAt: 950,
             access: createSessionAccessFixture('edit'), agentState: pendingAgentState('user_action') });
@@ -472,7 +486,6 @@ describe('buildActivityOverviewFromSource', () => {
             { serverId: 'server-a', sessionId: 'team-followed' },
         ]);
         expect(overview.candidates.find((candidate) => candidate.sessionId === assigned.id)).toMatchObject({
-            attentionState: 'quiet',
             hasAttention: false,
         });
     });
@@ -1126,7 +1139,7 @@ describe('buildActivityOverviewFromSource', () => {
         });
     });
 
-    it('does not promote provider runtime activity when hydrating a cached renderable row', () => {
+    it('preserves canonical background activity without inventing viewer attention or foreground thinking', () => {
         const nowMs = 1_000_000;
         const renderable = buildSessionListRenderableFromSession(createSessionFixture({
             id: 'provider-runtime',
@@ -1162,7 +1175,7 @@ describe('buildActivityOverviewFromSource', () => {
         expect(overview.counts.thinking).toBe(0);
         expect(overview.candidates[0]).toMatchObject({
             sessionId: 'provider-runtime',
-            attentionState: 'quiet',
+            attentionState: 'background_active',
             hasAttention: false,
         });
     });

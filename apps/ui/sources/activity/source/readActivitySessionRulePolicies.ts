@@ -11,7 +11,7 @@ import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 
 const NO_RULE_POLICIES: readonly FollowPolicyV1[] = Object.freeze([]);
-export function readActivityPersonalRuleSnapshot(source: ActivityAttentionSource, serverId: string) {
+export function readActivityPersonalRuleSnapshot(source: Pick<ActivityAttentionSource, 'personalFollowRulesByServerId'>, serverId: string) {
     return source.personalFollowRulesByServerId?.[serverId]
         ?? Object.entries(source.personalFollowRulesByServerId ?? {}).find(([candidate]) => areServerProfileIdentifiersEquivalent(candidate, serverId))?.[1];
 }

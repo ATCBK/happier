@@ -141,15 +141,11 @@ async function endLiveActivityHandle(
     }
 }
 
-function isUrgentLiveActivitySnapshot(snapshot: LiveActivitySnapshot | undefined): boolean {
-    return snapshot?.attentionState === 'permission_required' || snapshot?.attentionState === 'action_required';
-}
-
 function resolveLiveActivityDismissalPolicy(
     snapshot: LiveActivitySnapshot | undefined,
     contentDate: Date,
 ): LiveActivityDismissalPolicy {
-    if (snapshot === undefined || isUrgentLiveActivitySnapshot(snapshot)) {
+    if (snapshot === undefined || snapshot.presentationTemplate === 'urgentAttention') {
         return 'immediate';
     }
 

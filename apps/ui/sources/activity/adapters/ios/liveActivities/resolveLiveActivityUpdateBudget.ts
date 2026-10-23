@@ -1,6 +1,6 @@
 import type { LiveActivityApnsPriority, LiveActivityApnsTemplate } from '@happier-dev/protocol';
 
-import { isUrgentSessionListAttentionState } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import { readSessionAwarenessPresentationRankV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import type { LiveActivitySnapshot } from './buildLiveActivitySnapshots';
 import type { LiveActivityAuthorizationDiagnostics } from './readLiveActivityAuthorizationDiagnostics';
@@ -29,6 +29,12 @@ export type LiveActivityUpdateDecision = Readonly<{
     elapsedMs: number | null;
     minimumIntervalMs: number;
 }>;
+
+/** ActivityKit relevance scales the same Protocol priority used by the list and foreground path. */
+export function resolveLiveActivityRelevanceScore(attentionState: LiveActivitySnapshot['attentionState']): number {
+    return Math.round(readSessionAwarenessPresentationRankV1(attentionState)
+        / readSessionAwarenessPresentationRankV1('failed') * 100);
+}
 
 export function resolveLiveActivityRuntimeVisibility(params: Readonly<{
     appStateStatus: string | null | undefined;
@@ -65,7 +71,10 @@ export function resolveLiveActivityUpdateBudget(params: Readonly<{
     runtimeVisibility: LiveActivityRuntimeVisibility;
     frequentUpdates?: LiveActivityAuthorizationDiagnostics['frequentUpdates'];
 }>): LiveActivityUpdateBudget {
-    const urgent = isUrgentSessionListAttentionState(params.attentionState);
+    const urgent = readSessionAwarenessPresentationRankV1(params.attentionState) >= Math.min(
+        readSessionAwarenessPresentationRankV1('permission_required'),
+        readSessionAwarenessPresentationRankV1('action_required'),
+    );
     const urgentPriorityAllowed = params.frequentUpdates !== 'disabled';
 
     return {

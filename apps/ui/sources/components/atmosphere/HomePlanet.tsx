@@ -5,7 +5,7 @@ import { AtmosphereDissolve } from './AtmosphereDissolve';
 import { AtmosphereRipple } from './AtmosphereRipple';
 import type { AtmosphereRippleHandle } from './atmosphereRipple.types';
 import { atmospherePageRgb } from './atmospherePage';
-import { useSessionFinishedRipple, useSessionTurnStates } from './homeAtmosphereMoments';
+import { useSessionFinishedRipple } from './homeAtmosphereMoments';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import { useSessionRipplePlayback } from './sessionRipple';
 import { PlanetCanvas } from './PlanetCanvas';
@@ -169,9 +169,8 @@ export const HomePlanet = React.memo(function HomePlanet(
  * render this leaf, never the planet.
  */
 function SessionFinishWatch(props: Readonly<{ visible: boolean; onAnswer: () => void }>) {
-  const states = useSessionTurnStates();
   const active = useHostActivelyViewed();
-  const answers = useSessionFinishedRipple({ enabled: true, visible: props.visible && active, states });
+  const answers = useSessionFinishedRipple({ enabled: true, visible: props.visible && active });
   const { onAnswer } = props;
   React.useEffect(() => {
     if (answers > 0) onAnswer();

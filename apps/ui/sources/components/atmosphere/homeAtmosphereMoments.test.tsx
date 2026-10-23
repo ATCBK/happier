@@ -10,6 +10,7 @@ import {
 
 import { renderScreen } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { ActivityAttentionSource } from '@/activity/source/activityAttentionSourceTypes';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { atmosphereResettleFact } from './atmosphereStage';
@@ -19,9 +20,13 @@ import {
   useIdleResettle,
   buildSessionTurnStates,
   useSessionFinishedRipple,
+  createSessionTurnStateSelector,
+  createSessionFinishedRippleObserver,
   type SessionTurnState,
 } from './homeAtmosphereMoments';
 import { sessionRippleFrame } from './sessionRipple';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
 
 // React Native is the platform boundary; the moment policies and Look edits stay real.
 vi.mock('react-native', async () =>
@@ -57,21 +62,176 @@ afterEach(() => {
 });
 
 describe('session-finished ripple (Home owner, fake clock)', () => {
-  type Input = Parameters<typeof useSessionFinishedRipple>[0];
+  it('publishes retirement of a hydrated Voice Session after its list corpus was cleared', () => {
+    const previous = storage.getState();
+    const session = createSessionFixture({ id: 'voice-without-list-row', serverId: 'server-a', metadata: {
+      path: '/voice', host: 'test', systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+    } });
+    try {
+      storage.getState().applySessions([session]);
+      storage.getState().clearSessionListRowsForServerScope('server-a');
+      expect(storage.getState().sessions[session.id]).toBeDefined();
+      expect(storage.getState().sessionListRowsByServerId['server-a']?.[session.id]).toBeUndefined();
+      storage.getState().deleteSession(session.id, 'server-a');
+      expect(storage.getState().sessionListRenderableDelta.removedSessionIds).toContain(session.id);
+    } finally { storage.setState(previous, true); }
+  });
+  it('keeps same-id Sessions on separate Homes current and rebuilds membership without replaying removals', () => {
+    const session = createSessionFixture({ id: 'same-id', serverId: 'server-a', lastTurnCompletedAt: 10 });
+    const sibling = { ...session, serverId: 'server-b', lastTurnCompletedAt: 20 };
+    const membership = { membershipByServerId: {}, statesByServerId: {}, coverageComplete: false };
+    const active = getActiveServerSnapshot();
+    const project = createSessionTurnStateSelector();
+    const state = {
+      ...storage.getState(), isDataReady: true,
+      sessions: { [session.id]: session },
+      ordinarySessionListMembershipByServerId: { 'server-a': [session.id], 'server-b': [sibling.id] },
+      sessionListRowsByServerId: {
+        'server-a': { [session.id]: buildSessionListRenderableFromSession(session) },
+        'server-b': { [sibling.id]: buildSessionListRenderableFromSession(sibling) },
+      },
+      sessionListRenderableDelta: { revision: 1, changedSessionIds: [session.id], removedSessionIds: [], rebuiltSessionListIndex: true },
+    };
+    expect(project(state, membership, active)?.states.size).toBe(2);
+    const changed = { ...state, sessionListRowsByServerId: {
+      ...state.sessionListRowsByServerId,
+      'server-b': { [sibling.id]: buildSessionListRenderableFromSession({ ...sibling, lastTurnCompletedAt: 30 }) },
+    }, sessionListRenderableDelta: { ...state.sessionListRenderableDelta, revision: 2, rebuiltSessionListIndex: false } };
+    expect([...project(changed, membership, active)?.states ?? []]).toEqual([
+      ['server-b\u0000same-id', { lastTurnCompletedAt: 30, pendingApproval: false }],
+    ]);
+    const removed = { ...changed, ordinarySessionListMembershipByServerId: { 'server-a': [session.id], 'server-b': [] } };
+    expect([...project(removed, membership, active)?.states ?? []]).toEqual([['server-b\u0000same-id', null]]);
+    // A new membership/policy is authoritative even without a new changed-id revision.
+    expect(project(removed, { ...membership, membershipByServerId: { 'server-b': [sibling.id] } }, active)?.states.get('server-b\u0000same-id'))
+      .toEqual({ lastTurnCompletedAt: 30, pendingApproval: false });
+  });
+  it('reads only the changed Session after learning a thousand-session Home', async () => {
+    const previous = storage.getState();
+    let inventoryScans = 0;
+    let rowReads = 0;
+    let machineReads = 0;
+    const sessions = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => {
+      const id = `scale-${index}`;
+      return [id, createSessionFixture({ id, serverId: 'server-a', active: true, activeAt: Date.now(), lastTurnCompletedAt: 10 })];
+    }));
+    const rows = Object.fromEntries(Object.entries(sessions).map(([id, session]) => [id, buildSessionListRenderableFromSession(session)]));
+    // The app also has an independent Voice inventory subscriber. Count this corridor's work,
+    // including Activity's source selector, instead of charging Voice's reads to Atmosphere.
+    const fromAtmosphere = () => /(?:homeAtmosphereMoments|buildActivityOverviewFromSource|createActivityAttentionStoreSourceSelector)\.tsx?:/.test(new Error().stack ?? '');
+    const countScans = (values: typeof sessions) => new Proxy(values, { ownKeys(target) { if (fromAtmosphere()) inventoryScans += 1; return Reflect.ownKeys(target); } });
+    const countRows = (values: typeof rows) => new Proxy(values, { get(target, key, receiver) { if (typeof key === 'string' && key.startsWith('scale-') && fromAtmosphere()) rowReads += 1; return Reflect.get(target, key, receiver); } });
+    const machines = Object.fromEntries(Array.from({ length: 139 }, (_, index) => {
+      const id = `machine-scale-${index}`;
+      return [id, createMachineFixture({ id })];
+    }));
+    const countMachines = (values: typeof machines) => new Proxy(values, { get(target, key, receiver) { if (fromAtmosphere()) machineReads += 1; return Reflect.get(target, key, receiver); }, ownKeys(target) { if (fromAtmosphere()) machineReads += 1; return Reflect.ownKeys(target); } });
+    const base = {
+      ...previous,
+      isDataReady: true,
+      sessions: countScans(sessions),
+      machines: countMachines(machines),
+      sessionListRowsByServerId: { 'server-a': countRows(rows) },
+      ordinarySessionListMembershipByServerId: { 'server-a': Object.keys(sessions) },
+      sessionListIndexByServerId: { 'server-a': Object.keys(sessions).map(sessionId => ({ type: 'session' as const, sessionId, serverId: 'server-a' })) },
+      concurrentSessionListCacheByServerId: {},
+      sessionListRenderableDelta: { revision: 100, changedSessionIds: Object.keys(sessions), removedSessionIds: [], rebuiltSessionListIndex: true },
+    };
+    storage.setState(base, true);
+    let answers = 0;
+    let renders = 0;
+    function Probe() { answers = useSessionFinishedRipple({ enabled: true, visible: true }); renders += 1; return null; }
+    const screen = await renderScreen(<Probe />);
+    try {
+      const changed = { ...sessions['scale-42']!, lastTurnCompletedAt: 20 };
+      const nextSessions = countScans({ ...sessions, [changed.id]: changed });
+      inventoryScans = 0;
+      rowReads = 0;
+      renders = 0;
+      await act(async () => storage.setState({
+        sessions: nextSessions,
+        sessionListRowsByServerId: { 'server-a': countRows({ ...rows, [changed.id]: buildSessionListRenderableFromSession(changed) }) },
+        sessionListRenderableDelta: { revision: 101, changedSessionIds: [changed.id], removedSessionIds: [], rebuiltSessionListIndex: false },
+      }));
+      expect({ inventoryScans, rowReads }).toEqual({ inventoryScans: 0, rowReads: 2 });
+      expect(answers).toBe(1);
+      expect(renders).toBe(1);
+      // Both publications occur in one React batch. A later non-finish must not erase the first finish.
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        const another = { ...sessions['scale-43']!, lastTurnCompletedAt: 30 };
+        const latestRows = { ...rows, [changed.id]: buildSessionListRenderableFromSession(changed), [another.id]: buildSessionListRenderableFromSession(another) };
+        storage.setState({ sessionListRowsByServerId: { 'server-a': latestRows }, sessionListRenderableDelta: {
+          revision: 102, changedSessionIds: [another.id], removedSessionIds: [], rebuiltSessionListIndex: false,
+        } });
+        storage.setState({ sessionListRowsByServerId: { 'server-a': { ...latestRows, 'scale-44': { ...rows['scale-44']!, seq: 2 } } }, sessionListRenderableDelta: {
+          revision: 103, changedSessionIds: ['scale-44'], removedSessionIds: [], rebuiltSessionListIndex: false,
+        } });
+      });
+      expect(answers).toBe(2);
+      const arriving = createSessionFixture({ id: 'scale-1000', serverId: 'server-a', lastTurnCompletedAt: 40 });
+      const membershipBeforeArrival = storage.getState().ordinarySessionListMembershipByServerId['server-a'] ?? [];
+      const rowsBeforeArrival = storage.getState().sessionListRowsByServerId['server-a'] ?? {};
+      inventoryScans = 0;
+      rowReads = 0;
+      await act(async () => storage.setState({
+        sessionListRowsByServerId: { 'server-a': countRows({ ...rowsBeforeArrival, [arriving.id]: buildSessionListRenderableFromSession(arriving) }) },
+        ordinarySessionListMembershipByServerId: { 'server-a': [...membershipBeforeArrival, arriving.id] },
+        sessionListRenderableDelta: {
+          revision: 104, changedSessionIds: [arriving.id], removedSessionIds: [], rebuiltSessionListIndex: true,
+          ordinaryMembershipChanges: [{ serverId: 'server-a', addedSessionIds: [arriving.id], removedSessionIds: [] }],
+        },
+      }));
+      expect({ inventoryScans, rowReads, answers }).toEqual({ inventoryScans: 0, rowReads: 2, answers: 2 });
+      inventoryScans = 0;
+      rowReads = 0;
+      await act(async () => storage.setState({
+        ordinarySessionListMembershipByServerId: { 'server-a': membershipBeforeArrival },
+        sessionListRenderableDelta: {
+          revision: 105, changedSessionIds: [], removedSessionIds: [arriving.id], rebuiltSessionListIndex: true,
+          ordinaryMembershipChanges: [{ serverId: 'server-a', addedSessionIds: [], removedSessionIds: [arriving.id] }],
+        },
+      }));
+      expect({ inventoryScans, rowReads, answers }).toEqual({ inventoryScans: 0, rowReads: 0, answers: 2 });
+      inventoryScans = 0;
+      rowReads = 0;
+      machineReads = 0;
+      renders = 0;
+      await act(async () => storage.setState({ machines: countMachines({ ...machines, 'machine-scale-42': { ...machines['machine-scale-42']!, activeAt: Date.now() } }) }));
+      expect({ inventoryScans, rowReads, machineReads, renders, answers }).toEqual({ inventoryScans: 0, rowReads: 0, machineReads: 0, renders: 0, answers: 2 });
+      // Exercise the real writer -> ephemeral delta -> Activity candidacy -> ripple admission seam.
+      for (const source of ['rowOnly', 'archived', 'ordinary'] as const) {
+        const id = `producer-${source}`;
+        const entry = createSessionFixture({ id, serverId: 'server-a', lastTurnCompletedAt: 50,
+          archivedAt: source === 'archived' ? 1 : null });
+        await act(async () => storage.getState().applyServerScopedSessionListRows('server-a', [buildSessionListRenderableFromSession(entry)], { source, mode: 'append' }));
+        expect(storage.getState().sessionListRenderableDelta.ordinaryMembershipChanges).toEqual([
+          { serverId: 'server-a', addedSessionIds: source === 'ordinary' ? [id] : [], removedSessionIds: [] },
+        ]);
+        await act(async () => {
+          vi.advanceTimersByTime(10_000);
+          storage.getState().applyServerScopedSessionListRowPatches('server-a', [{ sessionId: id, patch: { lastTurnCompletedAt: 60 } }]);
+        });
+        expect(answers).toBe(source === 'ordinary' ? 3 : 2);
+      }
+      await act(async () => storage.getState().applyServerScopedSessionListRowPatches('server-a', [{ sessionId: 'producer-ordinary', patch: { archivedAt: 1 } }]));
+      expect(storage.getState().sessionListRenderableDelta.ordinaryMembershipChanges).toEqual([
+        { serverId: 'server-a', addedSessionIds: [], removedSessionIds: ['producer-ordinary'] },
+      ]);
+    } finally { await screen.unmount(); storage.setState(previous, true); }
+  });
+  type Input = Parameters<ReturnType<typeof createSessionFinishedRippleObserver>>[0];
   async function mountRipple(initial: Input) {
     let ripples = 0;
-    function Probe(props: Input) {
-      ripples = useSessionFinishedRipple(props);
-      return null;
-    }
-    const screen = await renderScreen(<Probe {...initial} />);
+    const observe = createSessionFinishedRippleObserver(() => { ripples += 1; });
+    observe(initial);
     return {
       ripples: () => ripples,
       async next(input: Input, advanceMs = 0) {
         await act(async () => {
           vi.advanceTimersByTime(advanceMs);
         });
-        await screen.update(<Probe {...input} />);
+        observe(input);
       },
     };
   }

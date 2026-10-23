@@ -5,6 +5,13 @@ async function loadUpdateBudgetModule() {
 }
 
 describe('resolveLiveActivityUpdateBudget', () => {
+    it('keeps the failed facet above requests in shared relevance and urgent delivery budgeting', async () => {
+        const updateBudget = await import('./resolveLiveActivityUpdateBudget');
+        expect(updateBudget.resolveLiveActivityRelevanceScore('failed'))
+            .toBeGreaterThan(updateBudget.resolveLiveActivityRelevanceScore('permission_required'));
+        expect(updateBudget.resolveLiveActivityUpdateBudget({ attentionState: 'failed', runtimeVisibility: 'background_or_locked' }))
+            .toEqual({ template: 'urgentAttention', apnsPriority: 10, minimumIntervalMs: 30_000 });
+    });
     it('derives runtime visibility from AppState status', async () => {
         const updateBudget = await loadUpdateBudgetModule();
         expect(updateBudget).not.toBeNull();

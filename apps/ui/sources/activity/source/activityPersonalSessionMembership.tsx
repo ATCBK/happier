@@ -21,6 +21,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
+import { isAccountFollowConfigurationChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
 
 export type ActivityPersonalSessionMembership = Readonly<{
     membershipByServerId: Readonly<Record<string, readonly string[]>>;
@@ -103,7 +104,7 @@ function usePersonalFollowInputs(serverIds: readonly string[], enabled: boolean,
             for (const home of serverIds) if (areServerProfileIdentifiersEquivalent(home, serverId)) refresh(home, retire);
         };
         const unsubscribeChanges = subscribeHomeAccountChange(event => {
-            if (event.entityIds === undefined || event.entityIds.some(id => id === 'session-follows' || id === 'self')) refreshMatching(event.serverId);
+            if (isAccountFollowConfigurationChangeRelevant(event)) refreshMatching(event.serverId);
         });
         const unsubscribeCredentials = subscribeHomeCredentialChange(event => refreshMatching(event.serverId, true));
         const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => {
