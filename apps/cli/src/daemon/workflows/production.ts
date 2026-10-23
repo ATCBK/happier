@@ -36,6 +36,7 @@ import { getRandomBytes } from '@/api/encryption';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createWorkflowDefinitionActions } from '@/session/actions/workflowDefinitions';
 import { PushNotificationClient } from '@/api/pushNotifications';
 import { logger } from '@/ui/logger';
@@ -1313,6 +1314,7 @@ export async function resolveWorkflowTriggerClaimSource(params: Readonly<{
   if (params.target.kind === 'inline') return { kind: 'inline', definition: params.target.definition };
   const artifactStore = createAccountArtifactStore({
     credentials: params.credentials,
+    resolveServerFeaturesSnapshot: () => fetchServerFeaturesSnapshot({ serverUrl: resolveServerHttpBaseUrl() }),
     getAccountEncryptionMode: async () => params.encryption.witness.mode,
   });
   const definitions = createWorkflowDefinitionActions({ artifactStore });

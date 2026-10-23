@@ -1,0 +1,236 @@
+import { createServer } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { decodeArtifactKindV1, ArtifactKindWriteBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { ArtifactAccessRecipientCensusResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { AccountNoticeArtifactHeaderV1Schema, AccountNoticeArtifactBodyV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { fetchServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createResourceDataKey } from '@/api/encryption/resourceDataKey';
+import { encodeBase64, encryptWithDataKey } from '@/api/encryption';
+import { createAccountArtifactStore } from './accountArtifactStore';
+import type { StoredCredentials } from '@/persistence';
+
+const source = { kind: 'plugin' as const, pluginId: 'acme.tasks', itemId: 'retained' };
+const noticeBody = AccountNoticeArtifactBodyV1Schema.parse({ v: 1, source, type: 'update', resolved: false });
+const noticeHeader = AccountNoticeArtifactHeaderV1Schema.parse({ ...noticeBody, kind: 'account_notice.v1', title: 'Retained', status: 'dismissed' });
+
+async function withHome(mode: 'plain' | 'e2ee', options: Readonly<{ supported?: boolean; refused?: boolean; unreadable?: boolean; oversizedKind?: boolean }>,
+  run: (home: Readonly<{ store: ReturnType<typeof createAccountArtifactStore>; requests: string[]; batches: string[][];
+    bodyReads: string[]; credentials: StoredCredentials; serverUrl: string; remaining(): number }>) => Promise<void>) {
+  const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+  const credentials = { token, encryption: mode === 'plain' ? null : { type: 'legacy' as const, secret: new Uint8Array(32).fill(21) } };
+  const resource = await createResourceDataKey({ credentials, mode });
+  const encode = (value: unknown) => resource.mode === 'plain' ? encodePlainArtifactStoredContent(value)
+    : encodeBase64(encryptWithDataKey(value, resource.dataKey));
+  const rows = Array.from({ length: 1001 }, (_, index) => ({
+    id: index === 700 ? 'retained-notice-700' : `legacy-${index}`, kind: index % 2 === 0 ? null as string | null : 'other',
+    ownerAccountId: 'owner', access: 'owner', publicAudience: 'none', encryptionMode: mode,
+    header: options.unreadable && index === 1000 ? 'unreadable' : encode(index === 700 ? noticeHeader
+      : { kind: options.oversizedKind && index === 1000 ? 'x'.repeat(192) : index % 3 === 0 ? 'prompt_doc.v2' : 'ordinary.v1' }),
+    body: encode({ body: index === 700 ? JSON.stringify(noticeBody) : 'Private unrelated content' }),
+    dataEncryptionKey: resource.mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER : resource.dataEncryptionKey,
+    headerVersion: 1, bodyVersion: 1, seq: 1001 - index, createdAt: 1001 - index, updatedAt: 1001 - index,
+  }));
+  const requests: string[] = [];
+  const batches: string[][] = [];
+  const bodyReads: string[] = [];
+  const remaining = () => rows.filter(row => !decodeArtifactKindV1(row.kind).classified).length;
+  const coverage = () => remaining() === 0 ? { status: 'complete', unclassifiedCount: 0 }
+    : { status: 'partial', unclassifiedCount: remaining(), reason: 'unclassified_legacy_rows' };
+  const wire = (row: typeof rows[number]) => {
+    const decoded = decodeArtifactKindV1(row.kind);
+    return { ...row, kind: decoded.kind, ...(decoded.classified ? { kindHint: decoded.kindHint } : {}) };
+  };
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    requests.push(`${request.method} ${url.pathname}${url.search}`);
+    const send = (value: unknown, status = 200) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    if (url.pathname === '/v1/features') return send({ features: options.supported === false ? {} : { artifacts: { queryHints: { enabled: true } } }, capabilities: {} });
+    if (url.pathname === '/v1/account/encryption') return send({ mode, updatedAt: 0 });
+    if (url.pathname === '/v1/account/encryption/currentness') return send({ mode, version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+    if (url.pathname === '/v1/artifacts/query-hints/batch' && request.method === 'POST') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const input = ArtifactKindWriteBatchInputV1Schema.parse(JSON.parse(body));
+      batches.push(input.items.map(item => item.artifactId));
+      return send({ items: input.items.map(item => {
+        const row = rows.find(row => row.id === item.artifactId);
+        if (!row || options.refused || row.headerVersion !== item.expectedHeaderVersion) return { artifactId: item.artifactId, success: false, error: 'version-mismatch' };
+        row.kind = item.kind;
+        return { artifactId: item.artifactId, success: true };
+      }) });
+    }
+    if (url.pathname === '/v1/artifacts' && request.method === 'GET') {
+      expect(url.searchParams.has('includeBody')).toBe(false);
+      const kinds: unknown = url.searchParams.has('kinds') ? JSON.parse(url.searchParams.get('kinds')!) : undefined;
+      const candidates = url.searchParams.has('unclassified') ? rows.filter(row => !decodeArtifactKindV1(row.kind).classified)
+        : Array.isArray(kinds) ? rows.filter(row => kinds.includes(decodeArtifactKindV1(row.kind).kindHint)) : rows;
+      const cursor = url.searchParams.get('cursor');
+      const after = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { updatedAt: number; id: string } : null;
+      const selected = candidates.filter(row => !after || row.updatedAt < after.updatedAt || row.updatedAt === after.updatedAt && row.id < after.id)
+        .slice(0, Number(url.searchParams.get('limit') ?? 500));
+      const headers = selected.map(row => { const { body: _body, ...head } = wire(row); return head; });
+      return send(kinds !== undefined || url.searchParams.has('unclassified')
+        ? { items: headers, hasUnclassified: remaining() > 0, coverage: coverage() } : headers);
+    }
+    if (request.method === 'GET' && url.pathname.endsWith('/access/recipients')) {
+      const row = rows.find(row => row.id === decodeURIComponent(url.pathname.split('/')[3]!));
+      return row ? send(ArtifactAccessRecipientCensusResponseV1Schema.parse({ artifactId: row.id, ownerAccountId: 'owner', access: 'owner',
+        encryptionMode: mode, dataEncryptionKey: row.dataEncryptionKey, callerDataEncryptionKey: row.dataEncryptionKey, recipients: [] }))
+        : send({ error: 'not_found' }, 404);
+    }
+    if (request.method === 'GET' && url.pathname.startsWith('/v1/artifacts/')) {
+      const row = rows.find(row => row.id === decodeURIComponent(url.pathname.slice('/v1/artifacts/'.length)));
+      if (row) bodyReads.push(row.id);
+      return row ? send(wire(row)) : send({ error: 'not_found' }, 404);
+    }
+    return send({ error: 'unexpected_route' }, 400);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing_address');
+    const serverUrl = `http://127.0.0.1:${address.port}`;
+    await runWithServerHttpBaseUrl(serverUrl, async () => {
+      const input = { credentials, getAccountEncryptionMode: async () => mode,
+        resolveServerFeaturesSnapshot: () => fetchServerFeaturesSnapshot({ serverUrl }) };
+      await run({ store: createAccountArtifactStore(input), requests, batches, bodyReads, credentials, serverUrl, remaining });
+    });
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}
+
+async function backfill(store: ReturnType<typeof createAccountArtifactStore>, options = { isCurrent: async () => true }) {
+  return store.backfillQueryHints(options);
+}
+
+describe('explicit daemon Account Artifact query-hint backfill', () => {
+  afterEach(() => { resetServerFeaturesClientForTests(); vi.unstubAllEnvs(); });
+  it.each(['plain', 'e2ee'] as const)('labels all 1001 %s legacy headers with one framed write, then never rewrites completed inventory', async mode => {
+    await withHome(mode, {}, async home => {
+      expect(await backfill(home.store)).toMatchObject({ status: 'complete', unclassifiedCount: 0 });
+      expect(home.batches).toHaveLength(1);
+      expect(home.batches[0]).toHaveLength(1001);
+      expect(home.bodyReads).toEqual([]);
+      expect(home.requests.filter(path => path.includes('unclassified=true'))).toHaveLength(3);
+      expect(home.requests.filter(path => path.includes('unclassified=true')).every(path => new URL(path.slice(4), 'http://localhost').searchParams.get('ownerAccountId') === 'owner')).toBe(true);
+      expect(home.requests.filter(path => path.includes('kinds=%5B%5D'))).toHaveLength(1);
+      expect(await backfill(home.store)).toMatchObject({ status: 'complete', unclassifiedCount: 0 });
+      expect(home.batches).toHaveLength(1);
+      expect(home.bodyReads).toEqual([]);
+      const before = home.requests.length;
+      await expect(home.store.create({ noticeAccountId: 'owner', header: { ...noticeHeader, status: 'open' }, body: JSON.stringify(noticeBody) }))
+        .rejects.toMatchObject({ code: 'conflict' });
+      expect(home.requests.slice(before).some(path => path.includes('kinds='))).toBe(true);
+      expect(home.requests.slice(before).some(path => path.includes('unclassified=true'))).toBe(false);
+      expect(home.bodyReads).toEqual(['retained-notice-700']);
+    });
+  });
+  it('returns unsupported without any discovery or hint mutation on an older Home', async () => {
+    await withHome('plain', { supported: false }, async home => {
+      expect(await backfill(home.store)).toMatchObject({ status: 'unsupported' });
+      expect(home.batches).toEqual([]);
+      expect(home.requests.filter(path => path.includes('/v1/artifacts'))).toEqual([]);
+    });
+  });
+  it.each([false, true])('finds a retained notice beyond 500 without hint writes (supported=%s)', async supported => {
+    await withHome('plain', { supported }, async home => {
+      await expect(home.store.create({ noticeAccountId: 'owner', header: { ...noticeHeader, status: 'open' }, body: JSON.stringify(noticeBody) }))
+        .rejects.toMatchObject({ code: 'conflict' });
+      expect(home.batches).toEqual([]);
+      expect(home.bodyReads).toEqual(['retained-notice-700']);
+      const queries = home.requests.filter(path => path.startsWith('GET /v1/artifacts?')).map(path => new URL(path.slice(4), 'http://localhost'));
+      expect(queries.some(url => url.searchParams.has('cursor'))).toBe(true);
+      expect(queries.every(url => url.searchParams.get('limit') === '500')).toBe(true);
+      expect(queries.some(url => url.searchParams.has('kinds'))).toBe(supported);
+      expect(queries.some(url => url.searchParams.has('unclassified'))).toBe(supported);
+      if (!supported) expect(queries.every(url => !url.searchParams.has('ownerAccountId'))).toBe(true);
+    });
+  });
+  it('retains unreadable legacy membership as typed partial instead of labeling guessed content', async () => {
+    await withHome('e2ee', { unreadable: true }, async home => {
+      expect(await backfill(home.store)).toMatchObject({ status: 'partial', unclassifiedCount: 1 });
+      expect(home.batches).toHaveLength(1);
+      expect(home.batches[0]).toHaveLength(1000);
+      expect(home.remaining()).toBe(1);
+      expect(home.bodyReads).toEqual([]);
+    });
+  });
+  it('returns a terminal unavailable result for refused CAS without a transport retry', async () => {
+    await withHome('plain', { refused: true }, async home => {
+      expect(await backfill(home.store)).toMatchObject({ status: 'unavailable', reason: 'write_refused' });
+      expect(home.batches).toHaveLength(1);
+      expect(home.remaining()).toBe(1001);
+      expect(home.bodyReads).toEqual([]);
+    });
+  });
+  it('retires before a pending metadata write when the captured Account is no longer current', async () => {
+    await withHome('plain', {}, async home => {
+      expect(await backfill(home.store, { isCurrent: async () => home.requests.filter(path => path.includes('unclassified=true')).length < 3 }))
+        .toMatchObject({ status: 'retired' });
+      expect(home.batches).toEqual([]);
+      expect(home.bodyReads).toEqual([]);
+    });
+  });
+  it('keeps an oversized discriminator unknown instead of truncating it or blocking other labels', async () => {
+    await withHome('plain', { oversizedKind: true }, async home => {
+      expect(await backfill(home.store)).toMatchObject({ status: 'partial', unclassifiedCount: 1 });
+      expect(home.batches).toHaveLength(1);
+      expect(home.batches[0]).toHaveLength(1000);
+      expect(home.remaining()).toBe(1);
+      expect(home.bodyReads).toEqual([]);
+    });
+  });
+  it('holds one refused result for the real native bootstrap lifetime without repeating it on ordinary reads', async () => {
+    vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'false');
+    vi.stubEnv('HAPPIER_MACHINE_TRANSFER_TAILSCALE_SERVE_ENABLED', 'false');
+    const { startDaemonRuntimeBootstrap } = await import('@/daemon/startup/startDaemonRuntimeBootstrap');
+    const { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } = await import('@/daemon/connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore');
+    const { createProviderAccountUsageStore } = await import('@/daemon/connectedServices/accountUsage/store');
+    await withHome('plain', { refused: true }, async home => {
+      const lifetime = new AbortController();
+      const unsupported = async () => { throw new Error('Connected Services disabled'); };
+      const input = {
+        api: {} as never, credentials: home.credentials, logger: { debug() {}, info() {}, warn() {} },
+        processEnv: { HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: 'false' },
+        controlPort: 43102, machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'artifact-backfill-bootstrap', cliVersion: '0.0.0',
+        startupSource: 'manual' as const, serviceLabel: undefined, daemonLogPath: '/tmp/artifact-bootstrap.log', controlToken: 'control',
+        publishDaemonState: () => true, happyHomeDir: '/tmp/artifact-bootstrap-home', activeServerDir: '/tmp/artifact-bootstrap-server',
+        filesystemAccessPolicy: { kind: 'osUser' as const }, publicReleaseChannel: 'dev' as const,
+        connectedServicesRestartRequestedPids: new Set<number>(), pidToTrackedSession: new Map(),
+        connectedServiceAuthGroupPreTurnSwitchCoordinator: { switchBeforeTurn: unsupported, applyCommittedGeneration: unsupported, applyCredentialUpdate: unsupported },
+        connectedServiceRuntimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(), providerAccountUsageStore: createProviderAccountUsageStore(),
+        artifactQueryHints: { signal: lifetime.signal, isCurrent: async () => true,
+          resolveServerFeaturesSnapshot: () => fetchServerFeaturesSnapshot({ serverUrl: home.serverUrl }) },
+      };
+      const runtime = await startDaemonRuntimeBootstrap(input);
+      let successor: Awaited<ReturnType<typeof startDaemonRuntimeBootstrap>> | undefined;
+      const nextLifetime = new AbortController();
+      try {
+        const task = runtime.artifactQueryHintBackfill;
+        expect(task).toBeInstanceOf(Promise);
+        expect(await task).toMatchObject({ status: 'unavailable', reason: 'write_refused' });
+        expect(home.batches).toHaveLength(1);
+        await home.store.list({ kinds: ['account_notice.v1'] });
+        expect(await task).toMatchObject({ status: 'unavailable', reason: 'write_refused' });
+        expect(runtime.artifactQueryHintBackfill).toBe(task);
+        expect(home.batches).toHaveLength(1);
+        lifetime.abort();
+        successor = await startDaemonRuntimeBootstrap({ ...input, runtimeId: 'artifact-backfill-next-bootstrap',
+          artifactQueryHints: { ...input.artifactQueryHints, signal: nextLifetime.signal } });
+        const nextTask = successor.artifactQueryHintBackfill;
+        expect(nextTask).not.toBe(task);
+        expect(await nextTask).toMatchObject({ status: 'unavailable', reason: 'write_refused' });
+        expect(home.batches).toHaveLength(2);
+      } finally {
+        lifetime.abort();
+        nextLifetime.abort();
+        await runtime.stopDirectPeerServer();
+        await runtime.stopTailscaleTransferServeLifecycle();
+        await successor?.stopDirectPeerServer();
+        await successor?.stopTailscaleTransferServeLifecycle();
+      }
+    });
+  });
+});

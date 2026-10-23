@@ -44,6 +44,7 @@ import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/instal
 import { configuration } from '@/configuration';
 import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
 // The ordinary-Artifact Home fixtures below expose Account "owner" with no legacy Role settings.
 // Keep the real Role deletion policy even when a scenario only reads or restores an Artifact.
@@ -1707,7 +1708,10 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
   it.each(['prior', null, { blobId: '11111111-1111-4111-8111-111111111111', mime: 'image/png', sizeBytes: 0,
     sha256: createHash('sha256').update(new Uint8Array()).digest('hex') }])('decodes retained body %s with the Artifact owner codec and restores through revision CAS', async (priorBody) => {
     const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null },
-      getAccountEncryptionMode: async () => 'e2ee' });
+      getAccountEncryptionMode: async () => 'e2ee',
+      resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+        features: { artifacts: { queryHints: { enabled: true } } }, capabilities: {},
+      }) }) });
     const artifact = { id: 'shared', ownerAccountId: 'other', access: 'edit', encryptionMode: 'plain',
       header: encodePlainArtifactStoredContent({ title: 'Shared', excerpt: 'Current preview' }), body: encodePlainArtifactStoredContent({ body: 'current' }),
       headerVersion: 3, bodyVersion: 4, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 1, createdAt: 1, updatedAt: 2 };

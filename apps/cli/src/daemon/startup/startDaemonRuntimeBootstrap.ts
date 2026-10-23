@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import type { ApiClient } from '@/api/api';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { createCredentialedAccountArtifactStore, type ArtifactQueryHintBackfillResult, type ArtifactQueryHintFeatures } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { LiveWorkProducerV1 } from '../lifecycle/managedActivity';
 import type { DaemonAdmissionDrain } from '../lifecycle/admissionDrain';
@@ -130,6 +130,7 @@ function resolveTrackedSessionNotificationTitle(tracked: TrackedSession | null |
 }
 
 export type StartDaemonRuntimeBootstrapParams = Readonly<{
+  artifactQueryHints?: Readonly<{ signal: AbortSignal; isCurrent(): Promise<boolean>; resolveServerFeaturesSnapshot: ArtifactQueryHintFeatures }>;
   publicProfileRefresh?: Omit<Parameters<typeof startPublicProfileRefresh>[0], 'scheduler'>;
   api: ApiClient;
   credentials: StoredCredentials;
@@ -216,6 +217,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
 }>;
 
 export type StartDaemonRuntimeBootstrapResult = Readonly<{
+  artifactQueryHintBackfill: Promise<ArtifactQueryHintBackfillResult> | null;
   publicProfileRefreshHandle: SingleFlightIntervalLoopHandle | null;
   fileState: DaemonLocallyPersistedState;
   initialDaemonState: DaemonState;
@@ -376,7 +378,14 @@ export async function startDaemonRuntimeBootstrap(
   const publicProfileRefreshHandle = params.publicProfileRefresh ? startPublicProfileRefresh({
     ...params.publicProfileRefresh, scheduler: daemonServerWorkScheduler,
   }) : null;
+  // Native daemon Account lifetime owns one terminal attempt, never notifications,
+  // requester runtimes, store construction or ordinary inventory reads.
+  const artifactQueryHintBackfill = params.artifactQueryHints
+    ? createCredentialedAccountArtifactStore(params.credentials, {
+      resolveServerFeaturesSnapshot: params.artifactQueryHints.resolveServerFeaturesSnapshot,
+    }).backfillQueryHints(params.artifactQueryHints) : null;
   return {
+    artifactQueryHintBackfill,
     publicProfileRefreshHandle,
     fileState,
     initialDaemonState,

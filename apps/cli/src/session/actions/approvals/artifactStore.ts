@@ -21,6 +21,7 @@ import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
 import { configuration } from '@/configuration';
+import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -160,6 +161,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
     ?? ((options?: AccountEncryptionModeReadOptions) => accountModeApi!.getAccountEncryptionMode(options));
   const rawAccountArtifactStore = createAccountArtifactStore({
     credentials: params.credentials,
+    resolveServerFeaturesSnapshot: () => fetchServerFeaturesSnapshot({ serverUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl() }),
     getAccountEncryptionMode: options => timeWebLatencyPhase('approval.account_mode', () => getAccountEncryptionMode(options)),
   });
   const accountArtifactStore = { ...rawAccountArtifactStore,

@@ -2975,13 +2975,16 @@ export async function startDaemon(
             .get(buildQualifiedPluginContributionKey(service))?.definition.usageIdentity ?? null;
         } finally { await lease.release(); }
     };
-    const runtimeBootstrap = await startDaemonRuntimeBootstrap({
-      publicProfileRefresh: await captureNativePublicProfileRefresh({
+    const nativeAccountRefresh = await captureNativePublicProfileRefresh({
         credentials, serverId: configuration.activeServerId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
         signal: homeTransportCancellation.signal,
         resolveServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.getSnapshot(),
         onError: error => logger.debug('[DAEMON RUN] Public-profile refresh deferred', serializeAxiosErrorForLog(error)),
-      }),
+      });
+    const runtimeBootstrap = await startDaemonRuntimeBootstrap({
+      publicProfileRefresh: nativeAccountRefresh,
+      artifactQueryHints: { signal: nativeAccountRefresh.signal, isCurrent: nativeAccountRefresh.isCurrent,
+        resolveServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.getSnapshot() },
       api,
       credentials,
       daemonSessionMutationCustody,
