@@ -37,27 +37,23 @@ export function createClientActionReverseDispatcher(
     const client = getMachineClient();
     // Session callers choose the App viewing their Session even when the
     // mounted operation itself searches or navigates across the Account.
-    const sessionUiAction = actionId === 'ui.find' || actionId === 'ui.prompts.picker.open'
-      || actionId === 'session.pending.next' || actionId === 'search.conversations'
-      || actionId === 'composer.transaction.apply'
+    const composerAction = actionId === 'ui.prompts.picker.open' || actionId === 'composer.transaction.apply'
       || actionId === 'composer.attachments.pick';
-    const requireSingleAnsweringClient = sessionUiAction || actionId === 'ui.current_context.read';
-    const composerRef = input && typeof input === 'object'
+    const composerRef = composerAction && input && typeof input === 'object'
       ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
     const targetSessionId = composerRef
       ? typeof composerRef === 'object' && 'sessionId' in composerRef && typeof composerRef.sessionId === 'string'
         ? composerRef.sessionId : null
       : context.defaultSessionId ? readCliActionBoundSessionId(context.defaultSessionId) : null;
-    const sessionMethod = sessionUiAction && targetSessionId ? sessionUiActionClientRpcMethod(targetSessionId) : null;
     const originAction = PluginExecutionOriginActionIdSchema.safeParse(actionId);
     const originInput = originAction.success ? PluginExecutionOriginActionInputSchemas[originAction.data].parse(input) : null;
     const answeringClient = originInput ? { ...(originInput.clientId ? { clientId: originInput.clientId } : {}),
       ...(actionId === 'plugins.execution_origin.list' ? {} : { requireSingle: true as const }) }
-      : requireSingleAnsweringClient ? { requireSingle: true as const } : undefined;
+      : { requireSingle: true as const };
     // Project only the address from the already-admitted full Action input.
     const address = isWorkflowAuthoringActionId(actionId) && input && typeof input === 'object'
       ? WorkflowDraftGetInputV1Schema.safeParse({ scope: Reflect.get(input, 'scope'), draftId: Reflect.get(input, 'draftId') }) : null;
-    const method = sessionMethod ?? (actionId === 'session.work.get' && input && typeof input === 'object'
+    const method = actionId === 'session.work.get' && input && typeof input === 'object'
       && typeof Reflect.get(input, 'sessionId') === 'string'
       ? mountedWorkReadClientRpcMethod(actionId, Reflect.get(input, 'sessionId'))
       : actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(actionId)
@@ -66,7 +62,9 @@ export function createClientActionReverseDispatcher(
         && input && typeof input === 'object'
         && typeof Reflect.get(input, 'commandId') === 'string'
         ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
-      : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE);
+      : address?.success ? workflowDraftClientRpcMethod(address.data)
+      : !originInput && targetSessionId ? sessionUiActionClientRpcMethod(targetSessionId)
+      : RPC_METHODS.UI_ACTION_EXECUTE;
     if (!client) return machineTransportUnavailable();
     // Advertisements are hints, not receiver authority: reconnect/withdrawal can
     // race them. The server selects current handlers and returns typed absence

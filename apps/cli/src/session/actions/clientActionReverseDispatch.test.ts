@@ -17,6 +17,28 @@ const disconnectedClient: ClientActionMachineRpc = {
 };
 
 describe('client Action reverse delivery', () => {
+  it('refuses unbound generic client effects when two connected Apps can answer', async () => {
+    const { selectRpcTarget } = await import('../../../../server/sources/app/api/socket/rpc/rpcTargetSelection');
+    let effects = 0;
+    const receiver = (id: string) => ({ id, timeout: () => ({ emitWithAck: async () => {
+      effects++;
+      return { v: 1, execution: { ok: true, result: { notificationId: id } } };
+    } }) });
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _request, options) => {
+        const selection = selectRpcTarget({ targets: [receiver('app-b'), receiver('app-a')],
+          answeringClient: options.answeringClient });
+        if (selection.type === 'ambiguous') return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_AMBIGUOUS };
+        if (selection.type !== 'target') return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
+        options.onIssued();
+        return { ok: true, result: await selection.target.timeout(0).emitWithAck('rpc-request', {}) };
+      },
+    }));
+    expect(await dispatch({ actionId: 'notifications.sounds.preview', input: {}, context: { surface: 'mcp' } }))
+      .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+    expect(effects).toBe(0);
+  });
   it.each([RPC_ERROR_CODES.OUTCOME_UNKNOWN, 'MACHINE_RPC_TIMEOUT'])('preserves the transport cause %s of an issued Find without claiming a known effect', async errorCode => {
     const dispatch = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: () => true,
@@ -72,6 +94,7 @@ describe('client Action reverse delivery', () => {
   });
 
   it.each([
+    { actionId: 'notifications.sounds.preview', input: {}, sessionId: 'invoking-session' },
     { actionId: 'ui.find', input: { op: 'read' }, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: {}, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: { composerRef: { kind: 'session', sessionId: 'target-session' } }, sessionId: 'target-session' },
@@ -636,7 +659,7 @@ describe('client Action reverse delivery', () => {
       hasConnectedClientRpcHandler: () => true,
       callConnectedClientRpc: async (_method, _params, options) => {
         options.onIssued();
-        return { ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE' };
+        return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
       },
     };
     await expect(executor(client).execute('workspace.tabs.list', {}, { surface: 'agent' }))
