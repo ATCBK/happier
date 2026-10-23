@@ -561,9 +561,10 @@ function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccou
         contract: input.collection.contract,
         parseStoredLogicalValue: value => {
             const parsed = input.collection.storedValueSchema.safeParse(value);
-            if (!parsed.success || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)
-                || !isLogicalCollectionValue<TValue>(input.collection.validate, parsed.data)) return null;
-            return parsed.data;
+            if (!parsed.success || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) return null;
+            // The canonical stored-read parser already validates the projected
+            // value against this Collection's admitted logical schema.
+            return parsed.data as TValue;
         },
         row: input.row,
         encryptionMode: input.encryptionMode,
@@ -575,13 +576,6 @@ function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccou
         revision: decoded.revision,
         value: decoded.value,
     });
-}
-
-function isLogicalCollectionValue<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
-    validate: ReturnType<typeof compilePluginJsonSchema>,
-    value: JsonValue,
-): value is TValue {
-    return isValidPluginJsonSchemaValue(validate, value);
 }
 
 /**

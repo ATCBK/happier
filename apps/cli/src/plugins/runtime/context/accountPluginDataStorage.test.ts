@@ -3,6 +3,7 @@ import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import * as collectionCodec from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
 import * as artifactIntegrity from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
+import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import {
     FeaturesResponseSchema,
     PLUGIN_COLLECTION_DEFAULT_DEPLOYMENT_LIMITS_V1,
@@ -648,6 +649,45 @@ describe('Account plugin Data storage host', () => {
             .rejects.toMatchObject({ code: 'plugin_collection_undeclared' });
         await expect(next.put({ id: 'task-1', status: 'invalid', privateNote: 'note' }, { expectedRevision: 'absent' }))
             .rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+    });
+
+    it('admits each logical row once when reading a Collection page', async () => {
+        const contract = normalizePluginAccountCollectionContractV1({ pluginId: PLUGIN_ID, contribution });
+        const rows = Array.from({ length: 50 }, (_, index) => ({
+            rowId: `task-${index}`, revision: 1, projection: { status: 'open' },
+            content: { t: 'plain', v: { privateNote: 'retained', retired: true } },
+        }));
+        const host = createAccountPluginDataStorageHost({
+            contracts: [contract], readCredentials: async () => plainCredentials,
+            isCurrentAccount: () => true, resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
+            resolveBaseUrl: () => 'https://data.example.test',
+            resolveAccountEncryptionCurrentness: async () => currentnessFor(plainCredentials),
+            http: { get: async () => ({ status: 200, data: {} }),
+                post: async () => ({ status: 200, data: { rows, changeCursor: 1 } }) },
+        });
+        const account = host.bind({ pluginId: PLUGIN_ID, occurrenceId: '1',
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true });
+        if (!account) throw new Error('Expected Account Data binding');
+        const collection = account.collection(collectionDefinition);
+        const validate = compilePluginJsonSchema(contract.schema);
+        // AJV publishes its error bag once per real validation. Observe that
+        // external compiler boundary without replacing any validation logic.
+        const descriptor = Object.getOwnPropertyDescriptor(validate, 'errors');
+        let errors: unknown = Reflect.get(validate, 'errors');
+        let admissions = 0;
+        Object.defineProperty(validate, 'errors', { configurable: true,
+            get: () => errors, set: (value: unknown) => { errors = value; admissions++; } });
+        try {
+            const page = await collection.query({ index: 'by-status', prefix: ['open'], order: 'asc', limit: 50 });
+            expect(page.rows).toHaveLength(rows.length);
+            for (const row of page.rows) expect(row.value).toEqual({
+                id: row.rowId, status: 'open', privateNote: 'retained',
+            });
+            expect(admissions).toBe(rows.length);
+        } finally {
+            if (descriptor) Object.defineProperty(validate, 'errors', descriptor);
+            else Reflect.deleteProperty(validate, 'errors');
+        }
     });
 
     it.each([plainCredentials, encryptedCredentials])('validates stored Collection rows once per revision across invocation reads on $token', async (credentials) => {
