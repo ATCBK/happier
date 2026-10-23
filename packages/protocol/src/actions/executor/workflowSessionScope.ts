@@ -6,7 +6,7 @@ import { areServerProfileIdentifiersEquivalent } from '../../features/payload/ca
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import type { ActionId } from '../actionIds.js';
 import type { WorkflowMaterializedLeafV1 } from '../../workflows/workflowDefinitionV1.js';
-import { readWorkflowInvocationMembersV1, readWorkflowInvocationRootV1 } from '../../workflows/workflowInvocationMembersV1.js';
+import { readWorkflowCurrentInvocationAncestryV1 } from '../../workflows/workflowInvocationMembersV1.js';
 
 type WorkflowActionInvocationContextV1 = Readonly<{
   opened: ReturnType<typeof WorkflowRunGetResultV1Schema.parse>;
@@ -85,42 +85,14 @@ export async function readActionWorkflowInvocationContextV1(
     const logical = await read(identity.logicalInvocationId);
     if (!logical) return null;
     const ancestryParents = new Map<string, string>();
-    let invocation: WorkflowInvocationBindingRowV1 | undefined;
-    {
-      // Retry preserves logical identity while replacing physical ancestors.
-      // Resolve those ancestors first, then use the shared inherited-slot owner
-      // for the leaf. Only this Action's ancestry and selected slots are opened.
-      const seen = new Set<string>();
-      const current = async (row: WorkflowInvocationBindingRowV1): Promise<WorkflowInvocationBindingRowV1 | undefined> => {
-        if (seen.has(row.index.id)) return undefined;
-        seen.add(row.index.id);
-        if (row.index.parentRecordId === null) {
-          return readWorkflowInvocationRootV1({ root: row, currentRootRecordId: opened.checkpoint?.rootRecordId,
-            readInvocation: read, readCurrentRoot: async () => {
-              const roots = await readSelected({ parentRecordId: null, memberOrdinal: '0' });
-              return roots.length === 1 ? roots[0] : undefined;
-            } });
-        }
-        const originalParent = await read(row.index.parentRecordId);
-        const parent = originalParent ? await current(originalParent) : undefined;
-        if (!parent) return undefined;
-        if (parent.index.id === row.index.parentRecordId && row.index.lifecycle !== 'superseded') return row;
-        const members = await readWorkflowInvocationMembersV1({ parentRecordIds: [parent.index.id],
-          memberOrdinal: row.index.memberOrdinal, readParent: read,
-          readChildren: parents => Promise.all(parents.map(id => readMembers(id, row.index.memberOrdinal))).then(pages => pages.flat()),
-          indexOf: (member: WorkflowInvocationBindingRowV1) => member.index });
-        const selected = members.get(parent.index.id);
-        const candidate = selected?.length === 1 ? selected[0] : undefined;
-        if (candidate && candidate.index.lifecycle !== 'superseded'
-          && candidate.progress.logicalInvocationRecordId === row.progress.logicalInvocationRecordId
-          && candidate.progress.blockKind === row.progress.blockKind
-          && sameStrictJsonValue(candidate.progress.invocationPath, row.progress.invocationPath)) {
-          ancestryParents.set(candidate.index.id, parent.index.id);
-          return candidate;
-        }
-        return undefined;
-      };
-      invocation = await current(logical);
+    const ancestry = await readWorkflowCurrentInvocationAncestryV1({ invocation: logical,
+      currentRootRecordId: opened.checkpoint?.rootRecordId, readInvocation: read, readCurrentRoot: async () => {
+        const roots = await readSelected({ parentRecordId: null, memberOrdinal: '0' });
+        return roots.length === 1 ? roots[0] : undefined;
+      }, readChildren: (parents, ordinal) => Promise.all(parents.map(id => readMembers(id, ordinal))).then(pages => pages.flat()) });
+    const invocation = ancestry?.at(-1);
+    for (let index = 1; ancestry && index < ancestry.length; index += 1) {
+      ancestryParents.set(ancestry[index]!.index.id, ancestry[index - 1]!.index.id);
     }
     if (!invocation || invocation.index.lifecycle === 'superseded' || invocation.progress.blockKind !== 'action'
       || invocation.progress.attempt !== identity.attempt || invocation.progress.logicalInvocationRecordId !== identity.logicalInvocationId

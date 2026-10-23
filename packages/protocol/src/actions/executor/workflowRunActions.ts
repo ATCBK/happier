@@ -45,6 +45,7 @@ import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js'
 import { readActionCallerLedSubtreeSessionIds } from './sessionLedSubtree.js';
 import { areServerProfileIdentifiersEquivalent } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import { FollowPolicyV1Schema, type FollowPolicyV1 } from '../../sessions/follow/sessionFollowPolicyV1.js';
+import { readWorkflowCurrentInvocationAncestryV1, readWorkflowInvocationMembersV1 } from '../../workflows/workflowInvocationMembersV1.js';
 
 export type WorkflowAccountRunEncryption = AvailableAutomationAccountEncryptionV1;
 
@@ -1182,27 +1183,44 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       }
       cursor = typeof page.nextCursor === 'string' ? page.nextCursor : undefined;
     } while (cursor);
-    return graph;
+    // Reuse the admitted graph: resolving effective ancestry adds no storage
+    // reads and never rewrites an authenticated physical parent binding.
+    const children = new Map<string | null, Awaited<ReturnType<typeof readPriorProgress>>[]>();
+    for (const row of graph.values()) {
+      const siblings = children.get(row.index.parentRecordId) ?? [];
+      siblings.push(row);
+      children.set(row.index.parentRecordId, siblings);
+    }
+    const roots = children.get(null) ?? [];
+    const currentRoot = roots.reduce<typeof seed>((selected, row) => !selected
+      || BigInt(row.index.attempt) > BigInt(selected.index.attempt) ? row : selected, undefined);
+    const members = await readWorkflowInvocationMembersV1({
+      parentRecordIds: [...children.keys()].filter(id => id !== null),
+      readParent: async id => graph.get(id), readChildren: async parents => parents.flatMap(id => children.get(id) ?? []),
+      indexOf: row => row.index,
+    });
+    const physicalMembers = new Set([...members].flatMap(([parentId, rows]) => rows
+      .filter(row => row.index.parentRecordId === parentId).map(row => row.index.id)));
+    const currentParents = new Map<string, string | null>();
+    for (const row of graph.values()) {
+      if (row.index.parentRecordId !== null && !physicalMembers.has(row.index.id)) continue;
+      const ancestry = await readWorkflowCurrentInvocationAncestryV1({ invocation: row,
+        currentRootRecordId: currentRoot?.index.id,
+        readInvocation: async id => graph.get(id), readCurrentRoot: async () => currentRoot,
+        readChildren: async (parents, ordinal) => parents.flatMap(id => children.get(id) ?? [])
+          .filter(child => child.index.memberOrdinal === ordinal) });
+      if (ancestry?.at(-1)?.index.id === row.index.id && row.index.lifecycle !== 'superseded') {
+        currentParents.set(row.index.id, ancestry.at(-2)?.index.id ?? null);
+      }
+    }
+    return Object.assign(graph, { currentParents });
   };
 
-  const isCurrentInvocation = (graph: ReadonlyMap<string, Awaited<ReturnType<typeof readPriorProgress>>>, target: Awaited<ReturnType<typeof readPriorProgress>>) => {
-    let current: typeof target | undefined = target;
-    const seen = new Set<string>();
-    while (current) {
-      if (current.index.lifecycle === 'superseded' || seen.has(current.index.id)) return false;
-      seen.add(current.index.id);
-      for (const row of graph.values()) {
-        if (row.index.parentRecordId === current.index.parentRecordId && row.index.memberOrdinal === current.index.memberOrdinal
-          && BigInt(row.index.attempt) > BigInt(current.index.attempt)) return false;
-      }
-      if (current.index.parentRecordId === null) return true;
-      current = graph.get(current.index.parentRecordId);
-    }
-    return false;
-  };
+  const isCurrentInvocation = (graph: Awaited<ReturnType<typeof readInvocationGraph>>, target: Awaited<ReturnType<typeof readPriorProgress>>) =>
+    graph.currentParents.has(target.index.id);
 
   const deriveRetryCausalSet = async (
-    graph: ReadonlyMap<string, Awaited<ReturnType<typeof readPriorProgress>>>,
+    graph: Awaited<ReturnType<typeof readInvocationGraph>>,
     targetId: string,
     run: WorkflowRunSummaryV1,
     signal?: AbortSignal,
@@ -1215,8 +1233,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     for (let current: typeof target | undefined = target; current;) {
       if (ancestors.has(current.index.id)) return unavailable('causal_set_requires_batch_review');
       ancestors.add(current.index.id);
-      if (current.index.parentRecordId === null) break;
-      const parent = graph.get(current.index.parentRecordId);
+      const parentId = graph.currentParents.get(current.index.id);
+      if (parentId === null) break;
+      const parent = parentId === undefined ? undefined : graph.get(parentId);
       if (!parent) return unavailable('causal_set_requires_batch_review');
       current = parent;
     }
@@ -1254,13 +1273,13 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       if (!EXACT_RECOVERY_RETRY_LIFECYCLES.has(row.index.lifecycle)
         && !EXACT_RECOVERY_ACTIVE_LIFECYCLES.has(row.index.lifecycle)
         && row.progress.execution === undefined) continue;
-      let parentId = row.index.parentRecordId;
-      while (parentId !== null) {
+      let parentId = graph.currentParents.get(row.index.id);
+      while (parentId != null) {
         if (groupIds.has(parentId)) {
           selected.add(row.index.id);
           break;
         }
-        parentId = graph.get(parentId)?.index.parentRecordId ?? null;
+        parentId = graph.currentParents.get(parentId);
       }
     }
     for (const seedId of [...selected]) {
@@ -1273,8 +1292,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           && !EXACT_RECOVERY_RETRY_LIFECYCLES.has(current.index.lifecycle)
           && !(current.index.lifecycle === 'needs_attention' && isStructuralRecoveryFrame(current.progress.blockKind))) break;
         selected.add(current.index.id);
-        if (groupIds.has(current.index.id) || current.index.parentRecordId === null) break;
-        current = graph.get(current.index.parentRecordId);
+        const parentId = graph.currentParents.get(current.index.id);
+        if (groupIds.has(current.index.id) || parentId === null) break;
+        current = parentId === undefined ? undefined : graph.get(parentId);
         if (!current) return unavailable('causal_set_requires_batch_review');
       }
     }
@@ -1294,13 +1314,13 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     }
     const depth = (row: NonNullable<typeof rows[number]>): number => {
       let value = 0;
-      let parentId = row.index.parentRecordId;
+      let parentId = graph.currentParents.get(row.index.id);
       const seen = new Set<string>();
-      while (parentId !== null && selected.has(parentId)) {
+      while (parentId != null && selected.has(parentId)) {
         if (seen.has(parentId)) return Number.MAX_SAFE_INTEGER;
         seen.add(parentId);
         value += 1;
-        parentId = graph.get(parentId)?.index.parentRecordId ?? null;
+        parentId = graph.currentParents.get(parentId);
       }
       return value;
     };
@@ -1357,7 +1377,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
   };
 
   const recoveryAvailability = async (run: WorkflowRunSummaryV1, prior: Awaited<ReturnType<typeof readPriorProgress>>, signal?: AbortSignal,
-    retryCausalSet?: WorkflowInvocationRecoveryAvailabilityV1['retry'], graph?: ReadonlyMap<string, Awaited<ReturnType<typeof readPriorProgress>>>,
+    retryCausalSet?: WorkflowInvocationRecoveryAvailabilityV1['retry'], graph?: Awaited<ReturnType<typeof readInvocationGraph>>,
     restoreWorkspaces?: readonly WorkflowWorkspaceProgressV1[]) => {
     const recordedWorkspaces = restoreWorkspaces ?? (prior.progress.reason?.code === 'workspace_unavailable'
       ? await resolveRestoreWorkspaces(await openAccepted(run.id, signal), prior, signal) : []);

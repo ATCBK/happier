@@ -238,6 +238,13 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
     actionRequestId: `${runId}/${row(id).progress.logicalInvocationRecordId}/${row(id).index.attempt}`,
     actionCaller: { kind: 'workflowRun', runId, authorization: accepted.snapshot.authorization } });
   let currentRoot = root;
+  const inspect = async (id: string) => WorkflowInvocationGetResultV1Schema.parse(await owner.execute({
+    actionId: 'workflow.run.invocations.get', input: { runId, invocationId: id },
+    context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'yolo' } }));
+  const requestRetry = (id: string, causalInvocationIds: string[]) => owner.execute({
+    actionId: 'workflow.run.invocations.retry', input: { runId, invocation: { recordId: id },
+      expectedRevision: run.revision, causalInvocationIds, conversation: 'fresh_conversation', input: { kind: 'original' } },
+    context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'yolo' } });
   const retry = async (id: string, recoverParent: boolean | 'ancestors' | 'root' = false) => {
     const failed = row(id);
     failed.index.lifecycle = failed.index.parentRecordId === null ? 'needs_attention' : 'failed';
@@ -279,7 +286,8 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
     Object.assign(cost, { requests: 0, pages: 0, historyPages: 0, envelopes: 0, bytes: 0 });
     return result.invocation.id;
   };
-  return { cost, executor, context, rounds, recover, retry, move, row, seal, root, deps, address,
+  return { cost, executor, context, rounds, recover, retry, inspect, requestRetry, move, row, seal, root, deps, address,
+    interrupt: () => { run.state = 'interrupted'; },
     currentRoot: () => currentRoot,
     retainOriginalCheckpointRoot: () => {
       snapshot.checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
@@ -292,6 +300,70 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
 }
 
 describe('Discussion round projection demand', () => {
+  it('keeps an original-parent failed descendant retryable', async () => {
+    const f = await fixture('projector-in-if');
+    await expect(f.retry(f.rounds[2]!.complete)).resolves.toEqual(expect.any(String));
+  });
+
+  it.each(['root', 'intermediate', 'intermediate-failed'] as const)('retries an inherited child after %s-only recovery', async ancestor => {
+    const f = await fixture('projector-in-if');
+    const action = f.rounds[2]!.complete;
+    f.row(action).index.lifecycle = 'pending';
+    const currentParent = await f.retry(ancestor === 'root' ? f.currentRoot() : f.row(action).index.parentRecordId!);
+    await expect(f.executor.execute('workflow.discussion.round.project',
+      { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action)))
+      .resolves.toMatchObject({ ok: true, result: { throughSeq: 3, outcomeReferences: f.rounds[2]!.replies } });
+    expect(f.cost.historyPages).toBe(0);
+    if (ancestor === 'intermediate-failed') f.row(currentParent).index.lifecycle = 'failed';
+    const replacement = await f.retry(action);
+    if (ancestor === 'intermediate-failed') expect(f.row(currentParent).index.lifecycle).toBe('superseded');
+    expect(f.row(action).index.lifecycle).toBe('superseded');
+    await expect(f.executor.execute('workflow.discussion.round.project',
+      { collections: ['speakers'], preparationBlockId: 'context' }, f.context(replacement)))
+      .resolves.toMatchObject({ ok: true, result: { throughSeq: 3, outcomeReferences: f.rounds[2]!.replies } });
+    expect(f.cost.historyPages).toBe(0);
+    f.interrupt();
+    expect((await f.inspect(action)).invocation.recoveryAvailability?.retry)
+      .toMatchObject({ kind: 'unavailable', reason: 'invocation_not_recoverable' });
+    await expect(f.requestRetry(action, [replacement])).rejects.toMatchObject({ code: 'ineligible_state' });
+    // A valid producer result cannot authorize an unrelated transport row.
+    f.miswire();
+    await expect(f.executor.execute('workflow.discussion.round.project',
+      { collections: ['speakers'] }, f.context(replacement)))
+      .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+
+  it.each([false, true])('retains complete fail-stop closure and its completed neighbor (root recovered: %s)', async recoveredRoot => {
+    const f = await fixture(undefined, 2, 'round', 'parallel');
+    const action = f.rounds[2]!.complete;
+    const stoppedSibling = f.rounds[0]!.complete;
+    const completedNeighbor = f.rounds[1]!.complete;
+    if (recoveredRoot) {
+      f.row(action).index.lifecycle = 'pending';
+      f.row(stoppedSibling).index.lifecycle = 'pending';
+      await f.retry(f.currentRoot());
+    }
+    let group = f.row(action);
+    while (group.progress.blockKind !== 'parallel' || group.progress.frame) group = f.row(group.index.parentRecordId!);
+    const groupId = group.index.id;
+    for (const id of [action, stoppedSibling]) {
+      let row = f.row(id);
+      row.progress.reason = { code: `container_fail_stop:${groupId}` };
+      row.index.lifecycle = id === action ? 'failed' : 'cancelled';
+      f.seal(row);
+      while (row.index.id !== groupId) {
+        row = f.row(row.index.parentRecordId!);
+        row.index.lifecycle = 'needs_attention';
+        f.seal(row);
+      }
+    }
+    await expect(f.retry(action)).resolves.toEqual(expect.any(String));
+    expect(f.row(stoppedSibling).index.lifecycle).toBe('superseded');
+    expect(f.row(groupId).index.lifecycle).toBe('superseded');
+    expect(f.row(completedNeighbor).index.lifecycle).toBe('completed');
+    expect(f.row(f.currentRoot()).index.lifecycle).toBe(recoveredRoot ? 'pending' : 'completed');
+  });
+
   const retryShapes = [
     { name: 'leaf only', shape: false },
     { name: 'one intermediate', shape: true },

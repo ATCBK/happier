@@ -3,12 +3,12 @@ import type { WorkflowRunInvocationIndexV1 } from './workflowProgressV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 
 /** Resolve the root slot, including checkpoints retained before root replacement. */
-export async function readWorkflowInvocationRootV1(params: Readonly<{
-  root: WorkflowInvocationBindingRowV1;
+export async function readWorkflowInvocationRootV1<T extends WorkflowInvocationBindingRowV1>(params: Readonly<{
+  root: T;
   currentRootRecordId?: string;
-  readInvocation: (id: string) => Promise<WorkflowInvocationBindingRowV1 | undefined>;
-  readCurrentRoot: () => Promise<WorkflowInvocationBindingRowV1 | undefined>;
-}>): Promise<WorkflowInvocationBindingRowV1 | undefined> {
+  readInvocation: (id: string) => Promise<T | undefined>;
+  readCurrentRoot: () => Promise<T | undefined>;
+}>): Promise<T | undefined> {
   const original = params.root;
   let root = params.currentRootRecordId && params.currentRootRecordId !== original.index.id
     ? await params.readInvocation(params.currentRootRecordId) : original;
@@ -34,6 +34,42 @@ export async function readWorkflowInvocationRootV1(params: Readonly<{
       || BigInt(previous.index.attempt) + 1n !== BigInt(ancestor.index.attempt)) return undefined;
     ancestor = previous;
   }
+}
+
+/** Current root-to-member correspondence; physical envelope bindings stay unchanged. */
+export async function readWorkflowCurrentInvocationAncestryV1<T extends WorkflowInvocationBindingRowV1>(params: Readonly<{
+  invocation: T;
+  currentRootRecordId?: string;
+  readInvocation: (id: string) => Promise<T | undefined>;
+  readCurrentRoot: () => Promise<T | undefined>;
+  readChildren: (parentRecordIds: string[], memberOrdinal: string) => Promise<readonly T[]>;
+}>): Promise<readonly T[] | undefined> {
+  const seen = new Set<string>();
+  const current = async (row: T): Promise<readonly T[] | undefined> => {
+    if (seen.has(row.index.id)) return undefined;
+    seen.add(row.index.id);
+    if (row.index.parentRecordId === null) {
+      const root = await readWorkflowInvocationRootV1({ ...params, root: row });
+      return root ? [root] : undefined;
+    }
+    const originalParent = await params.readInvocation(row.index.parentRecordId);
+    const ancestry = originalParent ? await current(originalParent) : undefined;
+    const parent = ancestry?.at(-1);
+    if (!ancestry || !parent) return undefined;
+    if (parent.index.id === row.index.parentRecordId && row.index.lifecycle !== 'superseded') return [...ancestry, row];
+    const members = await readWorkflowInvocationMembersV1({ parentRecordIds: [parent.index.id],
+      memberOrdinal: row.index.memberOrdinal, readParent: params.readInvocation,
+      readChildren: parents => params.readChildren(parents, row.index.memberOrdinal), indexOf: (member: T) => member.index });
+    const selected = members.get(parent.index.id);
+    const candidate = selected?.length === 1 ? selected[0] : undefined;
+    if (!candidate || candidate.index.lifecycle === 'superseded'
+      || candidate.index.runId !== row.index.runId
+      || candidate.progress.logicalInvocationRecordId !== row.progress.logicalInvocationRecordId
+      || candidate.progress.blockKind !== row.progress.blockKind
+      || !sameStrictJsonValue(candidate.progress.invocationPath, row.progress.invocationPath)) return undefined;
+    return [...ancestry, candidate];
+  };
+  return current(params.invocation);
 }
 
 /**

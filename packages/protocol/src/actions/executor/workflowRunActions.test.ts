@@ -86,6 +86,18 @@ function ownerDeps(storage: WorkflowAccountRunActionDeps['storage']): WorkflowAc
   };
 }
 
+function storedRootInvocation(snapshot: ReturnType<typeof runSnapshot>) {
+  const id = '66666666-6666-4666-8666-666666666666';
+  const index = WorkflowRunInvocationIndexV1Schema.parse({ id, runId, sequence: '0', parentRecordId: null,
+    memberOrdinal: '0', attempt: '0', contentRevision: '0', lifecycle: 'completed',
+    createdAt: snapshot.run.createdAt, updatedAt: snapshot.run.updatedAt });
+  const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+    blockKind: 'root', invocationPath: { blockId: '$root', scope: [] }, attempt: '0', logicalInvocationRecordId: id });
+  return { index, progress, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+    mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId,
+      recordId: id, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' }, progress })) };
+}
+
 describe('shared Account workflow run owner', () => {
   it('keeps membership private facts unrequested and rejects mismatched storage projection modes', async () => {
     const snapshot = runSnapshot();
@@ -1797,16 +1809,17 @@ describe('shared Account workflow run owner', () => {
         acceptedSnapshot: originalAccepted,
       })) };
     const nextId = '22222222-2222-4222-8222-222222222222';
+    const root = storedRootInvocation(original);
     const rows = ['completed', 'failed'].map((lifecycle, ordinal) => {
       const id = ordinal === 0 ? '33333333-3333-4333-8333-333333333333' : '44444444-4444-4444-8444-444444444444';
-      const index = { id, runId, sequence: String(ordinal), parentRecordId: null, memberOrdinal: String(ordinal),
+      const index = { id, runId, sequence: String(ordinal + 1), parentRecordId: root.index.id, memberOrdinal: String(ordinal),
         attempt: '0', contentRevision: '1', lifecycle, createdAt: original.run.createdAt, updatedAt: original.run.updatedAt };
       const progress = { kind: 'happier.workflow-progress.v1' as const, blockKind: 'step' as const,
         invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
         ...(ordinal === 0 ? { result: { answer: 'Previous answer', pass: false } } : { reason: { code: 'target_unavailable' } }) };
       return { index, progress, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
         mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: id,
-          sequence: index.sequence, parentRecordId: null, memberOrdinal: index.memberOrdinal, attempt: '0' }, progress,
+          sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: '0' }, progress,
       })) };
     });
     let committed: ReturnType<typeof runSnapshot> | undefined;
@@ -1820,11 +1833,11 @@ describe('shared Account workflow run owner', () => {
         throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
       }
       if (operation.operation === 'invocations.list') return operation.runId === runId
-        ? { invocations: [rows[operation.cursor ? 1 : 0]!.index], ...(operation.cursor ? {} : { nextCursor: 'second-page' }) }
+        ? { invocations: operation.cursor ? [rows[1]!.index] : [root.index, rows[0]!.index], ...(operation.cursor ? {} : { nextCursor: 'second-page' }) }
         : { invocations: [] };
       if (operation.operation === 'invocations.get') {
         if (priorContext === 'revoked') throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
-        const row = rows.find(candidate => candidate.index.id === operation.invocationId);
+        const row = [root, ...rows].find(candidate => candidate.index.id === operation.invocationId);
         if (!row) throw new Error('unknown_invocation');
         return { invocation: { ...row, parentRevision: 1,
           ...(priorContext === 'misbound' ? { contentEnvelope: rows.find(candidate => candidate !== row)!.contentEnvelope } : {}) } };
@@ -2151,11 +2164,12 @@ describe('shared Account workflow run owner', () => {
     snapshot.run.revision = 2;
     // These are initially stored envelope snapshots, matching the persisted
     // WorkflowRunInvocation default and canonical storage testkit admission.
-    const index = { id: recordId, runId, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0', contentRevision: '0',
+    const root = storedRootInvocation(snapshot);
+    const index = { id: recordId, runId, sequence: '1', parentRecordId: root.index.id, memberOrdinal: '0', attempt: '0', contentRevision: '0',
       lifecycle: scenario.lifecycle, createdAt: snapshot.run.createdAt, updatedAt: snapshot.run.updatedAt };
     const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
       mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId,
-        sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+        sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'work', scope: [] },
         blockKind: 'step', attempt: '0', logicalInvocationRecordId: recordId,
         execution: { kind: 'session', sessionId: 'session-1', localInputId: 'input-1' },
@@ -2168,10 +2182,10 @@ describe('shared Account workflow run owner', () => {
         recovery: { conversation: 'same_conversation', input: { kind: 'replacement', value: { document: { text: 'prepared', references: [], attachments: [] }, input: [] } } } },
     }));
     const latestId = '44444444-4444-4444-8444-444444444444';
-    const latestIndex = { ...index, id: latestId, attempt: '1', sequence: '1', lifecycle: 'pending' };
+    const latestIndex = { ...index, id: latestId, attempt: '1', sequence: '2', lifecycle: 'pending' };
     const latestEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
       mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: latestId,
-        sequence: '1', parentRecordId: null, memberOrdinal: '0', attempt: '1' },
+        sequence: latestIndex.sequence, parentRecordId: latestIndex.parentRecordId, memberOrdinal: '0', attempt: '1' },
       progress: { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: 'work', scope: [] },
         blockKind: 'step', attempt: '1', logicalInvocationRecordId: recordId, previousAttemptRecordId: recordId },
     }));
@@ -2180,9 +2194,10 @@ describe('shared Account workflow run owner', () => {
     const owner = createWorkflowAccountRunActionOwner({
       ...ownerDeps({ execute: async (operation) => {
         if (operation.operation === 'get') return snapshot;
+        if (operation.operation === 'invocations.get' && operation.invocationId === root.index.id) return { invocation: { ...root, parentRevision: 2 } };
         if (operation.operation === 'invocations.get') return { invocation: operation.invocationId === latestId
           ? { index: latestIndex, contentEnvelope: latestEnvelope, parentRevision: 2 } : { index, contentEnvelope, parentRevision: 2 } };
-        if (operation.operation === 'invocations.list') return { invocations: [index, ...('stale' in scenario ? [latestIndex] : [])], nextCursor: null };
+        if (operation.operation === 'invocations.list') return { invocations: [root.index, index, ...('stale' in scenario ? [latestIndex] : [])], nextCursor: null };
         replacements += 1;
         throw new Error('unexpected_replacement');
       } }),
