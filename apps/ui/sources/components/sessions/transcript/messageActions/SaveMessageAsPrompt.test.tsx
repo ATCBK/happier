@@ -37,8 +37,11 @@ afterEach(async () => {
     await disconnectActiveServerConnection();
 });
 
+let nextHome = 0;
 async function mount() {
-    const serverId = await harness.addHome({ name: 'Prompt Home', serverUrl: 'https://prompt-save.test', accountId: 'prompt-owner' });
+    // Each synthetic backend starts at revision 4. Give it a fresh Home rather than
+    // rolling an already observed Account's catalog back after a previous test saved revision 5.
+    const serverId = await harness.addHome({ name: 'Prompt Home', serverUrl: `https://prompt-save-${++nextHome}.test`, accountId: 'prompt-owner' });
     const catalog = createPromptLibraryCatalogBoundary({ revision: 4, settingsVersion: 1 });
     harness.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     harness.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
