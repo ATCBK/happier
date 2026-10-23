@@ -1201,7 +1201,6 @@ describe('ConnectionStatusControl (native popover config)', () => {
 
         const retryButton = screen.findByTestId('connection-popover-relay-retry');
         expect(retryButton).toBeTruthy();
-        expect(retryButton?.props.style).toMatchObject({ minWidth: 44, minHeight: 44 });
 
         await act(async () => {
             await pressTestInstanceAsync(retryButton);

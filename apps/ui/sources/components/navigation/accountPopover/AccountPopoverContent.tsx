@@ -86,8 +86,9 @@ export function AccountPopoverContent(props: Readonly<{
     runtimeOrigin: string | null;
     homeCarrier: HomeCarrier | null;
     switchServer: SwitchServer;
-    /** Reconnects in place; resolves when the attempt settles (the row's Retry shows it pending). */
+    /** Starts recovery in place; the promise covers preparation and retryBusy follows the connection owner. */
     onRetry: () => Promise<unknown>;
+    retryBusy: boolean;
     onRestore: () => void;
     onAddHome: () => void;
     onManageHomes: () => void;
@@ -495,7 +496,7 @@ function useAccountPopoverHomeRows(props: React.ComponentProps<typeof AccountPop
                 ? resolveCurrentHomeHealth(summary, props.machineSummary)
                 : resolveOtherHomeHealth(summary);
             const color = toneColor(health, summary);
-            const fix = health.fix;
+            const fix = isCurrent && props.retryBusy ? 'retry' : health.fix;
             const fixPress = fix === 'retry' ? props.onRetry : fix === 'restore' ? props.onRestore : onPress;
             const disambiguator = (nameCounts.get(label.trim().toLocaleLowerCase()) ?? 0) > 1
                 ? getServerSelectionTargetSubtitle(target)
@@ -513,7 +514,7 @@ function useAccountPopoverHomeRows(props: React.ComponentProps<typeof AccountPop
                 selected,
                 // Retry is a glyph (a failed Home keeps its row quiet); Sign in stays a labelled action.
                 right: fix === 'retry' ? (
-                    <RetryIconButton testID={`connection-popover-home-${target.kind}-${target.id}-fix`} onPress={fixPress} />
+                    <RetryIconButton testID={`connection-popover-home-${target.kind}-${target.id}-fix`} onPress={fixPress} busy={isCurrent && props.retryBusy} />
                 ) : fix ? (
                     <ToolbarButton
                         testID={`connection-popover-home-${target.kind}-${target.id}-fix`}
@@ -534,6 +535,7 @@ function useAccountPopoverHomeRows(props: React.ComponentProps<typeof AccountPop
         props.machineSummary,
         props.onRestore,
         props.onRetry,
+        props.retryBusy,
         props.pendingServerId,
         props.targets,
         serverById,
@@ -547,11 +549,12 @@ const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platfor
 const RETRY_GLYPH_PX = 18;
 
 /** The inline retry of a failed row: the refresh glyph, no chrome, named and explained on hover. */
-function RetryIconButton(props: Readonly<{ testID: string; onPress: () => unknown }>) {
+function RetryIconButton(props: Readonly<{ testID: string; onPress: () => unknown; busy?: boolean }>) {
     return (
         <IconButton
             testID={props.testID}
             iconName="arrow-clockwise"
+            busy={props.busy}
             variant="plain"
             // A chromeless square just larger than its glyph, so the glyph's edge sits on the row's
             // trailing edge where a labelled action (Sign in) ends; the press frame grows vertically.

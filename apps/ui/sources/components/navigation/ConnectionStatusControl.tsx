@@ -37,6 +37,8 @@ import { resolveSocketErrorClassification } from '@/sync/runtime/connectivity/re
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import {
     areServerProfileIdentifiersEquivalent,
@@ -217,13 +219,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: theme.space.s6,
     },
-    statusRowRetryButton: {
-        minWidth: minimumInteractiveTargetSize,
-        minHeight: minimumInteractiveTargetSize,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     popoverStatusPill: {
         flexShrink: 0,
     },
@@ -271,20 +266,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
         paddingHorizontal: theme.space.s16,
         paddingTop: theme.space.s12,
-    },
-    popoverActionButton: {
-        paddingHorizontal: theme.space.s10,
-        paddingVertical: theme.space.s6,
-        borderRadius: 10,
-        backgroundColor: theme.colors.background.canvas,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
-        minHeight: minimumInteractiveTargetSize,
-        justifyContent: 'center',
-    },
-    popoverActionButtonText: {
-        ...Typography.variant('meta', 'semiBold'),
-        color: theme.colors.text.primary,
     },
     detailsDisclosure: {
         minHeight: minimumInteractiveTargetSize,
@@ -499,6 +480,7 @@ const ConnectionPopoverStatusRow = React.memo(function ConnectionPopoverStatusRo
     statusVariant: StatusPillVariant;
     divided?: boolean;
     onRetry?: () => void;
+    retryBusy?: boolean;
 }>) {
     const styles = stylesheet;
     return (
@@ -520,16 +502,17 @@ const ConnectionPopoverStatusRow = React.memo(function ConnectionPopoverStatusRo
             <View style={{ flex: 1 }} />
             <View style={styles.statusRowRight}>
                 {props.onRetry ? (
-                    <Pressable
+                    <IconButton
                         testID={`${props.testID}-retry`}
-                        accessibilityRole="button"
+                        iconName="arrow-clockwise"
+                        variant="plain"
+                        size={DENSE_POINTER_TARGET_SIZE}
+                        iconSize={16}
+                        minimumInteractiveTargetSize={minimumInteractiveTargetSize}
                         accessibilityLabel={t('common.retry')}
-                        hitSlop={8}
+                        busy={props.retryBusy}
                         onPress={props.onRetry}
-                        style={styles.statusRowRetryButton}
-                    >
-                        <Icon name="arrow-clockwise" size={16} color={props.statusColor} />
-                    </Pressable>
+                    />
                 ) : null}
                 <StatusPill
                     variant={props.statusVariant}
@@ -871,7 +854,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
         });
     }, [displayServerProfile, invokingPath, router, runPopoverAction]);
 
-    // Returns the reconnect's promise so the Retry control shows it pending until it settles.
+    // The shared control covers preparation; the connection owner reports the subsequent probe/transport progress.
     const handleRetry = React.useCallback(() => runPopoverAction('in_place', () => (
         retryActiveServerConnection().catch(() => undefined)
     )), [runPopoverAction]);
@@ -930,6 +913,8 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
             homeSummaryStatusKey: homeSummary.statusKey,
         });
     const relayPresentation = resolveStatusPresentation(theme, relayStatusKey);
+    const isRetrying = connectionHealth.endpointStatus === 'connecting' || socketStatus.status === 'connecting';
+    const nextRetryAt = connectionHealth.nextRetryAt ?? activeSyncError?.nextRetryAt;
     const canRetryRelayConnection = irohTransportPresentation.permitsRetry && (
         relayStatusKey === 'connecting'
         || relayStatusKey === 'disconnected'
@@ -992,17 +977,17 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                 />
             ) : null}
 
-            {homeSummary.action !== 'none' ? (
+            {homeSummary.action !== 'none' || isRetrying ? (
                 <View style={styles.popoverActionsRow}>
-                    <Pressable
+                    <RoundButton
                         testID="connection-popover-primary-action"
+                        title={primaryActionLabel}
+                        size="mini"
+                        display="secondary"
+                        loading={isRetrying}
                         onPress={homeSummary.action === 'restore' ? handleRestoreAccount : handleRetry}
-                        style={styles.popoverActionButton}
-                        accessibilityRole="button"
                         accessibilityLabel={primaryActionLabel}
-                    >
-                        <Text style={styles.popoverActionButtonText}>{primaryActionLabel}</Text>
-                    </Pressable>
+                    />
                     <CopiedPill
                         visible={diagnosticsCopied}
                         testID="connection-copy-diagnostics-feedback"
@@ -1025,6 +1010,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                         dotColor={relayPresentation.dotColor}
                         statusVariant={relayPresentation.pillVariant}
                         onRetry={canRetryRelayConnection ? handleRetry : undefined}
+                        retryBusy={isRetrying}
                     />
                 </View>
             ) : null}
@@ -1038,6 +1024,14 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                         {formatTime(lastSyncAt)}
                     </Text>
                 </View>
+                {nextRetryAt ? (
+                    <View style={styles.statusMetaRow}>
+                        <Text style={styles.statusMetaLabel}>{t('connectionStatus.labels.nextRetry')}</Text>
+                        <Text testID="connection-popover-next-retry" style={styles.statusMetaValue}>
+                            {formatTime(nextRetryAt)}
+                        </Text>
+                    </View>
+                ) : null}
                 {syncErrorPresentation ? (
                     <View style={styles.statusMetaRow}>
                         <Text style={styles.statusMetaLabel}>
@@ -1132,6 +1126,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
             homeCarrier={displayHomeCarrier}
             switchServer={switchServer}
             onRetry={handleRetry}
+            retryBusy={isRetrying}
             onRestore={handleRestoreAccount}
             onAddHome={handleOpenAddHome}
             onManageHomes={handleManageRelay}

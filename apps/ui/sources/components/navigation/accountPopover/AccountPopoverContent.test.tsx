@@ -34,7 +34,7 @@ describe('AccountPopoverContent pairing entry', () => {
             homeSummary={resolveHomeConnectionSummary({ healthKind: 'healthy' })}
             machineSummary={{ kind: 'unknown' }} showsMachineGuidance={false}
             runtimeOrigin={null} homeCarrier={null}
-            switchServer={async () => 'switched'} onRetry={async () => {}}
+            switchServer={async () => 'switched'} onRetry={async () => {}} retryBusy={false}
             onRestore={() => {}} onAddHome={() => {}} onManageHomes={() => {}}
             onClose={onClose} renderDetails={() => null}
         />);

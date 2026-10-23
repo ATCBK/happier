@@ -282,5 +282,6 @@ export function useActiveHomeConnectionHealth() {
         ...presentation,
         primaryMachineLabel,
         endpointStatus: isAppliedHomeTransitioning ? 'connecting' : endpointConnectivity.status,
+        nextRetryAt: isAppliedHomeTransitioning ? null : endpointConnectivity.nextRetryAt,
     };
 }
