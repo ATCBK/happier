@@ -94,7 +94,7 @@ import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { SessionActionRpcTransport } from '@/session/actions/createCliActionDeps';
+import { createCliActionDeps, type SessionActionRpcTransport } from '@/session/actions/createCliActionDeps';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { BasePermissionHandler } from '@/agent/permissions/BasePermissionHandler';
 
@@ -190,6 +190,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   storage.state.revokedAt = null;
   storage.state.publicKey = installation.publicKey;
   storage.state.sessionIds = new Set([childId]);
+  storage.state.sessionAccessKeyIds = new Set();
   storage.state.directReportSessionIds = new Set([childId]);
   const token = await auth.createToken(storage.account.id, undefined, { kind: 'account', authority: 'present_user' });
   const credentials = { token, encryption: null };
@@ -395,6 +396,74 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it.each(['none', 'wait', 'return'] as const)('admits a native message (%s) with the resolved receiver Session under its original Home root', async reply => {
+  const f = await fixture();
+  try {
+    storage.state.sessionAccessKeyIds.add(childId);
+    f.app.get('/v2/sessions/:sessionId/delivery-mutes', { preHandler: f.app.authenticate,
+      config: { apiTokenSessionAction: 'session.delivery.mute.list', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
+    }, async () => ({ scopes: [] }));
+    f.app.get('/v2/sessions/:sessionId/messages/reply-capability', { preHandler: f.app.authenticate,
+      config: { apiTokenSessionAction: 'session.status.get', restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId' } },
+    }, async () => ({ v: 1, protocolVersions: [1] }));
+    const operation = f.operation('session.message.send', { sessionId: childId, message: 'Message the receiver', reply });
+    const prepared = await f.prepare(operation, { v: 1, caller: operation.witness.agentStartCaller,
+      sourceTurnId: 'turn', sourceInputId: 'input', callerPermissionMode: 'default', requestId: operation.requestId });
+    expect(prepared).not.toBeNull();
+    if (!prepared) throw new Error('Missing Home root');
+    const admitted: string[] = [];
+    const observer = new AbortController();
+    const deps = createCliActionDeps({ token: f.credentials.token, credentials: f.credentials, sessionId: '', mode: 'plain', ctx: null,
+      serverId, serverIdentityId: storage.state.homeId, serverHttpBaseUrl,
+      externalActionMachineRequestPrivateKey: installation.secretKey, externalActionMachineInstallationId: storage.state.installationId,
+      getCurrentTurnWorkDepth: () => 0,
+      sessionActionRpcTransport: async request => {
+        expect(request.sessionId).toBe(sessionId);
+        expect(request.method).toBe('session.message.reply.observe.v1');
+        return { v: 1, ok: true, progress: { v: 1, mode: reply === 'none' ? 'wait' : reply,
+          sourceSession: { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' }, disposition: 'released' } };
+      },
+      // The receiver Machine is the network boundary. Home minting, signature
+      // verification, Session-key admission and the send owner remain real.
+      machineAdmissionTransport: async request => {
+        expect(request.content).toMatchObject({ t: 'plain', v: { meta: { happierInputRequestV1: {
+          sourceSession: { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' },
+        } } } });
+        admitted.push(request.sessionId);
+        // The tool observer may end after durable acceptance; it must not undo
+        // the input. Reply/result custody itself has its existing composed tests.
+        if (reply === 'wait') observer.abort();
+        return { status: 'accepted', localId: request.localId };
+      },
+    });
+    const send = (signal?: AbortSignal) => runWithServerHttpBaseUrl(serverHttpBaseUrl, () => deps.sessionSendMessage({
+      sessionId: childId, message: 'Message the receiver', reply, requestedAction: { v: 1, kind: 'enqueue' },
+      ...(signal ? { signal } : {}),
+      actionCaller: operation.witness.agentStartCaller, callerSurface: 'agent',
+      sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } },
+      context: { surface: 'agent', authority: 'account_automation', serverId,
+        actionCaller: operation.witness.agentStartCaller, actionRequestId: operation.requestId,
+        callerPermissionMode: 'default',
+        sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' },
+        externalActionExecutionAuthorization: prepared.authorization, externalActionTarget: prepared.target },
+    }));
+    const outcome = await send(reply === 'wait' ? observer.signal : undefined);
+    expect(outcome).toMatchObject({ status: 'accepted' });
+    expect(admitted).toEqual([childId]);
+    expect(f.observations.filter(row => row.signed && row.status >= 400)).toEqual([]);
+    storage.state.sessionAccessKeyIds.delete(childId);
+    await expect(send()).rejects.toMatchObject({ code: 'not_authenticated' });
+    expect(admitted).toEqual([childId]);
+    if (reply === 'none') {
+      storage.state.sessionAccessKeyIds.add(childId);
+      storage.state.revokedAt = new Date(1);
+      await expect(send()).rejects.toMatchObject({ code: 'not_authenticated' });
+      expect(admitted).toEqual([childId]);
+    }
+  } finally { await f.close(); }
+});
 
 it.each(['bound', 'restricted', 'foreign-witness', 'wrong-handler'] as const)(
   'answers a worker question through MCP and the source daemon origin: %s', async binding => {

@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -8,6 +8,11 @@ import { buildBackendTargetKeyV2, FeaturesResponseSchema, SessionUsageLimitRecov
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
+  sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostResponseV1Schema, DiscussionDetailsResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { ApiMachineClient } from '@/api/apiMachine';
@@ -37,6 +42,11 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { registerSessionClientRuntimeHandlers } from './registerSessionClientRuntimeHandlers';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import { logger } from '@/ui/logger';
+import { createWorkflowRunStorageTestkit } from '@/daemon/workflows/workflowRunStorage.testkit';
+import { WORKFLOW_RUN_STORAGE_HTTP_PATH } from '@/daemon/workflows/workflowRunStorageClient';
+import { DurableWorkflowCoordinatorStore } from '@/daemon/workflows/production';
+import { workflowInvocationKey } from '@/daemon/workflows/coordinator';
+import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 const homes: Server[] = [];
 
@@ -56,7 +66,7 @@ afterEach(async () => {
 });
 
 async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>, roleCatalog = false, usageLimitRecovery?: boolean,
-  onStalledMutation?: () => void) {
+  onStalledMutation?: () => void, handleRequest?: (request: IncomingMessage, response: ServerResponse) => boolean) {
   let usageLimitIssue: SessionRuntimeIssueV1 | null = null;
   const settingsResponse = AccountSettingsV2GetResponseSchema.parse({
     version: settingsVersion, content: { t: 'plain', v: rawSettings },
@@ -73,6 +83,7 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
     requests.push({ method: request.method, path: request.url, authorization: request.headers.authorization,
       ...(isSettingsRead ? { settingsResponse } : {}) });
     response.setHeader('Content-Type', 'application/json');
+    if (handleRequest?.(request, response)) return;
     if (usageLimitRecovery !== undefined && request.url === '/v1/features') {
       response.end(JSON.stringify(FeaturesResponseSchema.parse({ features: { sessions: {
         enabled: true, usageLimitRecovery: { enabled: usageLimitRecovery },
@@ -98,7 +109,8 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
     } else if (roleCatalog && request.method === 'GET' && request.url === '/v2/account/settings/history') {
       response.end(JSON.stringify({ snapshots: [] }));
     } else if (roleCatalog && request.method === 'GET' && request.url?.startsWith('/v1/artifacts?')) {
-      response.end(JSON.stringify([]));
+      const filtered = new URL(request.url, 'http://fixture.local').searchParams.has('kind');
+      response.end(JSON.stringify(filtered ? { items: [], hasUnclassified: false } : []));
     } else { response.statusCode = 404; response.end('{}'); }
   });
   const settingsRead = once(server, 'settings-read');
@@ -113,6 +125,171 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
 }
 
 describe('Session RPC owner Home Settings custody', () => {
+  it.each(['enabled', 'disabled', 'unknown', 'storage_unavailable', 'run_access_denied'] as const)(
+    'publishes an accepted Workflow return through the captured Home Action owner (%s)', async scenario => {
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_ALLOW', 'automations,workflows');
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', '');
+    const diagnostics = vi.spyOn(logger, 'infoFile');
+    const accountId = 'workflow-owner';
+    const serverId = 'srv_workflow_owner_home';
+    const sessionId = 'workflow-receiver';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const recordId = 'invocation';
+    const workflow = { purpose: 'invocation' as const, runId, invocationRecordId: recordId };
+    const localId = deriveWorkflowSessionInputLocalIdV2(workflow);
+    const discussion = { serverId, discussionId: 'discussion' };
+    const addressing = { discussionId: discussion.discussionId, messageId: 'question', throughSeq: 2, participantSessionId: sessionId };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, inputs: [], defaults: {
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
+    }, blocks: [{ kind: 'step', id: 'answer', document: { text: 'Answer', references: [], attachments: [] },
+      input: [], result: { kind: 'text' }, execution: { conversation: { kind: 'fresh' } } }] },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine', executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'machine', directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct', discussion: { discussion, messageId: 'question', throughSeq: 2 } },
+        resultDelivery: { kind: 'originating_discussion', discussion, messageId: 'question', throughSeq: 2 },
+        authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error('Workflow fixture admission failed');
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot }));
+    const storage = createWorkflowRunStorageTestkit({ runId, machineId: 'machine', accountId,
+      origin: { kind: 'direct' }, acceptedEnvelope });
+    const root = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: 'root', sequence: '0',
+        parentRecordId: null, memberOrdinal: '0', attempt: '0' }, progress: { kind: 'happier.workflow-progress.v1',
+        invocationPath: { blockId: '$root', scope: [] }, blockKind: 'root', attempt: '0', logicalInvocationRecordId: 'root' } }));
+    await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: 'unused',
+      rootInvocation: { id: 'root', contentEnvelope: root } });
+    const store = await DurableWorkflowCoordinatorStore.load({ accountId, runId, parentAttempt: 0, rootRecordId: 'root',
+      revision: storage.run().revision, checkpoint: { kind: 'happier.workflow-checkpoint.v1', rootRecordId: 'root', nextSequence: '1',
+        frontier: { nextBlockOrdinal: 0, paused: false } }, storage,
+      encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
+    const key = workflowInvocationKey({ runId, blockId: 'answer', scope: [], attempt: 0 });
+    await store.ensureIntent({ key, recordId, runId, blockId: 'answer', path: { blockId: 'answer', scope: [] },
+      blockKind: 'step', memberOrdinal: '0', attempt: 0, acceptedAtMs: 1, lifecycle: 'pending' });
+    await store.commitFact({ key, lifecycle: 'completed', result: 'Accepted answer',
+      execution: { kind: 'session', sessionId, localInputId: localId } });
+    const ownerCredentials = { token: accountToken(accountId), encryption: null } as const;
+    const owner = await home(11, { schemaVersion: 6 }, true, undefined, undefined, (request, response) => {
+      if (request.method === 'GET' && request.url === '/v1/features') {
+        response.end(JSON.stringify(identitySnapshot.features));
+        return true;
+      }
+      if (request.method === 'GET' && request.url === '/v1/auth/ping') {
+        response.end('{}');
+        return true;
+      }
+      if (request.method === 'GET' && request.url?.endsWith('/reply')) {
+        response.end(JSON.stringify({ v: 1, status: 'available', progress: { v: 1, mode: 'wait', workflow,
+          discussion: addressing, acceptedTurnId: 'turn', disposition: 'inline',
+          outcome: { kind: 'answer', result: { sessionId, messageId: 'native-final' } } } }));
+        return true;
+      }
+      if (request.method === 'GET' && request.url === '/v1/discussions/discussion') {
+        response.end(JSON.stringify(DiscussionDetailsResponseV1Schema.parse({ discussion: {
+          id: discussion.discussionId, ownerAccountId: accountId, encryptionMode: 'plain',
+          anchor: null, access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId: 'created',
+          titleContent: { t: 'plain', v: { v: 1, title: 'Question' } }, messageSeq: 2, lastReadSeq: 0,
+          unreadCount: 2, unreadMentionCount: 0, recentAuthorAccountIds: [accountId], archivedAt: null,
+          latestMessage: { id: 'question', localId: 'question-local', seq: 2, authorAccountId: accountId,
+            accountActor: { v: 1, accountId, profile: null }, producerV1: null, createdAt: 2 },
+          capabilities: { postMessages: true, rename: true, archive: true, restore: false,
+            askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+        } })));
+        return true;
+      }
+      if (request.method !== 'POST' || request.url !== WORKFLOW_RUN_STORAGE_HTTP_PATH) return false;
+      const chunks: Buffer[] = [];
+      request.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => { void (async () => {
+        if (scenario === 'storage_unavailable' || scenario === 'run_access_denied') {
+          response.statusCode = scenario === 'storage_unavailable' ? 503 : 403;
+          response.end(JSON.stringify({ error: scenario }));
+          return;
+        }
+        const raw: unknown = JSON.parse(Buffer.concat(chunks).toString());
+        if (!raw || typeof raw !== 'object' || !('operation' in raw) || !('runId' in raw) || raw.runId !== runId) {
+          throw new Error('Unexpected Workflow storage request');
+        }
+        const result = raw.operation === 'get' ? await storage.execute({ operation: 'get', runId })
+          : raw.operation === 'invocations.get' && 'invocationId' in raw && raw.invocationId === recordId
+            ? await storage.execute({ operation: 'invocations.get', runId, invocationId: recordId }) : null;
+        if (!result) throw new Error('Unexpected Workflow storage operation');
+        response.end(JSON.stringify(result));
+      })().catch(error => { response.statusCode = 500; response.end(JSON.stringify({ error: String(error) })); }); });
+      return true;
+    });
+    const focused = await home(99, { schemaVersion: 6 });
+    const identitySnapshot = { status: 'ready' as const, provenance: 'authenticated' as const, features: FeaturesResponseSchema.parse({ features: {
+      automations: { enabled: true }, workflows: { enabled: true },
+    }, capabilities: { serverIdentity: { serverIdentityId: serverId } } }) };
+    let snapshot: CliServerFeaturesSnapshot | undefined = { ...identitySnapshot,
+      features: FeaturesResponseSchema.parse({ features: { automations: { enabled: true }, workflows: { enabled: false } } }) };
+    const posts: unknown[] = [];
+    let observeConnected!: () => void;
+    const connectionReady = new Promise<void>(resolve => { observeConnected = resolve; });
+    const socket = createApiSessionSocketStub({ onConnect: observeConnected, emitWithAck: (event, payload) => {
+      if (event === DISCUSSION_AGENT_POST_EVENT_V1) {
+        posts.push(payload);
+        return DiscussionAgentPostResponseV1Schema.parse({ v: 1, ok: true, value: { messageSeq: 3, message: {
+          id: 'published', discussionId: discussion.discussionId,
+          localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId, acceptedTurnId: 'turn' }),
+          seq: 3, authorAccountId: null, accountActor: null, producerV1: null,
+          content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Accepted answer' }] } },
+          mentionedAccountIds: [], replyTarget: { kind: 'message', messageId: 'question' }, createdAt: 3,
+        } } });
+      }
+      return { ok: true };
+    } });
+    const metadata = createTestMetadata({ path: '/repo', machineId: 'machine' });
+    const parent = new ApiSessionClient(ownerCredentials.token, createPlainSessionFixture({ id: sessionId, metadata }), {
+      metadataAuthority: { kind: 'owner', credentials: ownerCredentials }, getServerFeaturesSnapshot: () => identitySnapshot,
+      transport: { serverId, serverUrl: owner.url, createSessionSocketTransport: () => ({ socket: socket as never,
+        transport: createSocketTransportAdapter(socket as never) }) },
+    });
+    const rpcLog = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: rpcLog });
+    const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    const pluginRegistry = createResolvedContributionRegistry({});
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager: rpc, token: ownerCredentials.token, serverId, serverUrl: owner.url,
+      readOwnerAccountCredentials: async () => ownerCredentials, getServerFeaturesSnapshot: () => snapshot,
+      readRoleSources: createRoleSourceReader({ accountId, artifactStore: createCredentialedAccountArtifactStore(ownerCredentials),
+        readPluginRoles: () => readPluginRoleSources(pluginRegistry), readRawAccountSettings: async () => ({ schemaVersion: 6 }) }),
+      metadataPath: metadata.path, metadata, sessionId, getSessionMetadata: () => metadata, session: parent,
+      enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+      enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    try {
+      await connectionReady;
+      // The callback must observe the current captured Home, not freeze registration's disabled bit.
+      if (scenario !== 'disabled') snapshot = scenario === 'unknown' ? undefined : identitySnapshot;
+      const result = await runWithServerHttpBaseUrl(focused.url, () => rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
+        { request: { v: 1, sessionId, discussionId: discussion.discussionId,
+          replyReturn: { serverId, requestLocalId: localId, acceptedTurnId: 'turn',
+            workflow: { runId, invocationRecordId: recordId, invocationAttempt: '0' } },
+          request: { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId, acceptedTurnId: 'turn' }),
+            content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Accepted answer' }] } },
+            mentionedAccountIds: [], mentionedSessionIds: [], replyTarget: { kind: 'message', messageId: 'question' } } } }));
+      const enabled = scenario === 'enabled';
+      expect(posts, JSON.stringify({ result, requests: owner.requests.map(({ method, path }) => ({ method, path })),
+        rpc: rpcLog.mock.calls.filter(([message]) => message === '[RPC] Request completed'),
+        diagnostics: diagnostics.mock.calls.filter(([message]) => typeof message === 'string'
+          && (message.includes('workflow_action_failure') || message === '[Session] Role Action refused')) }))
+        .toHaveLength(enabled ? 1 : 0);
+      expect(result).toMatchObject(enabled ? { v: 1, ok: true }
+        : scenario === 'disabled' ? { v: 1, ok: false }
+          : { v: 1, ok: false, error: scenario === 'run_access_denied' ? 'discussion_post_denied' : 'discussions_unavailable' });
+      expect(owner.requests.some(request => request.path === WORKFLOW_RUN_STORAGE_HTTP_PATH))
+        .toBe(scenario !== 'disabled' && scenario !== 'unknown');
+      expect(owner.requests.filter(request => request.path === WORKFLOW_RUN_STORAGE_HTTP_PATH)
+        .every(request => request.authorization === `Bearer ${ownerCredentials.token}`)).toBe(true);
+      expect(focused.requests).toEqual([]);
+    } finally { await registration.dispose(); await parent.close(); }
+  });
   it.each(['invocation', 'retirement'] as const)('cancels an issued Team visibility mutation on %s and preserves uncertainty', async lifetime => {
     vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
     let accepted!: () => void;
