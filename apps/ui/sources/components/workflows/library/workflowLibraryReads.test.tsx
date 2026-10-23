@@ -106,8 +106,44 @@ const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') 
 const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
 const artifactInventoryReads = () => home.requests.filter(request => request.input === null
     && new URL(request.path, request.serverUrl).pathname === '/v1/artifacts');
+const artifactHeaderRoute = '/v1/artifacts?limit=500&kind=other';
+// Freeze or shorten a real filtered HTTP page. Keep the canonical transport
+// envelope instead of answering a kind-selected read with the old raw array.
+async function artifactHeaderPage(selectedIds?: readonly string[]): Promise<unknown> {
+    const response = await home.artifacts(serverId).handle(artifactHeaderRoute);
+    if (!response) throw new Error('Expected the canonical Artifact list boundary');
+    const page: unknown = await response.json();
+    if (selectedIds === undefined) return page;
+    if (!page || typeof page !== 'object' || !('items' in page) || !Array.isArray(page.items)) {
+        throw new Error('Expected a filtered Artifact page');
+    }
+    return { ...page, items: page.items.filter((row: unknown) => row && typeof row === 'object'
+        && 'id' in row && typeof row.id === 'string' && selectedIds.includes(row.id)) };
+}
 
 describe('Workflow library reads through real Account Actions and HTTP', () => {
+    it('does not reload definition inventory for typed Session-only changes, but refreshes Artifact and unknown wakes', async () => {
+        await saved();
+        const hook = await renderHook(() => useWorkflowDefinitionLibrary());
+        await waitLoaded(hook);
+        const initial = artifactInventoryReads().length;
+        expect(initial).toBeGreaterThan(0);
+        const before = hook.getCurrent().definitions;
+        await act(async () => {
+            publishHomeAccountChange(serverId, ['session:unrelated'], { changeKinds: ['session'] });
+        });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
+        expect(artifactInventoryReads()).toHaveLength(initial);
+        expect(hook.getCurrent().definitions).toBe(before);
+        await act(async () => {
+            publishHomeAccountChange(serverId, [definitionId], { changeKinds: ['artifact'] });
+        });
+        await waitForHomeGovernance(() => expect(artifactInventoryReads()).toHaveLength(initial + 1));
+        await waitLoaded(hook);
+        await act(async () => { publishHomeAccountChange(serverId); });
+        await waitForHomeGovernance(() => expect(artifactInventoryReads()).toHaveLength(initial + 2));
+    });
+
     it('names scheduled rows from admitted Artifact headers without demanding the full library', async () => {
         // The production activation owner establishes Settings before Profile scope.
         await storage.getState().activateSettingsScope({ serverId, accountId });
@@ -252,11 +288,11 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
     it('shares visible library demand and preserves row identity and renders on an equal refresh', async () => {
         await saved();
         const pending = createDeferred<void>();
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list(), respondAfter: pending.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage(), respondAfter: pending.promise });
         let renders = 0;
         const first = await renderHook(() => { renders++; return useWorkflowDefinitionLibrary(); });
         const second = await renderHook(() => useWorkflowDefinitionLibrary());
-        await waitForHomeGovernance(() => expect(home.requestsFor('/v1/artifacts?limit=500&includeBody=true')).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(artifactInventoryReads()).toHaveLength(1));
         await act(async () => pending.resolve());
         await waitLoaded(first); await waitForHomeGovernance(() => expect(first.getCurrent().loadingMore).toBe(false));
         expect(first.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
@@ -290,10 +326,10 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
     it('retains known rows while refreshing and rechecks a wake received during the first page', async () => {
         await saved();
         const firstPage = createDeferred<void>();
-        const oldRows = home.artifacts(serverId).list();
+        const oldRows = await artifactHeaderPage();
         let reads = 0;
-        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
-            ? { body: oldRows, respondAfter: firstPage.promise } : { body: home.artifacts(serverId).list() } });
+        home.answer(serverId, 'GET /v1/artifacts', { select: async () => ++reads === 1
+            ? { body: oldRows, respondAfter: firstPage.promise } : { body: await artifactHeaderPage() } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
         await waitForHomeGovernance(() => expect(reads).toBe(1));
         await act(async () => { await saved(secondId, 'Created during read'); });
@@ -302,7 +338,7 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         expect(reads).toBe(2);
         const before = hook.getCurrent().definitions;
         const refresh = createDeferred<void>();
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list(), respondAfter: refresh.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage(), respondAfter: refresh.promise });
         await act(async () => publishHomeAccountChange(serverId));
         expect(hook.getCurrent().definitions).toBe(before);
         await act(async () => refresh.resolve());
@@ -314,8 +350,8 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         await saved();
         const retired = createDeferred<void>();
         let reads = 0;
-        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
-            ? { body: [], respondAfter: retired.promise } : { body: home.artifacts(serverId).list() } });
+        home.answer(serverId, 'GET /v1/artifacts', { select: async () => ++reads === 1
+            ? { body: await artifactHeaderPage([]), respondAfter: retired.promise } : { body: await artifactHeaderPage() } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
         await waitForHomeGovernance(() => expect(reads).toBe(1));
         await act(async () => { storage.setState({ profileScope: null }); });
@@ -330,17 +366,17 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         await saved();
         const retired = createDeferred<void>();
         let reads = 0;
-        const oldRows = home.artifacts(serverId).list();
-        home.answer(serverId, 'GET /v1/artifacts', { select: () => ++reads === 1
+        const oldRows = await artifactHeaderPage();
+        home.answer(serverId, 'GET /v1/artifacts', { select: async () => ++reads === 1
             ? { body: oldRows, respondAfter: retired.promise }
-            : { body: home.artifacts(serverId).list().filter(row => row.ownerAccountId === accountId) } });
+            : { body: await artifactHeaderPage(home.artifacts(serverId).list().filter(row => row.ownerAccountId === accountId).map(row => row.id)) } });
         const hook = await renderHook(() => useWorkflowDefinitionLibrary());
         await waitForHomeGovernance(() => expect(reads).toBe(1));
         await act(async () => retireActiveServerAccountScopeLifetime());
         await waitLoaded(hook);
         expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
         const accountB = createDeferred<void>();
-        home.answer(serverId, 'GET /v1/artifacts', { body: [], respondAfter: accountB.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage([]), respondAfter: accountB.promise });
         await act(async () => { accountId = 'account-b'; await home.switchAccount(serverId, accountId); storage.setState({ profileScope: { serverId, accountId } }); });
         expect(hook.getCurrent().status).toBe('loading');
         expect(hook.getCurrent().definitions).toEqual([]);
@@ -362,17 +398,14 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         await waitForHomeGovernance(() => { expect(first.getCurrent().definitions).toHaveLength(2); expect(first.getCurrent().loadingMore).toBe(false); });
         const before = first.getCurrent().definitions;
         const refresh = createDeferred<void>();
-        const rows = home.artifacts(serverId).list();
-        const response = await home.artifacts(serverId).handle('/v1/artifacts?limit=500&includeBody=true');
-        if (!response) throw new Error('Expected the canonical Artifact list boundary');
-        home.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: await response.json(), respondAfter: refresh.promise });
+        home.answer(serverId, `GET ${artifactHeaderRoute}`, { body: await artifactHeaderPage(), respondAfter: refresh.promise });
         const second = await renderHook(() => useWorkflowDefinitionLibrary());
         expect(first.getCurrent().definitions).toBe(before);
         await act(async () => refresh.resolve());
         await waitForHomeGovernance(() => expect(first.getCurrent().loadingMore).toBe(false));
         expect(first.getCurrent().definitions).toBe(before); expect(second.getCurrent().definitions).toBe(before);
         // Return an authoritative smaller collection at the actual network leaf.
-        home.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { body: rows.filter(row => row.id === definitionId) });
+        home.answer(serverId, `GET ${artifactHeaderRoute}`, { body: await artifactHeaderPage([definitionId]) });
         await act(async () => first.getCurrent().retry());
         await waitForHomeGovernance(() => expect(first.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]));
         expect(first.getCurrent().hasMore).toBe(false);
@@ -383,14 +416,14 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         await saved(definitionId, 'First', description); await saved(secondId, 'Second', description);
         const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
         const retired = createDeferred<void>();
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId), respondAfter: retired.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage([definitionId]), respondAfter: retired.promise });
         await act(async () => hook.getCurrent().loadMore());
         expect(hook.getCurrent().loadingMore).toBe(true);
         home.answer(serverId, 'GET /v1/artifacts', { status: 503, body: { error: 'storage_unavailable' } });
         await act(async () => retireActiveServerAccountScopeLifetime());
         await waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('failed'));
         expect(hook.getCurrent().loadingMore).toBe(false);
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId) });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage([definitionId]) });
         await act(async () => hook.getCurrent().retry()); await waitLoaded(hook);
         await act(async () => retired.resolve());
         expect(hook.getCurrent().definitions.map(row => row.definitionId)).toEqual([definitionId]);
@@ -402,13 +435,11 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         const hook = await renderHook(() => useWorkflowDefinitionLibrary()); await waitLoaded(hook);
         const before = hook.getCurrent().definitions;
         const retired = createDeferred<void>();
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId), respondAfter: retired.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage([definitionId]), respondAfter: retired.promise });
         await act(async () => hook.getCurrent().loadMore());
         await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v1/artifacts?'))).toHaveLength(2));
         const fresh = createDeferred<void>();
-        const response = await home.artifacts(serverId).handle('/v1/artifacts?limit=500&includeBody=true');
-        if (!response) throw new Error('Expected the canonical Artifact list boundary');
-        home.answer(serverId, 'GET /v1/artifacts', { body: await response.json(), respondAfter: fresh.promise });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage(), respondAfter: fresh.promise });
         await act(async () => {
             storage.setState({ profileScope: null });
             retireActiveServerAccountScopeLifetime();
@@ -417,7 +448,7 @@ describe('Workflow library reads through real Account Actions and HTTP', () => {
         });
         await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v1/artifacts?'))).toHaveLength(3));
         await act(async () => publishHomeAccountChange(serverId));
-        home.answer(serverId, 'GET /v1/artifacts', { body: home.artifacts(serverId).list().filter(row => row.id === definitionId) });
+        home.answer(serverId, 'GET /v1/artifacts', { body: await artifactHeaderPage([definitionId]) });
         await act(async () => retired.resolve());
         expect(hook.getCurrent().definitions).toBe(before);
         await act(async () => fresh.resolve());
