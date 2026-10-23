@@ -3,7 +3,7 @@ import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol
 import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { ExternalActionActionIdV1Schema, bindExternalActionExecutionAuthorizationVerifyHttpPathV1, bindExternalActionExecutionAuthorizationHttpPathV1, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationVerifyRequestV1Schema, isExternalActionResolvedTargetAllowedV1, isExternalActionWorkflowActionIdV1, type ExternalActionExecutionAuthorizationBindingV1, type ExternalActionExecutionAuthorizationV1, type ExternalActionMachineRpcExecutionV1, type ExternalActionTargetV1, type ExternalActionServerPrincipalV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRpcRequestV1, verifyExternalActionMachineRequestV1, isExternalActionAuthorizationBoundToEnvelope, type ExternalActionMachineRpcEventV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
-import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, isPluginProvenanceOnlyActionId, isSessionTargetPreparationAction, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { ActionIdSchema, type ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { MachineAccessActionIdSchema } from '@happier-dev/protocol/actions';
@@ -1383,9 +1383,15 @@ function isDiscussionCandidateReadHttpPurpose(verified: VerifiedExternalActionEx
 function isSessionTargetPreparationHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
     const root = SignedRootActionIdSchema.safeParse(verified.binding.actionId);
-    if (!root.success || !getActionSpec(root.data).sessionTarget
+    if (!root.success || !isSessionTargetPreparationAction(root.data)
         || verified.effectActionId !== verified.binding.actionId) return false;
     const method = proof.method.toUpperCase();
+    if (method === 'GET' && proof.body === undefined && proof.sessionRouteTarget?.actionId === 'session.transcript.get') {
+        // Exact reference/manager facts precede selection and final Action scope.
+        // Per-Session grants above and ordinary route access still apply.
+        const path = `/v2/sessions/${encodeURIComponent(proof.sessionRouteTarget.sessionId)}`;
+        if (proof.path === path || proof.path === `${path}?accessProjectionVersion=1`) return true;
+    }
     if (method === 'GET' && proof.body === undefined && proof.sessionRouteTarget?.actionId === 'follow.list'
         && isSessionFollowActionHttpRequestV1('follow.list', { method, path: proof.path, routeInput: proof.routeInput,
             sessionRouteSessionId: proof.sessionRouteTarget.sessionId })) return true;

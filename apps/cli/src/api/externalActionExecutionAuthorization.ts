@@ -1253,6 +1253,11 @@ export async function mintExternalActionExecutionAuthorization(input: Readonly<{
     return { ok: false, code: 'server_unavailable',
       ...(!input.signal?.aborted && classifyServerEndpointError(error).retryable ? { retryable: true as const } : {}) };
   }
+  if (response.status < 200 || response.status >= 300) {
+    const diagnostic = readSessionInputAdmissionDiagnostic({ actionId: input.actionId, requestId: input.envelope.requestId });
+    if (diagnostic) refuseExternalActionPhase('authorization_mint_http_status', input.machineId,
+      createHttpStatusError(response.status, 'Home authorization unavailable'), diagnostic);
+  }
   if (response.status === 403) {
     const refusal = ExternalActionHttpErrorSchema.safeParse(response.data);
     if (refusal.success && refusal.data.error === 'credential_scope_denied') {

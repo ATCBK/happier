@@ -3014,8 +3014,8 @@ describe("external Action execution authorization", () => {
                     target: { selector: 'workers', of: session.id } } });
             // Inspection prepares the same canonical selection under its own
             // signed read root; the described Action grants no effect authority.
-            expect(await verify('GET', '/v1/account/encryption/currentness', undefined, {}, undefined, preview)).not.toBeNull();
-            expect(await verify('POST', '/v2/sessions/query', query, query, undefined, preview)).not.toBeNull();
+            expect.soft(await verify('GET', '/v1/account/encryption/currentness', undefined, {}, undefined, preview)).not.toBeNull();
+            expect.soft(await verify('POST', '/v2/sessions/query', query, query, undefined, preview)).not.toBeNull();
             expect(await verify('GET', '/v1/account/encryption/currentness', undefined, {}, undefined,
                 preview, 'session.goal.get')).toBeNull();
             expect(await verify('GET', '/v2/account/settings', undefined, {}, undefined, preview)).toBeNull();
@@ -3023,16 +3023,17 @@ describe("external Action execution authorization", () => {
                 requestId: crypto.randomUUID(), input: { objective: 'Selected child goal',
                     sessionId: { selector: 'self', of: session.id } } });
             const detailPath = `/v2/sessions/${session.id}`;
-            const detailProof = (path: string) => ({ authorizationToken: goalSelection.token, effectActionId: goalSelection.binding.actionId,
-                encodedTarget: encodeExternalActionResolvedTargetV1(goalSelection.binding.target), method: 'GET', path,
-                routeInput: { sessionId: session.id, ...(path.includes('?') ? { accessProjectionVersion: 1 } : {}) },
-                sessionRouteTarget: { kind: 'session' as const, sessionId: session.id, actionId: 'session.transcript.get' as const },
-                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: goalSelection.token,
-                    effectActionId: goalSelection.binding.actionId, target: goalSelection.binding.target,
-                    installationId: fixture.machine.installationId!, requestId: goalSelection.binding.requestId,
+            const detailProof = (path: string, root = goalSelection, targetSessionId = session.id) => ({
+                authorizationToken: root.token, effectActionId: root.binding.actionId,
+                encodedTarget: encodeExternalActionResolvedTargetV1(root.binding.target), method: 'GET', path,
+                routeInput: { sessionId: targetSessionId, ...(path.includes('?') ? { accessProjectionVersion: 1 } : {}) },
+                sessionRouteTarget: { kind: 'session' as const, sessionId: targetSessionId, actionId: 'session.transcript.get' as const },
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: root.token,
+                    effectActionId: root.binding.actionId, target: root.binding.target,
+                    installationId: fixture.machine.installationId!, requestId: root.binding.requestId,
                     method: 'GET', path, privateKey: fixture.keyPair.secretKey }) });
-            expect(await verifyExternalActionDomainExecutionRequest(detailProof(detailPath))).not.toBeNull();
-            expect(await verifyExternalActionDomainExecutionRequest(detailProof(`${detailPath}?accessProjectionVersion=1`))).not.toBeNull();
+            expect.soft(await verifyExternalActionDomainExecutionRequest(detailProof(detailPath))).not.toBeNull();
+            expect.soft(await verifyExternalActionDomainExecutionRequest(detailProof(`${detailPath}?accessProjectionVersion=1`))).not.toBeNull();
             expect(await verifyExternalActionDomainExecutionRequest(detailProof(`${detailPath}?includeMessages=true`))).toBeNull();
             expect(await verifyExternalActionDomainExecutionRequest(detailProof(`/v1/sessions/${session.id}/messages`))).toBeNull();
             const census = await app.inject({ method: 'GET', url: censusPath, headers: machineHeaders({
@@ -3092,7 +3093,7 @@ describe("external Action execution authorization", () => {
                 body: undefined, privateKey: fixture.keyPair.secretKey }) });
             expect([privateDenied.statusCode, privateDenied.json()]).toEqual([403, { error: 'credential_scope_denied' }]);
             await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
-                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
+                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId, 'session.goal.set'] },
                 targets: { sessions: [session.id], machines: [fixture.machine.id] },
             } } });
             const restricted = await issue();
@@ -3104,6 +3105,12 @@ describe("external Action execution authorization", () => {
             expect(await verify('GET', sourcesPath, undefined, { destinationSessionId: session.id }, scope, restricted)).not.toBeNull();
             expect(await verify('GET', '/v2/sessions/outside/follows/sessions', undefined, { destinationSessionId: 'outside' },
                 { ...scope, sessionId: 'outside' }, restricted)).toBeNull();
+            const restrictedGoal = await mint(app, fixture, 'session.goal.set', { ...fixture.envelope,
+                requestId: crypto.randomUUID(), input: { objective: 'Selected child goal',
+                    sessionId: { selector: 'self', of: session.id } } });
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(detailPath, restrictedGoal))).not.toBeNull();
+            expect(await verifyExternalActionDomainExecutionRequest(detailProof(`/v2/sessions/${foreignSession.id}`,
+                restrictedGoal, foreignSession.id))).toBeNull();
         } finally { await app.close(); vi.unstubAllEnvs(); }
     });
 

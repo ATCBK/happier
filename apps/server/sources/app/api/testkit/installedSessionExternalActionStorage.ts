@@ -10,6 +10,7 @@ export function createInstalledSessionExternalActionStorage() {
         publicKey, metadata: encodePlainMachineStoredContent({}),
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null as Date | null,
         sessionIds: new Set<string>(), directReportSessionIds: new Set<string>(),
+        sessionAccessKeyIds: new Set<string>(),
     };
     const account = { id: state.accountId, status: 'active', tokenEpoch: 1,
         encryptionMode: 'plain', terminalPresentUserPolicy: 'never' };
@@ -56,7 +57,8 @@ export function createInstalledSessionExternalActionStorage() {
         teamMembership: { findMany: async () => [] },
         accessKey: { findUnique: async ({ where }: { where: { accountId_machineId_sessionId: { accountId: string; machineId: string; sessionId: string } } }) => {
             const key = where.accountId_machineId_sessionId;
-            return state.bound && key.accountId === state.accountId && key.machineId === state.machineId && key.sessionId === state.sessionId
+            return state.bound && key.accountId === state.accountId && key.machineId === state.machineId
+                && (key.sessionId === state.sessionId || state.sessionAccessKeyIds.has(key.sessionId))
                 ? { machine: machine(), session: { accountId: state.accountId } } : null;
         } },
         simpleCache: { findUnique: async () => ({ value: state.homeId }) },
