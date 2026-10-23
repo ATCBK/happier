@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ToolCall } from '@happier-dev/session-core/messages';
+import { bindContextualActionToolInput } from '@happier-dev/protocol/actions/actionToolContext';
 import {
   isRecord,
   readHappierActionToolPayload,
@@ -24,6 +25,7 @@ import {
   resolveToolCallOutcome,
 } from '@/components/tools/shell/presentation/resolveToolCallOutcome';
 import { ToolError } from '@/components/tools/shell/presentation/ToolError';
+import type { DeclinedApprovalDisposition } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Item } from '@/components/ui/lists/Item';
@@ -94,6 +96,8 @@ export const ToolCallDetailsSections = React.memo(
     props: Readonly<{
       tool: ToolCall;
       serverId?: string | null;
+      sessionId?: string | null;
+      declinedApproval?: DeclinedApprovalDisposition | null;
     }>,
   ) {
     const { tool } = props;
@@ -101,9 +105,13 @@ export const ToolCallDetailsSections = React.memo(
     const args = React.useMemo(
       () =>
         actionId
-          ? readHappierActionCallInput(tool.name, tool.input)
+          ? bindContextualActionToolInput({
+              actionId,
+              input: readHappierActionCallInput(tool.name, tool.input),
+              context: { defaultSessionId: props.sessionId },
+            })
           : readHappierActionToolPayload(tool.input),
-      [actionId, tool.input, tool.name],
+      [actionId, props.sessionId, tool.input, tool.name],
     );
     const actionFields = React.useMemo(
       () =>
@@ -112,7 +120,7 @@ export const ToolCallDetailsSections = React.memo(
           : null,
       [actionId, args],
     );
-    // The header reads the same outcome: a refusal, a request sent for approval, unsettled work or a status.
+    // Keep the returned approval reference navigable; its current decision comes from the header's matched disposition.
     const outcome = React.useMemo(() => resolveToolCallOutcome(tool), [tool]);
     const failure = outcome.kind === 'failure' ? outcome.failure : null;
     const failureMessage = failure?.message ?? null;
@@ -229,6 +237,7 @@ export const ToolCallDetailsSections = React.memo(
             <ApprovalRequestRow
               artifactId={approvalRequest.artifactId}
               serverId={props.serverId ?? null}
+              declinedApproval={props.declinedApproval ?? null}
             />
           </ItemGroup>
         ) : resultFields ? (
@@ -269,15 +278,15 @@ export const ToolCallDetailsSections = React.memo(
 
 /** The approval an Action asked for, opening that request where its decision lives. */
 function ApprovalRequestRow(
-  props: Readonly<{ artifactId: string; serverId: string | null }>,
+  props: Readonly<{ artifactId: string; serverId: string | null; declinedApproval: DeclinedApprovalDisposition | null }>,
 ) {
   const router = useDestinationRouter();
-  const { artifactId, serverId } = props;
+  const { artifactId, serverId, declinedApproval } = props;
   return (
     <Item
       testID="tool-details-approval-request"
-      title={t('toolView.approvalRequested.title')}
-      subtitle={t('toolView.approvalRequested.description')}
+      title={declinedApproval ? t(`approvals.status.${declinedApproval}`) : t('toolView.approvalRequested.title')}
+      subtitle={declinedApproval ? t('toolView.actionOutcome.refusedReason') : t('toolView.approvalRequested.description')}
       subtitleLines={0}
       onPress={
         serverId

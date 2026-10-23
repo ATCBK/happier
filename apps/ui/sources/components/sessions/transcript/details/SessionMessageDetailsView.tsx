@@ -35,6 +35,7 @@ import { t } from '@/text';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { Typography } from '@/constants/Typography';
 import { ToolFullView } from '@/components/tools/shell/views/ToolFullView';
+import type { DeclinedApprovalDisposition } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { useSessionRecipientState } from '@/components/sessions/agentInput/routing/useSessionRecipientState';
 import { participantRecipientsMatch } from '@/sync/domains/input/participants/resolveParticipantRoutedSend';
 import type { BrowserContextState } from '@/sync/domains/browser/context';
@@ -145,6 +146,7 @@ function ToolCallDetailsView(props: Readonly<{
     composerInitialLocalId?: string;
     browserContextState?: BrowserContextState | null;
     header?: React.ReactNode;
+    declinedApproval?: DeclinedApprovalDisposition | null;
 }>) {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -276,6 +278,7 @@ function ToolCallDetailsView(props: Readonly<{
                 discardedMessages={executionRunRecipient ? targetPending.discarded : null}
                 pendingRecipient={executionRunRecipient}
                 header={props.header}
+                declinedApproval={props.declinedApproval}
             />
 
             {shouldShowComposer ? (
@@ -307,6 +310,7 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
     browserContextState?: BrowserContextState | null;
     /** The tool-details page's own header; hosts that draw their own (a Run's page) omit it. */
     header?: React.ReactNode;
+    declinedApproval?: DeclinedApprovalDisposition | null;
 }>) => {
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageDetailsStyles(theme), [theme]);
@@ -331,6 +335,7 @@ export const SessionMessageDetailsView = React.memo((props: Readonly<{
                         composerInitialLocalId={props.composerInitialLocalId}
                         browserContextState={props.browserContextState}
                         header={props.header}
+                        declinedApproval={props.declinedApproval}
                     />
                 ) : props.message.kind === 'agent-text' || props.message.kind === 'user-text' ? (
                     <TextFullView text={prepareTranscriptMessageBody(props.message).text ?? ''} />

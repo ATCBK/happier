@@ -259,6 +259,7 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
                             session={session}
                             jumpChildId={jumpChildId}
                             header={toolPageHeader}
+                            declinedApproval={declinedApproval}
                         />
                     </Deferred>
                 </NavigationBackChromeProvider>

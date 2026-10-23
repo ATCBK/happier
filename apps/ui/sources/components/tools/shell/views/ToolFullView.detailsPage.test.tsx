@@ -9,6 +9,7 @@ import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { toolActionOutcomeLabel } from '../presentation/resolveToolActionFailure';
 import { readDecodedToolResult, resolveToolCallOutcome } from '../presentation/resolveToolCallOutcome';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import {
   collectHostText,
   findPressableByText,
@@ -23,7 +24,13 @@ vi.mock('@/sync/sync', () => ({
 }));
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
+const approvalNavigation = vi.hoisted(() => ({ push: vi.fn() }));
+
 installToolShellCommonModuleMocks({
+  expoRouter: async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({ router: { push: approvalNavigation.push } }).module;
+  },
   storage: async (importOriginal) => {
     const { createStorageModuleMock } =
       await import('@/dev/testkit/mocks/storage');
@@ -133,6 +140,54 @@ const createSessionPendingCall = makeToolCall({
 });
 
 describe('ToolFullView as the tool-details page', () => {
+  it('presents contextual Session operands without inventing a value for malformed input', async () => {
+    for (const [input, sessionId, expectedSession] of [
+      [{}, 'originating-session', 'originating-session'],
+      [{ sessionId: 'explicit-other-session' }, 'originating-session', 'explicit-other-session'],
+      [{ sessionId: null }, 'originating-session', null],
+      [{}, undefined, null],
+    ] as const) {
+      const tool = makeToolCall({
+        name: 'mcp__happier__action_execute', state: 'completed', result: null,
+        input: { actionId: 'session.capabilities.set', input: { kind: 'native_skill', id: 'pdf', state: 'on', ...input } },
+      });
+      const screen = await renderScreen(<ToolFullView tool={tool} owningMessageId="contextual-call" sessionId={sessionId} />);
+      const warnings = screen.tree.root.findAllByProps({ testID: 'approvals.unrepresentable-details' });
+      if (expectedSession) {
+        expect(warnings).toHaveLength(0);
+        await screen.pressByTestIdAsync('approvals.technical-details.header');
+        expect(collectHostText(screen.tree).join('\n')).toContain(expectedSession);
+      } else {
+        expect(warnings.length).toBeGreaterThan(0);
+      }
+      await screen.unmount();
+    }
+  });
+
+  it('updates the approval link from pending to the matched rejected or canceled outcome', async () => {
+    const page = (declinedApproval: 'rejected' | 'canceled' | null) => (
+      <ToolFullView tool={archiveAskedCall} owningMessageId="tool-message-2" sessionId="s1" serverId="home-1"
+        declinedApproval={declinedApproval}
+        header={<ToolDetailsPageHeader tool={archiveAskedCall} metadata={null} declinedApproval={declinedApproval} />} />
+    );
+    const screen = await renderScreen(page(null));
+    expect(collectHostText(screen.tree).join('\n')).toContain('toolView.approvalRequested.title');
+    for (const disposition of ['rejected', 'canceled'] as const) {
+      await screen.update(page(disposition));
+      expect(headerOutcome(screen)).toBe(toolActionOutcomeLabel('refused'));
+      const visible = collectHostText(screen.tree).join('\n');
+      expect(visible).toContain(`approvals.status.${disposition}`);
+      expect(visible).toContain('toolView.actionOutcome.refusedReason');
+      expect(visible).not.toContain('toolView.approvalRequested.title');
+      expect(visible).not.toContain('toolView.approvalRequested.description');
+      const link = screen.tree.root.findAll((node) => node.props.testID === 'tool-details-approval-request'
+        && typeof node.props.onPress === 'function')[0];
+      expect(link).toBeDefined();
+      await act(async () => { link!.props.onPress(); });
+      expect(approvalNavigation.push).toHaveBeenLastCalledWith(buildApprovalHref('approval-1', 'home-1'));
+    }
+  });
+
   it('uses structured approval output alongside explanatory MCP text in both header and Result', async () => {
     const approval = { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'session.archive' };
     const tool = makeToolCall({ ...archiveAskedCall, result: {

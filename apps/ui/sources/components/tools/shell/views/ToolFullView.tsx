@@ -41,6 +41,7 @@ import { resolveToolPermissionTerminalErrorMessage } from '../permissions/resolv
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useHistoricalTranscriptAgentId } from '@/components/sessions/transcript/attribution/SessionTranscriptAgentAttributionContext';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import type { DeclinedApprovalDisposition } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 
 
 interface ToolFullViewProps {
@@ -65,6 +66,8 @@ interface ToolFullViewProps {
     pendingRecipient?: PendingMessage['recipient'];
     /** The page's own header when this view is the whole tool-details page; hosts with their own header omit it. */
     header?: React.ReactNode;
+    /** The same matched Action approval decision that the page header displays. */
+    declinedApproval?: DeclinedApprovalDisposition | null;
 }
 
 export function ToolFullView(props: ToolFullViewProps) {
@@ -75,7 +78,7 @@ export function ToolFullView(props: ToolFullViewProps) {
     return <SessionTranscriptSourceProvider source={detailSource}><ToolFullViewContent {...props} /></SessionTranscriptSourceProvider>;
 }
 
-function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metadata, messages = [], jumpChildId, forcePermissionFooterInTranscript = false, pendingMessages, discardedMessages, pendingRecipient, header }: ToolFullViewProps) {
+function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metadata, messages = [], jumpChildId, forcePermissionFooterInTranscript = false, pendingMessages, discardedMessages, pendingRecipient, header, declinedApproval }: ToolFullViewProps) {
     const source = useSessionTranscriptSource();
     const interaction = source.useInteraction();
     // This view opens one historical row on its own screen, so the row's own
@@ -307,7 +310,7 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
             {header}
             {structuredPage || !SpecializedFullView ? (
                 <TextSelectabilityScope selectable>
-                    <ToolCallDetailsSections tool={toolForRendering} serverId={serverId} />
+                    <ToolCallDetailsSections tool={toolForRendering} serverId={serverId} sessionId={sessionId} declinedApproval={declinedApproval} />
                 </TextSelectabilityScope>
             ) : (
                 <PageContentColumn style={styles.pageBody}>
