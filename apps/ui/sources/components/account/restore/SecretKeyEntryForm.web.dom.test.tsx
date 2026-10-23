@@ -69,3 +69,44 @@ it('gives the secret input an accessible name that is also visible in the form',
         container.remove();
     }
 });
+
+it('uses a password input with autocomplete disabled until the user explicitly reveals the key', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+        await act(async () => {
+            root.render(
+                <SecretKeyEntryForm description="Account key" submitTitle="Continue"
+                    onSubmit={async () => ({ kind: 'completed' })} />,
+            );
+        });
+        const input = container.querySelector<HTMLInputElement>('[data-testid="restore-manual-secret-input"]')!;
+        const reveal = container.querySelector<HTMLButtonElement>('[data-testid="restore-manual-secret-reveal"]')!;
+        const syntheticKey = 'synthetic-recovery-key-for-secure-entry';
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, syntheticKey);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+
+        expect(input.tagName).toBe('INPUT');
+        expect(input.type).toBe('password');
+        expect(input.autocomplete).toBe('off');
+        expect(container.textContent).not.toContain(syntheticKey);
+        expect(input.getAttribute('aria-valuetext')).toBeNull();
+        expect(input.getAttribute('aria-label')).toBe(t('connect.secretKeyInputLabel'));
+
+        await act(async () => { reveal.click(); });
+        expect(input.type).toBe('text');
+        expect(input.value).toBe(syntheticKey);
+        expect(input.autocomplete).toBe('off');
+
+        await act(async () => { reveal.click(); });
+        expect(input.type).toBe('password');
+        expect(input.value).toBe(syntheticKey);
+        expect(input.autocomplete).toBe('off');
+    } finally {
+        await act(async () => { root.unmount(); });
+        container.remove();
+    }
+});

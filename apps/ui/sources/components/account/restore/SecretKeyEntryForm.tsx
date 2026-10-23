@@ -167,6 +167,7 @@ export const SecretKeyEntryForm = React.memo(function SecretKeyEntryForm(props: 
                     secureTextEntry={!revealed}
                     autoFocus
                     autoCapitalize="none"
+                    autoComplete="off"
                     autoCorrect={false}
                     returnKeyType="go"
                     blurOnSubmit={false}
