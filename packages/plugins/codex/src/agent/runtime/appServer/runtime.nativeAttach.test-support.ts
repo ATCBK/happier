@@ -44,7 +44,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   sessionConnectedAccounts?: AgentSessionOpenRequest['connectedAccounts'];
   pluginListResponse?: unknown;
   skillListResponse?: unknown;
-  skillListResponseForRoots?: (extraRoots: readonly string[]) => unknown;
+  skillListResponseForRoots?: (extraRoots: readonly string[], params: Readonly<Record<string, unknown>>) => unknown;
   sessionFactory?: Pick<AgentSessionRuntimeFactory, 'open'>;
   skillListFailure?: Readonly<{ code: number; message: string }>;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
@@ -196,7 +196,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       } else if (message.method === 'plugin/list') {
         result = options.pluginListResponse ?? { marketplaces: [] };
       } else if (message.method === 'skills/list') {
-        result = options.skillListResponseForRoots?.(extraRoots) ?? options.skillListResponse ?? { data: [] };
+        result = options.skillListResponseForRoots?.(extraRoots, params) ?? options.skillListResponse ?? { data: [] };
         error = options.skillListFailure;
       } else if (message.method === 'skills/extraRoots/set') {
         if (options.rejectExtraRootsSet) error = { code: -32601, message: 'Method not found' };

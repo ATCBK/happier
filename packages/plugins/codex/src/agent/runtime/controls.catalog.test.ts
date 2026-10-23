@@ -7,7 +7,58 @@ import { createCodexNativeSessionControls } from './controls.js';
 import { createCodexAgentRuntime } from './engine.js';
 
 describe('Codex delivered skill catalog context', () => {
-  it('uses the live delivery root for fresh catalog clients, including external plugin skills and reloads', async () => {
+  it('keeps live reads fresh and request failures isolated from the Session client', async () => {
+    const engine = await createCodexAgentRuntime({
+      plugin: { id: 'happier.agent.codex', version: '0.0.0' }, agent: { id: 'codex' }, signal: new AbortController().signal,
+    });
+    const sessions = engine.sessions;
+    if (!sessions?.catalog) throw new Error('Missing Codex Session catalog');
+    const catalog = sessions.catalog;
+    let nativeSkills = [{ name: 'original-skill', path: '/project/original/SKILL.md' }];
+    let snapshot = nativeSkills;
+    const boundary: NonNullable<Parameters<typeof withCodexNativeAttachFixture>[1]> = {
+      sessionFactory: sessions,
+      skillListResponseForRoots: (_roots, params) => {
+        // Codex 0.162.1 skills_list_response retains snapshots unless forceReload is requested.
+        if (params.forceReload === true) snapshot = nativeSkills;
+        return { data: [{ skills: snapshot }] };
+      },
+    };
+    await withCodexNativeAttachFixture(async fixture => {
+      const session = await fixture.openConfiguredSession();
+      const context = {
+        signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
+        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+      } as unknown as AgentSessionControlContext;
+      const run = vi.spyOn(fixture.exec, 'run');
+      const spawn = vi.spyOn(fixture.exec, 'spawn');
+      const spawnClient = vi.spyOn(fixture.exec.clients, 'spawn');
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject({ status: 'ok', items: nativeSkills });
+      nativeSkills = [{ name: 'changed-skill', path: '/project/changed/SKILL.md' }];
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject({ status: 'ok', items: nativeSkills });
+      expect(await catalog.list({ kind: 'skills' }, { ...context, signal: AbortSignal.abort() }))
+        .toMatchObject({ status: 'unavailable', diagnostic: { code: 'codex_catalog_request_failed' } });
+      boundary.skillListFailure = { code: -32000, message: 'PRIVATE_TOKEN upstream failure' };
+      const failure = await catalog.list({ kind: 'skills' }, context);
+      expect(failure).toMatchObject({ status: 'unavailable', diagnostic: { code: 'codex_catalog_request_failed' } });
+      expect(JSON.stringify(failure)).not.toContain('PRIVATE_TOKEN');
+      boundary.skillListFailure = undefined;
+      const [first, second] = await Promise.all([
+        catalog.list({ kind: 'skills' }, context), catalog.list({ kind: 'skills' }, context),
+      ]);
+      for (const result of [first, second]) expect(result).toMatchObject({ status: 'ok', items: nativeSkills });
+      expect({ processes: run.mock.calls.length + spawn.mock.calls.length + spawnClient.mock.calls.length }).toEqual({ processes: 0 });
+      // A replacement Session may bind the same id before the old Session retires.
+      const replacement = await fixture.openConfiguredSession();
+      await session.dispose();
+      run.mockClear(); spawn.mockClear(); spawnClient.mockClear();
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject({ status: 'ok', items: nativeSkills });
+      expect({ processes: run.mock.calls.length + spawn.mock.calls.length + spawnClient.mock.calls.length }).toEqual({ processes: 0 });
+      await replacement.dispose();
+    }, boundary);
+  });
+
+  it('reads catalogs without spawning during a live turn, preserving delivery, reloads and isolation', async () => {
     const skills: AgentSessionSkillDelivery = {
       pluginRoot: '/private/session-delivery', skillsRoot: '/private/session-delivery/skills',
       items: [
@@ -39,15 +90,28 @@ describe('Codex delivered skill catalog context', () => {
       const expected = (delivery: AgentSessionSkillDelivery) => ({ status: 'ok', kind: 'skills',
         items: delivery.items.map(item => ({ name: item.name, path: `${item.directory}/SKILL.md` })) });
       expect(session.skillsDelivered).toBe(true);
+      await expect(session.send({
+        inputIds: ['catalog-turn-input'], input: { text: 'Keep working while the catalog is read.' },
+        delivery: { kind: 'newTurn', turnId: 'catalog-turn' },
+      })).resolves.toMatchObject({ status: 'admitted' });
+      const run = vi.spyOn(fixture.exec, 'run');
+      const spawn = vi.spyOn(fixture.exec, 'spawn');
+      const spawnClient = vi.spyOn(fixture.exec.clients, 'spawn');
+      const rootSets = fixture.requests.filter(request => request.method === 'skills/extraRoots/set').length;
       expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(skills));
+      expect({ processes: run.mock.calls.length + spawn.mock.calls.length + spawnClient.mock.calls.length }).toEqual({ processes: 0 });
+      expect(await catalog.list({ kind: 'vendorPlugins' }, context)).toMatchObject({ status: 'ok', kind: 'vendorPlugins' });
+      expect({ processes: run.mock.calls.length + spawn.mock.calls.length + spawnClient.mock.calls.length }).toEqual({ processes: 0 });
+      expect(fixture.requests.filter(request => request.method === 'skills/extraRoots/set')).toHaveLength(rootSets);
       await expect(session.refreshSkills?.({ skills: replacement }, { signal: AbortSignal.abort() })).rejects.toThrow();
       expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(skills));
       expect(await session.refreshSkills?.({ skills: replacement })).toEqual({ kind: 'applied' });
       expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(replacement));
       nativeBoundary.rejectExtraRootsSet = true;
-      expect(await catalog.list({ kind: 'skills' }, context))
-        .toMatchObject({ status: 'unavailable', diagnostic: { code: 'codex_catalog_startup_failed' } });
+      // Reads use the already acknowledged native context; they never set roots.
+      expect(await catalog.list({ kind: 'skills' }, context)).toMatchObject(expected(replacement));
       expect(await catalog.list({ kind: 'vendorPlugins' }, context)).toMatchObject({ status: 'ok', kind: 'vendorPlugins' });
+      expect({ processes: run.mock.calls.length + spawn.mock.calls.length + spawnClient.mock.calls.length }).toEqual({ processes: 0 });
       nativeBoundary.rejectExtraRootsSet = false;
       // A separate Session and a disposed launch must not inherit this Session's root.
       expect(await catalog.list({ kind: 'skills' }, { ...context, session: { ...context.session, id: 'other-session' } }))

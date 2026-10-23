@@ -19,7 +19,7 @@ import {
   openCodexNativeAppServerExecutionRunConversation,
   openCodexNativeAppServerSession,
 } from './appServer/native.js';
-import { createCodexNativeSessionControls, type CodexSessionSkillsRootBinder } from './controls.js';
+import { createCodexNativeSessionControls, type CodexSessionCatalogBinder } from './controls.js';
 import { createCodexGoalProjection, type CodexGoalProjection } from './appServer/work/goalProjection.js';
 import { codexHandoffSurface } from '../surfaces/sessions/handoff/providerOps.js';
 
@@ -106,7 +106,7 @@ async function openCodexSession(
   request: AgentSessionOpenRequest,
   context: AgentSessionRuntimeContext,
   goalProjection: CodexGoalProjection,
-  bindSessionSkillsRoot: CodexSessionSkillsRootBinder,
+  bindSessionCatalog: CodexSessionCatalogBinder,
 ): Promise<AgentSessionRuntime> {
   const backendMode = readCodexBackendMode(request);
   if (backendMode === 'acp') {
@@ -126,7 +126,7 @@ async function openCodexSession(
         request,
         buildCodexNativeAcpRuntimeOptions(request),
       )
-    : await openCodexNativeAppServerSession(request, context, goalProjection, bindSessionSkillsRoot);
+    : await openCodexNativeAppServerSession(request, context, goalProjection, bindSessionCatalog);
   return {
     ...session,
     runtimeCapabilities: {
@@ -152,7 +152,7 @@ async function openCodexSession(
 
 export const createCodexAgentRuntime: AgentRuntimeFactory = () => {
   const goalProjection = createCodexGoalProjection();
-  const { bindSessionSkillsRoot, ...controls } = createCodexNativeSessionControls(goalProjection);
+  const { bindSessionCatalog, ...controls } = createCodexNativeSessionControls(goalProjection);
   return {
     sessions: {
       ...controls,
@@ -173,7 +173,7 @@ export const createCodexAgentRuntime: AgentRuntimeFactory = () => {
           environmentOverlay: { HAPPIER_CODEX_BACKEND_MODE: backendMode },
         };
       },
-      open: async (request, context) => await openCodexSession(request, context, goalProjection, bindSessionSkillsRoot),
+      open: async (request, context) => await openCodexSession(request, context, goalProjection, bindSessionCatalog),
       executionRunContextV1: {
         open: async (request, context) => await openCodexExecutionRun(request, context),
         openConversation: openCodexExecutionRunConversation,

@@ -58,6 +58,7 @@ import {
 } from '../../auth/services/runtime/auth/accountId.js';
 import { readCodexAuthTokensFromNativeHome } from '../../cli/auth/environment.js';
 import { readCodexRuntimeRateLimitsSnapshot } from '../../auth/services/quota/runtimeRateLimits.js';
+import { readCodexSessionCatalog, type CodexSessionCatalogReader } from './catalog/index.js';
 import { CODEX_ACCOUNT_USAGE_PROVIDER_ID, resolveCodexUsageSubjectRef } from '../../auth/services/usage/identity.js';
 import {
   mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot,
@@ -226,7 +227,7 @@ export type CodexAppServerRuntime = CodexAppServerSession & Readonly<{
   realtimeConversation: AgentSessionRealtimeConversation;
   prepareProviderCliAttach(): Promise<string>;
   prepareSkillDelivery(): Promise<void>;
-  readDeliveredSkillsRoot(): string | undefined;
+  readCatalog: CodexSessionCatalogReader;
   refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
   supportsInFlightSteer(): boolean;
   isTurnInFlight(): boolean;
@@ -3431,7 +3432,14 @@ export function createCodexAppServerRuntime(
     realtimeConversation,
     prepareProviderCliAttach,
     get skillsDelivered() { return skillsDelivered; },
-    readDeliveredSkillsRoot: () => skillsDelivered === true ? currentSkills?.skillsRoot : undefined,
+    async readCatalog(request, options) {
+      options?.signal?.throwIfAborted();
+      const appServerClient = await ensureClient();
+      return await readCodexSessionCatalog(request, {
+        client: { request: (method, requestParams) => appServerClient.request(method, requestParams, options) },
+        cwd: params.directory,
+      });
+    },
     async prepareSkillDelivery() { await ensureClient(); },
     async refreshSkills(request, options) {
       options?.signal?.throwIfAborted();

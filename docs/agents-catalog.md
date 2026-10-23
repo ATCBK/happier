@@ -127,12 +127,15 @@ text and supplies references to explicitly selected skill files, so several
 user-only invocations do not depend on the model-side Skill tool. Skill bodies
 are not pasted, and literal dollar-prefixed words are not parsed as invocations.
 
-Codex's development-source Session catalog sets `skills/extraRoots/set` on each
-fresh skill-listing control client before reading the native catalog. The live
-runtime supplies its acknowledged delivery root, including after a successful
-reload; disposing the Session removes that binding. Account and external-plugin
-skills use the same delivered tree, including folders whose names differ from
-their frontmatter. Native catalog membership still determines the returned rows.
+Codex's development-source Session catalog reads skills and vendor plugins on
+the Session's running native client, including during a turn. Startup and
+successful skill reloads set `skills/extraRoots/set` on that same client;
+catalog reads request a fresh native skill snapshot, start no additional
+process and do not set roots. Disposing the
+Session removes its catalog binding. Unbound controls retain fresh native
+clients. Account and external-plugin skills use the same delivered tree,
+including folders whose names differ from their frontmatter. Native catalog
+membership still determines the returned rows.
 
 Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
 The optional `skills.sessionDelivery` block selects `env_path_list`,

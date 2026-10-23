@@ -47,7 +47,7 @@ import {
 import { parseCodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { reconcileCodexResumeRolloutPath } from '../../auth/services/state/sharing/reconcileResumeRolloutPath.js';
 import type { CodexGoalProjection } from './work/goalProjection.js';
-import type { CodexSessionSkillsRootBinder } from '../controls.js';
+import type { CodexSessionCatalogBinder } from '../controls.js';
 import {
   buildCodexAgentRuntimeDescriptorV1,
   readCanonicalCodexAgentRuntimeDescriptorV1,
@@ -969,7 +969,7 @@ export async function openCodexNativeAppServerSession(
   request: AgentSessionOpenRequest,
   context: AgentSessionRuntimeContext,
   goalProjection?: CodexGoalProjection,
-  bindSessionSkillsRoot?: CodexSessionSkillsRootBinder,
+  bindSessionCatalog?: CodexSessionCatalogBinder,
 ): Promise<AgentSessionRuntime> {
   const initialProviderBinding = parseCodexProviderBindingEngineConfigV1(
     Object.prototype.hasOwnProperty.call(request, 'providerBinding')
@@ -1126,7 +1126,7 @@ export async function openCodexNativeAppServerSession(
     runtime,
     request.sessionId,
     runtime.realtimeConversation,
-    bindSessionSkillsRoot?.(request.sessionId, runtime.readDeliveredSkillsRoot),
+    bindSessionCatalog?.(request.sessionId, runtime.readCatalog),
     request.mcpToolPolicy,
   );
   return {

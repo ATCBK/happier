@@ -1,5 +1,6 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type {
+    AgentSessionCatalogControl,
     SkillCatalogItemV1,
     SkillCatalogV1,
     VendorPluginCatalogItemV1,
@@ -9,9 +10,44 @@ import type {
 type MetadataRecord = Record<string, unknown>;
 const CODEX_CATALOG_BACKEND_ID = 'codex';
 
+export type CodexSessionCatalogReader = (
+    request: Parameters<AgentSessionCatalogControl['list']>[0],
+    options?: Readonly<{ signal?: AbortSignal }>,
+) => ReturnType<AgentSessionCatalogControl['list']>;
+
 export type CodexAppServerCatalogClient = Readonly<{
     request: (method: string, params?: JsonValue) => Promise<unknown>;
 }>;
+
+export async function readCodexSessionCatalog(
+    request: Parameters<AgentSessionCatalogControl['list']>[0],
+    params: Readonly<{ client: CodexAppServerCatalogClient; cwd: string }>,
+): ReturnType<AgentSessionCatalogControl['list']> {
+    if (request.kind === 'vendorPlugins') {
+        const result = await listCodexVendorPlugins(params);
+        if (!result.supported) return { status: 'unsupported', diagnostic: { code: 'codex_vendor_catalog_unsupported', severity: 'error', message: 'codex_vendor_catalog_unsupported' } };
+        return {
+            status: 'ok', kind: 'vendorPlugins',
+            items: result.vendorPlugins.map(item => ({
+                id: item.vendorPluginRef, name: item.name, displayName: item.displayName,
+                ...(item.description ? { description: item.description } : {}),
+                installed: item.installed, enabled: item.enabled, mentionable: item.mentionable,
+            })),
+        };
+    }
+    // Session reads previously started a fresh process. Preserve fresh discovery
+    // when reusing the native client's skill snapshot (Codex 0.162.1).
+    const result = await listCodexAppServerSkills({ ...params, forceReload: true });
+    if (!result.supported) return { status: 'unsupported', diagnostic: { code: 'codex_skill_catalog_unsupported', severity: 'error', message: 'codex_skill_catalog_unsupported' } };
+    return {
+        status: 'ok', kind: 'skills',
+        items: result.skills.map(item => ({
+            v: 1, origin: 'vendor', id: item.id, name: item.name, displayName: item.displayName ?? item.name,
+            ...(item.description ? { description: item.description } : {}),
+            path: item.path, enabled: item.enabled,
+        })),
+    };
+}
 
 export type CodexVendorPluginCatalogEntry = VendorPluginCatalogItemV1 & Readonly<{
     name: string;
@@ -240,6 +276,7 @@ export async function listCodexVendorPlugins(params: Readonly<{
 export async function listCodexAppServerSkills(params: Readonly<{
     client: CodexAppServerCatalogClient;
     cwd: string;
+    forceReload?: boolean;
 }>): Promise<Readonly<{
     supported: boolean;
     catalog?: CodexSkillCatalog;
@@ -247,7 +284,10 @@ export async function listCodexAppServerSkills(params: Readonly<{
     diagnostic?: string;
 }>> {
     try {
-        const response = await params.client.request('skills/list', { cwds: [params.cwd] });
+        const response = await params.client.request('skills/list', {
+            cwds: [params.cwd],
+            ...(params.forceReload ? { forceReload: true } : {}),
+        });
         const byName = new Map<string, CodexSkillCatalogEntry>();
         for (const entry of readSkillCatalogEntries(response)) {
             const skill = normalizeSkill(entry);
