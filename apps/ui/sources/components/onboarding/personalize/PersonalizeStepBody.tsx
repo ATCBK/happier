@@ -3,7 +3,9 @@ import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { isPushNotificationRuntimeSupported, readPushPermission } from '@/activity/notifications/permission/pushNotificationAccess';
-import { runPushNotificationPermissionPriming } from '@/activity/notifications/permission/pushNotificationPermissionPriming';
+import { NotificationConfigurationActionOutputSchemas } from '@happier-dev/protocol/actions/notificationConfigurationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { APPEARANCE_SETTINGS } from '@/components/settings/appearance/appearanceSettings';
 import { GlassEffectiveStateLine, GlassPresetPreview } from '@/components/settings/appearance/GlassAppearanceControls';
@@ -24,7 +26,9 @@ import { ListPresentationProvider } from '@/components/ui/lists/listPresentation
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Text } from '@/components/ui/text/Text';
 import { SESSION_LIST_LAYOUT_CHOICES } from '@/sync/domains/session/listing/sessionListLayout';
-import { sync } from '@/sync/sync';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
+import { Modal } from '@/modal';
 import { t } from '@/text';
 import { desktopHostKind } from '@/utils/platform/desktopHost';
 
@@ -415,6 +419,7 @@ type DeviceNotificationPermission = Readonly<{
 
 /** This device's OS notification permission, from the owner each host already uses. */
 function useDeviceNotificationPermission(): DeviceNotificationPermission {
+    const execution = useMountedActionExecution(useActiveServerAccountScope(), { openOnRequest: true });
     const tauri = Platform.OS === 'web' && desktopHostKind() === 'tauri';
     const desktop = useTauriNotificationPermissionDiagnostics(tauri);
     const native = isPushNotificationRuntimeSupported();
@@ -430,13 +435,20 @@ function useDeviceNotificationPermission(): DeviceNotificationPermission {
         return () => { cancelled = true; };
     }, [native]);
     const requestNative = React.useCallback(async () => {
-        const outcome = await runPushNotificationPermissionPriming({
-            pushEnabled: true,
-            trigger: 'user_action',
-            onGranted: () => sync.onPushPermissionGranted(),
-        });
-        setNativeStatus(outcome.granted ? 'granted' : 'notGranted');
-    }, []);
+        try {
+            const result = await execution.execute('notifications.push.permission.request', { purpose: 'local_notifications' });
+            if (!execution.isCurrent()) return;
+            if (!result.ok) {
+                if (result.errorCode === 'action_account_scope_changed' || isActionApprovalDeclinedErrorCode(result.errorCode)) return;
+                if (presentActionTurnedOffNoticeIfOff(result, 'notifications.push.permission.request')) return;
+                throw new Error(result.error);
+            }
+            const outcome = NotificationConfigurationActionOutputSchemas['notifications.push.permission.request'].parse(result.result);
+            setNativeStatus(outcome.granted ? 'granted' : 'notGranted');
+        } catch (error) {
+            if (execution.isCurrent()) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+        }
+    }, [execution.execute, execution.isCurrent]);
     if (tauri) {
         return {
             status: desktop.status === 'error' ? 'notGranted' : desktop.status,
