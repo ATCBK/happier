@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { applyWorkBoardIntentV1, createWorkBoardV1, buildWorkBoardItemKeyV1, buildWorkBoardWidgetKeyV1, type BoardItemRefV1, type WorkBoardV1 } from '@happier-dev/protocol';
 import { createEntityDragDropRuntime, createEntityDragGestureAdapter } from '@/components/ui/treeDragDrop';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
@@ -53,6 +53,8 @@ describe('WorkBoard shared entity owner', () => {
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         let current = true;
         const store = createWorkBoardAccountStore(persistence.transport, () => current);
+        const releaseView = store.retainView(() => () => {}, `board:${board.id}`);
+        onTestFinished(() => { releaseView(); store.retire(); });
         await store.refresh();
         const port = createWorkBoardUiActionPort(() => context(store.getBoards().boards[0]!), store.queue, store.readBoardAccess, store.getBoards);
         const deps = { workBoardArtifacts: port, widgetAccountScope: () => scope };
@@ -88,6 +90,8 @@ describe('WorkBoard shared entity owner', () => {
         const board = { ...createWorkBoardV1({ id: 'b1', name: 'Board' }), source: { picked: [ref] } };
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         const store = createWorkBoardAccountStore(persistence.transport, () => true);
+        const releaseView = store.retainView(() => () => {}, `board:${board.id}`);
+        onTestFinished(() => { releaseView(); store.retire(); });
         await store.refresh();
         const port = createWorkBoardUiActionPort(() => null, store.queue, store.readBoardAccess, store.getBoards);
         await expect(port.apply({ kind: 'set_positions', boardId: board.id, positionsByItemRef: { [key]: { x: 24, y: 48 } } }))
@@ -116,6 +120,8 @@ describe('WorkBoard shared entity owner', () => {
         const board = createWorkBoardV1({ id: 'b1', name: 'Board' });
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         const store = createWorkBoardAccountStore(persistence.transport, () => true);
+        const releaseView = store.retainView(() => () => {}, `board:${board.id}`);
+        onTestFinished(() => { releaseView(); store.retire(); });
         await store.refresh();
         const runtime = createEntityDragDropRuntime();
         const item = { kind: 'session' as const, scope, address: { serverId: scope.serverId, sessionId: ref.qualifiedId.id } };
