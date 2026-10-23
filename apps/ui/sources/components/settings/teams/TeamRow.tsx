@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 
 import { teamViewerStandingLabel } from './teamLabels';
 import type { TeamsDirectoryRow } from './teamsDirectoryViewState';
@@ -31,6 +31,7 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
     variant?: 'page' | 'rail';
     selected?: boolean;
 }>) {
+    usePreferredLanguage();
     const { row } = props;
     const onPress = React.useCallback(() => props.onPress(row.address), [props.onPress, row.address]);
     const rail = props.variant === 'rail';
