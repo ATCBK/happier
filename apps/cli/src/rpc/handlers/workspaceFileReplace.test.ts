@@ -444,6 +444,45 @@ describe('registered workspace replace transport', () => {
     expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('old();\n');
   });
 
+  it.each(['replace', 'editSet'] as const)('refuses the entire %s when the last preview target changed on disk', async kind => {
+    const original = Buffer.from('\uFEFFold\r\n');
+    await writeFile(join(root, 'a.ts'), original);
+    await writeFile(join(root, 'b.ts'), original);
+    const files = ['a.ts', 'b.ts'].map(path => ({ path, expectedHash: hash(original) }));
+    // The preview has already captured both hashes. An external writer changes
+    // the later target before Apply, so even the first target must stay intact.
+    await writeFile(join(root, 'b.ts'), 'agent edit\r\n');
+    vi.mocked(filesystem.writeFile).mockClear();
+    const outcome = await apply(kind === 'replace'
+      ? { kind, matcher, files }
+      : { kind, files: files.map(file => ({ ...file, edits: [
+        { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } }, text: 'new' },
+      ] })) });
+    expect(outcome).toMatchObject({ ok: true, results: [
+      { path: 'a.ts', status: 'skipped', reason: 'edit_set_aborted' },
+      { path: 'b.ts', status: 'changed' },
+    ] });
+    expect(await readFile(join(root, 'a.ts'))).toEqual(original);
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe('agent edit\r\n');
+    expect(filesystem.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('validates every semantic target before a source move or buffer write can begin', async () => {
+    await writeFile(join(root, 'a.ts'), 'old');
+    await writeFile(join(root, 'b.ts'), 'old');
+    const edit = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'next' };
+    expect(await apply({ kind: 'editSet', files: [
+      { path: 'a.ts', expectedHash: hash(Buffer.from('old')), edits: [edit], renameTo: 'moved.ts' },
+      { path: 'b.ts', expectedHash: hash(Buffer.from('old')), edits: [edit, edit] },
+    ] })).toMatchObject({ results: [
+      { status: 'skipped', reason: 'edit_set_aborted' },
+      { status: 'failed', reason: 'overlapping_edits' },
+    ] });
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('old');
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe('old');
+    await expect(readFile(join(root, 'moved.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('renames a semantic source with importer edits and guarded inverse rename without overwriting a destination', async () => {
     const apply = (operation: unknown) => applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' });
     await writeFile(join(root, 'a.ts'), 'export const value = 1;\n');

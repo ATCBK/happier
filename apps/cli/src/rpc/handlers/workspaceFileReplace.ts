@@ -189,41 +189,36 @@ export async function applyWorkspaceFileReplace(
         }
       }
     }
-    for (let index = 0; index < operation.files.length; index++) {
-      if (context?.signal.aborted) return { ok: true, results, cancelled: operation.files.slice(index).map(file => file.path) };
-      // Semantic edits are one dependent set (for example a move and its
-      // importers). Honour LSP's abort failure mode without claiming rollback.
-      const previous = results.at(-1);
-      if (dependentEditSet && previous && (!['replaced', 'restored'].includes(previous.status) || previous.reason !== undefined)) {
-        return { ok: true, results: [...results, ...operation.files.slice(index).map(file => ({
-          path: file.path, status: 'skipped' as const, reason: 'edit_set_aborted',
-        }))] };
-      }
+    type PreparedFile = Readonly<{ sourcePath: string; destinationPath: string; expectedHash: string; newBytes: Uint8Array; result: FileResult }>;
+    const failedFile = (path: string, error: unknown): FileResult => ({ path,
+      status: ['ENOENT', 'ENOTDIR'].includes(readErrorCode(error) ?? '') || isFilesystemWriteGuardErrorCode(readErrorCode(error)) ? 'changed' : 'failed',
+      reason: error instanceof SyntaxError ? 'invalid_pattern' : readErrorCode(error) ?? 'read_failed' });
+    const prepareFile = async (index: number, prior: readonly FileResult[]): Promise<PreparedFile | FileResult> => {
       const file = operation.files[index];
       const authorization = authorizeFilesystemPathWithinRoot({ targetPath: file.path, rootPath: root.resolvedPath, defaultDirectory: workingDirectory, accessPolicy });
-      if (!authorization.valid) { results.push({ path: file.path, status: 'failed', reason: 'path_not_allowed' }); continue; }
+      if (!authorization.valid) return { path: file.path, status: 'failed', reason: 'path_not_allowed' };
       try {
         const bytes = await readFile(authorization.resolvedPath);
-        if (hashBytes(bytes) !== file.expectedHash) { results.push({ path: file.path, status: 'changed' }); continue; }
+        if (hashBytes(bytes) !== file.expectedHash) return { path: file.path, status: 'changed' };
         let newBytes: Uint8Array;
         let result: FileResult;
         if (operation.kind === 'replace') {
           const selected = operation.files[index];
           const replacement = computeFileReplacement(bytes, { ...operation.matcher, matchCase: operation.matcher.matchCase ?? false, regex: operation.matcher.regex ?? false }, selected.excludedMatches);
-          if (replacement.kind === 'skip') { results.push({ path: file.path, status: 'skipped', reason: replacement.reason }); continue; }
-          if (!replacement.matches.length) { results.push({ path: file.path, status: 'changed' }); continue; }
+          if (replacement.kind === 'skip') return { path: file.path, status: 'skipped', reason: replacement.reason };
+          if (!replacement.matches.length) return { path: file.path, status: 'changed' };
           newBytes = replacement.newBytes;
           result = { path: file.path, status: 'replaced', hash: hashBytes(newBytes), matchCount: replacement.matches.length, edits: [...replacement.edits] };
         } else if (operation.kind === 'restore') {
           const decoded = decodeReplaceFileText(bytes);
-          if (decoded.kind === 'skip') { results.push({ path: file.path, status: 'skipped', reason: decoded.reason }); continue; }
+          if (decoded.kind === 'skip') return { path: file.path, status: 'skipped', reason: decoded.reason };
           const restored = applyInverseEdits(decoded.text, operation.files[index].edits);
-          if (!restored.ok) { results.push({ path: file.path, status: 'changed', reason: restored.reason }); continue; }
+          if (!restored.ok) return { path: file.path, status: 'changed', reason: restored.reason };
           newBytes = new TextEncoder().encode(restored.text);
           result = { path: file.path, status: 'restored', hash: hashBytes(newBytes) };
         } else {
           const decoded = decodeReplaceFileText(bytes);
-          if (decoded.kind === 'skip') { results.push({ path: file.path, status: 'skipped', reason: decoded.reason }); continue; }
+          if (decoded.kind === 'skip') return { path: file.path, status: 'skipped', reason: decoded.reason };
           const edited = applyWorkspaceFileTextEdits(decoded.text, operation.files[index].edits);
           newBytes = new TextEncoder().encode(edited.text);
           result = { path: file.path, status: 'replaced', hash: hashBytes(newBytes), edits: edited.edits };
@@ -231,35 +226,65 @@ export async function applyWorkspaceFileReplace(
         const renameTo = operation.kind !== 'replace' ? operation.files[index].renameTo : undefined;
         if (renameTo && renameTo !== file.path) result = { ...result, renameTo };
         const remaining = operation.files.slice(index + 1).map(next => ({ path: next.path, status: 'failed', reason: 'transport_ceiling' }));
-        const otherResultsBytes = responseBytes({ ok: true, results: [...results, ...remaining] });
-        if (otherResultsBytes + fileResultBytes(result) + (results.length + remaining.length ? 1 : 0) > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
-          results.push({ path: file.path, status: 'failed', reason: 'transport_ceiling' }); continue;
-        }
+        const otherResultsBytes = responseBytes({ ok: true, results: [...prior, ...remaining] });
+        if (otherResultsBytes + fileResultBytes(result) + (prior.length + remaining.length ? 1 : 0) > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES)
+          return { path: file.path, status: 'failed', reason: 'transport_ceiling' };
         let destinationPath = authorization.resolvedPath;
         if (renameTo && renameTo !== file.path) {
           const destination = isSafeRelativeWorkspacePath(renameTo)
             ? authorizeFilesystemPathWithinRoot({ targetPath: renameTo, rootPath: root.resolvedPath, defaultDirectory: workingDirectory, accessPolicy })
             : { valid: false as const };
-          if (!destination.valid) { results.push({ path: file.path, status: 'failed', reason: 'path_not_allowed' }); continue; }
-          const moved = await commitGuardedFileReplace({ destPath: destination.resolvedPath, expectation: null,
-            source: { kind: 'move', path: authorization.resolvedPath, expectedHash: file.expectedHash } });
-          if (!moved.success) {
-            results.push({ path: file.path, status: isFilesystemWriteGuardErrorCode(moved.errorCode) ? 'changed' : 'failed', reason: moved.errorCode });
-            continue;
-          }
+          if (!destination.valid) return { path: file.path, status: 'failed', reason: 'path_not_allowed' };
+          checkFileWriteExpectation(destination.resolvedPath, null);
           destinationPath = destination.resolvedPath;
         }
-        const write = await commitGuardedFileReplace({ destPath: destinationPath, expectation: file.expectedHash, source: { kind: 'bytes', bytes: newBytes } });
-        if (write.success) results.push({ ...result, hash: write.hash });
+        return { sourcePath: authorization.resolvedPath, destinationPath, expectedHash: file.expectedHash, newBytes, result };
+      } catch (error) { return failedFile(file.path, error); }
+    };
+    const publishFile = async (file: PreparedFile): Promise<FileResult> => {
+      const { result, sourcePath, destinationPath, expectedHash, newBytes } = file;
+      try {
+        if (result.renameTo) {
+          const moved = await commitGuardedFileReplace({ destPath: destinationPath, expectation: null,
+            source: { kind: 'move', path: sourcePath, expectedHash } });
+          if (!moved.success) return { path: result.path, status: isFilesystemWriteGuardErrorCode(moved.errorCode) ? 'changed' : 'failed', reason: moved.errorCode };
+        }
+        const write = await commitGuardedFileReplace({ destPath: destinationPath, expectation: expectedHash, source: { kind: 'bytes', bytes: newBytes } });
+        if (write.success) return { ...result, hash: write.hash };
         // A rename is already observable even if its subsequent text write
         // fails. Preserve its real hash and inverse move instead of losing Undo.
-        else if (result.renameTo) results.push({ path: file.path, status: result.status, renameTo: result.renameTo,
-          hash: file.expectedHash, edits: [], reason: write.errorCode });
-        else results.push({ path: file.path, status: isFilesystemWriteGuardErrorCode(write.errorCode) ? 'changed' : 'failed', reason: write.errorCode ?? 'write_failed' });
-      } catch (error) {
-        results.push({ path: file.path, status: ['ENOENT', 'ENOTDIR'].includes(readErrorCode(error) ?? '') ? 'changed' : 'failed',
-          reason: error instanceof SyntaxError ? 'invalid_pattern' : readErrorCode(error) ?? 'read_failed' });
+        if (result.renameTo) return { path: result.path, status: result.status, renameTo: result.renameTo,
+          hash: expectedHash, edits: [], reason: write.errorCode };
+        return { path: result.path, status: isFilesystemWriteGuardErrorCode(write.errorCode) ? 'changed' : 'failed', reason: write.errorCode ?? 'write_failed' };
+      } catch (error) { return failedFile(result.path, error); }
+    };
+    if (operation.kind !== 'restore') {
+      // A preview is one reviewed set. Prepare every target before publishing
+      // any file or move, retaining only bounded reply receipts, not all file
+      // bodies. Publication re-reads a target and the writer checks it again.
+      const admitted: FileResult[] = [];
+      let refused = false;
+      for (let index = 0; index < operation.files.length; index++) {
+        if (context?.signal.aborted) return { ok: true, results: [], cancelled: operation.files.map(file => file.path) };
+        const file = await prepareFile(index, admitted);
+        if (!('newBytes' in file)) refused = true;
+        admitted.push('newBytes' in file ? file.result : file);
       }
+      if (refused) return { ok: true, results: admitted.map((file): FileResult =>
+        file.status === 'replaced' ? { path: file.path, status: 'skipped', reason: 'edit_set_aborted' } : file) };
+    }
+    for (let index = 0; index < operation.files.length; index++) {
+      if (context?.signal.aborted) return { ok: true, results, cancelled: operation.files.slice(index).map(file => file.path) };
+      const previous = results.at(-1);
+      if (dependentEditSet && previous && (!['replaced', 'restored'].includes(previous.status) || previous.reason !== undefined)) {
+        return { ok: true, results: [...results, ...operation.files.slice(index).map(file => ({
+          path: file.path, status: 'skipped' as const, reason: 'edit_set_aborted',
+        }))] };
+      }
+      // Inverse receipts may visit a path repeatedly in reverse time order;
+      // each restore must read the bytes produced by its preceding receipt.
+      const file = await prepareFile(index, results);
+      results.push('newBytes' in file ? await publishFile(file) : file);
     }
     return { ok: true, results };
 }
