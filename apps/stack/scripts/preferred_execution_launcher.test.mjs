@@ -6836,11 +6836,12 @@ test('source web export admission fits measured memory to its admitted thread co
     'done',
   ].join('\n');
   for (const [memoryGiB, cpuBudget, override, expectedThreads, expectedGiB, custody, expectedStatus = 0] of [
-    [26, 47, '', 32, 26, false],
-    [125, 47, '', 47, 33, false],
+    [26, 47, '', 8, 14, false],
+    [125, 47, '', 8, 14, false],
     [26, 8, '', 8, 14, false],
     [26, 47, '8', 8, 14, false],
-    [26.7, 47, '', 32, 26, true],
+    [125, 47, '47', 47, 33, false],
+    [26.7, 47, '', 8, 14, true],
     [13, 47, '', 6, 13, false],
     [10, 47, '', 2, 10, false],
     [10, 1, '', 1, 10, false],

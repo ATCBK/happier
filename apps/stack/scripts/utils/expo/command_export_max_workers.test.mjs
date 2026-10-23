@@ -123,6 +123,17 @@ test('expoExec derives its noninteractive export worker default from the admitte
   assert.equal(lines[lines.indexOf('--max-workers') + 1], '3');
 });
 
+test('expoExec caps its managed export default at the measured thread knee', async (t) => {
+  const { lines } = await runExportAndReadArgs({ t, cpuBudget: '47' });
+  assert.equal(lines[lines.indexOf('--max-workers') + 1], '8');
+  assert.deepEqual(applyExpoExportMaxWorkersArgs(['export'], {
+    GOMAXPROCS: '47', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '47',
+  }), ['export', '--max-workers', '47']);
+  assert.deepEqual(applyExpoExportMaxWorkersArgs(['export', '--max-workers=47'], {
+    GOMAXPROCS: '47', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '2',
+  }), ['export', '--max-workers=47']);
+});
+
 test('noninteractive exports leave Metro defaults intact without a valid executor CPU budget', async (t) => {
   const { lines } = await runExportAndReadArgs({ t, cpuBudget: null });
   assert.ok(!lines.includes('--max-workers'));
