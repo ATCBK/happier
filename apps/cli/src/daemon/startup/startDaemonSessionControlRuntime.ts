@@ -16844,8 +16844,12 @@ export async function startDaemonSessionControlRuntime(
         readCurrentAccountSettingsSnapshot: () => isCurrentPidOwner() ? readSnapshot() : null,
         readAccountSettingsSnapshot: async () => await isCurrent() ? readSnapshot() : null,
         ...(purposeResolver ? { resolveManagedPurposeBindingIntent: async (input: Parameters<typeof purposeResolver>[0]) => {
-          if (!await isCurrent()) throw createForegroundProviderError('provider_authorization_changed');
-          const binding = await withSessionAccountHome(requester, () => purposeResolver(input));
+          // The nested Connected Account reader checks the same requester at
+          // entry. Share that read proof; keep the post-read fence fresh.
+          const binding = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+            if (!await isCurrent()) throw createForegroundProviderError('provider_authorization_changed');
+            return await withSessionAccountHome(requester, () => purposeResolver(input));
+          }, { readOnly: true });
           if (!await isCurrent()) throw createForegroundProviderError('provider_authorization_changed');
           return binding;
         } } : {}),
