@@ -20,6 +20,9 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
+// Load the real owner after boundary installation, outside the case's runtime deadline.
+const { createSyncBackedSubmitPort } = await import('./syncBackedSubmitPort');
+
 describe('createSyncBackedSubmitPort', () => {
     it('does not admit an online-only wake after the exact Home and Account request failed', async () => {
         const previousState = storage.getState();
@@ -29,7 +32,6 @@ describe('createSyncBackedSubmitPort', () => {
         try {
             storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] } });
             recordMachineRequestFailed({ ...scope, machineId: machine.id });
-            const { createSyncBackedSubmitPort } = await import('./syncBackedSubmitPort');
             const port = createSyncBackedSubmitPort();
             const otherAccount = { ...accountLifetime, scope: { ...scope, accountId: 'other-account' } };
             expect(port.isMachineReachable?.(machine.id, { serverId: scope.serverId, accountLifetime: otherAccount })).toBe(true);
@@ -45,7 +47,6 @@ describe('createSyncBackedSubmitPort', () => {
         }
     });
     it('forwards the canonical Pending row action mutation', async () => {
-        const { createSyncBackedSubmitPort } = await import('./syncBackedSubmitPort');
         const port = createSyncBackedSubmitPort();
         const accountLifetime = {
             scope: { serverId: 'server-1', accountId: 'account-1' },
