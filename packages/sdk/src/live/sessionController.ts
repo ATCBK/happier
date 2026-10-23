@@ -245,8 +245,8 @@ export async function createSessionController(params: LiveParams): Promise<Happi
         assertCurrent(captured);
         changed ||= page.changes.some((change) => (change.kind === 'session' || change.kind === 'share') && change.entityId === params.sessionId);
         targets.push(...page.changes.flatMap((change) => { const hint = readSessionUpdatedMessageChangeHintV1(change); return hint ? [hint] : []; }));
-        // The server filters only after paging raw Account changes. An empty
-        // visible page is not the tail; its raw cursor must stop progressing.
+        // A compatible server may advance through an empty visible page, so
+        // only a non-progressing cursor proves this drain reached its tail.
         if (page.nextCursor <= cursor) return { targets, cursor, reset: false, changed };
         cursor = page.nextCursor;
       }
