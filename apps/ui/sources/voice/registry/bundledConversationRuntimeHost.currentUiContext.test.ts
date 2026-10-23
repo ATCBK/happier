@@ -11,6 +11,7 @@ import { createCurrentUiContextVoiceToolPort } from '@/components/appShell/curre
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { setFocusedSessionId } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -57,6 +58,7 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
     const history = createSessionFixture({ id: 'ui-voice-history', active: false, metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() } });
     const target = createSessionFixture({ id: 'ui-context-target', metadata: { path: '/private', host: 'test', name: 'private session title' } });
     const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history, [target.id]: target }));
+    const readSession = createSessionReadBatchFetchBoundary(async (input, init) => sessionHttp.handle(input, init));
     // Seed the existing server-owned history with its canonical current tuple
     // before Sync lists it; a legacy projection cannot answer current create/load.
     const { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol');
@@ -95,7 +97,7 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
           return Response.json(SessionLookupByTagsResponseV2Schema.parse({ sessions: [(await detail.json()).session] }));
         }
         if (path === '/v1/sessions' && init?.method === 'POST') return sessionHttp.createSessionFromPost(history.id, init);
-        const sessionResponse = sessionHttp.handle(url, init);
+        const sessionResponse = await readSession(url, init);
         if (sessionResponse) return sessionResponse;
         return new Response('{}', { status: 404 });
       },

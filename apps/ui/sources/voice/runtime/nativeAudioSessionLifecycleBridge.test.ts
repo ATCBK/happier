@@ -7,6 +7,7 @@ import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/native
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
@@ -121,7 +122,7 @@ async function withNativeBridge(
   }) });
   const account = await restoreServerAccountForTest({
     serverUrl: 'https://native-bridge.example.test', credentialScope: 'restored-home', activation: 'switch',
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       if (new URL(String(url)).pathname === '/v1/sessions' && init?.method === 'POST') {
         return sessionHttp.createSessionFromPost('bridge-history', init);
       }
@@ -135,7 +136,7 @@ async function withNativeBridge(
       if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'bridge-hosted-token', leaseId: 'bridge-lease', bindingNonce: 'bridge-nonce', expiresAtMs: Date.now() + 60_000 });
       if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
       return new Response('{}', { status: 404 });
-    },
+    }),
   });
   const voice = writeVoiceProviderSettingsConfig(previousState.settings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
   storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({

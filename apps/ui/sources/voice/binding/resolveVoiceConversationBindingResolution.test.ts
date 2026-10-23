@@ -5,6 +5,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -90,7 +91,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
       }
       throw new Error(`Unexpected daemon effect: ${request.method}`);
     });
-    const request = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
+    const request = createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
       const path = new URL(String(input)).pathname;
       if (path === '/health') return Response.json({});
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
@@ -106,7 +107,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
       if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
       if (path === '/v2/sessions/metadata-upgrades') return Response.json({ sessionIds: [] });
       return metadata.handle(input, init);
-    };
+    });
     network.setHttpResponder(request);
     connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: 'account-binding', credentialScope: 'restored-home', request });
     await sync.refreshMachines();

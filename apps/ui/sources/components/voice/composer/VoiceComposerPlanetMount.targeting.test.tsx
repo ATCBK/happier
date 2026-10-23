@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { VoiceEnergyProvider } from '@/components/voice/light/useVoiceEnergy';
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -23,6 +23,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import 'fake-indexeddb/auto';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { buildVoiceTranscriptHistorySessionMetadata } from '@/voice/persistence/voiceTranscriptHistorySession';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -56,6 +57,25 @@ let captureAdmission: ReturnType<typeof createVoiceCaptureAdmissionController>;
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
 
+// Observe the real async Start; the owning test budget bounds this wait.
+function waitForVoiceStart(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const observe = () => {
+            const snapshot = lifecycle.getSnapshot();
+            if (snapshot.status === 'connected') {
+                unsubscribe();
+                resolve();
+            } else if (snapshot.status === 'error') {
+                unsubscribe();
+                reject(new Error(snapshot.errorCode ?? 'voice_start_failed'));
+            }
+        };
+        const unsubscribe = lifecycle.subscribe(observe);
+        onTestFinished(unsubscribe);
+        observe();
+    });
+}
+
 describe('VoiceComposerPlanetMount targeting', () => {
     beforeEach(async () => {
         getStorage().setState(initialStorageState, true);
@@ -73,7 +93,7 @@ describe('VoiceComposerPlanetMount targeting', () => {
         };
         const sessionHttp = createSessionMetadataHttpBoundary(() => sessions);
         account = await restoreServerAccountForTest({ serverUrl: 'https://composer-targeting.test',
-            accountId: 'composer-account', credentialScope: 'restored-home', request: async (url, init) => {
+            accountId: 'composer-account', credentialScope: 'restored-home', request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/v1/features') return Response.json({ features: { voice: { enabled: true } }, capabilities: {} });
                 const preparation = answerVoiceRealtimePreparationHttpRequest(url, getStorage().getState().settings);
@@ -84,7 +104,7 @@ describe('VoiceComposerPlanetMount targeting', () => {
                 const sessionResponse = sessionHttp.handle(url, init);
                 if (sessionResponse) return sessionResponse;
                 return null;
-            } });
+            }) });
         // The Home fixture seeds SDK storage; the credential owner resolves it.
         expect(await TokenStorage.getCredentials()).toEqual(account.credentials);
         const { sync } = await import('@/sync/sync');
@@ -146,7 +166,8 @@ describe('VoiceComposerPlanetMount targeting', () => {
 
         await screen.pressByTestIdAsync('session-composer-voice');
 
-        await vi.waitFor(() => expect(lifecycle.getSnapshot()).toEqual(expect.objectContaining({ adapterId: entry.providerId, status: 'connected', canStop: true })));
+        await waitForVoiceStart();
+        expect(lifecycle.getSnapshot()).toEqual(expect.objectContaining({ adapterId: entry.providerId, status: 'connected', canStop: true }));
         expect(lifecycle.getAttemptTargetSessionAddress()).toBeNull();
         expect(captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
         await screen.unmount();
@@ -157,7 +178,8 @@ describe('VoiceComposerPlanetMount targeting', () => {
 
         await screen.pressByTestIdAsync('session-composer-voice');
 
-        await vi.waitFor(() => expect(lifecycle.getSnapshot()).toEqual(expect.objectContaining({ adapterId: entry.providerId, status: 'connected', canStop: true })));
+        await waitForVoiceStart();
+        expect(lifecycle.getSnapshot()).toEqual(expect.objectContaining({ adapterId: entry.providerId, status: 'connected', canStop: true }));
         expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 'session-7' });
         expect(captureAdmission.acquire('dictation')).toEqual({ status: 'busy', activeOwner: 'conversation' });
         await screen.unmount();
