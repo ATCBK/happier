@@ -82,12 +82,8 @@ import { resolveHomeSearchRuntimeConfig } from "@/app/search/homeSearchCapabilit
 import { resolveHomeSearchDbPath } from "@/app/search/homeSearchDb";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
-import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
-import {
-    SESSION_TRANSCRIPT_PUBLICATION_SELECT,
-    resolveSessionTranscriptPublicationConstraints,
-} from '@/app/session/sessionTranscriptPublicationPolicy';
+import { readHomeSearchVisibleSessionConstraints } from '@/app/search/readHomeSearchVisibleSessionConstraints';
+import type { Tx } from '@/storage/inTx';
 import type { HomeConnectionDescriptorContinuityStore } from '@/app/features/homeConnectionDescriptorContinuity';
 import type { ResolveAuthEmailApplicationLinkTarget } from '@/app/auth/email/nativeAuthEmailOperations';
 import { readHomeConnectionDescriptor, readPreparedHomeCredentialDestination } from '@/app/features/homeConnectionDescriptorPublication';
@@ -339,21 +335,7 @@ export async function startApi(params: Readonly<{
     if (homeSearch) {
         registerHomeSearchRoutes(typed, {
             service: homeSearch,
-            resolveVisibleSessions: async (userId, authentication) => resolveSessionTranscriptPublicationConstraints(
-                await inTx(async (tx) => {
-                    const accessWhere = await buildSessionAccessWhere({
-                        tx,
-                        accountId: userId,
-                        capability: 'readTranscript',
-                        mode: 'effective_access_v1',
-                        authentication,
-                    });
-                    return await tx.session.findMany({
-                        where: accessWhere,
-                        select: { id: true, ...SESSION_TRANSCRIPT_PUBLICATION_SELECT },
-                    });
-                }),
-            ),
+            resolveVisibleSessions: (accountId, authentication, scope) => readHomeSearchVisibleSessionConstraints({ accountId, authentication, scope }),
         });
         onShutdown('home-search', async () => { await homeSearch.stop(); });
     }

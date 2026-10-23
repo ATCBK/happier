@@ -1,4 +1,4 @@
-import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, type MemorySearchQueryV1, type MemorySearchResultV1, type MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 import { z } from 'zod/mini';
 import type { Fastify } from '@/app/api/types';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
@@ -18,7 +18,7 @@ export function registerHomeSearchRoutes(app: Fastify, params: Readonly<{
         search(query: MemorySearchQueryV1, context?: HomeSearchRequestContext): MemorySearchResultV1;
         invalidateAndRebuild(reason: 'explicit-repair'): Promise<void>;
     }>;
-    resolveVisibleSessions: (userId: string, authentication: SessionAccessAuthentication) => Promise<NonNullable<HomeSearchRequestContext['visibleSessions']>>;
+    resolveVisibleSessions: (userId: string, authentication: SessionAccessAuthentication, scope: MemorySearchScope) => Promise<NonNullable<HomeSearchRequestContext['visibleSessions']>>;
     env?: NodeJS.ProcessEnv;
 }>): void {
     const env = params.env ?? process.env;
@@ -34,6 +34,7 @@ export function registerHomeSearchRoutes(app: Fastify, params: Readonly<{
         visibleSessions: await params.resolveVisibleSessions(
             request.userId,
             readSessionAccessAuthenticationFromRequest(request),
+            request.body.scope,
         ),
     })));
     // This is a local Personal Home maintenance operation. Hosted deployments
