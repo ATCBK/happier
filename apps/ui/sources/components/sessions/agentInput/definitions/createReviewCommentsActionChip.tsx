@@ -13,7 +13,7 @@ import {
     buildReviewCommentsDisplayText,
     filterReviewCommentDraftsIncludedInPrompt,
 } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
-import { getReviewCommentAnchorLine } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
+import { formatReviewCommentAnchorLines } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
@@ -93,12 +93,7 @@ function openReviewCommentsDraftsModal(params: Readonly<{
  */
 function describeSingleReviewCommentDraft(draft: ReviewCommentDraft): Readonly<{ name: string; lines: string | null }> {
     const name = draft.filePath.split(/[\\/]/).filter(Boolean).pop() ?? draft.filePath;
-    const anchor = draft.anchor;
-    if (anchor.kind === 'range') {
-        return { name, lines: anchor.endLine > anchor.startLine ? `${anchor.startLine}–${anchor.endLine}` : `${anchor.startLine}` };
-    }
-    const line = getReviewCommentAnchorLine(draft);
-    return { name, lines: line == null ? null : `${line}` };
+    return { name, lines: formatReviewCommentAnchorLines(draft) };
 }
 
 export function createReviewCommentsActionChip(params: Readonly<{

@@ -9960,6 +9960,9 @@ export const zhHans: TranslationStructure = {
           jump: "跳转",
           addCommentA11y: "添加评论",
           closeCommentA11y: "关闭评论",
+          anchorLine: ({ line }: { line: number }) => `第 ${line} 行`,
+          anchorLines: ({ start, end }: { start: number; end: number }) => `第 ${start}–${end} 行`,
+          anchorBeforeChange: ({ lines }: { lines: string }) => `${lines}（改动前）`,
           draftsChipLabel: ({ count }: { count: number }) => `审阅（${count}）`,
           modalSubtitle: "查看哪些评论会随下一条消息发送。",
           modalSummary: ({ included, count }: { included: number; count: number }) =>

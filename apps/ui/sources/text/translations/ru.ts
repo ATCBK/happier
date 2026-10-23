@@ -10174,6 +10174,9 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
           jump: "Перейти",
           addCommentA11y: "Добавить комментарий",
           closeCommentA11y: "Закрыть комментарий",
+          anchorLine: ({ line }: { line: number }) => `Строка ${line}`,
+          anchorLines: ({ start, end }: { start: number; end: number }) => `Строки ${start}–${end}`,
+          anchorBeforeChange: ({ lines }: { lines: string }) => `${lines}, до изменения`,
           draftsChipLabel: ({ count }: { count: number }) => `Ревью (${count})`,
           modalSubtitle: "Проверьте, какие комментарии будут отправлены со следующим сообщением.",
           modalSummary: ({ included, count }: { included: number; count: number }) =>

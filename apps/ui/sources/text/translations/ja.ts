@@ -10619,6 +10619,9 @@ localTailscale: {
           jump: "ジャンプ",
           addCommentA11y: "コメントを追加",
           closeCommentA11y: "コメントを閉じる",
+          anchorLine: ({ line }: { line: number }) => `${line} 行目`,
+          anchorLines: ({ start, end }: { start: number; end: number }) => `${start}–${end} 行目`,
+          anchorBeforeChange: ({ lines }: { lines: string }) => `${lines}（変更前）`,
           draftsChipLabel: ({ count }: { count: number }) => `レビュー (${count})`,
           modalSubtitle: "次のメッセージで送信するコメントを確認します。",
           modalSummary: ({ included, count }: { included: number; count: number }) =>

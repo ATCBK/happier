@@ -12094,6 +12094,9 @@ const enFiles = {
     jump: 'Jump',
     addCommentA11y: 'Add comment',
     closeCommentA11y: 'Close comment',
+    anchorLine: ({ line }: { line: number }) => `Line ${line}`,
+    anchorLines: ({ start, end }: { start: number; end: number }) => `Lines ${start}–${end}`,
+    anchorBeforeChange: ({ lines }: { lines: string }) => `${lines}, before the change`,
     draftsChipLabel: ({ count }: { count: number }) => `Review (${count})`,
     modalSubtitle: 'Review which comments will be sent with your next message.',
     modalSummary: ({ included, count }: { included: number; count: number }) =>
