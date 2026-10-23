@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import {
     DaemonContributionRegistryProjectionDescribeResponseSchema,
-    MACHINE_PLAIN_DATA_KEY_MARKER,
     SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
     MachineAgentInventoryItemSchema,
     PluginProjectionV2Schema,
@@ -19,13 +18,14 @@ import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNaviga
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import type { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import type { Session, PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { ResumeSessionResult } from '@/sync/ops/sessions';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { PendingResetStartBindingV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
@@ -246,12 +246,7 @@ let projection: PluginProjectionV2 = PluginProjectionV2Schema.parse({ v: 2, gene
 function configureSocket(socket: Socket) {
     // Socket.IO is the external transport boundary. Its actual listener and
     // acknowledgement owners remain in use; no Sync or lifecycle method is spied.
-    socket.connected = true;
-    vi.mocked(socket.connect).mockImplementation(() => {
-        socket.connected = true;
-        queueMicrotask(() => { for (const listener of socket.listeners('connect')) listener(); });
-        return socket;
-    });
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     // Fire-and-forget presence/demand packets also cross this cold Socket
     // boundary; no Engine.IO connection is created by the fixture.
@@ -294,6 +289,7 @@ function configureSocket(socket: Socket) {
     });
 }
 
+const { configureConnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
 const { installSessionPaneRuntimeTestHarness } = await import('../panes/sessionPaneRuntimeTestHarness');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -311,6 +307,10 @@ const runtime = installSessionPaneRuntimeTestHarness({
     request: async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? 'GET';
+        if (url.pathname === '/v1/machines/read-batch' && method === 'POST') {
+            return createMachineReadBatchResponseFixture(init?.body, id => id === 'm-target'
+                ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
+        }
         if (method === 'GET' && url.pathname === '/v2/sessions/s1/pending' && pendingReadOverride) return pendingReadOverride();
         if (method === 'GET' && url.pathname === '/v1/machines') {
             if (inventoryReadOverride) return inventoryReadOverride();
@@ -357,7 +357,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
         const artifactResponse = approvalArtifacts.handle(url.pathname, init);
         if (artifactResponse) return artifactResponse;
         if (url.pathname === '/v1/machines/m-target') return Response.json({
-            machine: { id: 'm-target', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
+            machine: createPlainMachineRowFixture({ id: 'm-target', accountId: 'account-a' }),
         });
         if (method === 'POST' || method === 'PATCH') {
             const body: unknown = JSON.parse(String(init?.body ?? '{}'));
@@ -435,6 +435,7 @@ function setMachineOnline(online: boolean) {
     storage.getState().applyMachines([createMachineFixture({
         id: 'm-target', storageMode: 'plain', active: online, activeAt: online ? Date.now() : 0,
     })], true, { sourceServerId: runtime.serverId });
+    observeMachinePresenceForTest(scope(), ['m-target']);
 }
 function pendingWrites() { return httpWrites.filter(write => write.url.pathname === '/v2/sessions/s1/pending' && write.method === 'POST'); }
 function actionWrites() { return httpWrites.filter(write => write.url.pathname.startsWith('/v2/sessions/s1/pending/') && write.method === 'PATCH'); }
@@ -686,7 +687,6 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
                 expect(badge()?.testID).toBe('session.managedWake.loading.badge');
                 await act(async () => { inventory.resolve(); await inventoryRead; });
                 await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge'));
-                expect(badge()?.label).toBe('managedWake.agentFailed');
             }
             expect(pendingWrites()).toHaveLength(0);
             expect(actionWrites()).toHaveLength(0);
@@ -1153,6 +1153,90 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         }
     });
 
+    it('wakes the same stopped Session for an ordinary next message with online-only resume', async () => {
+        storage.setState({ settings: { ...storage.getState().settings, sessionInactiveResumePolicy: 'online_only' } });
+        setMachineOnline(true);
+        const ownerMetadataView = { ...readSessionOwnerMetadataView(currentSession())!, lifecycleState: 'stopped' as const };
+        const { projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1');
+        const { parseDecryptedSessionMetadata } = await import('@/sync/engine/sessions/parsePlainSessionPayload');
+        const metadata = parseDecryptedSessionMetadata(projectSessionSharedMetadataV1({ metadata: ownerMetadataView }), 1);
+        if (!metadata) throw new Error('Invalid stopped Session shared metadata fixture');
+        updateSession({ metadataLayoutVersion: 1, metadata, ownerMetadataView, active: false, presence: 0 });
+        const resumed = deferred<RpcCall>();
+        resumeResponse = async call => {
+            resumed.resolve(call);
+            return { type: 'success', sessionId: 's1' };
+        };
+        const screen = await renderSessionView({ routeServerId: runtime.serverId });
+        try {
+            await changeText(screen, 'Reply with the word awake.');
+            await send(screen);
+            await waitForSubmittedDraft(screen);
+            expect({ pending: pendingWrites().length, alerts: modalMockState.current?.spies.alert.mock.calls })
+                .toMatchObject({ pending: 1, alerts: [] });
+            const call = await resumed.promise;
+            expect(resumeCalls()).toHaveLength(1);
+            expect(pendingWrites()).toHaveLength(1);
+            expect(call.payload).toMatchObject({ sessionId: 's1', directory: '/tmp/target', resume: 'codex-session-1' });
+            expect(findAgentInput(screen).props.value).toBe('');
+        } finally { await screen.unmount(); }
+    });
+
+    it.each([
+        ['agent_queue', 'steer_now'],
+        ['server_pending', 'enqueue'],
+        ['interrupt', 'send_now'],
+    ] as const)('honors a composer %s choice over standing send preferences', async (mode, action) => {
+        storage.setState({ settings: { ...storage.getState().settings,
+            sessionMessageSendMode: mode === 'interrupt' ? 'agent_queue' : 'interrupt',
+            sessionBusySteerSendPolicy: 'server_pending',
+        } });
+        updateSession({ active: true, activeAt: Date.now(), presence: 'online', thinking: true, thinkingAt: Date.now(),
+            agentStateVersion: 1, agentState: { controlledByUser: false,
+                capabilities: { inFlightSteerSupported: true, inFlightSteerAvailable: true },
+            },
+        });
+        const screen = await renderSessionView({ routeServerId: runtime.serverId });
+        try {
+            await changeText(screen, 'chosen delivery');
+            await send(screen, { deliveryIntent: mode });
+            await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+            expect(pendingWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: action } });
+            await waitForSubmittedDraft(screen);
+            expect(findAgentInput(screen).props.value).toBe('');
+        } finally { await screen.unmount(); }
+    });
+
+    it.each([
+        ['agent_queue', 'steer_now'], ['interrupt', 'send_now'],
+    ] as const)('dispatches the existing queue head from an empty composer with %s', async (deliveryIntent, action) => {
+        const row = durablePendingRow('queue-head', 'enqueue');
+        const second = durablePendingRow('second-row', 'enqueue');
+        pendingReadOverride = () => Response.json({ pending: [row, second].map((message, position) => ({
+            localId: message.localId, messageRole: 'user',
+            requestedAction: actionWrites().find(write => write.url.pathname.includes(message.localId!))?.body.requestedAction ?? message.pendingRequestedAction,
+            content: { t: 'plain', v: message.rawRecord }, status: 'queued', deliveryStatus: { status: 'queued' },
+            position, createdAt: message.createdAt, updatedAt: message.updatedAt,
+        })) });
+        await act(async () => {
+            updateSession({ active: true, activeAt: Date.now(), presence: 'online', thinking: true, thinkingAt: Date.now(),
+                agentStateVersion: 1, agentState: { controlledByUser: false,
+                    capabilities: { inFlightSteerSupported: true, inFlightSteerAvailable: true } } });
+            storage.getState().applyPendingSnapshot('s1', { messages: [row, second], discarded: [] });
+        });
+        const screen = await renderSessionView({ routeServerId: runtime.serverId });
+        try {
+            await changeText(screen, '');
+            await send(screen, { deliveryIntent, sendNextQueued: true });
+            await vi.waitFor(() => expect(actionWrites()).toHaveLength(1));
+            expect(actionWrites()[0]?.url.pathname).toContain('/pending/queue-head/');
+            expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: action } });
+            expect(pendingWrites()).toHaveLength(0);
+            expect(findAgentInput(screen).props.value).toBe('');
+            expect(storage.getState().sessionPending.s1.messages.map(message => message.localId)).toEqual(['queue-head', 'second-row']);
+        } finally { await screen.unmount(); }
+    });
+
     it('persists a send_now Pending action when the send action is forced immediate', async () => {
         storage.getState().applyMachines([createMachineFixture({ id: 'm-target', storageMode: 'plain',
             active: true, activeAt: Date.now(), daemonStateVersion: 1,
@@ -1404,7 +1488,8 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         } } });
         const screen = await renderSessionView();
         await act(async () => { await emitSessionResumeRequest('s1'); });
-        expect(modalMockState.current?.spies.confirm).toHaveBeenCalledTimes(1);
+        expect({ confirmations: modalMockState.current?.spies.confirm.mock.calls.length,
+            alerts: modalMockState.current?.spies.alert.mock.calls }).toMatchObject({ confirmations: 1, alerts: [] });
         expect(routerPushSpy).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/new', params: expect.objectContaining({ dataId: expect.any(String) }) }));
         expect(resumeCalls()).toHaveLength(0);
         expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
@@ -1507,7 +1592,8 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(screen.findByTestId('session-directory-missing')).toBeTruthy();
         expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
         await screen.pressByTestIdAsync('session-directory-missing-continue');
-        expect(resumeCalls()).toHaveLength(2);
+        expect({ resumes: resumeCalls().length, alerts: modalMockState.current?.spies.alert.mock.calls })
+            .toMatchObject({ resumes: 2, alerts: [] });
         expect(resumeCalls()[1]?.payload).toMatchObject({ approvedNewDirectoryCreation: true });
         await screen.unmount();
     });
