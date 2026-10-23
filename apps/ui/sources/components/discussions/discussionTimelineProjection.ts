@@ -18,12 +18,13 @@ import { t } from '@/text';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { buildMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
-import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
-import type { InlineMessageReference } from '@/components/sessions/transcript/references/messageStructuredReferences';
+import { readableMessageText, readableMessageTextWithReferences } from '@/components/sessions/transcript/messageDisplayText';
+import { projectMessageAttachmentReference, projectMessageMentionReference, readEligibleMessageInlineReferenceTokens, type InlineMessageReference } from '@/components/sessions/transcript/references/messageStructuredReferences';
+import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 
 type DiscussionMessageReference = InlineMessageReference &
   Readonly<{
-    participant: Extract<
+    participant?: Extract<
       ReturnType<typeof readDiscussionMessagePartsV1>[number],
       { t: 'mention' }
     >['participant'];
@@ -43,10 +44,23 @@ export function projectDiscussionMessageReferences(
   inline: ReadonlyMap<string, DiscussionMessageReference>;
   parts: readonly (string | DiscussionMessageReference)[];
 }> {
-  const inline = new Map<string, DiscussionMessageReference>();
-  const parts = readDiscussionMessagePartsV1(content, mode).map(
+  const declared = new Map<string, DiscussionMessageReference>();
+  const attachments = new Map<string, DiscussionMessageReference>();
+  const sourceParts = readDiscussionMessagePartsV1(content, mode).map(
     (part): string | DiscussionMessageReference => {
-      if (part.t === 'text') return readableMessageText(part.text);
+      if (part.t === 'text') return part.text;
+      if (part.t === 'reference') {
+        const reference = projectMessageMentionReference(part.reference, part.reference.label ?? '');
+        if (!reference) return formatSessionInputMentionMarkerV1(part.reference);
+        declared.set(reference.ref, reference);
+        return reference;
+      }
+      if (part.t === 'attachment') {
+        const reference = projectMessageAttachmentReference(part.attachment);
+        declared.set(reference.ref, reference);
+        attachments.set(reference.ref, reference);
+        return '';
+      }
       const account = part.participant.kind === 'account';
       const id =
         part.participant.kind === 'account'
@@ -68,21 +82,41 @@ export function projectDiscussionMessageReferences(
         participant: part.participant,
         ...(!account ? { sessionId: id } : {}),
       };
-      inline.set(reference.ref, reference);
+      declared.set(reference.ref, reference);
       return reference;
     },
   );
+  let text = sourceParts.map(part => typeof part === 'string' ? part : formatInlineReferenceTokenV1(part)).join('');
+  const inline = new Map<string, DiscussionMessageReference & { tokenStarts: Set<number> }>();
+  for (const token of readEligibleMessageInlineReferenceTokens(text)) {
+    const reference = declared.get(token.ref);
+    if (!reference || reference.token !== undefined && reference.token !== text.slice(token.start, token.end)) continue;
+    const existing = inline.get(token.ref);
+    if (existing) existing.tokenStarts.add(token.start);
+    else inline.set(token.ref, { ...reference, tokenStarts: new Set([token.start]) });
+  }
+  for (const reference of attachments.values()) {
+    if (inline.has(reference.ref)) continue;
+    const separator = text && !/\s$/u.test(text) ? ' ' : '';
+    const start = text.length + separator.length;
+    text += separator + formatInlineReferenceTokenV1(reference);
+    inline.set(reference.ref, { ...reference, tokenStarts: new Set([start]) });
+  }
+  const parts: Array<string | DiscussionMessageReference> = [];
+  let cursor = 0;
+  for (const token of readEligibleMessageInlineReferenceTokens(text)) {
+    const reference = inline.get(token.ref);
+    if (!reference?.tokenStarts.has(token.start)) continue;
+    if (token.start > cursor) parts.push(readableMessageText(text.slice(cursor, token.start)));
+    parts.push(reference);
+    cursor = token.end;
+  }
+  if (cursor < text.length) parts.push(readableMessageText(text.slice(cursor)));
   return {
     parts,
     inline,
-    text: parts
-      .map((part) =>
-        typeof part === 'string' ? part : formatInlineReferenceTokenV1(part),
-      )
-      .join(''),
-    readableText: parts
-      .map((part) => (typeof part === 'string' ? part : part.marker))
-      .join(''),
+    text,
+    readableText: readableMessageTextWithReferences(text, inline),
   };
 }
 

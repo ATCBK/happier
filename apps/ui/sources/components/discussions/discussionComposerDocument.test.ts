@@ -21,6 +21,31 @@ function mention(payload: Readonly<{ kind: string; ref: string; label: string }>
 }
 
 describe('discussion composer document', () => {
+    it('keeps authored attachment occurrences and emits one payload for every retained tray root', () => {
+        const attachment = { kind: 'folder' as const, id: '093862e6-2d88-4dc2-9b29-3b365460f83c', name: 'Sources', entries: [], directories: ['empty'] };
+        const token = formatInlineReferenceTokenV1({ ref: `attachment:${attachment.id}`, label: attachment.name });
+        const text = `Review ${token} and ${token}`;
+        expect(buildDiscussionContent(text, [], undefined, [attachment])).toEqual({ v: 1, parts: [
+            { t: 'text', text }, { t: 'attachment', attachment },
+        ] });
+        expect(buildDiscussionContent('The chip was deleted, not the tray entry', [], undefined, [attachment]).parts.at(-1))
+            .toEqual({ t: 'attachment', attachment });
+        expect(buildDiscussionContent('', [], undefined, [attachment]).parts).toEqual([{ t: 'attachment', attachment }]);
+    });
+    it('retains a selected declared plugin reference through send and read without addressing its Session-shaped label', () => {
+        const payload = { kind: 'happier.composerReference', ref: 'composerReference:issue-42', label: 'Reviewer',
+            composerReference: { pluginId: 'acme.issues', localId: 'issues' }, composerReferenceTrigger: '@' as const };
+        const selected = mention(payload);
+        const reference = { ...payload, token: selected.tokenText };
+        const content = buildDiscussionContent(`Review ${selected.tokenText}`, [{ ...selected, ...payload, start: 7, end: 7 + selected.end }]);
+        expect(DiscussionMessageContentV1Schema.parse(content)).toEqual({ v: 1, parts: [
+            { t: 'text', text: 'Review ' }, { t: 'reference', reference },
+        ] });
+        expect(readDiscussionMentionedParticipantIdsV1(content)).toEqual({ mentionedAccountIds: [], mentionedSessionIds: [] });
+        expect(projectDiscussionMessageReferences(content).readableText).toBe('Review @Reviewer');
+        expect(projectDiscussionMessageReferences(content).inline.get(payload.ref)).toMatchObject({ kind: payload.kind, label: payload.label });
+        expect(buildDiscussionContent(selected.tokenText, [])).toEqual({ v: 1, parts: [{ t: 'text', text: selected.tokenText }] });
+    });
     it('separates default recipient mentions from each other and the unchanged authored message', () => {
         const authored = buildDiscussionContent('Review this', []);
         const recipients = [{ kind: 'session' as const, sessionId: 'reviewer' }, { kind: 'account' as const, accountId: 'person' }];
@@ -73,9 +98,15 @@ describe('discussion composer document', () => {
 
     it('does not infer identity from pasted inline tokens, a mismatched scheme or another kind', () => {
         const selected = mention(buildDiscussionAccountMentionPayload('account-a', 'Alex'));
-        for (const mentions of [[], [{ ...selected, ref: 'session:account-a' }], [{ ...selected, kind: 'partner.account' }]]) {
-            expect(buildDiscussionContent(selected.tokenText, mentions)).toEqual({ v: 1, parts: [{ t: 'text', text: selected.tokenText }] });
-        }
+        expect(buildDiscussionContent(selected.tokenText, [])).toEqual({ v: 1, parts: [{ t: 'text', text: selected.tokenText }] });
+        const mismatched = buildDiscussionContent(selected.tokenText, [{ ...selected, ref: 'session:account-a' }]);
+        expect(mismatched).toEqual({ v: 1, parts: [{ t: 'reference', reference: { kind: selected.kind,
+            ref: 'session:account-a', label: selected.label, token: selected.tokenText } }] });
+        expect(readDiscussionMentionedParticipantIdsV1(mismatched)).toEqual({ mentionedAccountIds: [], mentionedSessionIds: [] });
+        const inert = buildDiscussionContent(selected.tokenText, [{ ...selected, kind: 'partner.account' }]);
+        expect(inert).toEqual({ v: 1, parts: [{ t: 'reference', reference: { kind: 'partner.account',
+            ref: selected.ref, label: selected.label, token: selected.tokenText } }] });
+        expect(readDiscussionMentionedParticipantIdsV1(inert)).toEqual({ mentionedAccountIds: [], mentionedSessionIds: [] });
     });
 
     it('drops only the edited reference when reconciling a pending input', () => {

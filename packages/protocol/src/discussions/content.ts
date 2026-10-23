@@ -17,6 +17,12 @@ import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttrib
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { WorkflowDecimalV1Schema } from '../workflows/workflowProgressV1.js';
 import { WorkflowRunIdV1Schema, WorkflowInvocationRecordIdSchema } from '../workflows/workflowIdsV1.js';
+import { MentionRefV1Schema } from '../runtime/input/mentionRefV1.js';
+import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { ComposerReferenceTriggerV1Schema } from '../plugins/contributions/composerReferenceProviders.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { StoredAttachmentPayloadV1Schema, readAttachmentPayloadFilesV1, type StoredAttachmentPayloadV1 } from '../transfers/attachments/attachmentPayloadV1.js';
+import type { BinaryBlobReferenceV1 } from '../storage/binaryBlobV1.js';
 
 function nfcString() {
   return z.string().check(z.refine((value) => value === value.normalize('NFC'), 'Session discussion text must be NFC-normalized'));
@@ -29,9 +35,21 @@ export const DiscussionTitleV1Schema = lazyZodSchema(() => z.strictObject({
 export type DiscussionTitleV1 = z.infer<typeof DiscussionTitleV1Schema>;
 export const DiscussionTitleV1StoredSchema = createStoredReadSchema(DiscussionTitleV1Schema);
 
+// The shared reference grammar owns identity and bounds. Fresh Discussion
+// content closes its known extension fields; references never become routing.
+const DiscussionInlineReferenceV1Schema = lazyZodSchema(() => {
+  const schema = z.extend(MentionRefV1Schema, {
+    composerReference: z.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
+    composerReferenceTrigger: z.optional(ComposerReferenceTriggerV1Schema),
+  });
+  return z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<typeof schema.shape, z.core.$strict>;
+});
+
 export const DiscussionMessagePartV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.strictObject({ t: z.literal('text'), text: nfcString() }),
   z.strictObject({ t: z.literal('mention'), participant: DiscussionParticipantRefV1Schema }),
+  z.strictObject({ t: z.literal('reference'), reference: DiscussionInlineReferenceV1Schema }),
+  z.strictObject({ t: z.literal('attachment'), attachment: StoredAttachmentPayloadV1Schema }),
 ]));
 export type DiscussionMessagePartV1 = z.infer<typeof DiscussionMessagePartV1Schema>;
 
@@ -44,7 +62,7 @@ export type DiscussionDocEditProposalContentV1 = z.infer<typeof DiscussionDocEdi
 
 /**
  * The authored human document. A message must say something: at least one
- * mention or one non-blank text run. Adjacent empty text parts are rejected so
+ * mention, reference, attachment or non-blank text run. Adjacent empty text parts are rejected so
  * two clients cannot produce different bytes for the same visible message and
  * then disagree about request equality.
  */
@@ -55,7 +73,7 @@ export const DiscussionTextMessageContentV1Schema = lazyZodSchema(() => z.strict
   let hasMeaningfulPart = false;
   for (let index = 0; index < value.parts.length; index += 1) {
     const part = value.parts[index]!;
-    if (part.t === 'mention') {
+    if (part.t !== 'text') {
       hasMeaningfulPart = true;
       continue;
     }
@@ -76,8 +94,18 @@ export const DiscussionTextMessageContentV1Schema = lazyZodSchema(() => z.strict
     context.addIssue({
       code: 'custom',
       path: ['parts'],
-      message: 'Discussion content must contain at least one mention or non-blank text run',
+      message: 'Discussion content must contain at least one mention, reference, attachment or non-blank text run',
     });
+  }
+  const roots = new Set<string>(), blobs = new Set<string>();
+  for (const [index, part] of value.parts.entries()) {
+    if (part.t !== 'attachment') continue;
+    if (roots.has(part.attachment.id)) context.addIssue({ code: 'custom', path: ['parts', index], message: 'Attachment identities must be unique' });
+    roots.add(part.attachment.id);
+    for (const file of readAttachmentPayloadFilesV1(part.attachment)) {
+      if (blobs.has(file.blobId)) context.addIssue({ code: 'custom', path: ['parts', index], message: 'Attachment leaf identities must be unique' });
+      blobs.add(file.blobId);
+    }
   }
 })));
 export type DiscussionTextMessageContentV1 = z.infer<typeof DiscussionTextMessageContentV1Schema>;
@@ -113,6 +141,15 @@ export function readDiscussionMessagePartsV1(content: DiscussionMessageContentV1
   if (content.kind === 'doc_passage_comment') return content.content.parts;
   if (projection === 'preview') return [{ t: 'text', text: content.proposal.reason }];
   return [{ t: 'text', text: [content.proposal.before, content.proposal.after, content.proposal.reason].join('\n') }];
+}
+
+/** Opened tree metadata only: history projection never acquires file bytes. */
+export function readDiscussionAttachmentPayloadsV1(content: DiscussionMessageContentV1): readonly StoredAttachmentPayloadV1[] {
+  return readDiscussionMessagePartsV1(content).flatMap(part => part.t === 'attachment' ? [part.attachment] : []);
+}
+
+export function readDiscussionAttachmentReferencesV1(content: DiscussionMessageContentV1): readonly BinaryBlobReferenceV1[] {
+  return readDiscussionAttachmentPayloadsV1(content).flatMap(attachment => readAttachmentPayloadFilesV1(attachment));
 }
 
 /** Strict content projection shared by composers, codecs and server routing admission. */

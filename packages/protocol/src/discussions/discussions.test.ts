@@ -61,6 +61,25 @@ const plainMessage = {
 };
 
 describe('session discussion content', () => {
+  it('admits attachment-only files and complete folder trees through strict writes and tolerant stored reads', () => {
+    const file = { blobId: '00000000-0000-4000-8000-000000000001', mime: 'image/png', sizeBytes: 4, sha256: 'a'.repeat(64) };
+    const attachment = { kind: 'folder', id: '00000000-0000-4000-8000-000000000002', name: 'Pictures',
+      entries: [{ relativePath: 'nested/photo.png', file }], directories: ['nested', 'empty'] };
+    const content = { v: 1, parts: [{ t: 'attachment', attachment }] };
+    expect(DiscussionMessageContentV1Schema.safeParse(content).success).toBe(true);
+    expect(DiscussionMessageContentV1Schema.safeParse({ v: 1, parts: [{ t: 'attachment', attachment: { kind: 'file', id: file.blobId, name: 'photo.png', file } }] }).success).toBe(true);
+    const parsed = DiscussionMessageContentV1Schema.parse(content);
+    expect(readDiscussionMentionedParticipantIdsV1(parsed)).toEqual({ mentionedAccountIds: [], mentionedSessionIds: [] });
+    expect(DiscussionMessageContentV1Schema.safeParse({ v: 1, parts: [{ t: 'attachment', attachment: { ...attachment,
+      entries: [{ relativePath: '../escape', file }] } }] }).success).toBe(false);
+    const extended = { v: 1, parts: [{ t: 'attachment', attachment: { ...attachment,
+      entries: [{ relativePath: 'nested/photo.png', file: { ...file, future: true }, future: true }], future: true } }] };
+    expect(DiscussionMessageContentV1Schema.safeParse(extended).success).toBe(false);
+    expect(DiscussionMessageContentV1StoredSchema.parse(extended)).toEqual(content);
+    expect(DiscussionMessageContentV1Schema.safeParse({ v: 1, parts: [{ t: 'attachment', attachment: { ...attachment, entries: [], directories: ['empty'] } }] }).success).toBe(true);
+    expect(serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content: parsed, mentionedAccountIds: [] }))
+      .not.toBe(serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content: DiscussionMessageContentV1Schema.parse({ v: 1, parts: [{ t: 'attachment', attachment: { ...attachment, entries: [{ relativePath: 'nested/photo.png', file: { ...file, sha256: 'b'.repeat(64) } }] } }] }), mentionedAccountIds: [] }));
+  });
   it('reads an attributed Workflow result without inventing a Session producer', () => {
     const producer = { v: 1, kind: 'workflow', runId: 'run', invocationRecordId: 'invocation', invocationAttempt: '0',
       execution: { kind: 'action', actionId: 'plugin:external/check' }, outcome: 'answer' };
@@ -163,6 +182,24 @@ describe('session discussion content', () => {
     expect(readDiscussionMessagePartsV1(content, 'preview')).toEqual([{ t: 'text', text: 'Clarify retries' }]);
     // Full human read/copy consumers retain the authored proposal; only preview is summarized.
     expect(readDiscussionMessagePartsV1(content)).toEqual([{ t: 'text', text: `${before}\n${after}\nClarify retries` }]);
+  });
+
+  it('retains typed external references as closed authored data without executable addressing', () => {
+    const reference = { kind: 'happier.composerReference', ref: 'composerReference:issue-42',
+      token: '[Reviewer](happier-ref:composerReference:issue-42)', label: 'Reviewer',
+      composerReference: { pluginId: 'acme.issues', localId: 'issues' }, composerReferenceTrigger: '@' };
+    const content = { v: 1, parts: [{ t: 'reference', reference }] };
+    expect(DiscussionMessageContentV1Schema.parse(content)).toEqual(content);
+    expect(readDiscussionMentionedParticipantIdsV1(DiscussionMessageContentV1Schema.parse(content)))
+      .toEqual({ mentionedAccountIds: [], mentionedSessionIds: [] });
+    for (const forged of [{ ...reference, participant: { kind: 'session', sessionId: 'reviewer' } },
+      { ...reference, composerReference: { ...reference.composerReference, accountId: 'forged' } },
+      { ...reference, ref: 'malformed' }]) {
+      expect(DiscussionMessageContentV1Schema.safeParse({ v: 1, parts: [{ t: 'reference', reference: forged }] }).success).toBe(false);
+    }
+    expect(DiscussionMessageContentV1StoredSchema.parse({ v: 1, future: 'inert', parts: [{ t: 'reference', reference: {
+      ...reference, future: 'inert', composerReference: { ...reference.composerReference, future: 'inert' },
+    } }] })).toEqual(content);
   });
 
   it('retains an exact Home-qualified Doc anchor without admitting source content or grants', () => {
@@ -471,6 +508,9 @@ describe('session discussion API schemas', () => {
       restore: '/v1/discussions/:discussionId/restore',
       settings: '/v1/discussions/:discussionId/settings',
       messages: '/v1/discussions/:discussionId/messages',
+      upload: '/v1/discussions/upload',
+      attachment: '/v1/discussions/:discussionId/messages/:messageId/attachments/:blobId',
+      attachmentUpload: '/v1/discussions/attachments/uploads/:uploadId',
       read: '/v1/discussions/:discussionId/read',
       participants: '/v1/discussions/:discussionId/participants',
       invite: '/v1/discussions/:discussionId/participants/invite',

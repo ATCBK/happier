@@ -26,6 +26,14 @@ function message(overrides: Partial<DiscussionOpenedMessageV1> = {}): Discussion
 }
 
 describe('Discussion human presentation', () => {
+  it('presents files and empty folders without treating them as participant mentions', () => {
+    expect(formatDiscussionMessageForHuman(message({ content: { v: 1, parts: [
+      { t: 'attachment', attachment: { kind: 'file', id: '7578de54-3f59-4d6d-8293-ff6e4682fd10', name: 'notes.txt', file: {
+        blobId: '7578de54-3f59-4d6d-8293-ff6e4682fd10', mime: 'text/plain', sizeBytes: 0, sha256: 'a'.repeat(64),
+      } } },
+      { t: 'attachment', attachment: { kind: 'folder', id: '7578de54-3f59-4d6d-8293-ff6e4682fd11', name: 'project', entries: [], directories: [] } },
+    ] } }))).toBe('1. Alice Chen: [File: notes.txt][Folder: project]');
+  });
   it('renders opened passage comments and proposal text through the existing transcript formatter', () => {
     const revision = { headerVersion: 1, bodyVersion: 2 };
     const passage = { ref: { kind: 'doc' as const, artifactId: 'doc', serverId: 'home' }, revision,

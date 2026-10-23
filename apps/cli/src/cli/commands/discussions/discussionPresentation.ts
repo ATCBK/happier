@@ -2,6 +2,7 @@ import { definitionList, ok } from '@happier-dev/cli-common/output';
 import { DiscussionCreateResultV1Schema, DiscussionDetailsResultV1Schema, DiscussionListResultV1Schema, DiscussionPostResultV1Schema, DiscussionReadResultV1Schema, DiscussionReadStateResultV1Schema } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionMessageContentV1, DiscussionOpenedMessageV1, DiscussionOpenedSummaryV1 } from '@happier-dev/protocol';
 import { readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
+import { formatSessionInputMentionMarkerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 
 import type {
   ActionCliPresentation,
@@ -97,6 +98,8 @@ function renderContent(
 ): string {
   return readDiscussionMessagePartsV1(content).map((part) => {
     if (part.t === 'text') return part.text;
+    if (part.t === 'reference') return formatSessionInputMentionMarkerV1(part.reference);
+    if (part.t === 'attachment') return `[${part.attachment.kind === 'folder' ? 'Folder' : 'File'}: ${part.attachment.name}]`;
     return part.participant.kind === 'session'
       ? '@Happier Agent'
       : `@${mentionLabels.get(part.participant.accountId) ?? 'Happier member'}`;

@@ -46,6 +46,26 @@ function harness(messages = [question, answer, review], responseHome = discussio
 }
 
 describe('workflow.definition.capture through the public Action owner', () => {
+  it.each(['file', 'folder'] as const)('holds selected %s content for review instead of silently capturing text only', async kind => {
+    const attachment = kind === 'folder'
+      ? { kind, id: '7578de54-3f59-4d6d-8293-ff6e4682fd11', name: 'project', entries: [], directories: [] } as const
+      : { kind, id: '7578de54-3f59-4d6d-8293-ff6e4682fd10', name: 'notes.txt', file: {
+        blobId: '7578de54-3f59-4d6d-8293-ff6e4682fd10', mime: 'text/plain', sizeBytes: 0, sha256: 'a'.repeat(64),
+      } } as const;
+    const attached = DiscussionOpenedMessageV1Schema.parse({ ...question, content: { v: 1, parts: [
+      { t: 'text' as const, text: 'Inspect the evidence' }, { t: 'attachment' as const, attachment },
+    ] } });
+    expect(await harness([attached, answer])({ discussion, messageIds: ['question', 'answer'] }))
+      .toMatchObject({ ok: true, result: { status: 'needs_review', definition: null,
+        unresolved: [{ messageId: 'question', reason: 'unsupported_content' }] } });
+    const excluded = { ...attached, id: 'excluded', seq: 3,
+      messageRef: { ...attached.messageRef, messageId: 'excluded' } };
+    const capture = harness([question, answer, excluded]);
+    for (const selection of [{ messageIds: ['question', 'answer'] },
+      { messageIds: ['question', 'answer', 'excluded'], choices: [{ messageId: 'excluded', role: 'exclude' }] }]) {
+      expect(await capture({ discussion, ...selection })).toMatchObject({ ok: true, result: { status: 'ready', unresolved: [] } });
+    }
+  });
   it('reads only the selected committed messages and pins every later read to the first frontier', async () => {
     const unrelated = Array.from({ length: 1_000 }, (_, index) => message(`unrelated-${index}`, index + 4, 'UNRELATED_PRIVATE_SENTINEL'));
     const capture = harness([question, answer, review, ...unrelated]);

@@ -1,4 +1,6 @@
 export * from './content.js';
+export * from './attachments.js';
+export * from './attachmentsUpload.js';
 export * from './settings.js';
 export * from './actionIds.js';
 export * from './actions.js';

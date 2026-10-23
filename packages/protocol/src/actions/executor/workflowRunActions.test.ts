@@ -285,6 +285,7 @@ describe('shared Account workflow run owner', () => {
     const unused = (): never => { throw new Error('capture_must_not_save_or_start'); };
     const definitions = createWorkflowDefinitionActions({ artifactStore: { read: unused, list: unused, create: unused, update: unused, delete: unused },
       encodeListCursor: unused, assertDefinitionWriteAllowed: unused });
+    let captureAttachment = false;
     const capture = createActionExecutor({ workflowAction: createWorkflowActionExecutor({ definitions, runs: owner, isWorkflowFeatureEnabled: () => true }),
       discussionAction: async () => ({ v: 1, serverId: discussion.serverId, discussionId: discussion.discussionId,
         messageSeq: 8, incomplete: false, hasMoreOlder: false, messages: [{ id: 'published-answer', discussionId: discussion.discussionId,
@@ -294,12 +295,18 @@ describe('shared Account workflow run owner', () => {
             workflow: { runId, invocationRecordId: invocationId, invocationAttempt: '0' }, outcome: 'answer' } }
             : { v: 1, kind: 'workflow', runId, invocationRecordId: invocationId, invocationAttempt: '0',
               execution: { kind: 'action', actionId: 'reviews.comments.list' }, outcome: 'answer' },
-          content: { v: 1, parts: [{ t: 'text', text: 'NATIVE_RESULT_MUST_NOT_BECOME_A_PROMPT' }] },
+          content: { v: 1, parts: [{ t: 'text', text: 'NATIVE_RESULT_MUST_NOT_BECOME_A_PROMPT' },
+            ...(captureAttachment ? [{ t: 'attachment', attachment: { kind: 'folder', id: '7578de54-3f59-4d6d-8293-ff6e4682fd11', name: 'project', entries: [], directories: [] } }] : []),
+          ] },
         }] }),
     } as unknown as ActionExecutorDeps);
     expect(await capture.execute('workflow.definition.capture', { discussion, messageIds: ['published-answer'], choices: [] },
       { ...context, serverId: discussion.serverId }))
       .toMatchObject({ ok: true, result: { status: 'ready', definition: authored, provenance: { workflow: { runId, source: { kind: 'inline' } } } } });
+    captureAttachment = true;
+    expect(await capture.execute('workflow.definition.capture', { discussion, messageIds: ['published-answer'], choices: [] },
+      { ...context, serverId: discussion.serverId })).toMatchObject({ ok: true, result: { status: 'needs_review', definition: null,
+        unresolved: expect.arrayContaining([{ messageId: 'published-answer', reason: 'unsupported_content' }]) } });
     const invocation = await owner.execute({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId }, context });
     if (delivers) expect(invocation).toMatchObject({ discussionResultDelivery: { kind: 'originating_discussion', discussion,
       messageId: 'question-1', throughSeq: 7 } });

@@ -7,6 +7,7 @@ import { WorkflowDefinitionV1Schema, type WorkflowDefinitionV1, type WorkflowBlo
 import type { WorkflowValueReference } from './workflowReferenceV1.js';
 import { WorkflowDefinitionCaptureProvenanceV1Schema } from './workflowDefinitionV1.js';
 import { ExecutableParticipantSelectionV1Schema } from '../discussions/executableParticipants.js';
+import { readDiscussionAttachmentPayloadsV1 } from '../discussions/content.js';
 
 /** Closed, read-only capture operands. Source text is always read under the caller's authority. */
 export const WorkflowDefinitionCaptureRequestV1Schema = lazyZodSchema(() => z.strictObject({
@@ -69,7 +70,9 @@ export function captureWorkflowDiscussionV1(request: WorkflowDefinitionCaptureRe
     const text = message.content && 'parts' in message.content
       ? message.content.parts.filter(part => part.t === 'text').map(part => part.text).join('') : '';
     if (!message.content) throw Object.assign(new Error('capture_source_unavailable'), { code: 'content_unavailable' });
-    if (role !== 'exclude' && !('parts' in message.content)) unresolved.push({ messageId: message.id, reason: 'unsupported_content' });
+    if (role !== 'exclude' && (!('parts' in message.content) || readDiscussionAttachmentPayloadsV1(message.content).length > 0)) {
+      unresolved.push({ messageId: message.id, reason: 'unsupported_content' });
+    }
     if (role === 'step' && !choice && !parent) unresolved.push({ messageId: message.id, reason: 'unlinked_message' });
     if (role === 'step' && !participant) unresolved.push({ messageId: message.id, reason: 'participant_required' });
     for (const id of dependsOnMessageIds) {

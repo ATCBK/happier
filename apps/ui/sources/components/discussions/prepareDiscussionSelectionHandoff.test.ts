@@ -28,6 +28,21 @@ const message = (input: Readonly<{
 };
 
 describe('prepareDiscussionSelectionHandoff', () => {
+    it('copies an attachment summary with committed provenance without leaking a private locator', () => {
+        const attachment = { kind: 'folder' as const, id: '63d77628-40c9-48c5-93f6-d197c2783ad5',
+            name: 'Empty designs', entries: [], directories: ['drafts'] };
+        const result = prepareDiscussionSelectionHandoff({
+            serverId: 'home-a', discussionId: 'discussion-a', selectedMessageIds: ['m1'],
+            messages: [message({ id: 'm1', seq: 1, authorAccountId: 'alice',
+                content: { v: 1, parts: [{ t: 'attachment', attachment }] } })],
+            resolveAccountLabel: () => 'Alice', format: 'plain',
+            roleLabels: { user: 'User', assistant: 'Assistant' }, agentAttributionLabel: 'Via Agent',
+        });
+        expect(result?.text).toContain(attachment.name);
+        expect(result?.text).not.toContain(attachment.id);
+        expect(result?.source).toMatchObject({ serverId: 'home-a', discussionId: 'discussion-a', messageIds: ['m1'] });
+    });
+
     it('copies opened passage comments and proposals without interpreting their source as a mention', () => {
         const revision = { headerVersion: 1, bodyVersion: 2 };
         const passage = { ref: { kind: 'doc' as const, artifactId: 'doc', serverId: 'home-a' }, revision,

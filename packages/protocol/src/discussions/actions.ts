@@ -1,4 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResultV1Schema } from './attachments.js';
+export { DiscussionAttachmentReadInputV1Schema, DiscussionAttachmentReadResultV1Schema } from './attachments.js';
+export type { DiscussionAttachmentReadInputV1, DiscussionAttachmentReadResultV1 } from './attachments.js';
 import { DiscussionSettingsV1Schema, DiscussionSettingsResponseV1Schema } from './settings.js';
 import { DiscussionSecondOpinionStartInputV1Schema, DiscussionSecondOpinionStartResultV1Schema } from './secondOpinionActions.js';
 import { z } from 'zod/mini';
@@ -330,6 +333,7 @@ export const DISCUSSION_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
   'discussion.settings.get': DiscussionGetInputV1Schema,
   'discussion.settings.set': DiscussionSettingsSetInputV1Schema,
   'discussion.read': DiscussionReadInputV1Schema,
+  'discussion.attachment.read': DiscussionAttachmentReadInputV1Schema,
   'discussion.create': DiscussionCreateInputV1Schema,
   'discussion.second_opinion.start': DiscussionSecondOpinionStartInputV1Schema,
   'discussion.post': DiscussionPostInputV1Schema,
@@ -357,6 +361,7 @@ export const DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'discussion.settings.get': DiscussionSettingsResponseV1Schema,
   'discussion.settings.set': DiscussionSettingsResponseV1Schema,
   'discussion.read': DiscussionReadResultV1Schema,
+  'discussion.attachment.read': DiscussionAttachmentReadResultV1Schema,
   'discussion.create': DiscussionCreateResultV1Schema,
   'discussion.second_opinion.start': DiscussionSecondOpinionStartResultV1Schema,
   'discussion.post': DiscussionPostResultV1Schema,

@@ -22,6 +22,8 @@ import {
     type ComposerStructuredInputMention,
 } from '@/components/sessions/agentInput/structuredInputMentions';
 import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
+import { composerReferencesFromStructuredMentions } from '@/components/sessions/composer/composerScopeAdapters';
+import type { StoredAttachmentPayloadV1 } from '@happier-dev/protocol/transfers/attachments/attachmentPayloadV1';
 
 /** The passage travels inside C3's admitted content, beside the human comment. */
 export function prepareDiscussionContentForPassage(input: Readonly<{
@@ -128,27 +130,34 @@ export function buildDiscussionContent(
     text: string,
     mentions: readonly ComposerStructuredInputMention[],
     resolvedModelSessions?: ReadonlyMap<string, string>,
+    attachments: readonly StoredAttachmentPayloadV1[] = [],
 ): DiscussionTextMessageContentV1 {
     const parts: DiscussionTextMessageContentV1['parts'][number][] = [];
     let offset = 0;
     for (const mention of parseComposerStructuredInputMentionsForText(mentions, text).mentions) {
         const reference = readDiscussionMentionParticipant(mention);
-        if (!reference) continue;
-        let participant: DiscussionParticipantRefV1;
-        if (reference.kind === 'model') {
+        let participant: DiscussionParticipantRefV1 | null = null;
+        if (reference?.kind === 'model') {
             const sessionId = resolvedModelSessions?.get(reference.participantSlotId);
             if (!sessionId) throw new Error('discussion_participant_start_required');
             participant = { kind: 'session', sessionId: SessionIdSchema.parse(sessionId) };
-        } else {
+        } else if (reference) {
             participant = reference;
         }
+        const selected = participant ? null : composerReferencesFromStructuredMentions({ text, mentions: [mention] })[0];
+        if (!participant && !selected) continue;
         if (mention.start > offset) {
             parts.push({ t: 'text', text: text.slice(offset, mention.start).normalize('NFC') });
         }
-        parts.push({ t: 'mention', participant });
+        if (participant) parts.push({ t: 'mention', participant });
+        else if (selected) {
+            const { start: _start, end: _end, ...reference } = selected;
+            parts.push({ t: 'reference', reference });
+        }
         offset = mention.end;
     }
     if (offset < text.length) parts.push({ t: 'text', text: text.slice(offset).normalize('NFC') });
+    parts.push(...attachments.map(attachment => ({ t: 'attachment' as const, attachment })));
     return DiscussionTextMessageContentV1Schema.parse({ v: 1, parts });
 }
 

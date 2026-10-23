@@ -2,7 +2,7 @@ import { omit } from 'zod/mini';
 import { DiscussionSelectionSourceV1Schema, readDiscussionMessagePartsV1, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
-import { resolveDiscussionWorkflowAttribution } from './discussionTimelineProjection';
+import { projectDiscussionMessageReferences, resolveDiscussionWorkflowAttribution } from './discussionTimelineProjection';
 import { formatSelectedMessagesForClipboard } from '@/components/sessions/transcript/messageSelection/formatSelectedMessagesForClipboard';
 import type { TranscriptBulkCopyFormat } from '@/components/sessions/transcript/messageSelection/_types';
 
@@ -19,19 +19,16 @@ function renderDiscussionContent(
     resolveSessionLabel?: (sessionId: string) => string | null,
 ): string | null {
     if (!message.content) return null;
-    const parts: string[] = [];
     for (const part of readDiscussionMessagePartsV1(message.content)) {
-        if (part.t === 'text') {
-            parts.push(part.text);
-            continue;
-        }
+        if (part.t !== 'mention') continue;
         const label = (part.participant.kind === 'account'
             ? resolveAccountLabel(part.participant.accountId)
             : resolveSessionLabel?.(part.participant.sessionId))?.trim();
         if (!label) return null;
-        parts.push(`@${label}`);
     }
-    return parts.join('');
+    return projectDiscussionMessageReferences(message.content, {
+        account: resolveAccountLabel, session: resolveSessionLabel,
+    }).readableText;
 }
 
 /**

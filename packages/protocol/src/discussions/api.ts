@@ -8,6 +8,8 @@ import { DiscussionInitialParticipantsV1Schema, DiscussionOwnedSessionV1Schema, 
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { WorkflowDiscussionOriginV1Schema } from '../workflows/workflowDestinationsV1.js';
+import { DiscussionAttachmentBindingsV1Schema } from './attachments.js';
+import { readDiscussionAttachmentReferencesV1 } from './content.js';
 
 import {
   SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1,
@@ -105,6 +107,9 @@ export const DISCUSSION_HTTP_PATHS_V1 = Object.freeze({
   archive: '/v1/discussions/:discussionId/archive',
   restore: '/v1/discussions/:discussionId/restore',
   messages: '/v1/discussions/:discussionId/messages',
+  upload: '/v1/discussions/upload',
+  attachment: '/v1/discussions/:discussionId/messages/:messageId/attachments/:blobId',
+  attachmentUpload: '/v1/discussions/attachments/uploads/:uploadId',
   read: '/v1/discussions/:discussionId/read',
   participants: '/v1/discussions/:discussionId/participants',
   invite: '/v1/discussions/:discussionId/participants/invite',
@@ -165,6 +170,7 @@ export const DiscussionMessageWriteV1Schema = lazyZodSchema(() => z.strictObject
   mentionedAccountIds: MentionedAccountIdsSchema,
   mentionedSessionIds: z.optional(MentionedSessionIdsSchema),
   replyTarget: z.optional(DiscussionReplyTargetV1Schema),
+  attachments: z.optional(DiscussionAttachmentBindingsV1Schema),
 }).check(z.superRefine((value, context) => {
   refineEqualityEvidenceForEnvelope(
     value.content.t,
@@ -172,6 +178,18 @@ export const DiscussionMessageWriteV1Schema = lazyZodSchema(() => z.strictObject
     context,
     ['requestEqualityEvidenceV1'],
   );
+  const bindings = value.attachments ?? [];
+  if (bindings.some(binding => binding.t !== value.content.t)) context.addIssue({ code: 'custom', path: ['attachments'],
+    message: 'Attachment byte envelopes must match the message mode' });
+  if (value.content.t === 'plain') {
+    const opened = DiscussionMessageContentV1Schema.safeParse(value.content.v);
+    if (opened.success) {
+      const ids = new Set(readDiscussionAttachmentReferencesV1(opened.data).map(file => file.blobId));
+      if (ids.size !== bindings.length || bindings.some(binding => !ids.has(binding.blobId))) {
+        context.addIssue({ code: 'custom', path: ['attachments'], message: 'Attachment bindings must match the authored file leaves' });
+      }
+    }
+  }
 })));
 export type DiscussionMessageWriteV1 = z.infer<typeof DiscussionMessageWriteV1Schema>;
 
@@ -433,6 +451,7 @@ export function buildDiscussionMutationRequestBodyV1(
           ? { requestEqualityEvidenceV1: input.firstMessage.requestEqualityEvidenceV1 }
           : {}),
         content: input.firstMessage.content,
+        ...buildDiscussionAttachmentBindingsV1(authoredContent, input.firstMessage.content.t),
         ...(isDiscussionDocEditProposalContentV1(authoredContent) ? { docEditProposal: true } : {}),
         mentionedAccountIds: [...input.firstMessage.mentionedAccountIds],
         ...(input.firstMessage.mentionedSessionIds === undefined ? {} : { mentionedSessionIds: [...input.firstMessage.mentionedSessionIds] }),
@@ -448,6 +467,7 @@ export function buildDiscussionMutationRequestBodyV1(
         ? { requestEqualityEvidenceV1: input.requestEqualityEvidenceV1 }
         : {}),
       content: input.content,
+      ...buildDiscussionAttachmentBindingsV1(authoredContent, input.content.t),
       ...(isDiscussionDocEditProposalContentV1(authoredContent) ? { docEditProposal: true } : {}),
       mentionedAccountIds: [...input.mentionedAccountIds],
       ...(input.mentionedSessionIds === undefined ? {} : { mentionedSessionIds: [...input.mentionedSessionIds] }),
@@ -457,6 +477,14 @@ export function buildDiscussionMutationRequestBodyV1(
   return DiscussionRenameRequestV1Schema.parse({
     titleContent: input.titleContent,
   });
+}
+
+/** One derived projection for UI, CLI, storage bodies and equality preparation. */
+export function buildDiscussionAttachmentBindingsV1(content: DiscussionMessageContentV1, t: 'plain' | 'encrypted'): {
+  attachments?: { blobId: string; t: 'plain' | 'encrypted' }[];
+} {
+  const references = readDiscussionAttachmentReferencesV1(content);
+  return references.length === 0 ? {} : { attachments: references.map(file => ({ blobId: file.blobId, t })) };
 }
 
 export const DiscussionReadRequestV1Schema = lazyZodSchema(() => z.strictObject({

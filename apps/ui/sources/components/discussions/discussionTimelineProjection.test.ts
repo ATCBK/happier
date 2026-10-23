@@ -7,11 +7,39 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, projectDiscussionMessageLabels, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, resolveDiscussionReplyPresentation, startsDiscussionMessageGroup } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, projectDiscussionMessageReferences, projectDiscussionMessageLabels, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, resolveDiscussionReplyPresentation, startsDiscussionMessageGroup } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 describe('readDiscussionMessagePreview', () => {
+    it('binds repeated attachment tokens once per occurrence without duplicating the retained metadata', () => {
+        const id = '762847e4-14cb-45c2-9e3a-06db902a417a';
+        const token = `[diagram.png](happier-ref:attachment:${id})`;
+        const projection = projectDiscussionMessageReferences({ v: 1, parts: [
+            { t: 'text', text: `Inspect ${token} beside ${token}` },
+            { t: 'attachment', attachment: { kind: 'file', id, name: 'diagram.png', file: {
+                blobId: id, mime: 'image/png', sizeBytes: 3, sha256: 'a'.repeat(64),
+            } } },
+        ] });
+        expect(projection.readableText.match(/diagram\.png/g)).toHaveLength(2);
+        expect(projection.inline.get(`attachment:${id}`)?.tokenStarts?.size).toBe(2);
+        expect(projection.text.match(/happier-ref:attachment:/g)).toHaveLength(2);
+    });
+
+    it('keeps file and empty-folder attachments visible without treating their identities as participants', () => {
+        const file = { kind: 'file' as const, id: '762847e4-14cb-45c2-9e3a-06db902a417a', name: 'diagram.png',
+            file: { blobId: '762847e4-14cb-45c2-9e3a-06db902a417a', mime: 'image/png', sizeBytes: 3, sha256: 'a'.repeat(64) } };
+        const folder = { kind: 'folder' as const, id: '63d77628-40c9-48c5-93f6-d197c2783ad5', name: 'Empty designs', entries: [], directories: ['drafts'] };
+        for (const attachment of [file, folder]) {
+            const preview = readDiscussionMessagePreview({ v: 1, parts: [{ t: 'attachment', attachment }] }, {
+                account: () => { throw new Error('File identity is not an Account'); },
+                session: () => { throw new Error('File identity is not a Session'); },
+            });
+            expect(preview).toContain(attachment.name);
+            expect(preview).not.toContain(attachment.id);
+        }
+    });
+
     it('keeps lookalike inline tokens as labels alongside typed Discussion mentions', () => {
         expect(readDiscussionMessagePreview({ v: 1, parts: [
             { t: 'text', text: 'Ask [lookalike](happier-ref:session:unowned) and ' },

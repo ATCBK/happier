@@ -12,6 +12,7 @@ import {
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
 import { DiscussionInitialParticipantsV1Schema, type DiscussionInitialParticipantV1 } from './participants.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { DiscussionAttachmentBindingsV1Schema, type DiscussionAttachmentBindingV1 } from './attachments.js';
 
 export { DISCUSSION_MUTATION_EQUALITY_HKDF_LABEL_V1 };
 
@@ -37,6 +38,7 @@ export type DiscussionPostEqualityIntentV1 = Readonly<{
   mentionedAccountIds: readonly string[];
   mentionedSessionIds?: readonly string[];
   replyTarget?: DiscussionReplyTargetV1;
+  attachments?: readonly DiscussionAttachmentBindingV1[];
 }>;
 
 export type DiscussionCreateEqualityIntentV1 = Readonly<{
@@ -48,6 +50,11 @@ export type DiscussionCreateEqualityIntentV1 = Readonly<{
 
 function normalizeMentionedIds(ids: readonly string[]): string[] {
   return Array.from(new Set(ids)).sort();
+}
+
+function normalizeAttachments(bindings: readonly DiscussionAttachmentBindingV1[] | undefined) {
+  return bindings?.length ? { attachments: DiscussionAttachmentBindingsV1Schema.parse([...bindings]).sort((left, right) =>
+    left.blobId < right.blobId ? -1 : left.blobId > right.blobId ? 1 : 0) } : {};
 }
 
 /**
@@ -86,6 +93,7 @@ export function serializeDiscussionMutationEqualityIntentV1(
       firstMessage: {
         localId: params.firstMessage.localId,
         content,
+        ...normalizeAttachments(params.firstMessage.attachments),
         mentionedAccountIds: normalizeMentionedIds(params.firstMessage.mentionedAccountIds),
         ...(params.firstMessage.mentionedSessionIds?.length ? { mentionedSessionIds: normalizeMentionedIds(params.firstMessage.mentionedSessionIds) } : {}),
         ...(replyTarget === undefined ? {} : { replyTarget }),
@@ -97,6 +105,7 @@ export function serializeDiscussionMutationEqualityIntentV1(
     v: 1,
     kind: 'post',
     content,
+    ...normalizeAttachments(params.attachments),
     mentionedAccountIds: normalizeMentionedIds(params.mentionedAccountIds),
     ...(params.mentionedSessionIds?.length ? { mentionedSessionIds: normalizeMentionedIds(params.mentionedSessionIds) } : {}),
     ...(params.replyTarget === undefined ? {} : { replyTarget: DiscussionReplyTargetV1Schema.parse(params.replyTarget) }),

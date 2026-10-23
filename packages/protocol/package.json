@@ -7,6 +7,16 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./discussions/attachmentsUpload": {
+      "happier-source": "./src/discussions/attachmentsUpload.ts",
+      "types": "./dist/discussions/attachmentsUpload.d.ts",
+      "default": "./dist/discussions/attachmentsUpload.js"
+    },
+    "./discussions/attachments": {
+      "happier-source": "./src/discussions/attachments.ts",
+      "types": "./dist/discussions/attachments.d.ts",
+      "default": "./dist/discussions/attachments.js"
+    },
     "./storage/binaryBlobV1": {
       "happier-source": "./src/storage/binaryBlobV1.ts",
       "types": "./dist/storage/binaryBlobV1.d.ts",

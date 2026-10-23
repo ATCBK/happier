@@ -4,9 +4,13 @@ import { StrictSessionStoredMessageContentEnvelopeSchema } from '../sessions/mes
 import { ResourceRecipientKeyEnvelopesV1Schema } from '../teams/resourceGrantAccessV1.js';
 import { DiscussionAccessRecipientCensusResponseV1Schema } from './access.js';
 import { DiscussionIdSchema } from './content.js';
+import { BinaryBlobAccountEncryptionStageV1Schema } from '../storage/binaryBlobV1.js';
 
 const Content = StrictSessionStoredMessageContentEnvelopeSchema;
-const Message = lazyZodSchema(() => z.strictObject({ id: z.string().check(z.minLength(1)), content: Content }));
+const Message = lazyZodSchema(() => z.strictObject({ id: z.string().check(z.minLength(1)), content: Content,
+  attachments: z.optional(z.array(z.strictObject({ blobId: z.string().check(z.uuid()), encryptionMode: z.enum(['plain', 'e2ee']),
+    storedSizeBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) }))),
+}));
 export const DiscussionAccountEncryptionInventoryV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(z.strictObject({
     discussionId: DiscussionIdSchema,
@@ -26,7 +30,10 @@ export const AccountEncryptionMigrateDiscussionsDirectiveV1Schema = lazyZodSchem
     dataEncryptionKey: z.string().check(z.minLength(1)),
     expectedTitleContent: Content,
     titleContent: Content,
-    messages: z.array(z.strictObject({ id: z.string().check(z.minLength(1)), expectedContent: Content, content: Content })),
+    messages: z.array(z.strictObject({ id: z.string().check(z.minLength(1)), expectedContent: Content, content: Content,
+      attachments: z.optional(z.array(z.strictObject({ blobId: z.string().check(z.uuid()),
+        expectedContentSha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)), content: BinaryBlobAccountEncryptionStageV1Schema }))),
+    })),
     recipientKeyEnvelopes: ResourceRecipientKeyEnvelopesV1Schema,
   })),
 }));

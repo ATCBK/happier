@@ -20,6 +20,7 @@ export const DISCUSSION_ACTION_IDS_V1 = [
   'discussion.settings.get',
   'discussion.settings.set',
   'discussion.read',
+  'discussion.attachment.read',
   'discussion.create',
   'discussion.second_opinion.start',
   'discussion.post',
