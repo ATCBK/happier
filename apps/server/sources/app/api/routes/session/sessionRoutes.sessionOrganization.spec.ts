@@ -1006,10 +1006,18 @@ describe("session organization routes", () => {
             hint: {
                 sessionOrganization: true,
                 scope: "folderAssignments",
-                folderIds: ["folder-a-id"],
+                folderIds: ["folder-a-id", "child-a-id"],
                 scopeKeys: ["parent-id"],
             },
         });
+    });
+
+    it("admits the Section Action through the retained folder-assignment transport", async () => {
+        const url = "/v2/session-organization/folder-assignments/:sessionId";
+        const route = await createSessionRouteTestBuilder("PUT", url);
+        expect(isExternalActionSessionRoutePurposeAllowed({
+            method: "PUT", routeOptions: { url, config: route.app.routes.get(`PUT ${url}`)?.opts.config },
+        }, "session.section.set")).toBe(true);
     });
 
     it("sets folder assignments only to active current-account folders and emits legacy plus organization hints", async () => {

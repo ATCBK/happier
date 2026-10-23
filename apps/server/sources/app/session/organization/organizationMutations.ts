@@ -729,7 +729,7 @@ export async function deleteSessionOrganizationFolder(params: Readonly<{
             await markSessionOrganizationChanged(tx, {
                 accountId: params.accountId,
                 scope: "folderAssignments",
-                folderIds: deletedFolderIds,
+                folderIds: [folder.id, ...children.map((child) => child.id)],
                 scopeKeys: [assignmentTargetFolderId ?? "root"],
             });
         }
