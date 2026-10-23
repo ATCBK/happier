@@ -35,6 +35,8 @@ import { arePaneStateJsonValuesEqual } from './paneStateStructuralEquality';
 import { readSessionTerminalWorkspace, reduceSessionTerminalWorkspace, type SessionTerminalWorkspaceCommand } from '@/components/sessions/terminal/sessionTerminalWorkspace';
 import { resolveTerminalDetailsInstanceId } from '@/components/terminal/terminalDetailsTabModel';
 import { SESSION_BOARD_DESTINATION } from '@/components/sessions/board/sessionBoardDestination';
+import { fileChangesScopeOfComparison } from '@/components/workspaces/files/file/changes/fileChangesScope';
+import { buildWorkspaceFileViewPatch } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileView';
 import {
     areSelectedPaneDestinationsEqual,
     createBuiltinPaneDestination,
@@ -539,7 +541,17 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
         }
         case 'openDetailsTab':
             return upsertScope(state, action.scopeId, (prev) => {
-                const opened = applyOpenDetailsTab(prev.details, { tab: action.tab, openAs: action.openAs });
+                let opened = applyOpenDetailsTab(prev.details, { tab: action.tab, openAs: action.openAs });
+                const resource = action.tab.kind === 'file' && action.tab.resource && typeof action.tab.resource === 'object'
+                    ? action.tab.resource as Readonly<{ changes?: unknown }> : null;
+                const changesScope = fileChangesScopeOfComparison(resource?.changes);
+                if (changesScope) {
+                    // An explicit opener is a new selection, including when this file already has retained view state.
+                    const current = getOwnPaneTabStateEntry(opened.tabState, action.tab.key);
+                    const record = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+                    opened = applySetDetailsTabState(opened, action.tab.key, { ...record,
+                        ...buildWorkspaceFileViewPatch(current, { changesScope }) });
+                }
                 const origin = action.origin === 'main' || action.origin === 'side' ? action.origin : null;
                 const details = !origin || opened.openedFrom === origin ? opened : { ...opened, openedFrom: origin };
                 // All Board openers share this semantic handoff. Keep retained

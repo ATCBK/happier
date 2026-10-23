@@ -34,6 +34,25 @@ function getDetailsView(state: ReturnType<typeof createAppPaneState>, scopeId: s
 }
 
 describe('appPaneReduce', () => {
+    it('applies an explicit file turn opener over the retained scope without replacing editor or reading state', () => {
+        const scopeId = 'session:turn-file';
+        const tab = createFileTab('src/a.ts');
+        let state = appPaneReduce(createAppPaneState({ maxScopesInMemory: 3 }), { type: 'openDetailsTab', scopeId, tab, openAs: 'pinned' });
+        const draft = { text: 'my unsaved edit' };
+        state = appPaneReduce(state, { type: 'setDetailsTabState', scopeId, tabKey: tab.key,
+            nextState: { draft, view: { changesScope: { kind: 'workingTree' }, findQuery: 'needle', scrollLine: 8 } } });
+        const explicit = { ...tab, resource: { ...tab.resource, changes: { kind: 'turnCheckpoint', turnId: 'turn-original' } } };
+        state = appPaneReduce(state, { type: 'openDetailsTab', scopeId, tab: explicit, openAs: 'pinned' });
+        expect(getDetailsView(state, scopeId).tabState[tab.key]).toEqual({ draft,
+            view: { changesScope: { kind: 'turn', turnId: 'turn-original' }, findQuery: 'needle', scrollLine: 8 } });
+        const openedState = state;
+        state = appPaneReduce(state, { type: 'openDetailsTab', scopeId, tab: explicit, openAs: 'pinned' });
+        expect(state).toBe(openedState);
+        // Ordinary file activation carries no selector and preserves the person's chosen scope.
+        state = appPaneReduce(state, { type: 'openDetailsTab', scopeId, tab, openAs: 'pinned' });
+        expect(getDetailsView(state, scopeId).tabState[tab.key]).toEqual(getDetailsView(openedState, scopeId).tabState[tab.key]);
+    });
+
     it('hands the sidebar Board to its Details tab without closing a different sidebar destination', () => {
         const scopeId = 'session:board-handoff';
         for (const tabId of ['board', 'git']) {
