@@ -125,6 +125,51 @@ describe("deleteOwnedSession stored-content compatibility (SQLite)", () => {
         })).toBe(1);
     });
 
+    it("tombstones the owner's and collaborator's Session and Run drafts while preserving a sibling Session", async () => {
+        const { mutateSessionDraft, readSessionDraft } = await import('@/app/account/sessionDrafts/sessionDraftService');
+        const { sessionDraftPhysicalKey } = await import('@/app/account/sessionDrafts/sessionDraftPhysicalKey');
+        const { deleteOwnedSession } = await import('./deleteOwnedSession');
+        const authentication = { env: process.env, authority: 'present_user' as const, authenticationEvidence: undefined };
+        await db.account.create({ data: { id: 'collaborator' } });
+        await db.session.createMany({ data: ['draft-parent', 'draft-parent-sibling'].map(id => ({
+            id, tag: id, accountId: 'owner', metadata: '{}', encryptionMode: 'e2ee',
+        })) });
+        await db.sessionShare.create({ data: {
+            sessionId: 'draft-parent', sharedWithUserId: 'collaborator', sharedByUserId: 'owner', accessLevel: 'view',
+        } });
+        const addresses = [
+            { kind: 'session', sessionId: 'draft-parent' },
+            { kind: 'run', sessionId: 'draft-parent', runId: 'run-a' },
+            { kind: 'session', sessionId: 'draft-parent-sibling' },
+        ] as const;
+        for (const accountId of ['owner', 'collaborator']) {
+            for (const address of addresses) {
+                if (accountId === 'collaborator' && address.sessionId !== 'draft-parent') continue;
+                expect(await mutateSessionDraft({ accountId, address, expectedRevision: 'absent',
+                    content: { t: 'encrypted', c: 'opaque-draft-content', v: 2 }, authentication,
+                })).toMatchObject({ status: 'updated', record: { revision: 0 } });
+            }
+        }
+
+        await expect(deleteOwnedSession({ sessionId: 'draft-parent', ownerAccountId: 'owner', reason: 'user_request' }))
+            .resolves.toEqual({ ok: true });
+        for (const accountId of ['owner', 'collaborator']) {
+            for (const address of addresses.slice(0, 2)) {
+                const key = sessionDraftPhysicalKey(address);
+                if (!key) throw new Error('Expected a canonical draft key');
+                expect(await db.userKVStore.findUnique({ where: { accountId_key: { accountId, key } },
+                    select: { value: true, version: true },
+                })).toEqual({ value: null, version: 1 });
+                expect(await readSessionDraft({ accountId, address, authentication })).toEqual({ status: 'absent' });
+            }
+        }
+        expect(await readSessionDraft({ accountId: 'owner', address: addresses[2], authentication }))
+            .toMatchObject({ status: 'present', record: { revision: 0 } });
+        expect(await mutateSessionDraft({ accountId: 'owner', address: addresses[0], expectedRevision: 1,
+            content: null, authentication,
+        })).toEqual({ status: 'sessionUnavailable' });
+    });
+
     it("invalidates a surviving Follow destination when deleting its source Session", async () => {
         await db.session.createMany({ data: [{
             id: "follow-source-delete",
