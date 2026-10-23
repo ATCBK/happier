@@ -2057,7 +2057,7 @@ describe('Happier SDK client', () => {
     await expect(failure).rejects.not.toBeInstanceOf(HappierSessionSpawnError);
     const rejection = await failure.catch((error) => error);
     expect(requests).toEqual([
-      { actionId: 'session.stop' },
+      { actionId: 'session.stop', requestId: expect.any(String) },
       { actionId: 'agents.backends.list' },
       { actionId: 'session.spawn_new', requestId: expect.any(String) },
     ]);

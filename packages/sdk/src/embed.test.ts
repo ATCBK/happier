@@ -152,7 +152,7 @@ describe('SDK embed helpers', () => {
     const listResult = { queryVersion: 1, sessions: [], nextCursor: null, hasNext: false,
       attentionNextCursor: null, attentionHasNext: false };
     const sessionList = vi.fn(async () => listResult);
-    const executor = createActionExecutor({ sessionList } as Pick<ActionExecutorDeps, 'sessionList'> as ActionExecutorDeps);
+    const executor = createActionExecutor({ sessionList, isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
     const requests: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: URL, options: RequestInit) => {
       if (url.pathname.endsWith('/self')) return json({ ...self, accountEncryptionMode: 'e2ee' });
@@ -162,9 +162,10 @@ describe('SDK embed helpers', () => {
       if (url.pathname === '/v1/machines') return json([]);
       const request = ExternalActionRequestEnvelopeV2Schema.parse(JSON.parse(String(options.body)));
       expect(request.target).toEqual({ kind: 'machine', machineId: grant.create.machineId });
+      if (request.target === undefined) throw new Error('expected Machine-bound E2EE request');
       const binding = { serverIdentityId: context.serverIdentityId, accountId: context.accountId,
         credentialId: context.tokenId, actionId: 'session.list' as const, requestId: request.requestId,
-        target: request.target! };
+        target: request.target };
       const opened = openExternalActionRequestV2({ envelope: request, binding, material: { type: 'dataKey', machineKey: accountKey } });
       expect(opened).not.toBeNull();
       requests.push(String(options.body));

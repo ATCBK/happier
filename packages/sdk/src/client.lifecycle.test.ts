@@ -199,14 +199,20 @@ describe('Happier SDK client lifecycle', () => {
   it('bounds iterator return and close and releases real sockets when transcript cleanup never responds', async () => {
     let unfollowSeen = false;
     let socketClosed = false;
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
+      const bytes: Buffer[] = [];
+      for await (const chunk of request) bytes.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(Buffer.concat(bytes).toString('utf8')));
       const actionId = decodeURIComponent(request.url?.split('/').at(-1) ?? '');
       if (actionId === 'session.status.get') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({
           v: 1,
           actionId,
-          execution: { ok: true, result: { session: { active: false } } },
+          ...(envelope.requestId ? { requestId: envelope.requestId } : {}),
+          execution: { ok: true, result: { session: {
+            id: 'session-1', active: false, createdAt: 0, updatedAt: 0, activeAt: 0, encryption: null,
+          } } },
         }));
         return;
       }
@@ -215,6 +221,7 @@ describe('Happier SDK client lifecycle', () => {
         response.end(JSON.stringify({
           v: 1,
           actionId,
+          ...(envelope.requestId ? { requestId: envelope.requestId } : {}),
           execution: { ok: true, result: { items: [{ role: 'assistant' }], nextCursor: '1', truncated: false } },
         }));
         return;
