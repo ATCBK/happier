@@ -73,6 +73,19 @@ it('keeps mounted rule counts current after source changes without restarting us
     await flushHookEffects();
     expect(reads()).toBe(before);
 
+    // A thousand Sessions can stream without changing any filter fact. The
+    // focused change planner proves that these arrivals need no corpus read.
+    await act(async () => {
+        for (let index = 0; index < 1_000; index++) {
+            publishHomeAccountChange(serverId, [`streaming-${index}`], {
+                changeKinds: ['session'], sessionListQueryAffects: false,
+            });
+        }
+    });
+    await flushHookEffects();
+    expect(reads() - before).toBe(0);
+    counts(1);
+
     let release: (() => void) | undefined;
     const held = new Promise<void>(resolve => { release = resolve; });
     homes.answer(serverId, '/v2/sessions/query', { body: page(['first', 'second']), respondAfter: held });
