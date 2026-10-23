@@ -315,6 +315,18 @@ export const TeamCredentialResourceReadInputV1Schema = lazyZodSchema(() => z.str
   cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
   limit: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(100)), 50),
 }));
+export type TeamCredentialResourceReadInputV1 = z.infer<typeof TeamCredentialResourceReadInputV1Schema>;
+
+/** Account-scoped set read; Team authority is still admitted independently. */
+export const TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1 = '/v1/teams/credential-resources/entitled/discover';
+
+export const TeamCredentialResourceDiscoverInputV1Schema = lazyZodSchema(() => z.strictObject({
+  teamIds: z.array(z.string().check(z.minLength(1))),
+  application: z.optional(ProviderBrokerApplicationBindingV1Schema),
+  cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+  limit: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(100)), 50),
+}));
+export type TeamCredentialResourceDiscoverInputV1 = z.infer<typeof TeamCredentialResourceDiscoverInputV1Schema>;
 
 export const TeamCredentialResourceListFilterV1Schema = lazyZodSchema(() => z.enum([
   'all',
@@ -645,6 +657,16 @@ export const TeamCredentialErrorCodeV1Schema = lazyZodSchema(() => z.enum([
   'token_limit_unavailable', 'cost_limit_unavailable', 'team_credential_usage_limit',
 ]));
 export type TeamCredentialErrorCodeV1 = z.infer<typeof TeamCredentialErrorCodeV1Schema>;
+
+export const TeamCredentialResourceDiscoveryPageV1Schema = lazyZodSchema(() => z.strictObject({
+  resources: z.array(TeamCredentialResourceCatalogEntryV1Schema).check(z.maxLength(100)),
+  nextCursor: z.nullable(z.string().check(z.minLength(1), z.maxLength(512))),
+  failures: z.array(z.strictObject({
+    teamId: z.string().check(z.minLength(1)),
+    error: TeamCredentialErrorCodeV1Schema,
+  })),
+}));
+export type TeamCredentialResourceDiscoveryPageV1 = z.infer<typeof TeamCredentialResourceDiscoveryPageV1Schema>;
 
 export const TeamCredentialResourceErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: TeamCredentialErrorCodeV1Schema,

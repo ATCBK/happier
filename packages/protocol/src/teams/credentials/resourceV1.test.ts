@@ -23,6 +23,8 @@ import {
   TeamCredentialRequestPolicySupportOutputV1Schema,
   TeamCredentialResourceEntitledPageV1Schema,
   TeamCredentialResourceReadInputV1Schema,
+  TeamCredentialResourceDiscoverInputV1Schema,
+  TeamCredentialResourceDiscoveryPageV1Schema,
   TeamCredentialResourceGetInputV1Schema,
   TeamCredentialBrokerPlacementV1Schema,
   TeamCredentialResourceUpdateInputV1Schema,
@@ -562,6 +564,15 @@ describe('TeamCredentialResourcePageV1Schema', () => {
     expect(TeamCredentialResourceEntitledPageV1Schema.parse({ resources: [] })).toEqual({ resources: [], nextCursor: null });
     expect(TeamCredentialResourceReadInputV1Schema.parse({ teamId: 'team-1' })).toMatchObject({ limit: 50 });
     expect(TeamCredentialResourceReadInputV1Schema.safeParse({ teamId: 'team-1', limit: 101 }).success).toBe(false);
+    expect(TeamCredentialResourceDiscoverInputV1Schema.parse({ teamIds: ['team-1', 'team-2'] }))
+      .toEqual({ teamIds: ['team-1', 'team-2'], limit: 50 });
+    expect(TeamCredentialResourceReadInputV1Schema.safeParse({ teamIds: ['team-1'] }).success).toBe(false);
+    expect(TeamCredentialResourceDiscoverInputV1Schema.safeParse({ teamIds: ['team-1'], teamId: 'team-1' }).success).toBe(false);
+    expect(TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [], nextCursor: null,
+      failures: [{ teamId: 'team-2', error: 'team_authentication_required' }] }).failures)
+      .toEqual([{ teamId: 'team-2', error: 'team_authentication_required' }]);
+    expect(TeamCredentialResourceDiscoveryPageV1Schema.safeParse({ resources: [], nextCursor: null,
+      failures: [{ teamId: 'team-2', error: 'forbidden', authority: 'owner' }] }).success).toBe(false);
   });
 
   it('keeps a corrupt recipient row visible when no source identity can be parsed safely', () => {
