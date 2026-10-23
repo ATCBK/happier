@@ -18,12 +18,10 @@ function extractPowerShellQuotedSegment(raw: string): string | null {
   const text = String(raw ?? '').trim();
   if (!text.startsWith('"')) return null;
 
-  let current = '';
   let escaping = false;
   for (let index = 1; index < text.length; index += 1) {
     const ch = text[index] ?? '';
     if (escaping) {
-      current += ch;
       escaping = false;
       continue;
     }
@@ -32,9 +30,8 @@ function extractPowerShellQuotedSegment(raw: string): string | null {
       continue;
     }
     if (ch === '"') {
-      return current;
+      return text.slice(0, index + 1);
     }
-    current += ch;
   }
 
   return null;
@@ -44,7 +41,7 @@ function parseRedirectionPath(line: string, redirection: '1>>' | '2>>'): string 
   const index = line.indexOf(redirection);
   if (index < 0) return null;
   const value = extractPowerShellQuotedSegment(line.slice(index + redirection.length));
-  return value === null ? null : parsePowerShellDoubleQuotedText(`"${value}"`);
+  return value === null ? null : parsePowerShellDoubleQuotedText(value);
 }
 
 export function parseWindowsScheduledTaskWrapperPs1(params: Readonly<{

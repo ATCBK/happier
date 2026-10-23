@@ -8,6 +8,7 @@ import { dirname, join, posix as posixPath } from 'node:path';
 
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { DEFAULT_HAPPIER_CLOUD_SERVER_URL } from '../happierCloud.js';
+import { parsePowerShellDoubleQuotedText } from '../service/discovery/_shared.js';
 
 import {
   applyServicePlan,
@@ -838,9 +839,7 @@ function parseLaunchdPlistWorkingDirectory(plistText: string): string | null {
 
 function parseWindowsWrapperWorkingDirectory(wrapperText: string): string | null {
   const match = String(wrapperText ?? '').match(/Set-Location\s+-LiteralPath\s+"((?:`.|[^"])*)"/iu);
-  const raw = match?.[1]?.trim();
-  if (!raw) return null;
-  return raw.replace(/`(["`])/gu, '$1') || null;
+  return match ? parsePowerShellDoubleQuotedText(`"${match[1]}"`).trim() || null : null;
 }
 
 function parseServiceDefinitionWorkingDirectory(params: Readonly<{
