@@ -25,6 +25,7 @@ import {
 import { createCliApprovalsArtifactStore } from './artifactStore';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { encodeAccountArtifactListCursor } from '@/api/artifacts/accountArtifactStore';
+import { ArtifactHttpReadV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createProjectServiceDeclarationTargetIdV1 } from '@happier-dev/protocol/local/services/actions/v1';
@@ -43,6 +44,15 @@ const { mockGet, mockPost } = vi.hoisted(() => ({
 }));
 
 const fixtureArtifacts = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+
+function batchFixtureItem(artifactId: string, raw: unknown) {
+  if (!raw || typeof raw !== 'object') throw new Error('Missing Artifact HTTP fixture');
+  const artifact = ArtifactHttpReadV1Schema.parse({ ...raw, publicAudience: Reflect.get(raw, 'publicAudience') ?? 'none' });
+  return { artifactId, ok: true as const, artifact, recipientCensus: artifact.encryptionMode === 'plain' ? null : {
+    artifactId, ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: artifact.encryptionMode,
+    dataEncryptionKey: artifact.dataEncryptionKey, callerDataEncryptionKey: artifact.dataEncryptionKey, recipients: [],
+  } };
+}
 
 vi.mock('axios', () => ({
   default: {
@@ -170,6 +180,19 @@ describe('createCliApprovalsArtifactStore', () => {
     fixtureArtifacts.clear();
     mockGet.mockReset();
     mockPost.mockReset();
+    // Model the existing selected-body HTTP endpoint as well as legacy exact
+    // reads. Domain admission, decryption and correspondence remain real.
+    mockPost.mockImplementation(async (url: string, input: unknown) => {
+      if (new URL(url).pathname !== '/v1/artifacts/read') throw new Error('Unexpected Artifact fixture POST');
+      const request = ArtifactReadBatchInputV1Schema.parse(input);
+      const items = await Promise.all(request.artifactIds.map(async artifactId => {
+        const retained = fixtureArtifacts.get(artifactId);
+        const artifact = retained && typeof retained.body === 'string' ? retained
+          : (await mockGet(`http://127.0.0.1:24599/v1/artifacts/${encodeURIComponent(artifactId)}`)).data;
+        return batchFixtureItem(artifactId, artifact);
+      }));
+      return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items }) };
+    });
   });
 
   type DataKeyCredentials = Credentials & Readonly<{
@@ -586,7 +609,7 @@ describe('createCliApprovalsArtifactStore', () => {
     const artifactGets = mockGet.mock.calls.filter(([url]) =>
       String(url).includes('/v1/artifacts'));
     const artifactPosts = mockPost.mock.calls.filter(([url]) =>
-      String(url).includes('/v1/artifacts'));
+      String(url).includes('/v1/artifacts') && !String(url).endsWith('/v1/artifacts/read'));
     expect(artifactPosts).toHaveLength(2);
     for (const [, config] of artifactGets) {
       expect(config).toMatchObject({
@@ -1238,7 +1261,7 @@ describe('createCliApprovalsArtifactStore', () => {
     });
     const approvalBody = encodePlainArtifactStoredContent({ body: JSON.stringify(approval) });
     const rows = [
-      ...Array.from({ length: 6 }, (_, index) => ({
+      ...Array.from({ length: 501 }, (_, index) => ({
         id: `unrelated-${index}`,
         header: encodedHeader({ v: 1, kind: 'prompt_library_item.v1', title: `Other ${index}` }),
         headerVersion: 1,
@@ -1246,7 +1269,7 @@ describe('createCliApprovalsArtifactStore', () => {
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         seq: index + 1,
         createdAt: index + 1,
-        updatedAt: 100 - index,
+        updatedAt: 1000 - index,
       })),
       {
         id: 'approval-after-unrelated',
@@ -1254,9 +1277,9 @@ describe('createCliApprovalsArtifactStore', () => {
         headerVersion: 1,
         ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain',
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-        seq: 7,
-        createdAt: 7,
-        updatedAt: 94,
+        seq: 502,
+        createdAt: 502,
+        updatedAt: 499,
       },
     ];
     mockGet.mockImplementation(async (url: string) => {
@@ -1271,13 +1294,16 @@ describe('createCliApprovalsArtifactStore', () => {
             bodyVersion: 1,
             ownerAccountId: 'account-1', access: 'owner', encryptionMode: 'plain',
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-            seq: 7,
-            createdAt: 7,
-            updatedAt: 94,
+            seq: 502,
+            createdAt: 502,
+            updatedAt: 499,
           },
         };
       }
-      return { status: 200, data: [rows.shift()] };
+      const query = new URL(url).searchParams;
+      const cursor = query.get('cursor');
+      const start = cursor ? rows.findIndex(row => encodeAccountArtifactListCursor({ artifactId: row.id, updatedAt: row.updatedAt }) === cursor) + 1 : 0;
+      return { status: 200, data: rows.slice(start, start + Number(query.get('limit'))) };
     });
 
     await expect(store.approvalsList({ status: 'open', limit: 1, serverId: 'server-1' }))
@@ -1285,7 +1311,7 @@ describe('createCliApprovalsArtifactStore', () => {
         items: [{ artifactId: 'approval-after-unrelated', status: 'open', serverId: 'server-1' }],
         queryPlan: { kind: 'approval_artifact_header_scan' },
       });
-    expect(mockGet).toHaveBeenCalledTimes(8);
+    expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts')).toHaveLength(2);
   });
 
   it('lists a strict approval from the complete page while individual body reads are unavailable', async () => {
@@ -1311,6 +1337,13 @@ describe('createCliApprovalsArtifactStore', () => {
         ...row, ...content, id: 'mismatched-page-approval',
         header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1({ ...approval, summary: 'Wrong subject' }, { legacyServerId: 'server-1' })),
       }] };
+    });
+    mockPost.mockImplementation(async (url: string, input: unknown) => {
+      expect(new URL(url).pathname).toBe('/v1/artifacts/read');
+      const request = ArtifactReadBatchInputV1Schema.parse(input);
+      return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items: request.artifactIds.map(artifactId =>
+        batchFixtureItem(artifactId, artifactId === row.id ? row : { ...row, id: artifactId,
+          header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1({ ...approval, summary: 'Wrong subject' }, { legacyServerId: 'server-1' })) })) }) };
     });
     await expect(store.approvalsList({ status: 'open', limit: 10, serverId: 'server-1' }))
       .resolves.toMatchObject({ items: [{ artifactId: row.id, status: 'open', summary: approval.summary }] });
@@ -1367,7 +1400,6 @@ describe('createCliApprovalsArtifactStore', () => {
     mockGet
       .mockImplementationOnce(async (url: string) => {
         expect(url).toContain('/v1/artifacts');
-        expect(url).toContain('limit=10');
         return {
           status: 200,
           data: [

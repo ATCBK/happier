@@ -69,14 +69,15 @@ describe('comparison discard through the SCM Action executor', () => {
     runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'comparison base']);
     const after = before.replace('line 3', 'first change').replace('line 30', 'middle change').replace('line 58', 'last change');
     const captured = await captureTurn(fixture.rootPath, async () => { await writeFile(file, after); });
-    const authority = { sessionId: captured.sessionId, authorizeSession: async (id: string) => id === captured.sessionId };
+    const { call } = createTestGitRpcManager({ workingDirectory: fixture.rootPath });
+    const authorization = { kind: 'session.write' as const, sessionId: captured.sessionId };
     try {
       const evidence = captured.comparison.inventory.files.find(value => value.path === fixture.trackedPath)!;
       expect(evidence.occurrences).toHaveLength(3);
       const input = { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
         against: { source: captured.comparison.source, comparisonId: captured.comparison.id },
         changeRefs: [evidence.occurrences[1]!.id], includeUndo: true, expectedHash: hash(Buffer.from(after)) }] };
-      const result = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry, workingDirectory: fixture.rootPath, ...authority }));
+      const result = ScmChangeDiscardResponseSchema.parse(await call('scm.change.discard', input, authorization));
       expect(result).toMatchObject({ success: true, entries: [{ status: 'reverted' }] });
       const reverted = after.replace('middle change', 'line 30');
       expect(await readFile(file, 'utf8')).toBe(reverted);
@@ -85,7 +86,7 @@ describe('comparison discard through the SCM Action executor', () => {
       expect(applyInverseEdits(reverted, entry.inverseEdits!)).toEqual({ ok: true, text: after });
       expect(JSON.stringify(entry.inverseEdits).length).toBeLessThan(after.length);
       await writeFile(file, 'concurrent writer\n');
-      const refused = await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry, workingDirectory: fixture.rootPath, ...authority });
+      const refused = await call('scm.change.discard', input, authorization);
       expect(refused).toMatchObject({ success: false, errorCode: 'FILE_CHANGED' });
       expect(await readFile(file, 'utf8')).toBe('concurrent writer\n');
     } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId }); }

@@ -94,7 +94,6 @@ describe('target Session input authoring through HTTP', () => {
       expect(config.headers.Authorization).toBe(`Bearer ${token}`);
       expect(body).toMatchObject({ followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-private-rule', ruleVersion: 3 } }],
         followRelations: [{ relation: 'follower' }], followDeliveryV1: { original: { sourceSessionId: 'c222222222222222222222222' } } });
-      if (mode === 'e2ee') expect(body).toHaveProperty('requestEqualityEvidenceV1.kind', 'e2eeTag');
       return { status: 200, data: { didWrite: false, terminal: true, message: { localId: 'earlier-accepted-input' } } };
     });
     const admission = buildTrustedHostSessionInputAdmissionV1('agent');

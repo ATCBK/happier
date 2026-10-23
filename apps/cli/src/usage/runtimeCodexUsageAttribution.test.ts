@@ -54,18 +54,24 @@ describe('native Codex request scope → host → ingest', () => {
                 await bridge.sendTurnPrompt('say ready', { localId: 'input-paid-turn', turnId: 'host-paid-turn' });
                 // A later read/default plan cannot rewrite the dispatched request's fact.
                 planType = 'team';
-                emitNotification('thread/tokenUsage/updated', { threadId: 'fresh-thread', turnId: 'provider-turn-1',
-                    tokenUsage: { last: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } } });
+                emitNotification('rawResponse/completed', { threadId: 'fresh-thread', turnId: 'provider-turn-1',
+                    responseId: 'paid-response', usage: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } });
                 await vi.waitFor(() => expect(posted).toHaveLength(1));
                 expect(UsageEventIngestRequestSchema.parse(posted[0])).toMatchObject({
                     turnId: 'host-paid-turn', scope: 'turn_delta', isCumulative: false,
                     attribution: { v: 1, turnId: 'host-paid-turn', source: { kind: 'native', accountScope: 'personal',
                         connectedAccount: { service, accountId: 'account-A' } } },
                 });
+                // A last-only compatibility snapshot has counters, but no exact
+                // upstream response witness and must not inherit the paid proof.
                 emitNotification('thread/tokenUsage/updated', { threadId: 'fresh-thread', turnId: 'provider-turn-1',
-                    tokenUsage: { total: { totalTokens: 9, inputTokens: 6, outputTokens: 3 } } });
+                    tokenUsage: { last: { totalTokens: 3, inputTokens: 2, outputTokens: 1 } } });
                 await vi.waitFor(() => expect(posted).toHaveLength(2));
                 expect(UsageEventIngestRequestSchema.parse(posted[1])).not.toHaveProperty('attribution');
+                emitNotification('thread/tokenUsage/updated', { threadId: 'fresh-thread', turnId: 'provider-turn-1',
+                    tokenUsage: { total: { totalTokens: 9, inputTokens: 6, outputTokens: 3 } } });
+                await vi.waitFor(() => expect(posted).toHaveLength(3));
+                expect(UsageEventIngestRequestSchema.parse(posted[2])).not.toHaveProperty('attribution');
             } finally { unsubscribe(); await bridge.resetOrDisposeRuntime('runtime_recovery'); }
         }, { connectedAccountService: service,
             runtimeAuthHost: { refreshRuntimeAuth: async () => ({ status: 'failed', reason: 'unused' }) },

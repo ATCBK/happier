@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { build } from 'esbuild';
 
+import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS } from '../../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 import { SERVER_ROUTED_FILE_TRANSFER_SIZE_LIMIT_ERROR } from '../policy/serverRoutedTransferPolicy';
 import { resolveWorkspaceFileDownloadSource } from './resolveWorkspaceFileDownloadSource';
 
@@ -24,12 +27,17 @@ afterEach(() => {
 });
 
 describe('resolveWorkspaceFileDownloadSource', () => {
-    it('keeps the ZIP implementation out of the cold download-owner graph until a ZIP is requested', async () => {
+    it('keeps ZIP cold until demand and creates archives through the compiled split-ESM export', async () => {
         const source = fileURLToPath(new URL('../download/buildZipArchive.ts', import.meta.url));
+        const workspace = createWorkspace();
+        const outputDir = join(workspace, 'output');
         const result = await build({
             entryPoints: [source], bundle: true, platform: 'node', format: 'esm',
-            splitting: true, write: false, metafile: true,
-            outdir: join(createWorkspace(), 'output'), logLevel: 'silent',
+            splitting: true, target: 'node20', metafile: true,
+            ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
+            conditions: [SOURCE_CONDITION], outdir: outputDir, logLevel: 'silent',
+            banner: { js: "import { createRequire as __artifactCreateRequire } from 'node:module'; import { fileURLToPath as __artifactFileURLToPath } from 'node:url'; import { dirname as __artifactDirname } from 'node:path'; const require = __artifactCreateRequire(import.meta.url); const __artifactFilename = __artifactFileURLToPath(import.meta.url); const __artifactDirectory = __artifactDirname(__artifactFilename);" },
+            define: { __dirname: '__artifactDirectory', __filename: '__artifactFilename' },
         });
         const inputs = result.metafile.inputs;
         const entry = Object.keys(inputs).find(key => resolve(key) === source);
@@ -44,6 +52,29 @@ describe('resolveWorkspaceFileDownloadSource', () => {
             }
         }
         expect([...coldInputs].filter(key => /(?:^|\/)node_modules\/archiver\//.test(key))).toEqual([]);
+        expect(Object.keys(inputs).some(key => /node_modules\/archiver\//.test(key))).toBe(true);
+        const entryOutput = Object.entries(result.metafile.outputs)
+            .find(([, output]) => output.exports.includes('buildZipArchive'));
+        expect(entryOutput).toBeDefined();
+        writeFileSync(join(outputDir, 'package.json'), '{"type":"module"}');
+        const sourcePath = join(workspace, 'hello.txt');
+        const zipPath = join(workspace, 'download.zip');
+        writeFileSync(sourcePath, 'hello from the compiled ZIP owner\n');
+        const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+            const { buildZipArchive } = await import(process.argv[1]);
+            const input = { sourcePath: process.argv[2], zipPath: process.argv[3],
+                excludedTopLevelDirs: [], maxEntryCount: 1, maxTotalBytes: 1024, maxOutputBytes: 1024 };
+            await buildZipArchive(input);
+            let rejected;
+            try { await buildZipArchive({ ...input, zipPath: process.argv[4], maxOutputBytes: 1 }); }
+            catch (error) { rejected = error.message; }
+            console.log(JSON.stringify({ rejected }));
+        `, pathToFileURL(resolve(entryOutput![0])).href, sourcePath, zipPath,
+            join(workspace, 'too-small.zip')], { encoding: 'utf8' });
+        expect(JSON.parse(stdout)).toEqual({ rejected: 'Zip exceeds output size limit' });
+        const archive = readFileSync(zipPath);
+        expect(archive.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+        expect(archive.includes(Buffer.from('hello.txt'))).toBe(true);
     });
 
     it('confines a publication download despite a broader OS-user policy, including symlink escapes', async () => {
