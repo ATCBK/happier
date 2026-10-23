@@ -2525,9 +2525,12 @@ function FilesPanel({
           />
         </Stack>
       )}
+      // A changed-file list reads like a file tree: tight single-line rows, so a whole pull request fits in view.
+      density="compact"
       renderItem={(row) => (
         <Item
           title={row.path}
+          density="tight"
           titleEllipsizeMode="middle"
           {...(() => {
             const subtitle = changedFileSubtitle(text, row);
