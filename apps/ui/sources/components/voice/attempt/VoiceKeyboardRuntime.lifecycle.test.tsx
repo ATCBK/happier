@@ -16,6 +16,7 @@ import { createSessionFixture } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
 import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
@@ -76,7 +77,7 @@ describe('Voice default-target lifecycle', () => {
             settings: { ...state.settings, experiments: true, featureToggles: { ...state.settings.featureToggles, voice: true } },
         }));
         const sessions = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
-        account = await restoreServerAccountForTest({ serverUrl: 'https://keyboard-voice.example.test', credentialScope: 'restored-home', activation: 'switch', request: async (url, init) => {
+        account = await restoreServerAccountForTest({ serverUrl: 'https://keyboard-voice.example.test', credentialScope: 'restored-home', activation: 'switch', request: createSessionReadBatchFetchBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json({ features: { voice: { enabled: true } }, capabilities: {} });
             if (path.endsWith('/messages') && init?.method !== 'POST') return Response.json(SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false }));
@@ -89,7 +90,7 @@ describe('Voice default-target lifecycle', () => {
             if (path === '/v1/voice/token') return Response.json({ allowed: true, token: 'keyboard-token', leaseId: 'keyboard-lease', bindingNonce: 'keyboard-nonce', expiresAtMs: Date.now() + 60_000 });
             if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
             return new Response('{}', { status: 404 });
-        } });
+        }) });
         expect(await TokenStorage.getCredentials()).toEqual(account.credentials);
         const metadata = { path: '/voice-history', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() };
         const owner = createSessionOwnerMetadataV1({ metadata });
@@ -176,7 +177,8 @@ describe('Voice default-target lifecycle', () => {
             expect(getStorage().getState().settings.voice.ui.scopeDefault).toBe(scopeDefault);
             await screen.pressByTestIdAsync('voice-top-bar-rest');
             const expected = scopeDefault === 'global' ? null : { serverId: account.home.id, sessionId: 'session-a' };
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status,
+                `Voice Start failure code: ${getVoiceSessionSnapshot().errorCode ?? 'none'}`).toBe('connected')));
             expect(starts).toEqual([expected]);
             const admitted = getVoiceSessionSnapshot();
             expect(admitted.status).toBe('connected');
