@@ -5,21 +5,16 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { createBuiltinPictureEnsurer, createBuiltinThumbnailEnsurer, readPictureSource } from './ensureBuiltinPicture';
 import { readPictureBase64 } from './pictureBytes.native';
 import type { PictureInfo, PictureInput, PictureRecord, PictureStore, PicturePreparationOptions } from './pictureStore.types';
+import { createPictureStorePublication } from './pictureStorePublication';
 
 type StoredInfo = PictureInfo & { hasThumb: boolean; source?: PictureRecord['source'] };
-const listeners = new Set<() => void>();
-let revision = 0;
+const publication = createPictureStorePublication();
 
 function storeDirectory() { return new Directory(Paths.document, 'atmosphere'); }
 
 function recordDirectory(localId: string) {
     // Opaque names avoid URI-decoded separators and native filename-length limits.
     return new Directory(storeDirectory(), bytesToHex(sha256(localId)));
-}
-
-function changed() {
-    revision += 1;
-    for (const listener of listeners) listener();
 }
 
 async function readInfo(directory: Directory): Promise<StoredInfo | undefined> {
@@ -75,7 +70,7 @@ async function put(input: PictureInput): Promise<PictureRecord> {
     new File(directory, 'info.json').write(JSON.stringify(info));
     const record: PictureRecord = { localId: info.localId, kind: info.kind, createdAtMs: info.createdAtMs, size: info.size, data: data.uri,
         ...(info.source ? { source: info.source } : {}), ...(info.hasThumb ? { thumb: thumb.uri } : {}) };
-    changed();
+    publication.changed(input.localId, input.kind, previous?.kind);
     return record;
 }
 
@@ -86,8 +81,9 @@ export const pictureStore: PictureStore = {
     async remove(localId) {
         const directory = recordDirectory(localId);
         if (!directory.exists) return;
+        const info = await readInfo(directory);
         directory.delete();
-        changed();
+        publication.changed(localId, info?.kind);
     },
     async list() {
         const directory = storeDirectory();
@@ -101,6 +97,6 @@ export const pictureStore: PictureStore = {
     },
     ensureBuiltin: createBuiltinPictureEnsurer({ get, put }, prepare),
     ensureBuiltinThumbnail: createBuiltinThumbnailEnsurer({ get, put }, prepare),
-    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    getRevision() { return revision; },
+    subscribe: publication.subscribe,
+    getRevision: publication.getRevision,
 };

@@ -2,11 +2,10 @@ import { openBrowserRecordDatabase } from '@/sync/domains/state/browserRecordSto
 import { ATMOSPHERE_PICTURE_MAX_EDGE } from '@happier-dev/brand/atmosphere';
 import { createBuiltinPictureEnsurer, createBuiltinThumbnailEnsurer, readPictureSource } from './ensureBuiltinPicture';
 import type { PictureInfo, PictureInput, PictureStore, BuiltinPicture, PicturePreparationOptions } from './pictureStore.types';
+import { createPictureStorePublication } from './pictureStorePublication';
 
 type WebPictureRecord = PictureInfo & Readonly<{ data: Blob; thumb?: Blob; source?: BuiltinPicture['src'] }>;
-const listeners = new Set<() => void>();
-let revision = 0;
-function changed() { revision++; for (const listener of listeners) listener(); }
+const publication = createPictureStorePublication();
 
 function readRecord(value: unknown): WebPictureRecord | undefined {
     if (value === undefined) return undefined;
@@ -81,19 +80,27 @@ async function put(input: PictureInput): Promise<WebPictureRecord> {
         transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture write aborted.'));
         transaction.onerror = () => reject(transaction.error);
     });
-    changed();
+    publication.changed(input.localId, input.kind, previous?.kind);
     return record;
 }
 async function remove(localId: string): Promise<void> {
     const database = await openBrowserRecordDatabase('pictures');
+    let kind: WebPictureRecord['kind'] | undefined;
     await new Promise<void>((resolve, reject) => {
         const transaction = database.transaction('pictures', 'readwrite', { durability: 'strict' });
-        transaction.objectStore('pictures').delete(localId);
+        const store = transaction.objectStore('pictures');
+        const request = store.get(localId);
+        request.onsuccess = () => {
+            const value: unknown = request.result;
+            if (typeof value === 'object' && value !== null && 'kind' in value
+                && (value.kind === 'user' || value.kind === 'builtin')) kind = value.kind;
+        };
+        store.delete(localId);
         transaction.oncomplete = () => resolve();
         transaction.onabort = () => reject(transaction.error ?? new Error('Atmosphere picture removal aborted.'));
         transaction.onerror = () => reject(transaction.error);
     });
-    changed();
+    publication.changed(localId, kind);
 }
 async function list(): Promise<PictureInfo[]> {
     const database = await openBrowserRecordDatabase('pictures');
@@ -119,6 +126,6 @@ export const pictureStore = {
     prepare, put, get, remove, list,
     ensureBuiltin: createBuiltinPictureEnsurer({ get, put }, prepare, fetchBuiltinPicture),
     ensureBuiltinThumbnail: createBuiltinThumbnailEnsurer({ get, put }, prepare, fetchBuiltinPicture),
-    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    getRevision() { return revision; },
+    subscribe: publication.subscribe,
+    getRevision: publication.getRevision,
 } satisfies PictureStore;

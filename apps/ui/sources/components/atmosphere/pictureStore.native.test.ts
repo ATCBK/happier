@@ -117,6 +117,28 @@ beforeEach(() => {
 });
 
 describe('native picture store', () => {
+    it('does not wake a selected-picture reader when another picture changes', async () => {
+        const store = await openStore();
+        const selected = vi.fn();
+        const users = vi.fn();
+        const stop = store.subscribe(selected, 'selected-cost');
+        const stopUsers = store.subscribe(users, { kind: 'user' });
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                await store.put({ localId: `unrelated-${index}`, kind: 'builtin', data: 'data:image/webp;base64,AQID' });
+            }
+            expect(selected).toHaveBeenCalledTimes(0);
+            expect(users).toHaveBeenCalledTimes(0);
+            expect(store.getRevision('user')).toBe(0);
+            await store.put({ localId: 'selected-cost', kind: 'user', data: 'data:image/webp;base64,AQID' });
+            expect(users).toHaveBeenCalledTimes(1);
+            await store.put({ localId: 'selected-cost', kind: 'builtin', data: 'data:image/webp;base64,AQID' });
+            expect(users).toHaveBeenCalledTimes(2);
+            await store.remove('selected-cost');
+            expect(selected).toHaveBeenCalledTimes(3);
+            expect(users).toHaveBeenCalledTimes(2);
+        } finally { stop(); stopUsers(); }
+    });
     it('prepares a PNG review copy on the native worker without changing device custody', async () => {
         boundary.files.set('file:///picker/review.webp', new Uint8Array([1, 2, 3]));
         const store = await openStore();

@@ -6,6 +6,31 @@ vi.mock('@/components/atmosphere/pictureStore', async () => import('./pictureSto
 
 describe('device-local picture bytes', () => {
     afterEach(() => vi.unstubAllGlobals());
+    it('publishes only to readers of the changed picture while library readers see every write', async () => {
+        const selected = vi.fn();
+        const library = vi.fn();
+        const users = vi.fn();
+        const stopSelected = pictureStore.subscribe(selected, 'selected-cost');
+        const stopLibrary = pictureStore.subscribe(library);
+        const stopUsers = pictureStore.subscribe(users, { kind: 'user' });
+        const userRevision = pictureStore.getRevision('user');
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                await pictureStore.put({ localId: `unrelated-cost-${index}`, kind: 'builtin', data: new Blob(['pixels']) });
+            }
+            expect(selected).toHaveBeenCalledTimes(0);
+            expect(library).toHaveBeenCalledTimes(20);
+            expect(users).toHaveBeenCalledTimes(0);
+            expect(pictureStore.getRevision('user')).toBe(userRevision);
+            await pictureStore.put({ localId: 'selected-cost', kind: 'user', data: new Blob(['selected']) });
+            expect(users).toHaveBeenCalledTimes(1);
+            await pictureStore.put({ localId: 'selected-cost', kind: 'builtin', data: new Blob(['replacement']) });
+            expect(users).toHaveBeenCalledTimes(2);
+            await pictureStore.remove('selected-cost');
+            expect(users).toHaveBeenCalledTimes(2);
+            expect(selected).toHaveBeenCalledTimes(3);
+        } finally { stopSelected(); stopLibrary(); stopUsers(); }
+    });
     it('prepares a lossless reviewed copy without writing or replacing the device library', async () => {
         vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 1200, height: 800, close() {} })));
         vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0,

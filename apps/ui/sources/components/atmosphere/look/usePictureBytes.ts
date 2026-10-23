@@ -1,13 +1,17 @@
 import * as React from 'react';
 import { pictureStore } from '../pictureStore';
 import type { BuiltinPicture, PictureInfo } from '../pictureStore.types';
+import { useStoredPictureRecord } from '../useStoredPictureRecord';
 
 type Bytes = Blob | string;
 
-function useStoreRevision() {
+const subscribeUserPictures = (listener: () => void) => pictureStore.subscribe(listener, { kind: 'user' });
+const userPicturesRevision = () => pictureStore.getRevision('user');
+
+function useUserPictureRevision() {
   return React.useSyncExternalStore(
-    pictureStore.subscribe,
-    pictureStore.getRevision,
+    subscribeUserPictures,
+    userPicturesRevision,
     () => 0,
   );
 }
@@ -44,28 +48,10 @@ const LOADING: StoredPicture = { status: 'loading' };
 const MISSING: StoredPicture = { status: 'missing' };
 
 export function useStoredPicture(localId: string | null): StoredPicture {
-  const revision = useStoreRevision();
-  const [read, setRead] = React.useState<Readonly<{
-    localId: string;
-    picture: StoredPicture;
-  }> | null>(null);
-  React.useEffect(() => {
-    if (localId === null) return;
-    let disposed = false;
-    void pictureStore.get(localId).then(
-      (record) => {
-        if (!disposed)
-          setRead({ localId, picture: record ? { status: 'present', bytes: record.data } : MISSING });
-      },
-      () => {
-        if (!disposed) setRead({ localId, picture: MISSING });
-      },
-    );
-    return () => {
-      disposed = true;
-    };
-  }, [localId, revision]);
-  return localId !== null && read?.localId === localId ? read.picture : LOADING;
+  const stored = useStoredPictureRecord(localId);
+  return React.useMemo(() => localId === null ? LOADING : stored.status === 'present'
+    ? { status: 'present' as const, bytes: stored.record.data }
+    : stored.status === 'missing' ? MISSING : LOADING, [localId, stored]);
 }
 
 /** A stored picture's full bytes (a user picture on this device), or null when it is not here. */
@@ -76,7 +62,7 @@ export function useStoredPictureBytes(localId: string | null): Bytes | null {
 
 /** The user pictures kept on this device, oldest first. */
 export function useUserPictures(): readonly PictureInfo[] {
-  const revision = useStoreRevision();
+  const revision = useUserPictureRevision();
   const [pictures, setPictures] = React.useState<readonly PictureInfo[]>([]);
   React.useEffect(() => {
     let disposed = false;
