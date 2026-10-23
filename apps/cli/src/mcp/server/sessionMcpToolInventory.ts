@@ -138,7 +138,6 @@ export function createSessionMcpToolInventory(params: Readonly<{
             inventory = prepareHappierMcpToolInventory({
                 sessionId: params.client.sessionId,
                 sessionMachineId: inputs.sessionMachineId,
-                pluginToolCatalog,
                 inventory: createHappierToolInventory({
                     surface: 'agent', isActionEnabled, actionsSettings: inputs.actionsSettings,
                     pluginToolCatalog, requiredDirectActionIds: params.requiredDirectActionIds,

@@ -123,7 +123,7 @@ function toMcpToolInputSchema(params: Readonly<{
     inputSchema: unknown;
     sessionId: string;
     sessionMachineId?: string | null;
-    pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
+    contextualDefaults: HappierBuiltInToolDefinition['contextualDefaults'];
 }>): z.ZodMiniType {
     const contextualInputSchema = params.actionId
         ? projectSessionBoundActionToolInputSchema({
@@ -133,7 +133,9 @@ function toMcpToolInputSchema(params: Readonly<{
                 defaultSessionId: params.sessionId,
                 defaultSessionMachineId: params.sessionMachineId,
             },
-            pluginToolCatalog: params.pluginToolCatalog,
+            // Plugin defaults travel with the admitted tool; first-party
+            // defaults still resolve through the canonical Action owner.
+            contextualDefaults: params.contextualDefaults,
         })
         : params.inputSchema;
     return toMcpToolObjectSchema(contextualInputSchema, 'inputSchema');
@@ -242,7 +244,6 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
     inventory: HappierToolInventory;
     sessionId: string;
     sessionMachineId?: string | null;
-    pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
 }>): HappierMcpToolInventory {
     const registrations = params.inventory.tools.flatMap(tool => {
         try {
@@ -257,7 +258,7 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
                 title: tool.title,
                 inputSchema: toMcpToolInputSchema({
                     actionId, inputSchema: tool.inputSchema, sessionId: params.sessionId,
-                    sessionMachineId: params.sessionMachineId, pluginToolCatalog: params.pluginToolCatalog,
+                    sessionMachineId: params.sessionMachineId, contextualDefaults: tool.contextualDefaults,
                 }),
                 ...(outputSchema === undefined ? {} : { outputSchema }),
                 ...(annotations === undefined ? {} : { annotations }),
@@ -315,7 +316,6 @@ export function registerHappierMcpBuiltInTools(
     const inventory = params.toolInventory ?? prepareHappierMcpToolInventory({
         sessionId: params.sessionId,
         sessionMachineId: params.sessionMachineId,
-        pluginToolCatalog: params.pluginToolCatalog,
         inventory: createHappierToolInventory({
             surface: params.surface,
             isActionEnabled,

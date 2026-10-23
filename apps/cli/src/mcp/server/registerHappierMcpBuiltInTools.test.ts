@@ -281,10 +281,10 @@ describe('registerHappierMcpBuiltInTools', () => {
       // The assertion names the inventory entry that would abort MCP initialize.
       for (const tool of inventory.tools) {
         expect(() => prepareHappierMcpToolInventory({
-          inventory: { ...inventory, tools: [tool] }, sessionId: '', pluginToolCatalog,
+          inventory: { ...inventory, tools: [tool] }, sessionId: '',
         }), `${tool.name} (${tool.actionId ?? 'manual'})`).not.toThrow();
       }
-      const toolInventory = prepareHappierMcpToolInventory({ inventory, sessionId: '', pluginToolCatalog });
+      const toolInventory = prepareHappierMcpToolInventory({ inventory, sessionId: '' });
       const registrations: Array<Readonly<{
         name: string;
         meta: { inputSchema?: z.ZodMiniType; outputSchema?: z.ZodMiniType };

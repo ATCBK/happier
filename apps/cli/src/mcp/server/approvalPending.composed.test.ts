@@ -80,7 +80,7 @@ it('returns typed pending approval through real MCP and the shared native/plugin
     const inventory = createHappierToolInventory({ surface: 'agent', registry: runtime.contributes, pluginToolCatalog });
     registerHappierMcpBuiltInTools(server, {
       sessionId: 'requesting-session', surface: 'agent', pluginToolCatalog,
-      toolInventory: prepareHappierMcpToolInventory({ inventory, sessionId: 'requesting-session', pluginToolCatalog }),
+      toolInventory: prepareHappierMcpToolInventory({ inventory, sessionId: 'requesting-session' }),
       deps: { ...bridge, changeTitle: async () => { throw new Error('Unexpected title change'); } },
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

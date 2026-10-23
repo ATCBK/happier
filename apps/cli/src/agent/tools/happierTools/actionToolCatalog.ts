@@ -42,6 +42,13 @@ type ActionToolEntry = Readonly<{
   provenance: ResolvedContributionProvenance;
 }>;
 
+/** One projection's lookup indexes; plugin policy is read anew for each projection. */
+type ActionToolCatalog = Readonly<{
+  entries: readonly ActionToolEntry[];
+  byId: ReadonlyMap<string, ActionToolEntry>;
+  byToolName: ReadonlyMap<string, ActionToolEntry>;
+}>;
+
 type ActionToolCatalogAvailability = ActionSurfaceAvailability & Readonly<{
   provenance: ResolvedContributionProvenance | 'unknown';
 }>;
@@ -64,6 +71,7 @@ const BUILT_IN_ACTION_TOOL_ENTRIES = Object.freeze(
 const BUILT_IN_ACTION_SPECS_BY_ID = new Map(
   listActionSpecs().map((spec) => [String(spec.id), spec] as const),
 );
+const BUILT_IN_ACTION_TOOL_CATALOG = indexActionToolEntries(BUILT_IN_ACTION_TOOL_ENTRIES);
 
 const MANUAL_TOOL_EQUIVALENT_ACTION_IDS = new Map<string, ActionId>([
   ['change_title', 'session.title.set'],
@@ -140,39 +148,38 @@ function toPluginToolEntry(tool: ProjectedPluginToolCatalogEntry): ActionToolEnt
   };
 }
 
-function dedupeActionToolEntries(entries: readonly ActionToolEntry[]): readonly ActionToolEntry[] {
-  const deduped = new Map<string, ActionToolEntry>();
+function indexActionToolEntries(entries: readonly ActionToolEntry[]): ActionToolCatalog {
+  const byToolName = new Map<string, ActionToolEntry>();
+  const byId = new Map<string, ActionToolEntry>();
   for (const entry of entries) {
-    if (deduped.has(entry.toolName)) {
-      continue;
-    }
-    deduped.set(entry.toolName, entry);
+    if (byToolName.has(entry.toolName)) continue;
+    byToolName.set(entry.toolName, entry);
+    if (!byId.has(entry.id)) byId.set(entry.id, entry);
   }
-  return Object.freeze([...deduped.values()]);
+  return { entries: Object.freeze([...byToolName.values()]), byId, byToolName };
 }
 
-function listActionToolEntries(params?: Readonly<{
+export function createActionToolCatalog(params?: Readonly<{
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): readonly ActionToolEntry[] {
+}>): ActionToolCatalog {
   const activeRegistry = resolveCurrentRuntimeRegistry();
   const pluginToolCatalog = params?.pluginToolCatalog
     ?? (activeRegistry && (!params?.registry || activeRegistry.contributes === params.registry)
       ? projectExecutablePluginToolCatalog(activeRegistry)
       : []);
-  const declaredToolEntries = pluginToolCatalog.map(toPluginToolEntry);
-
-  return dedupeActionToolEntries([
+  if (pluginToolCatalog.length === 0) return BUILT_IN_ACTION_TOOL_CATALOG;
+  return indexActionToolEntries([
     ...BUILT_IN_ACTION_TOOL_ENTRIES,
-    ...declaredToolEntries,
+    ...pluginToolCatalog.map(toPluginToolEntry),
   ]);
 }
 
 function getActionToolEntryById(actionId: string, params?: Readonly<{
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): ActionToolEntry | null {
-  return listActionToolEntries(params).find((entry) => entry.id === actionId) ?? null;
+}>, catalog?: ActionToolCatalog): ActionToolEntry | null {
+  return (catalog ?? createActionToolCatalog(params)).byId.get(actionId) ?? null;
 }
 
 function getPluginActionContributionById(
@@ -249,6 +256,8 @@ export function resolveDiscoveredPluginActionAvailability(params: Readonly<{
 
 export function resolveActionToolCatalogAvailability(params: Readonly<{
   actionId: ActionId | string;
+  /** Select the declared binding when one Action contributes several tools. */
+  toolName?: string;
   surface?: HappierBuiltInToolSurface;
   isActionEnabled?: ActionEnabledPredicate;
   actionsSettings?: ActionsSettingsV1 | null;
@@ -256,7 +265,7 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
   requireToolBinding?: boolean | null;
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): ActionToolCatalogAvailability {
+}>, catalog?: ActionToolCatalog): ActionToolCatalogAvailability {
   const surface = params.surface ?? 'agent';
   const actionId = String(params.actionId);
   const builtInSpec = BUILT_IN_ACTION_SPECS_BY_ID.get(actionId);
@@ -274,11 +283,13 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
     };
   }
 
-  const projectedTool = getActionToolEntryById(actionId, {
-    registry: params.registry,
-    pluginToolCatalog: params.pluginToolCatalog,
-  });
-  if (projectedTool) {
+  const projectedTool = params.toolName
+    ? (catalog ?? createActionToolCatalog(params)).byToolName.get(params.toolName)
+    : getActionToolEntryById(actionId, {
+      registry: params.registry,
+      pluginToolCatalog: params.pluginToolCatalog,
+    }, catalog);
+  if (projectedTool?.id === actionId) {
     return resolveDiscoveredPluginActionAvailability({
       actionId, surface, actionsSettings: params.actionsSettings,
       surfaces: { ...projectedTool.surfaces, ui: false, voice: false, rpc: false, api: false, plugin: false },
@@ -335,7 +346,7 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
   if (params.requireToolBinding && !getActionToolEntryById(actionId, {
     registry: params.registry,
     pluginToolCatalog: params.pluginToolCatalog,
-  })) {
+  }, catalog)) {
     return {
       available: false,
       reason: 'missing_tool_binding',
@@ -367,8 +378,9 @@ export function getActionToolIdForToolName(
     registry?: ResolvedContributionRegistry;
     pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
   }>,
+  catalog?: ActionToolCatalog,
 ): string | null {
-  return listActionToolEntries(params).find((entry) => entry.toolName === toolName)?.id ?? null;
+  return (catalog ?? createActionToolCatalog(params)).byToolName.get(toolName)?.id ?? null;
 }
 
 export function getEquivalentActionIdForBuiltInTool(
@@ -377,16 +389,17 @@ export function getEquivalentActionIdForBuiltInTool(
     registry?: ResolvedContributionRegistry;
     pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
   }>,
+  catalog?: ActionToolCatalog,
 ): string | null {
-  return MANUAL_TOOL_EQUIVALENT_ACTION_IDS.get(toolName) ?? getActionToolIdForToolName(toolName, params);
+  return MANUAL_TOOL_EQUIVALENT_ACTION_IDS.get(toolName) ?? getActionToolIdForToolName(toolName, params, catalog);
 }
 
 export function listPluginActionBackedTools(params?: Readonly<{
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): readonly HappierBuiltInToolDefinition[] {
+}>, catalog?: ActionToolCatalog): readonly HappierBuiltInToolDefinition[] {
   return Object.freeze(
-    listActionToolEntries(params)
+    (catalog ?? createActionToolCatalog(params)).entries
       .filter((entry) => entry.provenance === 'external')
       .map((entry) => ({
         name: entry.toolName,
@@ -415,12 +428,13 @@ export function isActionAvailableOnToolSurface(params: Readonly<{
   sessionMemoryEnabled?: boolean;
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): boolean {
-  return resolveActionToolCatalogAvailability(params).available;
+}>, catalog?: ActionToolCatalog): boolean {
+  return resolveActionToolCatalogAvailability(params, catalog).available;
 }
 
 export function isActionDirectToolAvailableOnToolSurface(params: Readonly<{
   actionId: ActionId | string;
+  toolName?: string;
   surface?: HappierBuiltInToolSurface;
   isActionEnabled?: ActionEnabledPredicate;
   actionsSettings?: ActionsSettingsV1 | null;
@@ -428,7 +442,7 @@ export function isActionDirectToolAvailableOnToolSurface(params: Readonly<{
   requiredDirectActionIds?: readonly ActionId[];
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): boolean {
+}>, catalog?: ActionToolCatalog): boolean {
   const surface = params.surface ?? 'agent';
   const builtInSpec = BUILT_IN_ACTION_SPECS_BY_ID.get(String(params.actionId));
   if (builtInSpec) {
@@ -451,11 +465,12 @@ export function isActionDirectToolAvailableOnToolSurface(params: Readonly<{
       sessionMemoryEnabled: params.sessionMemoryEnabled,
       registry: params.registry,
       pluginToolCatalog: params.pluginToolCatalog,
-    }).available;
+    }, catalog).available;
   }
 
   const availability = resolveActionToolCatalogAvailability({
     actionId: params.actionId,
+    toolName: params.toolName,
     surface,
     isActionEnabled: params.isActionEnabled,
     actionsSettings: params.actionsSettings ?? null,
@@ -463,7 +478,7 @@ export function isActionDirectToolAvailableOnToolSurface(params: Readonly<{
     requireToolBinding: true,
     registry: params.registry,
     pluginToolCatalog: params.pluginToolCatalog,
-  });
+  }, catalog);
   return availability.available && availability.effectiveToolExposureMode === 'direct';
 }
 
@@ -477,16 +492,15 @@ export function createActionToolNameToIdMap(params?: Readonly<{
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
 }>): ReadonlyMap<string, string> {
   const surface = params?.surface ?? 'agent';
+  const catalog = createActionToolCatalog(params);
 
   return new Map(
-    listActionToolEntries({
-      registry: params?.registry,
-      pluginToolCatalog: params?.pluginToolCatalog,
-    })
+    catalog.entries
       .filter((entry) => (
         entry.surfaces[surface] === true
         && isActionDirectToolAvailableOnToolSurface({
           actionId: entry.id,
+          toolName: entry.toolName,
           surface,
           isActionEnabled: params?.isActionEnabled,
           actionsSettings: params?.actionsSettings ?? null,
@@ -494,7 +508,7 @@ export function createActionToolNameToIdMap(params?: Readonly<{
           requiredDirectActionIds: params?.requiredDirectActionIds,
           registry: params?.registry,
           pluginToolCatalog: params?.pluginToolCatalog,
-        })
+        }, catalog)
       ))
       .map((entry) => [entry.toolName, entry.id] as const),
   );
@@ -510,7 +524,7 @@ export function isDirectManualToolAvailable(params: Readonly<{
   requiredDirectActionIds?: readonly ActionId[];
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
-}>): boolean {
+}>, catalog?: ActionToolCatalog): boolean {
   const surface = params.surface ?? 'agent';
   if (DIRECT_MANUAL_TOOL_NAMES.has(params.toolName)) {
     const explicitMode = params.actionsSettings?.actions?.[params.actionId as ActionId]?.toolExposureModes?.[surface];
@@ -523,11 +537,12 @@ export function isDirectManualToolAvailable(params: Readonly<{
       sessionMemoryEnabled: params.sessionMemoryEnabled,
       registry: params.registry,
       pluginToolCatalog: params.pluginToolCatalog,
-    });
+    }, catalog);
   }
 
   return isActionDirectToolAvailableOnToolSurface({
     actionId: params.actionId,
+    toolName: params.toolName,
     surface,
     isActionEnabled: params.isActionEnabled,
     actionsSettings: params.actionsSettings ?? null,
@@ -535,7 +550,7 @@ export function isDirectManualToolAvailable(params: Readonly<{
     requiredDirectActionIds: params.requiredDirectActionIds,
     registry: params.registry,
     pluginToolCatalog: params.pluginToolCatalog,
-  });
+  }, catalog);
 }
 
 export function filterBuiltInToolsForSurface(
@@ -549,14 +564,16 @@ export function filterBuiltInToolsForSurface(
     registry?: ResolvedContributionRegistry;
     pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
   }>,
+  admittedCatalog?: ActionToolCatalog,
 ): readonly HappierBuiltInToolDefinition[] {
+  const catalog = admittedCatalog ?? createActionToolCatalog(params);
   return tools.filter((tool) => {
     const actionId = getEquivalentActionIdForBuiltInTool(tool.name, {
       registry: params?.registry,
       pluginToolCatalog: params?.pluginToolCatalog,
-    });
+    }, catalog);
     if (!actionId) return true;
-    if (isDirectManualToolAvailable({
+    return isDirectManualToolAvailable({
       toolName: tool.name,
       actionId,
       surface: params?.surface,
@@ -566,18 +583,6 @@ export function filterBuiltInToolsForSurface(
       requiredDirectActionIds: params?.requiredDirectActionIds,
       registry: params?.registry,
       pluginToolCatalog: params?.pluginToolCatalog,
-    })) {
-      return true;
-    }
-    return isActionDirectToolAvailableOnToolSurface({
-      actionId,
-      surface: params?.surface,
-      isActionEnabled: params?.isActionEnabled,
-      actionsSettings: params?.actionsSettings ?? null,
-      sessionMemoryEnabled: params?.sessionMemoryEnabled,
-      requiredDirectActionIds: params?.requiredDirectActionIds,
-      registry: params?.registry,
-      pluginToolCatalog: params?.pluginToolCatalog,
-    });
+    }, catalog);
   });
 }

@@ -2,7 +2,7 @@ import { HAPPIER_BUILT_IN_TOOLS } from './catalog';
 import {
   filterBuiltInToolsForSurface,
   listPluginActionBackedTools,
-  createActionToolNameToIdMap,
+  createActionToolCatalog,
 } from './actionToolCatalog';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
@@ -21,7 +21,11 @@ export type HappierToolInventory = Readonly<{
 
 /** Both consumers use the same admitted projection, rather than filtering it again. */
 export function createHappierToolInventory(params: Parameters<typeof listBuiltInHappierTools>[0]): HappierToolInventory {
-  return { tools: listBuiltInHappierTools(params), actionToolNameToId: createActionToolNameToIdMap(params) };
+  const tools = listBuiltInHappierTools(params);
+  return {
+    tools,
+    actionToolNameToId: new Map(tools.flatMap(tool => tool.actionId ? [[tool.name, tool.actionId] as const] : [])),
+  };
 }
 
 function dedupeToolsByName<T extends Readonly<{ name: string }>>(tools: readonly T[]): readonly T[] {
@@ -78,32 +82,20 @@ export function listBuiltInHappierTools(params?: Readonly<{
       return false;
     }
   };
-  return dedupeToolsByName([
-    ...filterBuiltInToolsForSurface(
-      HAPPIER_BUILT_IN_TOOLS,
-      {
-        surface,
-        isActionEnabled,
-        actionsSettings,
-        sessionMemoryEnabled: params?.sessionMemoryEnabled,
-        requiredDirectActionIds: params?.requiredDirectActionIds,
-        registry: params?.registry,
-        pluginToolCatalog: params?.pluginToolCatalog,
-      },
-    ),
+  const catalog = createActionToolCatalog(params);
+  return dedupeToolsByName(filterBuiltInToolsForSurface([
+    ...HAPPIER_BUILT_IN_TOOLS,
     ...listPluginActionBackedTools({
       registry: params?.registry,
       pluginToolCatalog: params?.pluginToolCatalog,
-    }).filter(
-      (tool) => filterBuiltInToolsForSurface([tool], {
-        surface,
-        isActionEnabled,
-        actionsSettings,
-        sessionMemoryEnabled: params?.sessionMemoryEnabled,
-        requiredDirectActionIds: params?.requiredDirectActionIds,
-        registry: params?.registry,
-        pluginToolCatalog: params?.pluginToolCatalog,
-      }).length === 1,
-    ),
-  ]);
+    }, catalog),
+  ], {
+    surface,
+    isActionEnabled,
+    actionsSettings,
+    sessionMemoryEnabled: params?.sessionMemoryEnabled,
+    requiredDirectActionIds: params?.requiredDirectActionIds,
+    registry: params?.registry,
+    pluginToolCatalog: params?.pluginToolCatalog,
+  }, catalog));
 }
