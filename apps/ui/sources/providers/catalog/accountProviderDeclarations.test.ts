@@ -12,6 +12,29 @@ import {
 } from './accountProviderDeclarations';
 
 describe('admitted Provider declarations', () => {
+    it('reads only the addressed Provider declaration for kind and icon in a large Machine registry', () => {
+        const definition = readAccountProviderDeclarations({ kind: 'account' }).find(row => row.definition.managedRuntime)!.definition;
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
+            providers: { family: 'providers', entriesById: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => {
+                const id = `acme.provider-${index}/gateway`;
+                return [id, { id, pluginId: `acme.provider-${index}`, provenance: 'external', sourceKind: 'path',
+                    definition: { ...definition, id: 'gateway', icon: 'cloud-outline' } }];
+            })) },
+        } });
+        let declarationsRead = 0;
+        const entries = projection.familiesById.providers!.entriesById;
+        for (const entry of Object.values(entries)) {
+            const admittedDefinition = entry.definition;
+            Object.defineProperty(entry, 'definition', { get: () => { declarationsRead++; return admittedDefinition; } });
+        }
+        const context: ProviderDeclarationContext = { kind: 'machine', projection };
+        expect(readProviderConnectionPickerKind({ kind: 'contribution', contributionKey: 'acme.provider-999/gateway' }, context)).toBe(definition.kind);
+        expect(readProviderContributionIcon('acme.provider-999/gateway', context)).toBe('cloud-outline');
+        expect(readProviderContributionIcon('acme.missing/gateway', context)).toBeNull();
+        // Two exact reads inspect two definitions; unrelated registry entries and a missing key inspect none.
+        expect(declarationsRead).toBe(2);
+    });
+
     it('keeps missing or invalid Agent targets unknown during anonymous catalog composition', () => {
         const contexts: ProviderDeclarationContext[] = [
             { kind: 'account' },

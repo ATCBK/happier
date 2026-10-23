@@ -3,7 +3,7 @@ import type { AccountProviderDeclarationV1 } from '@happier-dev/protocol/provide
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ProviderModelPickerSourceKind } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
 import type { ProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/v1';
-import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
+import { areProviderContributionKeysEqualV1, canonicalizeProviderContributionKeyV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import {
     BUNDLED_ACCOUNT_PROVIDER_DECLARATIONS,
@@ -30,6 +30,17 @@ export function readAccountProviderDeclarations(context: ProviderDeclarationCont
         entry.definition && entry.provenance ? [{ contributionKey: entry.id, definition: entry.definition, provenance: entry.provenance }] : []);
 }
 
+/** Exact declaration reads use the producer's qualified-identity index, without projecting the registry. */
+export function readAccountProviderDeclaration(contributionKey: string, context: ProviderDeclarationContext): AccountProviderDeclarationV1 | null {
+    if (context.kind === 'account') return bundledProviderDeclarations.find(declaration =>
+        areProviderContributionKeysEqualV1(declaration.contributionKey, contributionKey)) ?? null;
+    const entry = context.projection?.familiesById.providers?.entriesById[canonicalizeProviderContributionKeyV1(contributionKey)];
+    const definition = entry?.definition;
+    return definition && entry.provenance
+        ? { contributionKey: entry.id, definition, provenance: entry.provenance }
+        : null;
+}
+
 /**
  * The model-picker kind of a saved connection's source: `custom`, or its admitted declaration's kind.
  * Without an admitted declaration there is no kind, so no default is guessed from a name or count.
@@ -37,15 +48,13 @@ export function readAccountProviderDeclarations(context: ProviderDeclarationCont
 export function readProviderConnectionPickerKind(source: ProviderConnectionV1['source'] | undefined, context: ProviderDeclarationContext): ProviderModelPickerSourceKind | undefined {
     if (source?.kind === 'custom') return 'custom';
     if (source?.kind !== 'contribution') return undefined;
-    return readAccountProviderDeclarations(context).find(declaration =>
-        areProviderContributionKeysEqualV1(declaration.contributionKey, source.contributionKey))?.definition.kind;
+    return readAccountProviderDeclaration(source.contributionKey, context)?.definition.kind;
 }
 
 /** A contribution's fallback icon token; packaged brands resolve from the plugin identity. */
 export function readProviderContributionIcon(contributionKey: string | null | undefined, context: ProviderDeclarationContext): string | null {
     if (!contributionKey) return null;
-    return readAccountProviderDeclarations(context).find(declaration =>
-        areProviderContributionKeysEqualV1(declaration.contributionKey, contributionKey))?.definition.icon ?? null;
+    return readAccountProviderDeclaration(contributionKey, context)?.definition.icon ?? null;
 }
 
 export type AccountAgentProviderRequirements =
