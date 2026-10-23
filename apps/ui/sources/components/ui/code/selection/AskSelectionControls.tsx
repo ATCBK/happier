@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SelectionActionBar } from '@/components/ui/selection/SelectionActionBar';
-import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
+import { useFloatingChromeClearance, useReportPageBottomBar } from '@/components/ui/layout/useFloatingChromeClearance';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
@@ -67,6 +67,9 @@ export function AskSelectionControls(
     };
   }, [ask.canComment, ask.comment, ask.selection, commentEnabled, onCommentSelection, selectionKey]);
   const phoneBarShown = phone && visible;
+  const { theme } = useUnistyles();
+  // While it shows, the bar is one of the page's kept bottom bars (a floating companion seats above it).
+  const onSeatLayout = useReportPageBottomBar(phoneBarShown, chromeClearance > 0 ? chromeClearance : theme.space.s16);
   React.useEffect(() => {
     if (!onPhoneBarShownChange) return;
     onPhoneBarShownChange(phoneBarShown);
@@ -86,6 +89,7 @@ export function AskSelectionControls(
     return (
       <View
         pointerEvents="box-none"
+        onLayout={onSeatLayout}
         style={[styles.phoneBarHost, chromeClearance > 0 ? { bottom: chromeClearance } : null]}
       >
       <SelectionActionBar

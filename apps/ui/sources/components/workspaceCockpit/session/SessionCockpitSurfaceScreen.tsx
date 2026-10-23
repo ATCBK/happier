@@ -88,6 +88,7 @@ import { SessionServicesSurfaceScreen } from './SessionServicesSurfaceScreen';
 import { useSessionCockpitSurfaceNavigation } from './SessionCockpitSurfaceNavigation';
 import { PhoneAskSheet } from '@/components/sessions/composer/phoneAsk/PhoneAskSheet';
 import { PhoneWorkingCapsule } from '@/components/sessions/composer/phoneAsk/PhoneWorkingCapsule';
+import { PageBottomBarSeatProvider } from '@/components/ui/layout/useFloatingChromeClearance';
 import { usePhoneAskSheet } from '@/components/sessions/composer/phoneAsk/phoneAskSheetState';
 import type { SessionComposerRenderer } from '@/components/sessions/composer/sessionComposerModel';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
@@ -891,6 +892,8 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
 
     return renderSessionChrome(
         <View testID="session-details-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+            {/* The working capsule floats over the File page, so it reads which bottom bar the page keeps. */}
+            <PageBottomBarSeatProvider>
             <SessionDetailsPanel
                 sessionId={props.sessionId}
                 scopeId={props.scopeId}
@@ -904,6 +907,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
                 serverId={servicesServerId ?? null}
                 onView={() => surfaceNavigation?.switchSurface('chat')}
             />
+            </PageBottomBarSeatProvider>
         </View>,
     );
 });

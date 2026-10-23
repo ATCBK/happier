@@ -9,7 +9,7 @@ import {
   useCoreCapsuleColors,
 } from '@/components/ui/status/capsuleHost';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
-import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
+import { useFloatingChromeClearance, usePageBottomBarTop } from '@/components/ui/layout/useFloatingChromeClearance';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
@@ -80,7 +80,7 @@ export function PhoneWorkingCapsule(
   );
 }
 
-/** The capsule itself, floating above the page's bottom edge and its floating tab bar. */
+/** The capsule itself, floating above the page's bottom edge, its floating tab bar and any bottom bar the page keeps. */
 export function PhoneWorkingCapsuleView(
   props: Readonly<{
     kind: PhoneWorkingCapsuleKind;
@@ -93,11 +93,15 @@ export function PhoneWorkingCapsuleView(
   const insets = useChromeSafeAreaInsets();
   // Like the page's other bottom bars: above the floating tab bar when one covers the page.
   const chromeClearance = useFloatingChromeClearance();
+  // A bar the page keeps at its bottom (the Edit key row, the review bar) holds that edge: the capsule rides above it.
+  const keptBarTop = usePageBottomBarTop();
+  const edgeBottom = chromeClearance > 0 ? chromeClearance : insets.bottom + theme.space.s16;
+  const bottom = keptBarTop > 0 ? Math.max(edgeBottom, keptBarTop + theme.space.s8) : edgeBottom;
   const needsYou = props.kind === 'needsYou';
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.dock, { bottom: chromeClearance > 0 ? chromeClearance : insets.bottom + theme.space.s16 }]}
+      style={[styles.dock, { bottom }]}
     >
       <HappierStatusCapsule
         placement="inline"

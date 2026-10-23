@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
+import { useFloatingChromeClearance, useReportPageBottomBar } from '@/components/ui/layout/useFloatingChromeClearance';
 import { FloatingTabBarSurface } from '@/components/ui/navigation/FloatingTabBarSurface';
 import { Text } from '@/components/ui/text/Text';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -43,6 +43,7 @@ export function ReviewBar(props: ReviewBarProps) {
   const insets = useSafeAreaInsets();
   // Under the phone's floating tab bar the bar floats just above it (rvp P1), never beneath it.
   const chromeClearance = useFloatingChromeClearance();
+  const onSeatLayout = useReportPageBottomBar(true, chromeClearance);
   const completeRef = React.useRef(false);
   React.useEffect(() => {
     const complete = Boolean(props.complete);
@@ -157,7 +158,7 @@ export function ReviewBar(props: ReviewBarProps) {
   );
 
   return (
-    <View testID={props.testID} pointerEvents="box-none" style={[styles.anchor, chromeClearance > 0 ? { bottom: chromeClearance } : null]}>
+    <View testID={props.testID} pointerEvents="box-none" onLayout={onSeatLayout} style={[styles.anchor, chromeClearance > 0 ? { bottom: chromeClearance } : null]}>
       {/* Controls at both ends (‹ 2 of 7 › … Discard · Keep): the capsule spans the gutters, like the File page bar. */}
       <FloatingTabBarSurface bottomInset={chromeClearance > 0 ? 0 : insets.bottom} stretch>
         {body}
