@@ -5296,11 +5296,17 @@ authority and current target access. The same origin rule supplies the
 
 An MCP Action's transcript origin keeps the native transcript call identity in
 `toolCallId` and its connection-local JSON-RPC request identity separately in
-`mcpRequestId`. The built-in MCP registration reads Codex's `_meta.callId` and
-Claude Code's `_meta["claudecode/toolUseId"]`; the stdio bridge preserves this
-metadata. Clients without either field omit `toolCallId`. The existing transcript
-matcher then requires the exact tool name and reviewed operands, using the
-canonical Action-payload reader to remove transcript normalization metadata.
+`mcpRequestId`. In 0.3 development source, the Agent's existing tools capability
+declares the optional `mcpToolCallIdMetaKey`: Codex declares `callId`, and Claude
+Code declares `claudecode/toolUseId`. The host resolves only that declared `_meta`
+field; the stdio bridge forwards metadata opaquely. Missing declarations or
+missing/invalid values omit `toolCallId`, never substituting a JSON-RPC id.
+The existing transcript matcher then requires the exact tool name, Action id,
+Session scope and reviewed operands. It uses the canonical Action-payload reader
+and the same contextual-input binding as execution, so an omitted current Session
+is equivalent to its bound value, but an explicit different Session is not.
+Only known originating context supplies defaults; an approved effect target is
+not evidence of the originating Session's Machine or workspace.
 It never matches on a tool name alone or stores another raw input copy. This
 fallback cannot distinguish repeated calls with identical operands; native call
 identity remains the precise path. Correlation selects presentation only and

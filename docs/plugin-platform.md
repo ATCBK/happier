@@ -443,14 +443,23 @@ Startup and development reload do not invent defaults. Removed declarations
 leave stored rules inert. Visible page integration and live validation remain
 separate capabilities-program work.
 
-In 0.3 development source, an Agent's optional `mcpToolControl` and
-`mcpToolLoading` facts project from its own definition through the same tools
+In 0.3 development source, an Agent's optional `mcpToolControl`,
+`mcpToolLoading` and `mcpToolCallIdMetaKey` facts project from its own definition through the same tools
 capability owner. Absence is not inferred support. The host supplies the
 Protocol-resolved, data-only `mcpToolPolicy` beside `mcpServers` on Session and
 Run opens; the shared Run-to-Session adapter preserves both. Native Session
 policy changes use `AgentSessionConfigurationUpdate`, not a plugin-owned policy
 reader or a second permission engine. A declaration still requires proof through
 the actual Agent's launch and permission path.
+
+`mcpToolCallIdMetaKey` declares which opaque MCP request `_meta` field contains
+the native transcript call id. The generic host reads only that declared field
+and passes the optional string to its existing approval-origin writer. Agent
+code owns vendor interpretation; no host vendor table or Agent-id branch is
+involved. A missing key/value retains exact contextual-operand fallback, not
+JSON-RPC-as-native identity. This optional development V2 declaration changes
+no authority, execution outcome, stored format or wire epoch; the tools object
+and its children remain closed at admission.
 
 In 0.3 development source, OpenCode's session-scoped MCP namespace retains its
 isolation prefix and uses a compact digest. The remaining 64-character model
