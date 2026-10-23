@@ -7,6 +7,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 import {
   formatRunClock,
@@ -45,7 +47,9 @@ export function RunGlyph(props: Readonly<{ glyph: ProjectRunGlyph }>) {
 /** A live run's elapsed clock ("1:42"), in its own leaf so only it re-renders every second. */
 export function RunClock(props: Readonly<{ startedAt: number }>) {
   const { theme } = useUnistyles();
-  const seconds = useElapsedTime(props.startedAt);
+  const presented = useLayoutPresentationActive();
+  const viewed = useHostActivelyViewed();
+  const seconds = useElapsedTime(props.startedAt, presented && viewed);
   return (
     <Text style={[styles.clock, { color: theme.colors.text.tertiary }]}>
       {formatRunClock(seconds)}

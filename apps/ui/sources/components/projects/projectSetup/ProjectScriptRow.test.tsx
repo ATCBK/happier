@@ -6,6 +6,10 @@ import type { WorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHan
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { act } from 'react-test-renderer';
+import { installTimerCensus } from '@/dev/testkit/performance/timerCensus';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { RunClock } from './ProjectRunMarks';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -42,6 +46,41 @@ import { ProjectCommandOutputPage } from '@/components/inbox/actionOperations/Pr
 import { ActionOperationDetailModal } from '@/components/inbox/actionOperations/ActionOperationDetailModal';
 
 afterEach(() => { standardCleanup(); modal.show.mockClear(); outputRpc.mockReset(); device.current = null; });
+
+describe('Run clock presentation demand', () => {
+  it('uses zero timers and commits while hidden, then samples elapsed time when presented again', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const census = installTimerCensus();
+    let commits = 0;
+    const clock = (active: boolean) => <PluginSurfaceFocusEligibilityProvider active={active}>
+      <React.Profiler id="run-clock" onRender={() => { commits += 1; }}><RunClock startedAt={1_000} /></React.Profiler>
+    </PluginSurfaceFocusEligibilityProvider>;
+    try {
+      const screen = await renderScreen(clock(false));
+      expect(census.read()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      commits = 0;
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(commits).toBe(0);
+      await screen.update(clock(true));
+      expect(screen.getTextContent()).toContain('1:00');
+      expect(census.read()).toHaveLength(1);
+      await act(async () => { vi.advanceTimersByTime(1_000); });
+      expect(screen.getTextContent()).toContain('1:01');
+      await screen.update(clock(false));
+      expect(census.read()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      commits = 0;
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(commits).toBe(0);
+      await screen.update(clock(true));
+      expect(screen.getTextContent()).toContain('2:01');
+      await screen.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { census.stop(); vi.useRealTimers(); }
+  });
+});
 
 describe('Script row title line', () => {
   const workspace: WorkspaceAddressV1 = { serverId: 'home', machineId: 'machine', workspaceId: 'ws', rootPath: '/repo' };
