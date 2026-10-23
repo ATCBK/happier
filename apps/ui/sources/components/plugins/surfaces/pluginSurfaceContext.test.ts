@@ -6,8 +6,7 @@ import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/plugin
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storage';
 
-import { createPluginSurfaceContext, preparePluginSurfaceContext, usePluginSurfaceEnvironment } from './pluginSurfaceContext';
-import * as stableJson from '@/utils/json/stableJsonStringify';
+import { createPluginSurfaceContext, usePluginSurfaceEnvironment } from './pluginSurfaceContext';
 
 const targetedContributions: PluginUiTargetedContributionsV1 = {
     target: {
@@ -19,7 +18,7 @@ const targetedContributions: PluginUiTargetedContributionsV1 = {
 };
 
 describe('createPluginSurfaceContext', () => {
-    it('admits host publications once and does no parsing, walking or stringify on unchanged reads', () => {
+    it('freezes host-owned surface facts while fresh changed publications leave previous content intact', () => {
         const fixture = createPluginSurfaceContextFixture();
         const translations = { title: 'Original' };
         const input = {
@@ -30,54 +29,14 @@ describe('createPluginSurfaceContext', () => {
             translations,
             targetedContributions: fixture.targetedContributions,
         };
-        const prepared = preparePluginSurfaceContext(createPluginSurfaceContext(input));
-        const published = prepared.surface;
-        // Instrument the real owners; none of their implementations is replaced.
-        const parse = vi.spyOn(PluginUiHostApiSurfaceContextV1Schema, 'parse');
-        const stringify = vi.spyOn(stableJson, 'stableJsonStringify');
-        const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
-        onTestFinished(() => { parse.mockRestore(); stringify.mockRestore(); descriptors.mockRestore(); });
-        const reads = Array.from({ length: 100 }, () => preparePluginSurfaceContext(published, prepared));
-        const counts = { parses: parse.mock.calls.length, stringify: stringify.mock.calls.length, walks: descriptors.mock.calls.length };
-        expect(counts).toEqual({ parses: 0, stringify: 0, walks: 0 });
-        expect(reads.every(value => value === prepared)).toBe(true);
-        expect(prepared.surface).toBe(published);
+        const published = createPluginSurfaceContext(input);
         expect(Object.isFrozen(published.translations)).toBe(true);
-        expect(Object.isFrozen(translations)).toBe(false);
-        translations.title = 'Changed';
+        expect(Reflect.set(translations, 'title', 'Changed')).toBe(false);
         expect(published.translations.title).toBe('Original');
-        const next = preparePluginSurfaceContext(createPluginSurfaceContext(input), prepared);
-        expect(next.surface.translations.title).toBe('Changed');
-        expect(next.semanticKey).not.toBe(prepared.semanticKey);
-        expect(next.surface.target).toBe(prepared.surface.target);
-        expect(next.surface.theme).toBe(prepared.surface.theme);
-
-        // Copying/freezing a wrapper never admits mutable children or invalid input.
-        const raw = Object.freeze({ ...published, translations });
-        parse.mockClear();
-        expect(preparePluginSurfaceContext(raw).surface.translations.title).toBe('Changed');
-        translations.title = 'Changed again';
-        expect(preparePluginSurfaceContext(raw).surface.translations.title).toBe('Changed again');
-        expect(parse).toHaveBeenCalledTimes(2);
-        expect(() => preparePluginSurfaceContext(Object.freeze({ ...published, textScale: -1 }))).toThrow();
-    });
-    it('validates fresh input publications but builds no key when their admitted content is unchanged', () => {
-        const source = createPluginSurfaceContextFixture();
-        const previous = preparePluginSurfaceContext(source);
-        const parse = vi.spyOn(PluginUiHostApiSurfaceContextV1Schema, 'parse');
-        const stringify = vi.spyOn(stableJson, 'stableJsonStringify');
-        onTestFinished(() => { parse.mockRestore(); stringify.mockRestore(); });
-        const publications = Array.from({ length: 100 }, () => preparePluginSurfaceContext({ ...source }, previous));
-        expect(parse).toHaveBeenCalledTimes(100);
-        expect(stringify).toHaveBeenCalledTimes(0);
-        expect(publications.every(value => value === previous)).toBe(true);
-        stringify.mockClear();
-        const changed = preparePluginSurfaceContext({ ...source, locale: 'de' }, previous);
-        expect(stringify).toHaveBeenCalledTimes(1);
-        expect(changed.semanticKey).not.toBe(previous.semanticKey);
-        expect(changed.surface.locale).toBe('de');
-        expect(changed.surface.theme).toBe(previous.surface.theme);
-        expect(() => preparePluginSurfaceContext({ ...source, textScale: -1 }, previous)).toThrow();
+        const next = createPluginSurfaceContext({ ...input, translations: { title: 'Changed' } });
+        expect(next.translations.title).toBe('Changed');
+        expect(next.target).toBe(published.target);
+        expect(next.theme).toBe(published.theme);
     });
     it('projects live local spinner preferences without subscribing to unrelated local settings', async () => {
         const previous = storage.getState();

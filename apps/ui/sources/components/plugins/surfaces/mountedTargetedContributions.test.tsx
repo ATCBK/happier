@@ -140,10 +140,15 @@ describe('useMountedTargetedContributions', () => {
     });
 
     it('reads only the target slice and prepares its mounts', async () => {
+        const resourcesById = PluginProjectionV2Schema.parse({ v: 2, generation: 1, resourcesById: {
+            'acme.triage/state': { id: 'state', pluginId: 'acme.triage', resourceKind: 'config', scope: 'session' },
+        } }).resourcesById;
+        const resourceDeclarationsByPluginId = { 'acme.triage': resourcesById, 'acme.external': {} };
         targetedReadMock.mockResolvedValue({
             supported: true,
             targetedContributions: snapshot('occurrence-a'),
             targetedSurfaceMounts: [mount('occurrence-a')],
+            resourceDeclarationsByPluginId,
         });
         const rendered = await renderHook(() => useMountedTargetedContributions({
             machineId: 'machine-1',
@@ -157,12 +162,24 @@ describe('useMountedTargetedContributions', () => {
         expect(rendered.getCurrent()).toMatchObject({
             phase: 'ready',
             targetedContributions: snapshot('occurrence-a'),
+            resourceDeclarationsByPluginId,
             failure: null,
         });
         expect(rendered.getCurrent().preparedTargetedSurfaceMounts?.[0]?.inputValidation).toBeDefined();
+        expect(rendered.getCurrent().preparedTargetedSurfaceMounts?.[0]?.resourceDeclarations).toEqual(resourcesById);
         expect(targetedReadMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({ serverId: focusedHomeId, pluginId: 'acme.triage' }));
         // The mount never asks for the machine-wide projection itself.
         expect(describeMock).not.toHaveBeenCalled();
+        const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
+        targetedReadMock.mockResolvedValue({ supported: true, targetedContributions: snapshot('occurrence-a'),
+            targetedSurfaceMounts: [], resourceDeclarationsByPluginId: { 'acme.triage': {} } });
+        await act(async () => { publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId: focusedHomeId }); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(rendered.getCurrent()).toMatchObject({ resourceDeclarationsByPluginId: { 'acme.triage': {} } });
+        targetedReadMock.mockResolvedValue({ supported: true, targetedContributions: snapshot('occurrence-a'), targetedSurfaceMounts: [] });
+        await act(async () => { publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId: focusedHomeId }); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(rendered.getCurrent()).toMatchObject({ resourceDeclarationsByPluginId: null });
     });
 
     it('publishes exact ready model inputs with the target and updates them from the existing machine publisher', async () => {

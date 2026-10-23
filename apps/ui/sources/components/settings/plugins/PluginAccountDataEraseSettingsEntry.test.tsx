@@ -307,60 +307,8 @@ function createAccountAvailabilityReader(input: Pick<
 >): PluginAccountAvailabilityReader {
     const unavailable = createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE);
     return {
+        ...unavailable,
         ...input,
-        getObservationSnapshot: unavailable.getObservationSnapshot,
-        readBundledAccountDeclarationDigest: unavailable.readBundledAccountDeclarationDigest,
-        readAccountUiProjection: unavailable.readAccountUiProjection,
-        readCurrentAccountExecution: unavailable.readCurrentAccountExecution,
-        readCurrentAccountExecutionDeclarations: unavailable.readCurrentAccountExecutionDeclarations,
-        readInstalledPlugins: unavailable.readInstalledPlugins,
-        readCurrentArtifact: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentHostedPublicationTarget: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentHostedPackageAssetPublicationTarget: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentHostedArtifactAdministration: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentPackageAsset: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentCollectionContract: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentAccountDataCapability: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentAccountKvCapability: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readCurrentReleaseSelection: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        classifyRelease: (materialization) => ({
-            serverIdentityId: materialization.serverIdentityId,
-            materializationRef: {
-                machineId: materialization.machineId,
-                materializationId: materialization.materializationId,
-                pluginId: materialization.pluginId,
-            },
-            releaseContent: 'unknown',
-            validation: { kind: 'rejected', reason: 'release_unavailable' },
-        }),
-        subscribe: () => () => {},
     };
 }
 

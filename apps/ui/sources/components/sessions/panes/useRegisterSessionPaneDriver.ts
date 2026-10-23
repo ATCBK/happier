@@ -72,6 +72,9 @@ export function useRegisterSessionPaneDriver(
     // The phone cockpit presents sidebar destinations as its own retained
     // scenes. Its Session chrome must not mount another copy as an overlay.
     const rightPaneAvailable = bottomPaneAvailable || presentPane === null;
+    // Its Details are the cockpit's own File scene too: a Session screen raised beside it (the phone Ask sheet)
+    // must not open them again as an overlay over Chat.
+    const detailsPaneEnabled = presentPane === null;
     const registerDriver = options?.registerDriver === false ? null : paneCtx?.registerDriver ?? null;
     const canRegister = Boolean(registerDriver);
     // The registered PaneDriver is the sole target/currentness producer for
@@ -167,6 +170,7 @@ export function useRegisterSessionPaneDriver(
                     resolveBoardPrimaryHost,
                 }),
             },
+            detailsPaneEnabled,
             ...(bottomPaneAvailable ? {
                 bottomPaneBuiltinAdapter: {
                     destinationIds: ['terminal'],
@@ -178,6 +182,7 @@ export function useRegisterSessionPaneDriver(
         return registerDriver(driver);
     }, [
         bottomPaneAvailable,
+        detailsPaneEnabled,
         rightPaneAvailable,
         cockpitChrome,
         pluginRuntime.accountLifetime,

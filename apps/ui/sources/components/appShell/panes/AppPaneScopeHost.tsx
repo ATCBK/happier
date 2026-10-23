@@ -243,6 +243,7 @@ function resolvePaneAdapter(
             ...(driver.bottomPaneBuiltinAdapter === undefined
                 ? {}
                 : { bottomPaneBuiltinAdapter: driver.bottomPaneBuiltinAdapter }),
+            ...(driver.detailsPaneEnabled === undefined ? {} : { detailsPaneEnabled: driver.detailsPaneEnabled }),
         };
     }
 

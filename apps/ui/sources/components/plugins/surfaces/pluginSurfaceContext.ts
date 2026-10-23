@@ -2,8 +2,6 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { BrowserViewTargetV1 } from '@happier-dev/protocol';
-import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
-import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type {
     PluginSurfaceTarget,
     PluginUiPlatform,
@@ -27,16 +25,6 @@ import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfaceP
 import type { PluginSurfaceTargetUndeclaredReason } from '@/sync/domains/plugins/ui/scope/resolveResourceScope';
 
 import { usePluginUiTheme } from './pluginUiThemeProjection';
-import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
-
-export type PreparedPluginSurfaceContext = Readonly<{
-    surface: SurfaceContext;
-    semanticKey: string;
-}>;
-
-// Only this owner's schema-copied, recursively frozen publications prove admission.
-// A caller-frozen wrapper (or a copy of a publication) must still be parsed.
-const preparedSurfaceContexts = new WeakMap<SurfaceContext, PreparedPluginSurfaceContext>();
 
 function freezeOwnedContext<T>(value: T): T {
     if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -44,42 +32,6 @@ function freezeOwnedContext<T>(value: T): T {
         Object.freeze(value);
     }
     return value;
-}
-
-/** Acquire raw contexts once; host-owned publications already carry their exact key. */
-export function preparePluginSurfaceContext(
-    source: SurfaceContext,
-    previous?: PreparedPluginSurfaceContext,
-): PreparedPluginSurfaceContext {
-    const admitted = preparedSurfaceContexts.get(source);
-    if (admitted && !previous) return admitted;
-    if (admitted && previous?.semanticKey === admitted.semanticKey) return previous;
-    // The SDK grammar owns the copy (including optional undefined presence).
-    // Only its newly allocated graph is frozen; caller-owned aliases stay free.
-    const parsed = admitted ? { ...admitted.surface } : PluginUiHostApiSurfaceContextV1Schema.parse(source);
-    // A new source wrapper still needs admission, but equal admitted content
-    // needs neither another comparison string nor a new publication.
-    if (previous && sameStrictJsonValue(parsed, previous.surface)) return previous;
-    const semanticKey = admitted?.semanticKey ?? stableJsonStringify(parsed);
-    if (previous?.semanticKey === semanticKey) return previous;
-    if (previous) {
-        const owned = parsed as Record<string, unknown>;
-        const incumbent = previous.surface as Readonly<Record<string, unknown>>;
-        // Preserve exact unchanged public sub-snapshots through availability,
-        // locale, or theme updates. Compare only the newly acquired SDK copy,
-        // never a retained mutable source alias.
-        for (const key of Object.keys(owned)) {
-            const value = owned[key];
-            if (value !== null && typeof value === 'object'
-                && Object.hasOwn(incumbent, key)
-                && sameStrictJsonValue(value, incumbent[key])) {
-                owned[key] = incumbent[key];
-            }
-        }
-    }
-    const prepared = Object.freeze({ surface: freezeOwnedContext(parsed), semanticKey });
-    preparedSurfaceContexts.set(prepared.surface, prepared);
-    return prepared;
 }
 
 /**
@@ -327,7 +279,7 @@ export function createPluginSurfaceContext(input: Readonly<{
     machineConnectionPending?: SurfaceContext['machineConnectionPending'];
     machineExecutionReady?: SurfaceContext['machineExecutionReady'];
 }>): SurfaceContext {
-    return Object.freeze({
+    return freezeOwnedContext({
         mount: input.mount,
         target: input.target,
         ...(input.mount.kind === 'destination' && input.mount.container === 'appPage'

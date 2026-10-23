@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { PluginResourceContextV1 } from '@happier-dev/protocol';
-import { createPluginUiResourceStore, pluginUiResourceReferenceKey, type PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
+import { createPluginUiResourceStore, pluginUiResourceReferenceKey, type PluginUiResourceEntry, type PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
 import type {
     PluginUiResourceReference,
     PluginUiResourceSnapshot,
@@ -16,6 +16,7 @@ import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeL
 import { randomUUID } from '@/platform/randomUUID';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useWidgetFrameResourceActivity } from '@/components/widgets/frame/widgetFrameResourceActivity';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 type PluginContextualResourceStore = ReturnType<typeof createPluginUiResourceStore>;
 
@@ -231,41 +232,168 @@ export function acquirePluginContextualResourceStore(binding: PluginContextualRe
 /** A private mount facade: declaration scope selects an existing exact-context entry. */
 export function createPluginDeclaredResourceStore(input: Omit<PluginContextualResourceBinding, 'context'> & Readonly<{
     resourcesById: PluginUiProjectionModel['resourcesById'];
+    /** Undefined is unknown; a complete empty publication withdraws the ordinary namespace. */
+    resourceDeclarationsComplete?: boolean;
     sessionId?: string;
     surfaceContext?: Extract<PluginResourceContextV1, { kind: 'surface' }>;
-}>): PluginUiResourceStore | null {
-    const declarations = Object.values(input.resourcesById).filter(row => row.pluginId === input.pluginId);
-    // Older admitted projections can still use ordinary read/watch transport,
-    // but cannot lend the new sharing path a guessed Resource namespace.
-    if (!declarations.length || declarations.some(row => row.scope === undefined)) return null;
-    const leases = new Map<string, PluginContextualResourceStoreLease>();
+    createFallbackStore?: () => PluginUiResourceStore;
+}>): (PluginUiResourceStore & Readonly<{
+    reconcile(): void;
+    hasDeclaredNamespace(): boolean;
+    readNamespaceKey(): string;
+    onDeclaredNamespaceAdmission(listener: () => void): () => void;
+}>) | null {
+    const readDeclarations = () => Object.values(input.resourcesById).filter(row => row.pluginId === input.pluginId);
+    const isScopedNamespace = (rows: ReturnType<typeof readDeclarations>) => (
+        input.resourceDeclarationsComplete === true && rows.every(row => row.scope !== undefined)
+    );
+    // Preserve the incumbent ordinary transport until scoped declarations
+    // actually arrive. Once admitted, their withdrawal cannot reopen it.
+    let hasDeclaredNamespace = isScopedNamespace(readDeclarations());
+    let fallbackStore: PluginUiResourceStore | null = null;
+    const namespaceListeners = new Set<() => void>();
+    const entries = new Map<string, Readonly<{
+        localId: string;
+        contract: string | null;
+        entry: PluginUiResourceEntry;
+        retire(code: string): void;
+    }>>();
     let disposed = false;
-    const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
+    const unavailableSnapshot = (code: string): PluginUiResourceSnapshot => Object.freeze({
+        freshness: 'unknown', pending: 'idle', subscription: 'ended', error: { code, message: code },
+    });
+    const surfaceRetired = unavailableSnapshot('plugin_surface_retired');
+    const declarationWithdrawn = unavailableSnapshot('plugin_resource_not_found');
+    const unavailableEntry = (snapshot: PluginUiResourceSnapshot): PluginUiResourceEntry => Object.freeze({
+        getSnapshot: () => snapshot,
+        subscribe: () => () => {},
+        refresh: async () => snapshot,
+    });
+    // Resource hooks render failures as snapshots, not render-time exceptions.
+    const failures = {
+        plugin_surface_retired: unavailableEntry(surfaceRetired),
+        plugin_resource_not_found: unavailableEntry(declarationWithdrawn),
+        plugin_resource_context_unavailable: unavailableEntry(unavailableSnapshot('plugin_resource_context_unavailable')),
+    };
+    const fail = (code: keyof typeof failures) => failures[code];
+    const contractKey = (row: PluginUiProjectionModel['resourcesById'][string]) => {
+        // Canonical projected Resource fields, excluding host publication
+        // metadata and arbitrary UI projection extensions.
+        const { id, pluginId, occurrenceId, executionOrigin, resourceKind, path,
+            scope, connectedAccountPurposes, digest, contentType } = row;
+        return stableJsonStringify({ id, pluginId, occurrenceId, executionOrigin, resourceKind, path,
+            scope, connectedAccountPurposes, digest, contentType });
+    };
+    const reconcile = () => {
+        const declarations = readDeclarations();
+        const admittedNamespace = !hasDeclaredNamespace && isScopedNamespace(declarations);
+        hasDeclaredNamespace ||= isScopedNamespace(declarations);
+        for (const [key, mounted] of entries) {
+            const declaration = declarations.find(row => row.id === mounted.localId);
+            if (!disposed && input.accountLifetime.isCurrent()
+                && (mounted.contract === null ? !hasDeclaredNamespace
+                    : declaration && mounted.contract === contractKey(declaration))) continue;
+            entries.delete(key);
+            mounted.retire(disposed || !input.accountLifetime.isCurrent() ? 'plugin_surface_retired' : 'plugin_resource_not_found');
+        }
+        if (disposed || hasDeclaredNamespace) {
+            fallbackStore?.dispose();
+            fallbackStore = null;
+        }
+        if (admittedNamespace) {
+            const listeners = [...namespaceListeners];
+            namespaceListeners.clear();
+            for (const listener of listeners) listener();
+        }
+    };
     return Object.freeze({
+        reconcile,
+        hasDeclaredNamespace: () => hasDeclaredNamespace || isScopedNamespace(readDeclarations()),
+        readNamespaceKey: () => stableJsonStringify([
+            hasDeclaredNamespace || isScopedNamespace(readDeclarations()),
+            readDeclarations().map(contractKey).sort(),
+        ]),
+        onDeclaredNamespaceAdmission(listener) {
+            if (disposed || hasDeclaredNamespace || isScopedNamespace(readDeclarations())) return () => {};
+            namespaceListeners.add(listener);
+            return () => { namespaceListeners.delete(listener); };
+        },
         getEntry(resource) {
+            reconcile();
             if (disposed || !input.accountLifetime.isCurrent()) return fail('plugin_surface_retired');
             const reference = readPluginSurfaceResourceReference(input.pluginId, resource);
-            const declaration = reference?.pluginId === input.pluginId
-                ? declarations.find(row => row.id === reference.localId) : undefined;
-            if (!declaration) return fail('plugin_resource_not_found');
-            const context: PluginResourceContextV1 | undefined = declaration.scope === 'global' ? { kind: 'global' }
-                : declaration.scope === 'session' && input.sessionId ? { kind: 'session', sessionId: input.sessionId }
-                : declaration.scope === 'surface' ? input.surfaceContext : undefined;
-            if (!context) return fail('plugin_resource_context_unavailable');
-            const key = JSON.stringify(context);
-            let lease = leases.get(key);
-            if (!lease) {
-                lease = acquirePluginContextualResourceStore({ ...input, context }) ?? undefined;
+            if (!reference || reference.pluginId !== input.pluginId) return fail('plugin_resource_not_found');
+            const declaration = hasDeclaredNamespace ? readDeclarations().find(row => row.id === reference.localId) : undefined;
+            if (hasDeclaredNamespace && !declaration) return fail('plugin_resource_not_found');
+            const key = pluginUiResourceReferenceKey(reference, input.pluginId);
+            const mounted = entries.get(key);
+            if (mounted) return mounted.entry;
+            let lease: PluginContextualResourceStoreLease | null = null;
+            let shared: PluginUiResourceEntry;
+            if (declaration) {
+                const context: PluginResourceContextV1 | undefined = declaration.scope === 'global' ? { kind: 'global' }
+                    : declaration.scope === 'session' && input.sessionId ? { kind: 'session', sessionId: input.sessionId }
+                    : declaration.scope === 'surface' ? input.surfaceContext : undefined;
+                if (!context) return fail('plugin_resource_context_unavailable');
+                lease = acquirePluginContextualResourceStore({ ...input, context });
                 if (!lease) return fail('plugin_surface_retired');
-                leases.set(key, lease);
+                try { shared = lease.store.getEntry(reference); }
+                catch (error) { lease.dispose(); throw error; }
+            } else {
+                fallbackStore ??= input.createFallbackStore?.() ?? null;
+                if (!fallbackStore) return fail('plugin_resource_not_found');
+                shared = fallbackStore.getEntry(reference);
             }
-            return lease.store.getEntry(reference!);
+            // The underlying bytes/watch remain shared. Only this mount's
+            // declaration authority is withdrawn; another consumer can retain
+            // the shared entry without exposing it through this old facade.
+            let retired: PluginUiResourceSnapshot | null = null;
+            const contract = declaration ? contractKey(declaration) : null;
+            const subscriptions = new Set<Readonly<{ listener(): void; release(): void }>>();
+            const snapshot = (): PluginUiResourceSnapshot => {
+                if (retired) return retired;
+                if (disposed || !input.accountLifetime.isCurrent()) return surfaceRetired;
+                const currentDeclarations = readDeclarations();
+                const current = currentDeclarations.find(row => row.id === reference.localId);
+                // Snapshot reads may run while React renders. Hide withdrawn
+                // data now; committed reconciliation releases and notifies.
+                const admitted = contract === null ? !hasDeclaredNamespace && !isScopedNamespace(currentDeclarations)
+                    : current && contractKey(current) === contract;
+                return admitted ? shared.getSnapshot() : declarationWithdrawn;
+            };
+            const entry: PluginUiResourceEntry = Object.freeze({
+                getSnapshot: snapshot,
+                subscribe(listener, live) {
+                    reconcile();
+                    if (retired) return () => {};
+                    const subscription = { listener, release: shared.subscribe(listener, live) };
+                    subscriptions.add(subscription);
+                    return () => { subscriptions.delete(subscription); subscription.release(); };
+                },
+                async refresh() {
+                    reconcile();
+                    if (retired) return retired;
+                    await shared.refresh();
+                    return snapshot();
+                },
+            });
+            entries.set(key, { localId: reference.localId, contract, entry,
+                retire(code) {
+                    if (retired) return;
+                    retired = code === 'plugin_surface_retired' ? surfaceRetired : declarationWithdrawn;
+                    const previous = [...subscriptions];
+                    subscriptions.clear();
+                    for (const subscription of previous) subscription.release();
+                    lease?.dispose();
+                    for (const subscription of previous) subscription.listener();
+                } });
+            return entry;
         },
         dispose() {
             if (disposed) return;
             disposed = true;
-            for (const lease of leases.values()) lease.dispose();
-            leases.clear();
+            reconcile();
+            namespaceListeners.clear();
         },
     });
 }

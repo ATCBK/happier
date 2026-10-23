@@ -83,6 +83,8 @@ export type PaneDriver = Readonly<{
     rightPaneBuiltinAdapter?: PaneBuiltinAdapter;
     rightSidebarAdapter?: PaneRightSidebarAdapter;
     detailsPaneBuiltinAdapter?: PaneBuiltinAdapter;
+    /** False where an enclosing presenter shows Details itself (the phone cockpit's File scene). */
+    detailsPaneEnabled?: boolean;
     bottomPaneBuiltinAdapter?: PaneBuiltinAdapter;
     openResource?: (resource: PaneResource, options?: Readonly<{ intent?: 'preview' | 'pinned'; present?: boolean }>) => boolean;
     onScopeDeactivated?: () => void;

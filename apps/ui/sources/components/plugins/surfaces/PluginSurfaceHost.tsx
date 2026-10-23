@@ -199,7 +199,6 @@ import {
 } from './boundPluginSurfaceController';
 import {
     createPluginSurfaceContext,
-    preparePluginSurfaceContext,
     getPluginSurfaceTargetAuthorityKey,
     resolvePluginSurfaceTarget,
     usePluginSurfaceAccountEncryptionMode,
@@ -744,7 +743,6 @@ function DeclarativePluginSurfaceWithDocumentSource(
         if (!adapterKey) return null;
         return createCanonicalPluginReactNativeHostApiAdapter({
             surface: surfaceRef.current,
-            prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: props.controller.surfaceContext,
             requestIdPrefix: `declarative-document:${adapterKey}`,
             handleRequest: props.controller.hostApi.handleRequest,
@@ -1567,7 +1565,6 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         const surface = canonicalSurfaceRef.current;
         return createCanonicalPluginReactNativeHostApiAdapter({
             surface,
-            prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: props.requestSurface,
             requestIdPrefix: `rn-v2:${canonicalAdapterKey}`,
             handleRequest: props.hostApi.handleRequest,
@@ -2617,13 +2614,14 @@ function PluginSurfaceHostMount(props: Readonly<(
     const pointlessTargetedContributions = React.useMemo((): PluginUiTargetedContributionsV1 | null => {
         if (!mountedTarget || mountedTargetDeclaresPoints || !mountedTargetSourceCustody) return null;
         const snapshot: PluginUiTargetedContributionsV1 = {
-            target: {
+            target: Object.freeze({
                 pluginId: mountedTarget.pluginId,
                 occurrenceId: mountedTarget.occurrenceId,
                 sourceCustody: mountedTargetSourceCustody,
-            },
+            }),
             points: [],
         };
+        Object.freeze(snapshot.points);
         return Object.freeze(snapshot);
     }, [mountedTarget, mountedTargetDeclaresPoints, mountedTargetSourceCustody]);
     // The read answers with the daemon's current occurrence. A different tag
@@ -2660,11 +2658,12 @@ function PluginSurfaceHostMount(props: Readonly<(
         : null;
     const mountedTargetReady = mountedTargetedContributions !== null
         && (pointlessTargetedContributions !== null || mountedTargetRead.phase === 'ready');
-    // Positive loading facts, never mere absence: a settled missing target or
-    // failed read is an outage. This presentation does not gate Account/local
-    // semantics, surface activity, or target reads on the whole Machine describe.
-    const machineConnectionPending = (needsMachineExecution && pluginExecution.selection.loading)
-        || (mountedTargetSnapshotRequired && !mountedTargetReady && mountedTargetRead.phase === 'loading');
+    // Publish each positive loading prerequisite used by the controller's
+    // existing Machine gate. A failed read is an outage, not pending; Account
+    // reads and surface activity remain independent of these Machine facts.
+    const machinePrerequisitesPending = (needsMachineExecution && pluginExecution.loading)
+        || (mountedTargetSnapshotRequired && !mountedTargetReady && mountedTargetRead.phase === 'loading')
+        || (pointlessTargetedContributions !== null && mountedMachineProjection.phase === 'loading');
     const mountedTargetFallback = mountedTargetRead.phase === 'failed'
         ? resolveMountedTargetProjectionFallback(mountedTargetRead) : null;
     const daemonConnectionFailure = mountedTargetFallback?.state === 'unavailable'
@@ -2928,12 +2927,6 @@ function PluginSurfaceHostMount(props: Readonly<(
     const daemonOwnedInteractionEnabled = localControllerInteractionEnabled
         && projectionInteractionEnabled !== false && originInteractionCurrent
         && daemonInteraction.daemonReachable;
-    // Loading and executable currentness are separate facts. Target loading can
-    // settle before fresh Administration authority returns; publish its later
-    // positive edge without disguising a settled outage as pending.
-    const machineExecutionReady = daemonOwnedInteractionEnabled
-        && (!mountedTargetSnapshotRequired || mountedTargetReady)
-        && (!needsMachineExecution || pluginExecution.selection.canExecute);
     // Projection admission controls controller-owned Actions/Resources, but a
     // declared daemon settings target remains readable while its transport is
     // reachable. Keep that factual transport gate separate so Settings does
@@ -3100,6 +3093,8 @@ function PluginSurfaceHostMount(props: Readonly<(
     });
     const controllerFacts = Object.freeze({
         ...baseControllerFacts,
+        resourceDeclarations: targetedMount?.request.mount.mount.resourceDeclarations
+            ?? currentMountedTargetRead?.resourceDeclarationsByPluginId?.[baseControllerFacts.pluginId],
         actionInputSelectionFactsKey,
         targetSourceCustody: baseControllerFacts.targetedContributions?.target.sourceCustody ?? mountedTargetSourceCustody,
         executionOriginSelectionKind: needsMachineExecution ? pluginExecution.selection.state.kind : undefined,
@@ -3109,7 +3104,7 @@ function PluginSurfaceHostMount(props: Readonly<(
                 ...(refusingMachineIds.length === 1 ? { machineDisplayName: machineDisplayNamesById[refusingMachineIds[0]!] ?? null } : {}),
             }) }
             : {}),
-        isDaemonConnectionPending: () => machineConnectionPending,
+        isDaemonConnectionPending: () => machinePrerequisitesPending,
         daemonConnectionFailure: !needsMachineExecution || pluginExecution.selection.state.kind === 'selected'
             ? daemonConnectionFailure : undefined,
         resolveContributedAction,
@@ -3122,31 +3117,37 @@ function PluginSurfaceHostMount(props: Readonly<(
     // canonical document registry. The target-scoped projection is the only
     // attachment authority source here: the broad app union deliberately does
     // not become a second Composer catalog.
-    const mountedComposerAttachmentsById = targetedBinding
+    const projectedMountedComposerAttachmentsById = targetedBinding
         ? targetedMount?.runtimeComposerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById
         : ephemeralBinding
             ? ephemeralMount?.pluginUiProjection.composerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById
         : mountedMachineInputs?.pluginUiProjection.composerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById;
+    const mountedComposerAttachmentsById = Object.keys(projectedMountedComposerAttachmentsById).length > 0
+        ? projectedMountedComposerAttachmentsById
+        : EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById;
+    // The admitted mounted target already owns generic Composer identity.
+    // Delivering an empty Machine projection adds no attachment authority and
+    // must not replace its handlers or cancel unrelated Account reads.
     const mountedComposerOwnerPluginId = targetedBinding
         ? targetedBinding.mount.contributor.pluginId
-        : !composerBinding && mountedTarget && mountedMachineInputs
+        : !composerBinding && mountedTarget
             ? mountedPluginId
             : null;
     const mountedComposerOwnerContributionId = targetedBinding
         ? targetedBinding.mount.contributor.contributionId
-        : !composerBinding && mountedTarget && mountedMachineInputs
+        : !composerBinding && mountedTarget
             ? selectedSurfaceBinding?.kind === 'destination'
                 ? selectedSurfaceBinding.destination.localId
                 : selectedSurfaceBinding?.surface.localId ?? mountedContributionId
             : null;
     const mountedComposerOwnerOccurrenceId = targetedBinding
         ? targetedBinding.mount.contributor.occurrenceId
-        : !composerBinding && mountedTarget && mountedMachineInputs
+        : !composerBinding && mountedTarget
             ? mountedTarget.occurrenceId
             : null;
     const mountedComposerOwnerInstanceKey = targetedBinding
         ? targetedRequest?.instanceKey ?? null
-        : !composerBinding && mountedTarget && mountedMachineInputs
+        : !composerBinding && mountedTarget
             ? mountedInstanceKey ?? mountedSurfaceId
             : null;
     const mountedComposerOwner = React.useMemo<ComposerPresentationHostOwner | null>(() => {
@@ -3191,16 +3192,17 @@ function PluginSurfaceHostMount(props: Readonly<(
         }),
         [],
     );
+    const mountedComposerAttachmentsRef = React.useRef(mountedComposerAttachmentsById);
+    mountedComposerAttachmentsRef.current = mountedComposerAttachmentsById;
     const mountedComposerTransactionApplier = React.useMemo(() => (
         mountedComposerOwner
             ? createComposerPresentationTransactionApplier({
-                composerAttachmentsById: mountedComposerAttachmentsById,
+                get composerAttachmentsById() { return mountedComposerAttachmentsRef.current; },
                 localize: mountedComposerAttachmentLocalize,
             })
             : null
     ), [
         mountedComposerAttachmentLocalize,
-        mountedComposerAttachmentsById,
         mountedComposerOwner,
     ]);
     const mountedComposerSubscriptionPublisherRef = React.useRef<PluginSurfaceComposerSubscriptionPublisher | null>(null);
@@ -3443,6 +3445,11 @@ function PluginSurfaceHostMount(props: Readonly<(
         facts: controllerFacts,
         ...(effectiveControllerBinding ? { binding: effectiveControllerBinding } : {}),
     });
+    // Dispatch and public readmission consume one controller-owned admission
+    // fact, including fresh execution-origin validation, not only its retained
+    // presentation inputs. Unrelated loading cannot hold an admitted target.
+    const machineExecutionReady = controller.canInteractWithDaemon();
+    const machineConnectionPending = !machineExecutionReady && machinePrerequisitesPending;
     const [accountHosting, setAccountHosting] = React.useState<Readonly<{
         owner: BoundPluginSurfaceController;
         completion: Promise<PluginAccountHostedArtifactPublicationResult>;
@@ -3642,8 +3649,8 @@ function PluginSurfaceHostMount(props: Readonly<(
     // Native and declarative area controls share this host-only area facade.
     const renderDeclarativeWidgetArea = React.useMemo<DeclarativeWidgetAreaRender | undefined>(() => (controller.widgetArea
         ? createDeclarativeWidgetAreaRender({ dispatch: controller.widgetArea, surfaceName: projectedBrand?.displayName ?? mountedPluginId,
-            machineConnectionPending, machineExecutionReady: controllerFacts.daemonInteractionEnabled })
-        : undefined), [controller.widgetArea, mountedPluginId, projectedBrand?.displayName, machineConnectionPending, controllerFacts.daemonInteractionEnabled]);
+            machineConnectionPending, machineExecutionReady })
+        : undefined), [controller.widgetArea, mountedPluginId, projectedBrand?.displayName, machineConnectionPending, machineExecutionReady]);
     const brandTargetPresentation = React.useMemo(
         () => resolveBrandTarget
             ? Object.freeze({

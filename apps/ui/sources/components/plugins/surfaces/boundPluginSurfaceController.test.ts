@@ -37,6 +37,7 @@ import {
     usePluginSurfaceDaemonInteraction,
     type BoundPluginSurfaceBinding,
     type BoundPluginSurfaceFacts,
+    type BoundPluginSurfaceMountedHostApiHandlersFactory,
 } from './boundPluginSurfaceController';
 import type { PluginSurfaceResourceReadTransport } from './pluginSurfaceResourceRead';
 import type { PluginSurfaceResourceWatchTransport } from './pluginSurfaceResourceWatch';
@@ -141,6 +142,43 @@ const FACTS = {
 const TARGETED_RESOURCE_MOUNT_INSTANCE_KEY = 'targeted-surface:v1:review:mount-a';
 
 describe('mounted host Resource admission', () => {
+    it('keeps ordinary Resource transport when nonempty full-describe rows have no complete census', async () => {
+        const readResource = vi.fn<PluginSurfaceResourceReadTransport>(async (_machineId, input) => ({
+            supported: true, result: { ok: true, resource: input.resource, kind: 'asset', contentType: 'application/json',
+                digest: `sha256:${'a'.repeat(64)}`, bytesBase64: 'e30=' },
+        }));
+        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, resourcesById: { 'acme.browser/stale': {
+                id: 'stale', pluginId: 'acme.browser', resourceKind: 'config', scope: 'global',
+            } } },
+        }, binding: { readResource } });
+        try {
+            await expect(controller.hostApi.handleRequest(request('readResource', { resource: 'state' }))).resolves.toMatchObject({
+                contentType: 'application/json', bytesBase64: 'e30=',
+            });
+            expect(readResource).toHaveBeenCalled();
+        } finally { controller.dispose(); }
+    });
+
+    it('uses a complete targeted empty Resource set instead of a stale full-describe declaration', async () => {
+        const readResource = vi.fn<PluginSurfaceResourceReadTransport>(async (_machineId, input) => ({
+            supported: true, result: { ok: true, resource: input.resource, kind: 'asset', contentType: 'application/json',
+                digest: `sha256:${'a'.repeat(64)}`, bytesBase64: 'e30=' },
+        }));
+        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, resourcesById: { 'acme.browser/state': {
+                id: 'state', pluginId: 'acme.browser', resourceKind: 'config', scope: 'global',
+            } } },
+            resourceDeclarations: {},
+        }, binding: { readResource } });
+        try {
+            await expect(controller.hostApi.handleRequest(request('readResource', { resource: 'state' }))).resolves.toMatchObject({
+                code: 'unavailable', diagnostics: ['plugin_resource_not_found'],
+            });
+            expect(readResource).not.toHaveBeenCalled();
+        } finally { controller.dispose(); }
+    });
+
     it('separates ordinary Resource subscriptions for two mounts of the same surface', async () => {
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionEnabled: () => false }));
         const opened: string[] = [];
@@ -956,6 +994,84 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(execute).not.toHaveBeenCalled();
     });
 
+    it.each([false, true])('keeps a cold mount current through projection admission without freezing selection facts (operations: %s)', async (hasOperations) => {
+        const contributor = { pluginId: 'acme.provider', contributionId: 'setup', occurrenceId: 'provider-a',
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'provider-root' } };
+        const operation = { point: { pointId: 'providers', protocol: { id: 'providers', version: 1 } },
+            contributor, role: 'setup' as const, action: { pluginId: contributor.pluginId, localId: 'configure' } };
+        const target: PluginUiTargetedContributionsV1 = {
+            target: { pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
+                sourceCustody: { kind: 'development', registeredRootId: 'browser-root' } },
+            points: hasOperations ? [{ pointId: operation.point.pointId, protocols: [{
+                protocol: operation.point.protocol, contributions: [{ contributor,
+                    protocol: operation.point.protocol, operations: [operation], surfaces: [] }],
+            }] }] : [],
+        };
+        const publication = createPluginActionInputSelectionFactsPublication();
+        const hook = await renderHook((admitted: boolean) => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, targetedContributions: target, pluginProjectionById: admitted ? {} : null,
+            actionInputSelectionFactsKey: publication.publish({ targetPluginId: FACTS.pluginId,
+                targetedContributions: target, pluginProjectionById: admitted ? {} : null }),
+        } }), { initialProps: false });
+        const first = hook.getCurrent();
+        expect(await first.hostApi.handleRequest(request('selectActionInput', { operation })))
+            .toMatchObject({ code: 'unavailable', diagnostics: ['host_unavailable'] });
+
+        const admitted = await hook.rerender(true);
+        expect(admitted).toBe(first);
+        expect(first.isCurrent()).toBe(true);
+        expect(await first.hostApi.handleRequest(request('selectActionInput', { operation })))
+            .toMatchObject(hasOperations
+                ? { code: 'stale_surface', diagnostics: ['action_retired'] }
+                : { code: 'unavailable', diagnostics: ['action_not_found'] });
+        const withdrawn = await hook.rerender(false);
+        if (hasOperations) {
+            expect(withdrawn).not.toBe(first);
+            expect(first.isCurrent()).toBe(false);
+        } else {
+            expect(withdrawn).toBe(first);
+            expect(await first.hostApi.handleRequest(request('selectActionInput', { operation })))
+                .toMatchObject({ code: 'unavailable', diagnostics: ['host_unavailable'] });
+        }
+        await hook.unmount();
+    });
+
+    it('keeps a replacement Session controller through its own first projection admission', async () => {
+        const contributor = { pluginId: 'acme.provider', contributionId: 'setup', occurrenceId: 'provider-a',
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'provider-root' } };
+        const operation = { point: { pointId: 'providers', protocol: { id: 'providers', version: 1 } },
+            contributor, role: 'setup' as const, action: { pluginId: contributor.pluginId, localId: 'configure' } };
+        const target: PluginUiTargetedContributionsV1 = {
+            target: { pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
+                sourceCustody: { kind: 'development', registeredRootId: 'browser-root' } },
+            points: [{ pointId: operation.point.pointId, protocols: [{
+                protocol: operation.point.protocol, contributions: [{ contributor,
+                    protocol: operation.point.protocol, operations: [operation], surfaces: [] }],
+            }] }],
+        };
+        const publication = createPluginActionInputSelectionFactsPublication();
+        const hook = await renderHook((props: { sessionId: string; admitted: boolean }) => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, sessionId: props.sessionId, targetedContributions: target,
+            pluginProjectionById: props.admitted ? {} : null,
+            actionInputSelectionFactsKey: publication.publish({ targetPluginId: FACTS.pluginId,
+                targetedContributions: target, pluginProjectionById: props.admitted ? {} : null }),
+        } }), { initialProps: { sessionId: 'session-a', admitted: true } });
+        const first = hook.getCurrent();
+
+        const coldReplacement = await hook.rerender({ sessionId: 'session-b', admitted: false });
+        expect(coldReplacement).not.toBe(first);
+        expect(first.isCurrent()).toBe(false);
+        expect(await coldReplacement.hostApi.handleRequest(request('selectActionInput', { operation })))
+            .toMatchObject({ code: 'unavailable', diagnostics: ['host_unavailable'] });
+
+        const admittedReplacement = await hook.rerender({ sessionId: 'session-b', admitted: true });
+        expect(admittedReplacement).toBe(coldReplacement);
+        expect(coldReplacement.isCurrent()).toBe(true);
+        expect(await coldReplacement.hostApi.handleRequest(request('selectActionInput', { operation })))
+            .toMatchObject({ code: 'stale_surface', diagnostics: ['action_retired'] });
+        await hook.unmount();
+    });
+
     it('replaces and retires the controller when its exact Session identity changes', async () => {
         const hook = await renderHook(
             (sessionId: string) => useBoundPluginSurfaceController({
@@ -1471,13 +1587,15 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         controller.dispose();
     });
 
-    it('host-stamps the mounted exact machine for detached execution.run Actions', async () => {
+    it.each([false, true])('host-stamps the currently admitted exact machine for detached execution.run Actions (initially ready: %s)', async initiallyReady => {
+        let daemonReady = initiallyReady;
         const executeHostAction = vi.fn(async () => ({ ok: true as const, result: { runId: 'run_1' } }));
         const controller = createBoundPluginSurfaceController({
-            facts: FACTS,
+            facts: { ...FACTS, isDaemonInteractionEnabled: () => daemonReady },
             binding: { executeHostAction },
         });
 
+        daemonReady = true;
         await expect(controller.hostApi.handleRequest(request('executeAction', {
             action: 'execution.run.start',
             input: {
@@ -1507,6 +1625,11 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 },
             }),
         );
+        daemonReady = false;
+        await controller.dispatchAction('session.board.get', {});
+        expect(executeHostAction).toHaveBeenLastCalledWith('session.board.get', {},
+            expect.not.objectContaining({ executionRunTargetMachineId: 'machine_1' }));
+        controller.dispose();
     });
 
     it('preserves exact source custody in mounted host Action provenance', async () => {
@@ -2511,7 +2634,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }
     });
 
-    it.each(['submit', 'cancel', 'retire'] as const)('collects omitted declarative Action input before mounted dispatch (%s)', async (settlement) => {
+    it.each(['submit', 'cancel', 'retire', 'hydrate'] as const)('collects omitted declarative Action input before mounted dispatch (%s)', async (settlement) => {
         const action = {
             id: 'launch', occurrenceId: 'daemon-action-occurrence-a', title: 'Launch a worker',
             description: null, icon: null, scopes: ['session'], surfaces: ['ui'],
@@ -2544,13 +2667,18 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         const executeContributedAction = vi.fn(async () => ({
             supported: true as const, result: { ok: true as const, result: { launched: true } },
         }));
+        const actionFacts = { pluginProjectionById: { [FACTS.pluginId]: plugin },
+            resolveContributedAction: (identity: PluginContributionIdentityV1) => ({ ...resolveDaemonTargetAction(identity),
+                inputHints: action.inputHints }) };
+        let currentActionFacts: Pick<BoundPluginSurfaceFacts, 'pluginProjectionById' | 'resolveContributedAction'> =
+            settlement === 'hydrate' ? { ...actionFacts, pluginProjectionById: null } : actionFacts;
         const controller = createBoundPluginSurfaceController({
-            facts: { ...FACTS, sessionId: 'session-worker', pluginProjectionById: { [FACTS.pluginId]: plugin },
-                resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity),
-                    inputHints: action.inputHints }) },
+            facts: { ...FACTS, ...currentActionFacts, sessionId: 'session-worker',
+                readActionInputFacts: () => currentActionFacts },
             binding: { executeContributedAction },
         });
         try {
+            currentActionFacts = actionFacts;
             const pending = controller.dispatchAction({ pluginId: FACTS.pluginId, localId: action.id });
             await vi.waitFor(() => expect(form).toBeDefined());
             expect(form!.getFields().map(field => field.path)).toEqual(['name']);
@@ -2566,7 +2694,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                     }) },
                 }));
             } else {
-                if (settlement === 'cancel') form!.cancel();
+                if (settlement === 'cancel' || settlement === 'hydrate') form!.cancel();
                 else controller.dispose();
                 await pending;
                 expect(executeContributedAction).not.toHaveBeenCalled();
@@ -2878,6 +3006,76 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
         expect(viewerFactory).not.toHaveBeenCalled();
         expect(fileViewer.installedMethods).not.toContain('readComposer');
+    });
+
+    it('updates mounted handler bundles without withdrawing an entered request or the physical controller', async () => {
+        let finish: (value: null) => void = () => {};
+        const pending = new Promise<null>(resolve => { finish = resolve; });
+        const firstDispose = vi.fn();
+        const firstFactory: BoundPluginSurfaceMountedHostApiHandlersFactory = () => ({ handlers: { readComposer: () => pending }, dispose: firstDispose });
+        const secondFactory: BoundPluginSurfaceMountedHostApiHandlersFactory = () => ({ handlers: { readComposer: () => null } });
+        const hook = await renderHook((factory: BoundPluginSurfaceMountedHostApiHandlersFactory) =>
+            useBoundPluginSurfaceController({ facts: FACTS, binding: { createMountedHostApiHandlers: factory } }),
+        { initialProps: firstFactory });
+        try {
+            const incumbent = hook.getCurrent();
+            const entered = incumbent.hostApi.handleRequest(request('readComposer', {}));
+            const current = await hook.rerender(secondFactory);
+            expect(current).toBe(incumbent);
+            expect(incumbent.isCurrent()).toBe(true);
+            expect(firstDispose).toHaveBeenCalledOnce();
+            expect(await current.hostApi.handleRequest(request('readComposer', {}))).toBeNull();
+            finish(null);
+            expect(await entered).toBeNull();
+        } finally { finish(null); await hook.unmount(); }
+    });
+
+    it('readmits added mounted methods and withdraws removed methods in the committed render', async () => {
+        const readFactory: BoundPluginSurfaceMountedHostApiHandlersFactory = () => ({ handlers: { readComposer: () => null } });
+        const focusFactory: BoundPluginSurfaceMountedHostApiHandlersFactory = () => ({ handlers: { focusComposer: () => null } });
+        const hook = await renderHook((factory: BoundPluginSurfaceBinding['createMountedHostApiHandlers']) => {
+            const controller = useBoundPluginSurfaceController({ facts: FACTS, binding: { createMountedHostApiHandlers: factory } });
+            return { controller, renderedMethods: controller.admissionMethods };
+        }, { initialProps: readFactory });
+        try {
+            const initial = hook.getCurrent();
+            const current = await hook.rerender(focusFactory);
+            expect(current.controller).toBe(initial.controller);
+            expect(current.renderedMethods).toContain('focusComposer');
+            expect(current.renderedMethods).not.toContain('readComposer');
+            expect(current.controller.installedMethods).toContain('focusComposer');
+        } finally { await hook.unmount(); }
+    });
+
+    it('renders the current presentation binding after a same-method bundle replacement without a render loop', async () => {
+        let presentation: { isCurrent(): boolean } | undefined;
+        const makeFactory = () => () => {
+            let current = true;
+            presentation = { isCurrent: () => current };
+            return { handlers: {}, dispose: () => { current = false; } };
+        };
+        let renders = 0;
+        const firstFactory = makeFactory();
+        const secondFactory = makeFactory();
+        const hook = await renderHook((factory: BoundPluginSurfaceBinding['createMountedHostApiHandlers']) => {
+            renders += 1;
+            const controller = useBoundPluginSurfaceController({ facts: FACTS, binding: { createMountedHostApiHandlers: factory } });
+            // The physical Host captures its entity-drag presentation binding
+            // after constructing the controller, before committed layout work.
+            return { controller, presentation };
+        }, { initialProps: firstFactory });
+        try {
+            const first = hook.getCurrent();
+            const before = renders;
+            const second = await hook.rerender(secondFactory);
+            expect(second.controller).toBe(first.controller);
+            expect(first.presentation?.isCurrent()).toBe(false);
+            expect(second.presentation?.isCurrent()).toBe(true);
+            expect(renders - before).toBe(2);
+            const committed = renders;
+            await hook.rerender(secondFactory);
+            expect(renders - committed).toBe(1);
+        } finally { await hook.unmount(); }
     });
 
     it('activates and updates a mounted current-UI handler only after its controller commits, then retires it with that controller', async () => {

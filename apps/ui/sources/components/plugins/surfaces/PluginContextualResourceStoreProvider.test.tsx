@@ -18,6 +18,8 @@ import { widgetProjectionOf, widgetInstalledPackage, widgetExecutionOrigin } fro
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import { createBoundPluginSurfaceController } from './boundPluginSurfaceController';
+import { createPluginContextualResourceReadClient, createPluginSurfaceResourceReadHandler } from './pluginSurfaceResourceRead';
+import { createPluginContextualResourceWatchClient, createPluginSurfaceResourceWatchHandlers } from './pluginSurfaceResourceWatch';
 import { DeclarativeWidgetDocument } from '@/components/widgets/DeclarativeWidgetDocument';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -595,6 +597,172 @@ describe('PluginContextualResourceStoreProvider', () => {
             expect(mounted.getSnapshot().value).toBeUndefined();
         } finally { releaseAction(); actionLease.dispose(); releaseMount(); mountLease.dispose(); action.dispose(); }
     });
+    it('keeps a producer-complete empty Resource namespace closed without ordinary transport', async () => {
+        installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const exactBinding = binding(account.lifetime);
+        const store = createPluginDeclaredResourceStore({ ...exactBinding, resourcesById: {},
+            resourceDeclarationsComplete: true,
+            createFallbackStore: () => createPluginUiResourceStore({ pluginId: exactBinding.pluginId,
+                accountLifetime: account.lifetime, client: createPluginContextualResourceReadClient({
+                    pluginId: exactBinding.pluginId, resource: exactBinding, isCurrent: account.lifetime.isCurrent,
+                }) }),
+        })!;
+        try {
+            const result = await store.getEntry(RESOURCE_ID).refresh();
+            expect(result.error?.code).toBe('plugin_resource_not_found');
+            expect(result.value).toBeUndefined();
+            expect(machineResourceRpc.read).not.toHaveBeenCalled();
+        } finally { store.dispose(); }
+    });
+
+    it('retains ordinary Resource transport until declared scope arrives, then fences it through withdrawal', async () => {
+        installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const exactBinding = binding(account.lifetime);
+        let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {};
+        const store = createPluginDeclaredResourceStore({ ...exactBinding,
+            get resourcesById() { return resourcesById; },
+            createFallbackStore: () => createPluginUiResourceStore({
+                pluginId: exactBinding.pluginId, accountLifetime: account.lifetime,
+                client: createPluginContextualResourceReadClient({ pluginId: exactBinding.pluginId,
+                    resource: exactBinding, isCurrent: account.lifetime.isCurrent }),
+            }),
+        })!;
+        try {
+            const ordinary = store.getEntry(RESOURCE_ID);
+            expect((await ordinary.refresh()).value).toBeDefined();
+            resourcesById = { state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId,
+                resourceKind: 'config', scope: 'global' } };
+            expect(ordinary.getSnapshot().value).toBeUndefined();
+            const scoped = store.getEntry(RESOURCE_ID);
+            expect(scoped).not.toBe(ordinary);
+            expect((await scoped.refresh()).value).toBeDefined();
+            expect(machineResourceRpc.read).toHaveBeenLastCalledWith('machine-1', expect.objectContaining({ context: { kind: 'global' } }));
+            resourcesById = {};
+            expect(store.getEntry(RESOURCE_ID).getSnapshot().error?.code).toBe('plugin_resource_not_found');
+            expect(store.getEntry(RESOURCE_ID).getSnapshot().value).toBeUndefined();
+            expect(scoped.getSnapshot().value).toBeUndefined();
+            expect((await ordinary.refresh()).value).toBeUndefined();
+        } finally { store.dispose(); }
+    });
+
+    it('revalidates cached protocol Resource authority after the read yields', async () => {
+        installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const exactBinding = binding(account.lifetime);
+        let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {
+            state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId, resourceKind: 'config', scope: 'global' },
+        };
+        const store = createPluginDeclaredResourceStore({ ...exactBinding, get resourcesById() { return resourcesById; } })!;
+        try {
+            expect((await store.getEntry(RESOURCE_ID).refresh()).value).toBeDefined();
+            const read = createPluginSurfaceResourceReadHandler({ pluginId: exactBinding.pluginId,
+                resource: { ...exactBinding, store }, isCurrent: account.lifetime.isCurrent });
+            const pending = read({ requestId: 'withdraw-cached-read', method: 'readResource', payload: { resource: RESOURCE_ID } });
+            resourcesById = {};
+            await expect(pending).resolves.toMatchObject({ code: 'unavailable', diagnostics: ['plugin_resource_not_found'] });
+        } finally { store.dispose(); }
+    });
+
+    it('establishes an ordinary protocol watch without an initial push and retires it on scoped admission', async () => {
+        const rpc = installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const exactBinding = binding(account.lifetime);
+        let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {};
+        const store = createPluginDeclaredResourceStore({ ...exactBinding, get resourcesById() { return resourcesById; },
+            createFallbackStore: () => createPluginUiResourceStore({ pluginId: exactBinding.pluginId,
+                accountLifetime: account.lifetime, client: {
+                    ...createPluginContextualResourceReadClient({ pluginId: exactBinding.pluginId,
+                        resource: exactBinding, isCurrent: account.lifetime.isCurrent }),
+                    ...createPluginContextualResourceWatchClient({ pluginId: exactBinding.pluginId,
+                        resource: exactBinding, subscriptionIdPrefix: 'ordinary-transition', isCurrent: account.lifetime.isCurrent }),
+                } }),
+        })!;
+        const events: unknown[] = [];
+        const handlers = createPluginSurfaceResourceWatchHandlers({ pluginId: exactBinding.pluginId,
+            resource: { ...exactBinding, store }, deliver: event => { events.push(event); }, isCurrent: account.lifetime.isCurrent });
+        try {
+            await expect(handlers.watchResource({ requestId: 'ordinary-transition', method: 'watchResource',
+                payload: { subscriptionId: 'ordinary-transition', resource: RESOURCE_ID } })).resolves.toMatchObject({ digest: `sha256:${'a'.repeat(64)}` });
+            await vi.waitFor(() => expect(rpc.nextSignals).toHaveLength(1));
+            expect(events).toEqual([]);
+            resourcesById = { state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId, resourceKind: 'config', scope: 'global' } };
+            store.reconcile();
+            expect(events).toEqual([expect.objectContaining({ kind: 'error', diagnostics: ['plugin_resource_not_found'] })]);
+            expect(rpc.nextSignals[0]?.aborted).toBe(true);
+        } finally { handlers.dispose(); store.dispose(); }
+    });
+
+    it('keeps ordinary protocol work single-owned and fences its namespace admission in place', async () => {
+        const rpc = installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const requestSurface = { pluginId: 'acme.composer', contributionId: 'widget', surfaceId: 'widget-native',
+            placement: 'appSurface' as const, platform: 'ios' as const, channel: 'internal' as const,
+            resourceScope: [], diagnostics: [] };
+        let projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, {});
+        const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
+            accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
+            sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
+            resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projection,
+            readActionInputFacts: () => ({ pluginUiProjection: projection }),
+            interactionEnabled: true, daemonInteractionEnabled: true } });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface: createPluginSurfaceContextFixture(),
+            requestSurface, requestIdPrefix: 'ordinary-authority', handleRequest: controller.hostApi.handleRequest,
+            installedMethods: controller.hostApi.installedMethods });
+        const events: unknown[] = [];
+        const release = controller.subscribeResourceInvalidations(event => { events.push(event); adapter.publishResourceSubscriptionEvent(event); });
+        let finishRead = (_result: ReturnType<typeof resourceResponse>) => {};
+        let subscription: Awaited<ReturnType<typeof adapter.api.watchResource>> | undefined;
+        try {
+            subscription = await adapter.api.watchResource(RESOURCE_ID, () => {});
+            await vi.waitFor(() => expect(rpc.nextSignals).toHaveLength(1));
+            // The public guest store, not watch admission, owns baseline reads.
+            expect(machineResourceRpc.read).not.toHaveBeenCalled();
+            machineResourceRpc.read.mockImplementationOnce(() => new Promise<ReturnType<typeof resourceResponse>>(resolve => { finishRead = resolve; }));
+            const pending = adapter.api.readResource(RESOURCE_ID);
+            await vi.waitFor(() => expect(machineResourceRpc.read).toHaveBeenCalledTimes(1));
+            projection = { ...projection, resourcesById: { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', scope: 'global' } } };
+            controller.updateMountedBindings?.({});
+            expect(events).toEqual([expect.objectContaining({ kind: 'error', diagnostics: ['plugin_resource_not_found'] })]);
+            expect(rpc.nextSignals[0]?.aborted).toBe(true);
+            finishRead(resourceResponse('a'));
+            await expect(pending).rejects.toMatchObject({ code: 'unavailable', diagnostics: [{ code: 'plugin_resource_aborted' }] });
+            projection = { ...projection, resourcesById: {} };
+            controller.updateMountedBindings?.({});
+            await expect(adapter.api.watchResource(RESOURCE_ID, () => {})).rejects.toMatchObject({ code: 'unavailable', diagnostics: [{ code: 'plugin_resource_not_found' }] });
+        } finally { finishRead(resourceResponse('a')); subscription?.dispose(); release(); adapter.dispose(); controller.dispose(); }
+    });
+
+    it('withdraws a mounted declaration without exposing another consumer\'s retained shared bytes', async () => {
+        installLiveResourceRpc();
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const declaration = { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config' as const,
+            scope: 'global' as const };
+        let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = { state: declaration };
+        const base = { ...binding(account.lifetime), sessionId: 'session-1', get resourcesById() { return resourcesById; } };
+        const store = createPluginDeclaredResourceStore(base)!;
+        const other = createPluginDeclaredResourceStore({ ...base, resourcesById })!;
+        const retained = store.getEntry(RESOURCE_ID);
+        const shared = other.getEntry(RESOURCE_ID);
+        const release = retained.subscribe(() => {}, false);
+        const releaseOther = shared.subscribe(() => {}, false);
+        try {
+            await vi.waitFor(() => expect(retained.getSnapshot().value).toBeDefined());
+            resourcesById = {};
+            expect(store.getEntry(RESOURCE_ID).getSnapshot().error?.code).toBe('plugin_resource_not_found');
+            expect(store.getEntry(RESOURCE_ID).getSnapshot().value).toBeUndefined();
+            expect(retained.getSnapshot().value).toBeUndefined();
+            expect((await retained.refresh()).error?.code).toBe('plugin_resource_not_found');
+            expect(shared.getSnapshot().value).toBeDefined();
+            resourcesById = { state: { ...declaration, scope: 'session' } };
+            const replacement = store.getEntry(RESOURCE_ID);
+            expect(replacement).not.toBe(retained);
+            expect((await replacement.refresh()).value).toBeDefined();
+            expect(retained.getSnapshot().value).toBeUndefined();
+        } finally { release(); releaseOther(); store.dispose(); other.dispose(); }
+    });
+
     it('shares declared global bytes across app and Session mounts while keeping Session A and B distinct', async () => {
         installLiveResourceRpc();
         const account = await createAccountLifetime({ accountId: 'account-a' });
@@ -625,8 +793,10 @@ describe('PluginContextualResourceStoreProvider', () => {
             expect((await global.refresh()).digest).toBe(`sha256:${'b'.repeat(64)}`);
             expect(sessionA.getEntry('global-state').getSnapshot().digest).toBe(`sha256:${'b'.repeat(64)}`);
             expect(sessionB.getEntry('global-state').getSnapshot().digest).toBe(`sha256:${'b'.repeat(64)}`);
-            expect(() => app.getEntry('session-state')).toThrow(expect.objectContaining({ code: 'plugin_resource_context_unavailable' }));
-            expect(() => app.getEntry('undeclared')).toThrow(expect.objectContaining({ code: 'plugin_resource_not_found' }));
+            expect(app.getEntry('session-state').getSnapshot().error?.code).toBe('plugin_resource_context_unavailable');
+            expect(app.getEntry('session-state').getSnapshot().value).toBeUndefined();
+            expect(app.getEntry('undeclared').getSnapshot().error?.code).toBe('plugin_resource_not_found');
+            expect(app.getEntry('undeclared').getSnapshot().value).toBeUndefined();
             release();
             releaseA(); releaseB();
         } finally { app.dispose(); sessionA.dispose(); sessionB.dispose(); }
@@ -1016,5 +1186,110 @@ describe('PluginContextualResourceStoreProvider', () => {
         await vi.waitFor(() => { expect(machineResourceRpc.close).toHaveBeenCalledTimes(1); });
 
         await act(async () => { tree?.unmount(); });
+    });
+
+    it('rebinds a retained native Resource hook when ordinary scope becomes declared and the declaration scope changes', async () => {
+        let marker = 'a';
+        installLiveResourceRpc({ read: () => resourceResponse(marker), openMarker: () => marker });
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const requestSurface = { pluginId: 'acme.composer', contributionId: 'widget', surfaceId: 'widget-native-scope',
+            placement: 'appSurface' as const, platform: 'ios' as const, channel: 'internal' as const,
+            resourceScope: [], diagnostics: [] };
+        let projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, {});
+        const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
+            accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
+            sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
+            resourceContext: { kind: 'session', sessionId: 'session-1' },
+            resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projection,
+            readActionInputFacts: () => ({ pluginUiProjection: projection }),
+            interactionEnabled: true, daemonInteractionEnabled: true } });
+        const surface = createPluginSurfaceContextFixture();
+        const hostApi = controller.hostApi;
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface, requestSurface,
+            requestIdPrefix: 'native-scope-transition', handleRequest: hostApi.handleRequest,
+            installedMethods: hostApi.installedMethods });
+        const lifetime = new AbortController();
+        const retirement = controller.onRetire(() => lifetime.abort());
+        const renderContext = { plugin: { id: 'acme.composer', version: '1.0.0' },
+            surface, hostApi: adapter.api, signal: lifetime.signal };
+        let snapshot: PluginUiResourceSnapshot | undefined;
+        let refresh = async () => {};
+        let mounts = 0;
+        function NativeResourceBody() {
+            const resource = useLivePluginResource(RESOURCE_ID);
+            snapshot = resource.resource;
+            refresh = resource.refresh;
+            React.useEffect(() => { mounts += 1; }, []);
+            return <Text>{snapshot.digest}</Text>;
+        }
+        const renderSurface = defineUiSurface(() => <NativeResourceBody />);
+        const module = { renderSurface: (context: Parameters<typeof renderSurface>[0]) => {
+            const result = renderSurface(context);
+            if (result === null || React.isValidElement(result)) return result;
+            throw new Error('Expected a React element from the native surface boundary');
+        } };
+        const { PluginReactNativeSurface } = await import('@/components/plugins/reactNative/PluginReactNativeSurface');
+        const render = () => <PluginReactNativeSurface surfaceId={requestSurface.surfaceId}
+            decision={{ state: 'load', reason: 'compatible', diagnostics: [] }} module={module} interactionEnabled
+            privateHostBindings={{ resourceStore: controller.resourceStore, resourceStoreGeneration: 'occurrence-42',
+                accountLifetime: { isCurrent: account.lifetime.isCurrent, onRetire: account.lifetime.onRetire } }}
+            renderContext={renderContext} />;
+        let tree!: renderer.ReactTestRenderer;
+        try {
+            await act(async () => { tree = renderer.create(render()); });
+            await vi.waitFor(() => expect(snapshot?.digest).toBe(`sha256:${'a'.repeat(64)}`));
+            expect(machineResourceRpc.read).toHaveBeenLastCalledWith('machine-1', expect.objectContaining({ context: { kind: 'session', sessionId: 'session-1' } }));
+            const body = tree.root.findByType(NativeResourceBody);
+            const ordinary = controller.resourceStore!.getEntry(RESOURCE_ID);
+            for (const [index, scope] of (['global', 'session'] as const).entries()) {
+                const previous = controller.resourceStore!.getEntry(RESOURCE_ID);
+                marker = ['b', 'c'][index]!;
+                projection = { ...projection, resourcesById: { state: { id: RESOURCE_ID, pluginId: 'acme.composer',
+                    resourceKind: 'config', scope } } };
+                await act(async () => { controller.updateMountedBindings?.({}); tree.update(render()); });
+                await vi.waitFor(() => expect(snapshot?.digest).toBe(`sha256:${['b', 'c'][index]!.repeat(64)}`));
+                expect(machineResourceRpc.read).toHaveBeenLastCalledWith('machine-1', expect.objectContaining({
+                    context: scope === 'global' ? { kind: 'global' } : { kind: 'session', sessionId: 'session-1' },
+                }));
+                expect(previous.getSnapshot()).toMatchObject({ error: { code: 'plugin_resource_not_found' } });
+                expect((await previous.refresh()).value).toBeUndefined();
+                expect(tree.root.findByType(NativeResourceBody)).toBe(body);
+                expect(controller.hostApi).toBe(hostApi);
+                expect(controller.isCurrent()).toBe(true);
+                expect(renderContext.signal).toBe(lifetime.signal);
+                expect(lifetime.signal.aborted).toBe(false);
+                const currentView = controller.resourceStore;
+                projection = { ...projection, resourcesById: { ...projection.resourcesById } };
+                await act(async () => { controller.updateMountedBindings?.({}); tree.update(render()); });
+                expect(controller.resourceStore).toBe(currentView);
+                projection = { ...projection, resourcesById: { ...projection.resourcesById,
+                    unrelated: { id: RESOURCE_ID, pluginId: 'acme.other', resourceKind: 'config', scope: 'global' } } };
+                await act(async () => { controller.updateMountedBindings?.({}); tree.update(render()); });
+                expect(controller.resourceStore).toBe(currentView);
+            }
+            expect(mounts).toBe(1);
+            expect(ordinary.getSnapshot().value).toBeUndefined();
+            marker = 'd';
+            await act(async () => { await refresh(); });
+            expect(snapshot?.digest).toBe(`sha256:${'d'.repeat(64)}`);
+            const removed = controller.resourceStore!.getEntry(RESOURCE_ID);
+            projection = { ...projection, resourcesById: {} };
+            await act(async () => { controller.updateMountedBindings?.({}); tree.update(render()); });
+            expect(snapshot).toMatchObject({ error: { code: 'plugin_resource_not_found' } });
+            expect(snapshot?.value).toBeUndefined();
+            const reads = machineResourceRpc.read.mock.calls.length;
+            await act(async () => { await refresh(); });
+            expect(snapshot?.value).toBeUndefined();
+            expect(machineResourceRpc.read.mock.calls).toHaveLength(reads);
+            expect((await removed.refresh()).value).toBeUndefined();
+            expect(tree.root.findByType(NativeResourceBody)).toBe(body);
+            expect(mounts).toBe(1);
+            expect(controller.hostApi).toBe(hostApi);
+            expect(controller.isCurrent()).toBe(true);
+            expect(lifetime.signal.aborted).toBe(false);
+        } finally {
+            await act(async () => { tree?.unmount(); });
+            retirement.dispose(); adapter.dispose(); controller.dispose();
+        }
     });
 });
