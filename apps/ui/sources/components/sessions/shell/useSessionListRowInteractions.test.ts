@@ -293,7 +293,7 @@ describe('useSessionListRowInteractions', () => {
                 hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
                 hook.getCurrent().handleDragStart(sessionKey);
             });
-            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 105 } }); });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', pointer: { x: 10, y: 105 } }); });
             const runtime = hook.getCurrent().entityDragDrop.runtime;
             expect(runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'ordering-mode' } });
             let outcome: Awaited<ReturnType<typeof runtime.release>> = null;
@@ -304,7 +304,7 @@ describe('useSessionListRowInteractions', () => {
             act(() => hook.getCurrent().handleDragCancel());
             await hook.rerender({ ...initialInput, sessionListOrderingModeV1: 'custom' });
             await act(async () => { hook.getCurrent().handleDragStart(sessionKey); });
-            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 120 } }); });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', pointer: { x: 10, y: 120 } }); });
             expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'unavailable' }, preview: { target: 's1' } });
             expect(initialInput.setSessionListGroupOrderV1).not.toHaveBeenCalled();
         } finally {
@@ -324,7 +324,7 @@ describe('useSessionListRowInteractions', () => {
                 hook.getCurrent().registerTreeRowBounds(treeRowId.session(ACTIVE_SCOPE.serverId, 's2'), { measureInWindow: callback => callback(0, 160, 300, 40) });
                 hook.getCurrent().handleDragStart(sessionKey);
             });
-            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2, pointer: { x: 10, y: 165 } }); });
+            act(() => { hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', pointer: { x: 10, y: 165 } }); });
             const runtime = hook.getCurrent().entityDragDrop.runtime;
             expect(runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'no-target' } });
             let outcome: Awaited<ReturnType<typeof runtime.release>> = null;
@@ -377,7 +377,6 @@ describe('useSessionListRowInteractions', () => {
                 parentId: null, createdAt: 1, updatedAt: 1 }] } : DEFAULT_SESSION_FOLDERS_V1 });
         const sessionKey = sessionAddressKey({ serverId, sessionId: 's2' });
         const groupKey = containerKind === 'folder' ? folderGroupKey : 'project-a';
-        const dataIndex = containerKind === 'folder' ? 3 : 2;
         try {
             await act(async () => {
                 hook.getCurrent().handleTreeViewportMeasure({ measureInWindow: callback => callback(0, 50, 300, 300) });
@@ -390,7 +389,7 @@ describe('useSessionListRowInteractions', () => {
             });
             await vi.waitFor(() => {
                 let resolved: UseSessionInlineDragResolvedDrop | undefined;
-                act(() => { resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, dataIndex, pointer: { x: 10, y: 170 } }); });
+                act(() => { resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, pointer: { x: 10, y: 170 } }); });
                 expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'allowed',
                     effect: { actionId: 'session.manager.set', input: { sessionId: 's2', managerSessionId: 's1' } } });
                 expect(resolved!.geometry).toMatchObject({ kind: 'outline', targetId: treeRowId.session(serverId, 's1'),
@@ -398,7 +397,7 @@ describe('useSessionListRowInteractions', () => {
             });
             await act(async () => { hook.getCurrent().handleTreeScroll({ nativeEvent: { contentOffset: { y: 80 } } }); });
             let scrolled: UseSessionInlineDragResolvedDrop | undefined;
-            act(() => { scrolled = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, dataIndex, pointer: { x: 10, y: 90 } }); });
+            act(() => { scrolled = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, pointer: { x: 10, y: 90 } }); });
             expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission?.status).toBe('allowed');
             expect(scrolled!.geometry).toMatchObject({ kind: 'outline', targetId: treeRowId.session(serverId, 's1'),
                 geometry: { top: 20, height: 40 } });
@@ -477,10 +476,10 @@ describe('useSessionListRowInteractions', () => {
             let completion: Promise<void> | undefined;
             act(() => {
                 // useSessionInlineDrag resolves the final absolute coordinates before this callback.
-                const resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2,
+                const resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey: 'project-a',
                     pointer: { x: 10, y: 105 } });
                 expect(runtime.getSnapshot().admission?.status).toBe('allowed');
-                completion = hook.getCurrent().handleTreeDropResult({ sessionKey, groupKey: 'project-a', dataIndex: 2,
+                completion = hook.getCurrent().handleTreeDropResult({ sessionKey, groupKey: 'project-a',
                     result: resolved.result });
             });
             expect(runtime.getPointer()).toEqual({ x: 10, y: 105 });
@@ -756,7 +755,6 @@ describe('useSessionListRowInteractions', () => {
             hook.getCurrent().handleDragUpdate({
                 sessionKey: SESSION_ONE_KEY,
                 groupKey: 'g1',
-                dataIndex: 1,
                 result: {
                     instruction: {
                         kind: 'nest-into',
@@ -879,7 +877,6 @@ describe('useSessionListRowInteractions', () => {
             hook.getCurrent().handleTreeDropResult({
                 sessionKey: SESSION_ONE_KEY,
                 groupKey: 'project-a',
-                dataIndex: 2,
                 result: {
                     instruction: {
                         kind: 'nest-into',

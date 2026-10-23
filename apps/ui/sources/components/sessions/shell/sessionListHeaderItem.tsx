@@ -68,7 +68,6 @@ type SessionListHeaderItemProps = Readonly<{
     workspaceMachineSubtitlesEnabled?: boolean;
     /** False in a Runs-only list, where no group is a place to start a Session. */
     newSessionEnabled?: boolean;
-    dataIndex?: number;
     overlayShared?: TreeDropOverlaySharedValues;
     onRegisterTreeRowBounds?: RegisterSessionListTreeRowBounds;
     onUnregisterTreeRowBounds?: UnregisterSessionListTreeRowBounds;
@@ -134,7 +133,6 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
                 title={props.item.title}
                 sessionKey={rowId}
                 groupKey={props.item.groupKey ?? `folder:${props.item.folderId}`}
-                dataIndex={props.dataIndex ?? 0}
                 overlayShared={props.overlayShared}
                 onDragStart={props.onFolderDragStart}
                 onDragUpdate={props.onFolderDragUpdate}
@@ -211,7 +209,6 @@ export const SessionListHeaderItem = React.memo((props: SessionListHeaderItemPro
                 title={headerViewState.displayTitle}
                 sessionKey={rowId}
                 groupKey={props.item.groupKey ?? props.item.workspaceKey ?? headerViewState.displayTitle}
-                dataIndex={props.dataIndex ?? 0}
                 overlayShared={props.overlayShared}
                 onDragStart={props.onFolderDragStart}
                 onDragUpdate={props.onFolderDragUpdate}
@@ -251,7 +248,6 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
     title: string;
     sessionKey: string;
     groupKey: string;
-    dataIndex: number;
     overlayShared: TreeDropOverlaySharedValues;
     onDragStart?: UseSessionInlineDragStart;
     onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
@@ -268,7 +264,6 @@ const DraggableFolderHeaderFrame = React.memo(function DraggableFolderHeaderFram
         enabled,
         sessionKey: props.sessionKey,
         groupKey: props.groupKey,
-        dataIndex: props.dataIndex,
         overlayShared: props.overlayShared,
         onDragStart: props.onDragStart ?? (() => {}),
         onDragUpdate: props.onDragUpdate,

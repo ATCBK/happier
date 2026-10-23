@@ -63,6 +63,40 @@ describe('Session list canonical carry retirement', () => {
         await hook.unmount();
     });
 
+    it('starts from current keyed topology after rows move and cancels without an organization write', async () => {
+        getStorage().setState({ profileScope: scope });
+        const initial = input();
+        const source = items[1];
+        if (!source || source.type !== 'session') throw new Error('Expected the source Session fixture');
+        const neighbor = { ...source, sessionId: 'neighbor' } satisfies SessionListIndexItem;
+        const shiftedItems = [items[0]!, neighbor, source];
+        const hook = await renderHook((props: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(props), {
+            initialProps: initial,
+        });
+        try {
+            await hook.rerender({ ...initial, listItems: shiftedItems });
+            act(() => { hook.getCurrent().handleDragStart(sessionKey); });
+            const snapshot = hook.getCurrent().activeDragSnapshot;
+            expect(snapshot?.source.sourceRowId).toBe(sourceRowId);
+            expect(snapshot?.topology.rows.filter(row => row.kind === 'leaf').map(row => row.rowId))
+                .toEqual([treeRowId.session(scope.serverId, 'neighbor'), sourceRowId]);
+            act(() => { hook.getCurrent().handleDragCancel(); });
+            expect(hook.getCurrent().activeDragSnapshot).toBeNull();
+            expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
+            expect(initial.setSessionListGroupOrderV1).not.toHaveBeenCalled();
+            expect(initial.setSessionWorkspaceOrderV1).not.toHaveBeenCalled();
+            expect(initial.setSessionFoldersV1).not.toHaveBeenCalled();
+
+            await hook.rerender({ ...initial, listItems: [items[0]!, source, neighbor] });
+            act(() => { hook.getCurrent().handleDragStart(sessionKey); });
+            expect(hook.getCurrent().activeDragSnapshot?.topology.rows.filter(row => row.kind === 'leaf').map(row => row.rowId))
+                .toEqual([sourceRowId, treeRowId.session(scope.serverId, 'neighbor')]);
+            act(() => { hook.getCurrent().handleDragCancel(); });
+        } finally {
+            await hook.unmount();
+        }
+    });
+
     it('clears staged keyboard state on external cancellation and can pick up again', async () => {
         getStorage().setState({ profileScope: scope });
         const hook = await renderHook(() => useSessionListRowInteractions(input()));

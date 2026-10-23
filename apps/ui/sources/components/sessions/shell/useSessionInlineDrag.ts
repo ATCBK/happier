@@ -38,21 +38,18 @@ const IDLE_RESOLVED_DROP: UseSessionInlineDragResolvedDrop = Object.freeze({
 export type UseSessionInlineDragResolveDropResultEvent = Readonly<{
     sessionKey: string;
     groupKey: string;
-    dataIndex: number;
     pointer: WindowPointer | null;
 }>;
 
 export type UseSessionInlineDragDropResultEvent = Readonly<{
     sessionKey: string;
     groupKey: string;
-    dataIndex: number;
     result: TreeDropResult;
 }>;
 
 export type UseSessionInlineDragCancelEvent = Readonly<{
     sessionKey: string;
     groupKey: string;
-    dataIndex: number;
 }>;
 
 export type UseSessionInlineDragStart = (sessionKey: string) => EntityDragDomCarry | null | void;
@@ -66,7 +63,6 @@ export type UseSessionInlineDragParams = Readonly<{
     onDropResult: (event: UseSessionInlineDragDropResultEvent) => void;
     onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
     onDragCancel?: (event: UseSessionInlineDragCancelEvent) => void;
-    dataIndex: number;
     overlayShared: TreeDropOverlaySharedValues;
 }>;
 
@@ -114,7 +110,6 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         sessionKey,
         groupKey,
         enabled = true,
-        dataIndex,
         overlayShared,
     } = params;
 
@@ -151,9 +146,9 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
             if (!carry) return null;
             return {
                 move: pointer => {
-                    const resolved = callbacksRef.current.resolveDropResult({ sessionKey, groupKey, dataIndex, pointer });
+                    const resolved = callbacksRef.current.resolveDropResult({ sessionKey, groupKey, pointer });
                     writeSessionListDropOverlayGeometry(overlayShared, resolved.geometry);
-                    callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, dataIndex, result: resolved.result });
+                    callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, result: resolved.result });
                 },
                 cancel: () => { carry.cancel(); hideOverlay(overlayShared); },
             };
@@ -169,7 +164,6 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         ): UseSessionInlineDragResolvedDrop => callbacksRef.current.resolveDropResult({
             sessionKey,
             groupKey,
-            dataIndex,
             pointer: pointerFromAbsoluteCoordinates(absoluteX, absoluteY),
         }) ?? IDLE_RESOLVED_DROP;
 
@@ -179,16 +173,16 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
         const fireDragUpdate = (absoluteX: number, absoluteY: number) => {
             const resolved = resolveDropForPointer(absoluteX, absoluteY);
             writeSessionListDropOverlayGeometry(overlayShared, resolved.geometry);
-            callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, dataIndex, result: resolved.result });
+            callbacksRef.current.onDragUpdate?.({ sessionKey, groupKey, result: resolved.result });
         };
         const fireDragComplete = (absoluteX: number | null, absoluteY: number | null) => {
             const resolved = resolveDropForPointer(absoluteX, absoluteY);
             hideOverlay(overlayShared);
-            callbacksRef.current.onDropResult({ sessionKey, groupKey, dataIndex, result: resolved.result });
+            callbacksRef.current.onDropResult({ sessionKey, groupKey, result: resolved.result });
         };
         const fireDragCancel = () => {
             hideOverlay(overlayShared);
-            callbacksRef.current.onDragCancel?.({ sessionKey, groupKey, dataIndex });
+            callbacksRef.current.onDragCancel?.({ sessionKey, groupKey });
         };
         const clearOverlay = () => {
             hideOverlay(overlayShared);
@@ -242,7 +236,7 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
                 scheduleOnRN(didDrag ? fireDragCancel : clearOverlay);
             });
     // Only recreate when the row's identity changes — callbacks are read through a ref.
-    }, [didEnd, didStartDrag, enabled, desktopPointer, groupKey, sessionKey, dataIndex, overlayShared]);
+    }, [didEnd, didStartDrag, enabled, desktopPointer, groupKey, sessionKey, overlayShared]);
 
     const animatedStyle = useAnimatedStyle<ViewStyle>(() => ({
         opacity: enabled && isDragging ? HAPPIER_CARRIED_SOURCE_OPACITY : 1,

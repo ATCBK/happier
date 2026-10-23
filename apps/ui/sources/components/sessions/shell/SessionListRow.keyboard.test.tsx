@@ -51,7 +51,7 @@ describe('SessionListRow keyboard carry', () => {
                     onDragStart={vi.fn()} onDropResult={vi.fn()}
                     resolveDropResult={() => ({ result: { instruction: { kind: 'idle' }, visual: { kind: 'none' } }, geometry: { kind: 'none' } })}
                     onTogglePinnedSessionKey={null} onSetTagsSessionKey={null} onNativeContextMenuOpenChangeSessionKey={null}
-                    isDragActive={false} isBeingDragged={false} dataIndex={0}
+                    isDragActive={false} isBeingDragged={false}
                     overlayShared={{ overlayVisible: { value: 0 }, overlayKind: { value: 0 }, overlayTop: { value: 0 },
                         overlayHeight: { value: 0 }, overlayLeft: { value: 0 }, overlayRight: { value: 0 }, overlayDepth: { value: 0 } }}
                     onRegisterTreeRowBounds={vi.fn()} onUnregisterTreeRowBounds={vi.fn()} />

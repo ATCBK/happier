@@ -2013,7 +2013,6 @@ export function useSessionListViewStateFromPaneState(
             workspaceFaviconsEnabled={workspaceFaviconsEnabled}
             workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
             newSessionEnabled={newSessionEnabled}
-            dataIndex={index}
             overlayShared={rowInteractions.dropOverlayShared}
             onRegisterTreeRowBounds={rowInteractions.registerTreeRowBounds}
             onUnregisterTreeRowBounds={rowInteractions.unregisterTreeRowBounds}
@@ -2098,7 +2097,6 @@ export function useSessionListViewStateFromPaneState(
                 onNativeContextMenuOpenChangeSessionKey={rowInteractions.handleNativeContextMenuOpenChangeSessionKey}
                 draggingSessionKey={rowInteractions.draggingSessionKey}
                 nativeContextMenuSessionKey={rowInteractions.nativeContextMenuSessionKey}
-                dataIndex={index}
                 overlayShared={rowInteractions.dropOverlayShared}
                 onRegisterTreeRowBounds={rowInteractions.registerTreeRowBounds}
                 onUnregisterTreeRowBounds={rowInteractions.unregisterTreeRowBounds}

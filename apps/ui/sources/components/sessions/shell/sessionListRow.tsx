@@ -43,7 +43,6 @@ export type SessionListRowProps = Readonly<
         onNativeContextMenuOpenChangeSessionKey: ((sessionKey: string, next: boolean) => void) | null;
         isDragActive: boolean;
         isBeingDragged: boolean;
-        dataIndex: number;
         overlayShared: TreeDropOverlaySharedValues;
         onRegisterTreeRowBounds: RegisterSessionListTreeRowBounds;
         onUnregisterTreeRowBounds: UnregisterSessionListTreeRowBounds;
@@ -72,7 +71,6 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         onNativeContextMenuOpenChangeSessionKey,
         isDragActive,
         isBeingDragged,
-        dataIndex,
         overlayShared,
         onRegisterTreeRowBounds,
         onUnregisterTreeRowBounds,
@@ -136,7 +134,6 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         onDragUpdate,
         onDragCancel,
         resolveDropResult,
-        dataIndex,
         overlayShared,
     });
 

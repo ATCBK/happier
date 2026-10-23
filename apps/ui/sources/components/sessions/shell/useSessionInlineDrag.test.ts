@@ -249,7 +249,6 @@ describe('useSessionInlineDrag', () => {
         const base: UseSessionInlineDragParams = {
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
             overlayShared: sharedOverlayValues(),
             onDragStart: () => {},
             resolveDropResult: () => resolvedDrop(idleResult, { kind: 'none' }),
@@ -285,13 +284,11 @@ describe('useSessionInlineDrag', () => {
         expect(resolveDropResult).toHaveBeenCalledWith({
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
             pointer: { x: 18, y: 64 },
         });
         expect(onDragUpdate).toHaveBeenCalledWith({
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
             result: lineResult('session:server:target', 2),
         });
         expect(overlayShared.overlayVisible.value).toBe(1);
@@ -339,13 +336,11 @@ describe('useSessionInlineDrag', () => {
         expect(resolveDropResult).toHaveBeenLastCalledWith({
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
             pointer: { x: 24, y: 300 },
         });
         expect(onDropResult).toHaveBeenCalledWith({
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
             result: outlineResult('folder:final'),
         });
         expect(overlayShared.overlayVisible.value).toBe(0);
@@ -369,7 +364,7 @@ describe('useSessionInlineDrag', () => {
             }),
             onDragCancel,
         } satisfies UseSessionInlineDragParams & {
-            onDragCancel: (event: { sessionKey: string; groupKey: string; dataIndex: number }) => void;
+            onDragCancel: (event: { sessionKey: string; groupKey: string }) => void;
         };
         const hook = await renderHook(() => useSessionInlineDrag(params));
 
@@ -395,7 +390,6 @@ describe('useSessionInlineDrag', () => {
         expect(onDragCancel).toHaveBeenCalledWith({
             sessionKey: 's1',
             groupKey: 'g1',
-            dataIndex: 1,
         });
 
         await hook.unmount();

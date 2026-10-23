@@ -35,7 +35,6 @@ type SessionListSessionItemProps = Readonly<{
     onNativeContextMenuOpenChangeSessionKey: ((sessionKey: string, next: boolean) => void) | null;
     draggingSessionKey: string | null;
     nativeContextMenuSessionKey: string | null;
-    dataIndex: number;
     overlayShared: TreeDropOverlaySharedValues;
     onRegisterTreeRowBounds: RegisterSessionListTreeRowBounds;
     onUnregisterTreeRowBounds: UnregisterSessionListTreeRowBounds;
@@ -90,7 +89,6 @@ export function SessionListSessionItem(props: SessionListSessionItemProps) {
             onNativeContextMenuOpenChangeSessionKey={isNativeMobile && sessionKey ? props.onNativeContextMenuOpenChangeSessionKey : null}
             isDragActive={props.draggingSessionKey != null}
             isBeingDragged={sessionKey != null && sessionKey === props.draggingSessionKey}
-            dataIndex={props.dataIndex}
             overlayShared={props.overlayShared}
             onRegisterTreeRowBounds={props.onRegisterTreeRowBounds}
             onUnregisterTreeRowBounds={props.onUnregisterTreeRowBounds}

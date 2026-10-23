@@ -59,7 +59,6 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     compactMinimal: boolean;
     currentUserId: string | null;
     dataActive: boolean;
-    dataIndex: number;
     dragEnabled: boolean;
     draggingSessionKey: string | null;
     forkActionContext?: SessionItemProps['forkActionContext'];
@@ -236,7 +235,6 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
             onNativeContextMenuOpenChangeSessionKey={props.onNativeContextMenuOpenChangeSessionKey}
             draggingSessionKey={props.draggingSessionKey}
             nativeContextMenuSessionKey={props.nativeContextMenuSessionKey}
-            dataIndex={props.dataIndex}
             overlayShared={props.overlayShared}
             onRegisterTreeRowBounds={props.onRegisterTreeRowBounds}
             onUnregisterTreeRowBounds={props.onUnregisterTreeRowBounds}

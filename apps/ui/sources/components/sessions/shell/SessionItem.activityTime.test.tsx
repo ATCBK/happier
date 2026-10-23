@@ -1663,7 +1663,6 @@ describe('SessionItem activity time', () => {
                 onNativeContextMenuOpenChangeSessionKey={null}
                 draggingSessionKey={null}
                 nativeContextMenuSessionKey={null}
-                dataIndex={0}
                 overlayShared={createTreeDropOverlaySharedValues()}
                 onRegisterTreeRowBounds={vi.fn()}
                 onUnregisterTreeRowBounds={vi.fn()}

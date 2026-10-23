@@ -190,13 +190,13 @@ describe('SessionListRow real web gesture', () => {
                 onDragCancel={interactions.handleDragCancel} resolveDropResult={interactions.resolveDropResult}
                 onTogglePinnedSessionKey={null} onSetTagsSessionKey={null} onNativeContextMenuOpenChangeSessionKey={null}
                 isDragActive={interactions.draggingSessionKey !== null} isBeingDragged={interactions.draggingSessionKey === sessionKey}
-                dataIndex={2} overlayShared={interactions.dropOverlayShared}
+                overlayShared={interactions.dropOverlayShared}
                 onRegisterTreeRowBounds={interactions.registerTreeRowBounds} onUnregisterTreeRowBounds={interactions.unregisterTreeRowBounds} />
                 : <SessionListHeaderItem item={sourceKind === 'session-folder' ? folder : project}
                     collapsedKeys={{}} projectHeaderViewModelByGroupKey={new Map()} hasMultipleMachines={false}
                     onOpenProject={() => {}} onCreateSessionFromWorkspaceScope={() => {}} onAddFolderToWorkspace={() => {}}
                     onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}} onToggleCollapse={onToggleCollapse}
-                    dataIndex={sourceKind === 'session-folder' ? 1 : 0} overlayShared={interactions.dropOverlayShared}
+                    overlayShared={interactions.dropOverlayShared}
                     onRegisterTreeRowBounds={interactions.registerTreeRowBounds} onUnregisterTreeRowBounds={interactions.unregisterTreeRowBounds}
                     onFolderDragStart={interactions.handleDragStart} onFolderDropResult={interactions.handleTreeDropResult}
                     onFolderDragCancel={interactions.handleDragCancel} resolveDropResult={interactions.resolveDropResult} />}
@@ -327,7 +327,7 @@ describe('SessionListRow real web gesture', () => {
                     sessionKey="sess_pointer" treeRowId="sess_pointer" groupKey="group" reorderEnabled organizeMode={false}
                     onDragStart={onDragStart} onDropResult={onDropResult} onDragCancel={onDragCancel} resolveDropResult={resolveDropResult}
                     onTogglePinnedSessionKey={null} onSetTagsSessionKey={null} onNativeContextMenuOpenChangeSessionKey={null}
-                    isDragActive={false} isBeingDragged={false} dataIndex={0}
+                    isDragActive={false} isBeingDragged={false}
                     overlayShared={{ overlayVisible: makeMutable(0), overlayKind: makeMutable(0), overlayTop: makeMutable(0),
                         overlayHeight: makeMutable(0), overlayLeft: makeMutable(0), overlayRight: makeMutable(0), overlayDepth: makeMutable(0) }}
                     onRegisterTreeRowBounds={() => undefined} onUnregisterTreeRowBounds={() => undefined} />
