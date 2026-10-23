@@ -17,6 +17,7 @@ import { buildAcpAgentMessageEnvelope } from './acpMessageEnvelope'
 import { SessionMessageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1'
 import {
   fetchCommittedTranscriptLocalIdBaseline,
+  fetchEarliestCommittedUserMessageLocalId,
   fetchLatestUserPermissionIntentFromEncryptedTranscript,
   fetchRecentTranscriptTextItemsForAcpImportFromServer,
   hasCommittedUserMessageAfterMs,
@@ -36,6 +37,23 @@ afterEach(() => {
 })
 
 describe('transcriptQueries (plaintext envelopes)', () => {
+  it.each(['plain', 'e2ee'] as const)('reads one earliest user identity from a %s Session without paging its history', async encryptionMode => {
+    const payload = { role: 'user', content: { type: 'text', text: 'first prompt' } };
+    const row = SessionMessageV1Schema.parse({ id: 'first', seq: 2, createdAt: 1, localId: 'first-prompt',
+      sidechainId: null, messageRole: 'user',
+      content: encryptionMode === 'plain' ? { t: 'plain', v: payload }
+        : { t: 'encrypted', c: encodeBase64(encrypt(queryParams.encryptionKey, queryParams.encryptionVariant, payload)) },
+    });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const query = new URL(String(url)).searchParams;
+      expect(Object.fromEntries(query)).toMatchObject({ scope: 'main', role: 'user', afterSeq: '0', limit: '1' });
+      return { status: 200, data: { messages: [row], hasMore: true, nextAfterSeq: 2, nextBeforeSeq: null } } as AxiosResponse;
+    });
+    await expect(fetchEarliestCommittedUserMessageLocalId(encryptionMode === 'plain'
+      ? { token: 't', sessionId: 's1', encryptionMode } : queryParams)).resolves.toBe('first-prompt');
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['plain', 'e2ee'] as const)('retains consumed source facts from every transcript scope in a cold %s identity baseline', async encryptionMode => {
     const marker = buildAcpAgentMessageEnvelope({ provider: 'claude',
       body: { type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' } },

@@ -153,6 +153,9 @@ export function createApiSessionClientFixture(options?: {
         async fetchRecentTranscriptTextItemsForAcpImport() {
             return [];
         },
+        async fetchEarliestCommittedUserMessageLocalId() {
+            return null;
+        },
         getMetadataSnapshot() {
             return metadata;
         },
@@ -233,6 +236,9 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             return [];
         },
         async fetchLatestUserPermissionIntentFromTranscript() {
+            return null;
+        },
+        async fetchEarliestCommittedUserMessageLocalId() {
             return null;
         },
         async popPendingMessage() {

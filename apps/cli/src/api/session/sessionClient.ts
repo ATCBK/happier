@@ -154,7 +154,7 @@ import {
     CommittedUserMessageSeqTracker,
     type CommittedUserMessageSeqListener,
 } from './committedUserMessageSeqTracker';
-import { fetchCommittedTranscriptIdentitySnapshot, fetchCommittedTranscriptLocalIdBaseline } from './transcriptQueries';
+import { fetchCommittedTranscriptIdentitySnapshot, fetchCommittedTranscriptLocalIdBaseline, fetchEarliestCommittedUserMessageLocalId } from './transcriptQueries';
 import { getSessionCommittedTranscriptLocalIds } from './client/transcript/committedTranscriptLocalIdBaseline';
 import { readSidechainId } from './outbound/shared';
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
@@ -2957,6 +2957,16 @@ export class ApiSessionClient extends EventEmitter {
         });
         this.trackPendingUpdate(this.pendingTranscriptMessageUpdates, update);
         return update;
+    }
+
+    async fetchEarliestCommittedUserMessageLocalId(): Promise<string | null> {
+        const request = async () => await this.runSessionRequest(async () => fetchEarliestCommittedUserMessageLocalId({
+            token: this.token, sessionId: this.sessionId, ...this.getTranscriptQueryContext(),
+            signal: this.socketAckAbortController.signal,
+        }));
+        return this.sessionConnectionSupervisor
+            ? await runSupervisedRequest({ supervisor: this.sessionConnectionSupervisor, requireAuth: true, requireOnline: false, request })
+            : await request();
     }
 
     async fetchCommittedTranscriptIdentitySnapshot(opts?: Readonly<{ signal?: AbortSignal }>) {

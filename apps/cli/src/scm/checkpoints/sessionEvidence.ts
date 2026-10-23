@@ -270,10 +270,14 @@ export async function readRepositoryCheckpointInitialEvidence(input: Readonly<{ 
 export async function retainRepositoryCheckpointInitialEvidence(input: Readonly<{
     cwd: string; scopeId: string; checkpointRef: RepositoryCheckpointRef; captured: RepositoryCheckpointCaptureResult;
     recovered?: true; sessionIsNew?: boolean;
+    readEarliestPromptLocalId?: () => Promise<string | null>;
 }>): Promise<void> {
     const existing = await readRepositoryCheckpointInitialEvidence(input);
     if (existing && !(input.recovered && existing.state === 'unavailable' && existing.recoverable)) return;
-    if (!input.recovered && input.sessionIsNew !== true) {
+    // A Team launch may attach to its precreated Session row. Attachment alone
+    // cannot tell whether execution is fresh; Home's first user identity can.
+    if (!input.recovered && input.sessionIsNew !== true
+        && await input.readEarliestPromptLocalId?.() !== input.checkpointRef.checkpointId) {
         await writeJsonAtomic(join(await evidenceDirectory(input.cwd, input.scopeId), 'initial.json'), {
             state: 'unavailable', reason: 'Initial checkpoint requires canonical earliest prompt evidence for this resumed or unknown session', recoverable: true,
         });

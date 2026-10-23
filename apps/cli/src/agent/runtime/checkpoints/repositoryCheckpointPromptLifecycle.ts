@@ -291,7 +291,8 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
             try {
                 await retainRepositoryCheckpointInitialEvidence({ cwd: binding.repoRoot ?? params.runtimeDirectory,
                     scopeId: binding.scopeId, checkpointRef: messageStart, captured,
-                    sessionIsNew: params.sessionIsNew === true && params.session.sessionId === initialSessionId });
+                    sessionIsNew: params.sessionIsNew === true && params.session.sessionId === initialSessionId,
+                    readEarliestPromptLocalId: () => params.session.fetchEarliestCommittedUserMessageLocalId() });
             } catch (error) {
                 logger.debug('Repository initial checkpoint retention unavailable (non-fatal)', error);
             }

@@ -15,6 +15,7 @@ import { openSessionMessageContent, SessionMessageContentError } from '@/session
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
 import { loadCommittedTranscriptLocalIdBaseline, type CommittedTranscriptLocalIdBaseline } from './client/transcript/committedTranscriptLocalIdBaseline';
 import { readStreamedTranscriptSourceMessageId } from './streamedTranscriptWriter/buildStreamedTranscriptSegmentSnapshot';
+import { decodeTranscriptBody } from '@/session/services/transcript/transcriptBodyDecoder';
 import {
   createSessionTranscriptStoredContentUnavailableError,
   resolveSessionTranscriptStoredContentUnavailableError,
@@ -60,6 +61,19 @@ function openTranscriptMessage(row: Readonly<{ content?: unknown }>, params: Ses
     ...(params.encryptionMode === 'plain' ? { mode: 'plain', ctx: null } as const
       : { mode: 'e2ee', ctx: { encryptionKey: params.encryptionKey, encryptionVariant: params.encryptionVariant } } as const),
   });
+}
+
+/** A first-prompt witness needs only Home's earliest main user row, never its full history. */
+export async function fetchEarliestCommittedUserMessageLocalId(
+  params: SessionTranscriptQueryParams & Readonly<{ signal?: AbortSignal }>,
+): Promise<string | null> {
+  const page = await fetchEncryptedTranscriptMessagesPage({
+    token: params.token, sessionId: params.sessionId, afterSeq: 0, limit: 1, scope: 'main', role: 'user',
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  const first = page.messages[0];
+  if (!first || decodeTranscriptBody(openTranscriptMessage(first, params))?.semanticRole !== 'user') return null;
+  return typeof first.localId === 'string' && first.localId.length > 0 ? first.localId : null;
 }
 
 /** Source identity lives inside the Session's mode-protected message metadata. */
