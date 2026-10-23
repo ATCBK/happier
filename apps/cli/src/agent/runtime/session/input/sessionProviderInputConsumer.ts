@@ -64,6 +64,7 @@ export type SessionProviderInputConsumerOptions<Mode, Message> = Readonly<{
   pendingDrainMaxPopPerWake?: number;
   /** Host-private, non-queued input source used by centralized runtime owners. */
   takeContextOnlyInput?: ((abortSignal: AbortSignal) => Promise<MessageBatch<Mode, Message> | null>) | null;
+  /** Remains ready for an unobserved source change until the corresponding take observes it. */
   waitForContextOnlyInputChange?: ((abortSignal: AbortSignal) => Promise<boolean>) | null;
 }>;
 
@@ -688,8 +689,8 @@ export function createSessionProviderInputConsumer<Mode, Message>(
                 value => ({ status: 'fulfilled' as const, value }),
                 reason => ({ status: 'rejected' as const, reason }),
               );
-              // No notification here: every content-free Account change wakes an idle Session to
-              // probe for context, and an empty probe is not work. Readers still see the in-flight
+              // No notification here: a context invalidation can yield an empty take,
+              // which is not work. Readers still see the in-flight
               // preparation as busy; the retained result below is the edge observers are told about.
             }
             return contextOnlyPreparation;
@@ -824,6 +825,7 @@ async function waitForNextInput<Mode, Message>(
   const metadataWaitRetryBackoffMs =
     opts.metadataWaitRetryBackoffMs ?? DEFAULT_SESSION_METADATA_WAIT_RETRY_BACKOFF_MS;
   const refreshBeforeQueuedBatch = opts.refreshBeforeQueuedBatch !== false;
+  let contextOnlyNeedsRead = true;
 
   while (true) {
     const controller = new AbortController();
@@ -842,13 +844,19 @@ async function waitForNextInput<Mode, Message>(
         controller,
         metadataWaitRetryBackoffMs,
       });
+      const pendingInput = opts.session.hasPendingProviderInput?.();
+      // Context changes retained behind Pending custody must be read once it drains.
+      if (pendingInput) contextOnlyNeedsRead = true;
       const contextOnlyWake =
         // Context sources can remain ready until taken. Pending custody prevents
         // taking them below, so arm only queue/metadata/admission wakes until
         // Pending changes; otherwise the same retained wake spins this runner.
-        opts.session.hasPendingProviderInput?.() ? undefined
+        pendingInput ? undefined
           : opts.waitForContextOnlyInputChange?.(controller.signal)
-            .then(changed => ({ kind: 'context_only' as const, changed }));
+            .then(changed => {
+              if (changed) contextOnlyNeedsRead = true;
+              return { kind: 'context_only' as const, changed };
+            });
       const armedWake = Promise.race([
         armedInputWake,
         ...(contextOnlyWake ? [contextOnlyWake] : []),
@@ -893,7 +901,11 @@ async function waitForNextInput<Mode, Message>(
       if (!contextOnlyBatch
         && !opts.session.hasPendingProviderInput?.()
         && !opts.hasDeferredContextOnlyBatch()
+        && (contextOnlyNeedsRead || !opts.waitForContextOnlyInputChange)
         && opts.prepareContextOnlyInput) {
+        // An empty take stays settled until its source changes. Metadata updates
+        // (including Guard's own notice) are not new context work.
+        contextOnlyNeedsRead = false;
         // A context-ready signal may stay ready until its take settles. Only
         // user-input wakes interrupt preparation; they never cancel its custody.
         const preparation = await Promise.race([
@@ -904,11 +916,14 @@ async function waitForNextInput<Mode, Message>(
           // Recheck input priority after the asynchronous take, without repeating
           // the full preparation/materialization pass when nothing arrived.
           if (opts.abortSignal.aborted || opts.hasLocalInputCustody()
-            || opts.session.hasPendingProviderInput?.() || !opts.isAdmitted()) continue;
+            || opts.session.hasPendingProviderInput?.() || !opts.isAdmitted()) {
+            contextOnlyNeedsRead = true;
+            continue;
+          }
           if (opts.retainPreparedContextOnlyInput(preparation.result)) {
             contextOnlyBatch = opts.takeDeferredContextOnlyBatch();
           }
-        }
+        } else contextOnlyNeedsRead = true;
       }
       if (contextOnlyBatch) {
         controller.abort('sessionProviderInputConsumer-context-only');

@@ -8,6 +8,7 @@ import { buildSessionAgentActivityHeadline } from '@happier-dev/protocol/session
 import { createHostSubagentStore } from '@/session/subagents/hostSubagentStore';
 import type { AgentState } from '@/api/types';
 import type { SessionAgentActivityEntryV1 } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityEntryV1';
+import { publishSessionFollowWakeInvalidation, readSessionFollowWakeInvalidationGeneration, waitForSessionFollowWakeInvalidation } from '../follow/sessionFollowWakeSignal';
 
 function idleTail(): RuntimeActivitySnapshotTail {
   return { sequence: 1, custody: null, settlement: {
@@ -194,7 +195,8 @@ describe('Session input live-work notification stability', () => {
     const metadataWaiters = new Set<() => void>();
     const controller = new AbortController();
     let probes = 0;
-    let contextChanged: (() => void) | undefined;
+    let contextReady = false;
+    let observedContextGeneration = readSessionFollowWakeInvalidationGeneration();
     const waitForMetadataUpdate = (signal?: AbortSignal) => new Promise<boolean>(resolve => {
       const finish = (changed: boolean) => {
         metadataWaiters.delete(wake);
@@ -212,18 +214,19 @@ describe('Session input live-work notification stability', () => {
       getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
       readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
       materializeNextPendingMessageSafely: async () => ({ type: 'no_pending' as const }),
-    }, takeContextOnlyInput: async () => { probes += 1; return null; },
-    waitForContextOnlyInputChange: signal => new Promise<boolean>(resolve => {
-      const finish = (changed: boolean) => {
-        signal.removeEventListener('abort', abort);
-        resolve(changed);
-      };
-      const abort = () => finish(false);
-      contextChanged = () => finish(true);
-      signal.addEventListener('abort', abort, { once: true });
-    }) });
+    }, takeContextOnlyInput: async () => {
+      probes += 1;
+      observedContextGeneration = readSessionFollowWakeInvalidationGeneration();
+      return contextReady ? { message: 'new host context', mode: 'mode', isolate: true, hash: 'context-change' } : null;
+    },
+    waitForContextOnlyInputChange: signal => waitForSessionFollowWakeInvalidation(observedContextGeneration, signal) });
     const unsubscribe = consumer.subscribeLiveWork(() => {});
-    const waiting = consumer.waitForNextInput({ abortSignal: controller.signal });
+    const waiting = consumer.waitForNextInput({ abortSignal: controller.signal,
+      onMetadataUpdate: () => {
+        // Publish between passes, after the old context waiter was retired.
+        if (contextReady) publishSessionFollowWakeInvalidation();
+      },
+    });
     try {
       await vi.waitFor(() => {
         expect(probes).toBe(1);
@@ -239,8 +242,10 @@ describe('Session input live-work notification stability', () => {
       // own warning nor an activity observation may start another empty probe.
       expect(probes).toBe(1);
       expect((await consumer.readLiveWork()).settledAt).toBe(settledAt);
-      contextChanged?.();
+      contextReady = true;
+      for (const wake of [...metadataWaiters]) wake();
       await vi.waitFor(() => expect(probes).toBe(2));
+      await expect(waiting).resolves.toMatchObject({ message: 'new host context' });
     } finally { controller.abort(); await waiting; unsubscribe(); }
   });
   it('does not re-notify the observer that only re-read an unchanged host', async () => {
