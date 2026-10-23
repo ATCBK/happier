@@ -80,7 +80,7 @@ const {
             typeof error === 'object' && error !== null && (error as { isAxiosError?: unknown }).isAxiosError === true
         )),
         readAccountChangesCursor: vi.fn(async () => 0),
-        writeAccountChangesCursor: vi.fn(async () => {}),
+        writeAccountChangesCursor: vi.fn(async (_accountId: string, _cursor: number) => {}),
     };
 });
 
@@ -220,6 +220,111 @@ function createMachineSocket(options: {
 }
 
 describe('ApiMachineClient /v2/changes reconnect', () => {
+    it('consumes Account wake cursor demand once, including hints covered while a real feed read is pending', async () => {
+        const machine: Machine = { id: 'cursor-demand-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        let acknowledged = 10;
+        let feedCursor = 10;
+        let rebased = false;
+        let rebaseCursor = 8;
+        let failProjection = false;
+        let reads = 0;
+        let held: ReturnType<typeof createDeferred<void>> | undefined;
+        readAccountChangesCursor.mockImplementation(async () => acknowledged);
+        writeAccountChangesCursor.mockImplementation(async (_accountId, cursor) => { acknowledged = cursor; });
+        mockAccountGet(async url => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'cursor-demand-account' } };
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine } };
+            if (url.includes('/v2/changes')) {
+                reads += 1;
+                await held?.promise;
+                if (rebased) return { status: 410, data: { error: 'cursor-gone', currentCursor: rebaseCursor } };
+                return { status: 200, data: { changes: [], nextCursor: reads === 3 ? 52 : feedCursor } };
+            }
+            throw new Error(`Unexpected cursor demand read: ${new URL(url).pathname}`);
+        });
+        const socket = createMachineSocket();
+        bindApiSessionSocketMock(mockIo, socket);
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {
+            if (failProjection) { failProjection = false; throw new Error('held rebase projection failed'); }
+        });
+        const retryOwner = (client as unknown as { connectedServicesProjectionRetry: { waitForIdle(): Promise<void> } }).connectedServicesProjectionRetry;
+        const wake = (cursor: number) => socket.trigger('update', { id: `cursor-wake-${cursor}`, seq: cursor, createdAt: 1,
+            body: { t: 'account-change' } });
+        try {
+            client.connect();
+            await vi.waitFor(() => expect(writeAccountChangesCursor).toHaveBeenCalledWith('cursor-demand-account', 10));
+            await retryOwner.waitForIdle();
+            reads = 0;
+            for (let index = 0; index < 50; index += 1) wake(10);
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(0);
+
+            held = createDeferred<void>();
+            wake(11);
+            await vi.waitFor(() => expect(reads).toBe(1));
+            for (let cursor = 12; cursor <= 50; cursor += 1) wake(cursor);
+            feedCursor = 50;
+            held.resolve();
+            await retryOwner.waitForIdle();
+            expect(acknowledged).toBe(50);
+            expect(reads).toBe(1);
+
+            held = createDeferred<void>();
+            wake(51);
+            await vi.waitFor(() => expect(reads).toBe(2));
+            // Unlike the preceding covered hints, this newer wake must survive
+            // an older in-flight page and cause the existing successor drain.
+            wake(52);
+            feedCursor = 51;
+            held.resolve();
+            await vi.waitFor(() => expect(reads).toBe(3));
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(3);
+            expect(acknowledged).toBe(52);
+
+            // A smaller wake can signal a restored/rebased cursor domain,
+            // not just an old duplicate. It must reach cursor-gone recovery.
+            rebased = true;
+            wake(8);
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(4);
+            expect(acknowledged).toBe(8);
+            rebased = false;
+            feedCursor = 8;
+            socket.trigger('update', { id: 'legacy-connected-services', seq: 8, createdAt: 1,
+                body: { t: 'update-account', connectedServices: [] } });
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(5);
+
+            // A failed rebase must not be replaced by an equal old-domain
+            // hint: only a successful recovery can acknowledge the new cursor.
+            held = createDeferred<void>();
+            rebased = true;
+            rebaseCursor = 7;
+            failProjection = true;
+            wake(7);
+            await vi.waitFor(() => expect(reads).toBe(6));
+            wake(8);
+            held.resolve();
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(7);
+            expect(acknowledged).toBe(7);
+
+            // The same recovery demand also survives a replacement that
+            // arrives after failure, during the incumbent retry backoff.
+            rebaseCursor = 6;
+            failProjection = true;
+            wake(6);
+            await vi.waitFor(() => expect(reads).toBe(8));
+            wake(7);
+            await retryOwner.waitForIdle();
+            expect(reads).toBe(9);
+            expect(acknowledged).toBe(6);
+        } finally { held?.resolve(); await client.shutdown(); }
+    });
+
     it('wakes managed policy for exact Pending and Run controller targets, ignoring raw domain traffic', async () => {
         const machine: Machine = { id: 'accepted-policy-controller', encryptionMode: 'plain', metadata: null,
             metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };

@@ -579,6 +579,11 @@ export function createActionOperationSnapshotPublisher(input: Readonly<{
     };
 }
 
+type AccountChangesSyncDemand = {
+    reason: 'connect' | 'reconnect' | 'live';
+    requestedCursor?: number;
+};
+
 export class ApiMachineClient {
     private socket: Socket<ServerToDaemonEvents, DaemonToServerEvents> | null = null;
     private keepAliveInterval: NodeJS.Timeout | null = null;
@@ -589,6 +594,7 @@ export class ApiMachineClient {
     private accountIdPromise: Promise<string> | null = null;
     private accountEncryptionCurrentness: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness> | null = null;
     private readonly connectedServicesProjectionRetry = createConnectedServicesProjectionRetryScheduler();
+    private pendingChangesSyncDemand: AccountChangesSyncDemand | null = null;
     private projectionSchedulingClosed = false;
     private accountChangesObserverTransportGeneration: number | null = null;
     private updateListeners = new Set<(update: Update) => boolean | void>();
@@ -4652,7 +4658,10 @@ export class ApiMachineClient {
                     && data.body.connectedServices !== undefined
                 )
             ) {
-                this.startChangesSyncWithRetry({ reason: 'live' });
+                this.startChangesSyncWithRetry({ reason: 'live',
+                    ...(data.body.t === 'account-change' && Number.isSafeInteger(data.seq) && data.seq >= 0
+                        ? { requestedCursor: data.seq } : {}),
+                });
             }
             if (!handled && process.env.DEBUG) {
                 logger.debug(`[API MACHINE] Ignored update type: ${(data.body as any).t}`);
@@ -4717,6 +4726,7 @@ export class ApiMachineClient {
         this.activeTransportGeneration += 1;
         this.teardownActiveSocket();
         this.connectedServicesProjectionRetry.close();
+        this.pendingChangesSyncDemand = null;
         this.machineControlReadinessRetry.close();
         if (this.connectionSupervisor) {
             await this.connectionSupervisor.stop();
@@ -5029,7 +5039,7 @@ export class ApiMachineClient {
     }
 
     private async syncChangesOnConnect(
-        opts: { reason: 'connect' | 'reconnect' | 'live' },
+        opts: AccountChangesSyncDemand,
         signal: AbortSignal = new AbortController().signal,
     ): Promise<void> {
         // Startup/reconnect recover the full projection; live wakes classify the changes page first.
@@ -5084,6 +5094,11 @@ export class ApiMachineClient {
 
         const CHANGES_PAGE_LIMIT = 200;
         let after = await readAccountChangesCursor(accountId);
+        // The post-commit producer's seq is this durable cursor, not a domain
+        // event count. An equal acknowledged wake has no remaining feed work.
+        // Lower values still query: a restore can rebase the cursor domain.
+        if (opts.reason === 'live' && opts.requestedCursor === after
+            && this.accountChangesObserverTransportGeneration === transportGeneration) return;
         let reason = opts.reason;
         while (!this.projectionSchedulingClosed && this.isActiveTransportGeneration(transportGeneration)) {
             signal.throwIfAborted();
@@ -5475,12 +5490,33 @@ export class ApiMachineClient {
         }
     }
 
-    private startChangesSyncWithRetry(opts: { reason: 'connect' | 'reconnect' | 'live' }): void {
+    private startChangesSyncWithRetry(opts: AccountChangesSyncDemand): void {
         if (this.projectionSchedulingClosed) return;
+        const demand = this.pendingChangesSyncDemand ?? { ...opts };
+        if (this.pendingChangesSyncDemand) {
+            if (opts.reason !== 'live') demand.reason = opts.reason;
+            if (demand.reason !== 'live' || demand.requestedCursor === undefined || opts.requestedCursor === undefined
+                || opts.requestedCursor < demand.requestedCursor) {
+                // Legacy/reconnect demand and a backwards cursor require a
+                // genuine catch-up, never equality suppression.
+                delete demand.requestedCursor;
+            } else demand.requestedCursor = Math.max(demand.requestedCursor, opts.requestedCursor);
+        }
+        this.pendingChangesSyncDemand = demand;
         this.connectedServicesProjectionRetry.schedule(async (signal) => {
+            if (this.pendingChangesSyncDemand === demand) this.pendingChangesSyncDemand = null;
             try {
-                await this.syncChangesOnConnect(opts, signal);
+                await this.syncChangesOnConnect(demand, signal);
             } catch (error) {
+                // The retry owner can prefer newer queued work, including a
+                // wake arriving during backoff. Retain that recovery demand in
+                // the same pending work until the incumbent retry starts.
+                if (!signal.aborted && !this.projectionSchedulingClosed) {
+                    const retryDemand = this.pendingChangesSyncDemand ?? demand;
+                    if (demand.reason !== 'live') retryDemand.reason = demand.reason;
+                    delete retryDemand.requestedCursor;
+                    this.pendingChangesSyncDemand = retryDemand;
+                }
                 if (!signal.aborted) {
                     logger.warn('[API MACHINE] /v2/changes sync failed; retry scheduled', {
                         message: error instanceof Error ? error.message : String(error),
