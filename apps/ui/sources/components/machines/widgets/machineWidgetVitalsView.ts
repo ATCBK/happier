@@ -4,7 +4,7 @@ import type { MachineVitalsHistoryV1 } from '@happier-dev/protocol/machines/vita
 
 import { readMachinePublishedResources } from '@/components/machines/summary/machineResourceSentences';
 import {
-  buildMachineVitalsTimeline,
+  useMachineVitalsTimeline,
   selectMachineVitalsOverviewView,
   type MachineVitalsOverviewView,
   type MachineVitalsTimeline,
@@ -12,6 +12,7 @@ import {
 import { resolveVitalsAxis } from '@/components/machines/vitals/vitalsFormat';
 import type { MachineVitalsRange } from '@/sync/domains/machines/resources/machineRpc';
 import { useMachineVitalsOverview } from '@/sync/domains/machines/resources/useMachineVitalsOverview';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
 import type {
   MachineWidgetMachineFacts,
@@ -40,6 +41,7 @@ export function useMachineWidgetVitalsView(
     enabled?: boolean;
   }>,
 ): MachineWidgetVitalsView {
+  const language = usePreferredLanguage();
   const overview = useMachineVitalsOverview({
     serverId: input.target.serverId,
     machineId: input.target.machineId,
@@ -57,20 +59,9 @@ export function useMachineWidgetVitalsView(
     published,
     state: overview,
   });
-  const timeline = React.useMemo(
-    () =>
-      buildMachineVitalsTimeline({
-        range: input.range,
-        history: overview.history,
-        samples: overview.samples,
-      }),
-    [input.range, overview.history, overview.samples],
-  );
-  const axis = resolveVitalsAxis(
-    input.range,
-    timeline,
-    view.kind === 'ready' && view.freshness === 'live',
-  );
+  const timeline = useMachineVitalsTimeline({ range: input.range, history: overview.history, samples: overview.samples });
+  const axisLive = view.kind === 'ready' && view.freshness === 'live';
+  const axis = React.useMemo(() => resolveVitalsAxis(input.range, timeline, axisLive), [input.range, timeline, axisLive, language]);
   return {
     view,
     published,

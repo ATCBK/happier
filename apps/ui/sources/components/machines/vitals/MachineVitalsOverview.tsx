@@ -24,6 +24,7 @@ import { useMachineVitalsOverview } from '@/sync/domains/machines/resources/useM
 import { useMachineVitalsAttribution } from '@/sync/domains/machines/resources/useMachineVitalsAttribution';
 import { MachineUsingTheMost } from './MachineUsingTheMost';
 import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
@@ -32,7 +33,7 @@ import { DiskTile } from './DiskTile';
 import { MachineAlertsRow } from './MachineAlertsRow';
 import { MachineMoreFrom } from './MachineMoreFrom';
 import {
-  buildMachineVitalsTimeline,
+  useMachineVitalsTimeline,
   selectMachineVitalsExtras,
   selectMachineVitalsOverviewView,
   type MachineVitalsOverviewView,
@@ -75,6 +76,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
   }>,
 ) {
   const { machine } = props;
+  const language = usePreferredLanguage();
   const daemonState: unknown = machine.daemonState;
   const published = React.useMemo(
     () => readMachinePublishedResources(daemonState),
@@ -97,18 +99,10 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
   const [startedLoading] = React.useState(view.kind === 'loading');
   const attention =
     published?.attention ?? overview.snapshot?.attention ?? null;
-  const timeline = React.useMemo(
-    () =>
-      buildMachineVitalsTimeline({
-        range,
-        history: overview.history,
-        samples: overview.samples,
-      }),
-    [overview.history, overview.samples, range],
-  );
+  const timeline = useMachineVitalsTimeline({ range, history: overview.history, samples: overview.samples });
   // One axis for the three history tiles, kept by reference so a render that changes nothing they draw leaves them be.
   const axisLive = view.kind === 'ready' && view.freshness === 'live';
-  const axis = React.useMemo(() => resolveVitalsAxis(range, timeline, axisLive), [axisLive, range, timeline]);
+  const axis = React.useMemo(() => resolveVitalsAxis(range, timeline, axisLive), [axisLive, range, timeline, language]);
   const { retry } = overview;
   // What Happier uses — processes (plan 30) and what it keeps on each volume (plan 40) — through the one
   // attribution owner, only while this Overview shows a reading.
