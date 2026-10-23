@@ -2,7 +2,7 @@ import { assertPluginAccountStorageEnvelopeForModeV1, PluginAccountStorageEnvelo
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 
 import { buildPluginAccountStoragePhysicalKey } from "./accountScopedKv";
 import {
@@ -72,7 +72,7 @@ export async function readPluginAccountStorageInTx(
 export async function readPluginAccountStorage(
     input: Readonly<{ accountId: string; pluginId: string }>,
 ): Promise<PluginAccountStorageReadResult> {
-    return await inTx(async (tx) => await readPluginAccountStorageInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+    return await inReadSnapshot(async (tx) => await readPluginAccountStorageInTx(tx, input));
 }
 
 export async function mutatePluginAccountStorageInTx(

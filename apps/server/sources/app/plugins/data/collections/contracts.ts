@@ -1,9 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import { PluginAccountCollectionContributionV1Schema, PluginCollectionMigrationDeclarationV1Schema, PluginCollectionQuotaRequestV1Schema, PluginCollectionUiQueryDescriptorV1Schema, type PluginAccountCollectionContributionV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
+import { PluginCollectionMigrationDeclarationV1Schema, PluginCollectionQuotaRequestV1Schema, PluginCollectionUiQueryDescriptorV1Schema, type PluginAccountCollectionContributionV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginCollectionContractRefV1Schema, type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
-import { normalizePluginAccountCollectionContractV1, normalizePluginAccountCollectionContractsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
+import { preparePluginAccountCollectionContractV1, normalizePluginAccountCollectionContractsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionQuotaDimensionV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { z } from "zod/mini";
 
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
@@ -273,23 +273,22 @@ function reconstructMaterializedPluginCollectionContract(
 ) {
     try {
         const privacy = PersistedPrivacyProjectionV1Schema.parse(row.privacyProjection);
-        const contribution = PluginAccountCollectionContributionV1Schema.parse({
-            id: row.collectionId,
-            schemaVersion: row.schemaVersion,
-            schema: row.normalizedSchema,
-            rowIdField: privacy.rowIdField,
-            serverReadable: privacy.serverReadable,
-            indexes: row.indexes,
-            uiQueries: privacy.uiQueries,
-            relations: row.relations,
-            ...(privacy.quota ? { quota: privacy.quota } : {}),
-            readableSchemaVersions: privacy.readableSchemaVersions,
-            migrations: privacy.migrations,
-            identityFields: privacy.identityFields,
-        });
-        const normalized = normalizePluginAccountCollectionContractV1({
+        const { contribution, normalized } = preparePluginAccountCollectionContractV1({
             pluginId: row.pluginId,
-            contribution,
+            contribution: {
+                id: row.collectionId,
+                schemaVersion: row.schemaVersion,
+                schema: row.normalizedSchema,
+                rowIdField: privacy.rowIdField,
+                serverReadable: privacy.serverReadable,
+                indexes: row.indexes,
+                uiQueries: privacy.uiQueries,
+                relations: row.relations,
+                ...(privacy.quota ? { quota: privacy.quota } : {}),
+                readableSchemaVersions: privacy.readableSchemaVersions,
+                migrations: privacy.migrations,
+                identityFields: privacy.identityFields,
+            },
         });
         if (normalized.contractDigest !== row.contractDigest) {
             throw new PluginCollectionContractMaterializationError("collection_contract_inconsistent");

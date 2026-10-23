@@ -618,7 +618,7 @@ export async function revokePluginWebhookEndpointV1(params: Readonly<{
             });
         }
         return result;
-    }, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export async function retargetPluginWebhookEndpointV1(params: Readonly<{

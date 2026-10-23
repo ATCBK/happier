@@ -29,7 +29,7 @@ export async function createInitialPluginWebhookCredentialV1(_params: Readonly<{
     credentialVersionId: string;
     secret: string;
 }>): Promise<Readonly<{ credentialVersionId: string; secret: string }>> {
-    return await inTx(async (tx) => await createInitialPluginWebhookCredentialTxV1(tx, _params), { /* Credential pointer and retirement mutations participate with webhook authority readers. */ isolationLevel: "Serializable" });
+    return await inTx(async (tx) => await createInitialPluginWebhookCredentialTxV1(tx, _params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function createInitialPluginWebhookCredentialTxV1(tx: Tx, _params: Readonly<{
@@ -353,7 +353,7 @@ export async function retireExpiredPluginWebhookCredentialsV1(params: Readonly<{
                 await markPluginWebhookRouteAccountsChangedInTxV1(tx, candidate.routeId);
             }
             return deleted.count;
-        }, { /* Credential pointer and retirement mutations participate with webhook authority readers. */ isolationLevel: "Serializable" });
+        }, { isolationLevel: "ReadCommitted" });
     }
     return { retired };
 }
@@ -362,7 +362,7 @@ export async function finishPluginWebhookCredentialRotationV1(params: Readonly<{
     routeId: string;
     expectedPreviousCredentialVersionId: string;
 }>): Promise<Readonly<{ kind: "retired" | "alreadyRetired" | "credentialChanged" | "unavailable" }>> {
-    return await inTx(async (tx) => await finishPluginWebhookCredentialRotationTxV1(tx, params), { /* Credential pointer and retirement mutations participate with webhook authority readers. */ isolationLevel: "Serializable" });
+    return await inTx(async (tx) => await finishPluginWebhookCredentialRotationTxV1(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
 export async function finishPluginWebhookCredentialRotationTxV1(tx: Tx, params: Readonly<{

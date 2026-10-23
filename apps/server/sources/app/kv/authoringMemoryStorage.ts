@@ -1,7 +1,7 @@
 import { assertAuthoringMemoryContentForModeV1, assertAuthoringMemoryValueForKeyV1, assertStoredAuthoringMemoryValueForKeyV1, AuthoringMemoryChangeHintV1Schema, AuthoringMemoryContentV1Schema, StoredAuthoringMemoryContentV1Schema, type AuthoringMemoryContentV1, type AuthoringMemoryRowV1 } from '@happier-dev/protocol/account/authoringMemory';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import {
     AUTHORING_MEMORY_ACCOUNT_KV_PREFIX,
     buildAuthoringMemoryPhysicalKey,
@@ -106,10 +106,10 @@ export async function mutateAuthoringMemoryInTx(tx: Tx, input: Readonly<{
 }
 
 export async function readAuthoringMemory(input: Readonly<{ accountId: string; key: string }>): Promise<ReservedAccountScopedKvRowReadResult<AuthoringMemoryContentV1>> {
-    return await inTx(tx => readAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+    return await inReadSnapshot(tx => readAuthoringMemoryInTx(tx, input));
 }
 export async function listAuthoringMemory(input: Readonly<{ accountId: string }>): ReturnType<typeof listAuthoringMemoryInTx> {
-    return await inTx(tx => listAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+    return await inReadSnapshot(tx => listAuthoringMemoryInTx(tx, input));
 }
 export async function mutateAuthoringMemory(input: Parameters<typeof mutateAuthoringMemoryInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
     try {

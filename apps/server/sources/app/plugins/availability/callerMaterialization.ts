@@ -1,7 +1,7 @@
 import type { MachineOperationProtocolCapabilityNameV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 
 import { resolveCurrentClaimablePluginMachineMaterializationTx } from "./operations";
 
@@ -33,7 +33,7 @@ export async function authenticateCurrentPluginMaterializationCallerV1(params: R
 }>): Promise<CurrentPluginMaterializationCallerV1 | null> {
     if (params.caller.machineId !== params.publisher.machineId) return null;
     const serverIdentityId = await getOrCreateServerIdentityId(process.env);
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const row = await tx.pluginMachineMaterialization.findUnique({
             where: {
                 machineId_materializationId: {
@@ -68,5 +68,5 @@ export async function authenticateCurrentPluginMaterializationCallerV1(params: R
                 : {}),
         });
         return current.kind === "current" ? { pluginId: row.pluginId } : null;
-    }, { /* Installation identity and claimable materialization must share one capture. */ isolationLevel: "Serializable" });
+    });
 }

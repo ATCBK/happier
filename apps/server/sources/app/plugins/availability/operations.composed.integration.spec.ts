@@ -9,9 +9,11 @@ import {
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityIntentsListActionOutputV1Schema,
     PluginAvailabilityCollectionWritersClaimActionOutputV1Schema,
+    PluginAvailabilityCollectionWritersClaimActionInputV1Schema,
     PluginAccountCollectionContributionV1Schema,
     PluginAvailabilityReleaseReadActionOutputV1Schema,
     PluginAvailabilityMaterializationsReportActionInputV1Schema,
+    PluginReleaseFactsV1Schema,
     type PluginAvailabilityMaterializationsReportActionOutputV1,
     type FeaturesResponse,
     normalizePluginAccountCollectionContractsV1,
@@ -1308,6 +1310,32 @@ describe("plugin Availability operations", () => {
     );
 
     describe("release-less Collection writer claims", () => {
+        it("validates each HTTP claim once at the operation owner and still rejects malformed ingress", async () => {
+            await seedAccountAndMachine();
+            const parse = vi.spyOn(PluginAvailabilityCollectionWritersClaimActionInputV1Schema, "parse");
+            const safeParse = vi.spyOn(PluginAvailabilityCollectionWritersClaimActionInputV1Schema, "safeParse");
+            try {
+                await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                    const headers = { "x-test-user-id": ACCOUNT_ID };
+                    const url = PluginAvailabilityActionHttpPathsV1["account.plugins.availability.collectionWriters.claim"];
+                    for (let i = 0; i < 2; i++) {
+                        parse.mockClear(); safeParse.mockClear();
+                        const response = await app.inject({ method: "POST", url, headers,
+                            payload: { manifest: claimManifest([]) } });
+                        expect(response.statusCode, response.body).toBe(200);
+                        expect(response.json()).toMatchObject({ intent: { pluginId: PLUGIN_ID, desiredVersion: null } });
+                        expect(parse.mock.calls.length + safeParse.mock.calls.length).toBe(1);
+                    }
+                    parse.mockClear(); safeParse.mockClear();
+                    const rejected = await app.inject({ method: "POST", url, headers,
+                        payload: { manifest: { ...claimManifest([]), version: 7 } } });
+                    expect(rejected.statusCode).toBe(400);
+                    expect(rejected.json()).toEqual({ error: "plugin_availability_invalid_request" });
+                    expect(parse.mock.calls.length + safeParse.mock.calls.length).toBe(1);
+                });
+            } finally { parse.mockRestore(); safeParse.mockRestore(); }
+        });
+
         const CLAIMED_TASKS_V1 = {
             id: "tasks",
             schemaVersion: 1,
@@ -2040,6 +2068,51 @@ describe("plugin Availability operations", () => {
             expect(edited.event).toMatchObject({ title: "Edited repository event" });
             expect(edited.caller.eventDeclarationRelease.archiveDigestSha256)
                 .not.toBe(first.caller.eventDeclarationRelease.archiveDigestSha256);
+        });
+
+        it("reads an externally authored admitted declaration without reparsing its body and keeps fresh authority checks", async () => {
+            await seedWebhookCapableMachine();
+            const service = operations();
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const headers = { "x-test-user-id": ACCOUNT_ID };
+                const url = PluginAvailabilityActionHttpPathsV1["account.plugins.availability.collectionWriters.claim"];
+                const claim = await app.inject({ method: "POST", url, headers,
+                    payload: { manifest: declaredManifest() } });
+                expect(claim.statusCode, claim.body).toBe(200);
+                const malformed = declaredManifest();
+                const rejected = await app.inject({ method: "POST", url, headers,
+                    payload: { manifest: { ...malformed, contributes: {
+                        ...malformed.contributes, webhooks: [{ ...malformed.contributes.webhooks[0], verifier: { kind: "unknown" } }],
+                    } } } });
+                expect(rejected.statusCode).toBe(400);
+                expect(rejected.json()).toEqual({ error: "plugin_availability_invalid_request" });
+            });
+            await reportMaterialization(service, { sourceClass: "localPath", version: DECLARED_VERSION });
+            const where = { accountId_pluginId: { accountId: ACCOUNT_ID, pluginId: PLUGIN_ID } };
+            const parse = vi.spyOn(PluginManifestV2Schema, "safeParse");
+            try {
+                for (let index = 0; index < 5; index++) {
+                    expect((await readCurrentness(DECLARED_VERSION)).materialization.kind).toBe("current");
+                    expect((await readEventCurrentness()).event.title).toBe("Repository event");
+                }
+                expect(parse).not.toHaveBeenCalled();
+                await service.claimCollectionWriters({ accountId: ACCOUNT_ID,
+                    input: { manifest: declaredManifest(DECLARED_VERSION, "Updated external declaration") } });
+                parse.mockClear();
+                expect((await readEventCurrentness()).event.title).toBe("Updated external declaration");
+                const intent = await db.accountPluginIntent.findUniqueOrThrow({ where });
+                await service.setIntent({ accountId: ACCOUNT_ID, input: {
+                    pluginId: PLUGIN_ID, desiredVersion: null, enabled: false, offlineUiHosting: "disabled",
+                    writableCollections: [], expectedRevision: intent.revision.toString(),
+                } });
+                expect(await readCurrentness(DECLARED_VERSION)).toMatchObject({ webhook: null, claimAuthorities: [] });
+                await expect(readEventCurrentness()).rejects.toMatchObject({ code: "event_contribution_not_current" });
+                await db.machine.update({ where: { accountId_id: { accountId: ACCOUNT_ID, id: MACHINE_ID } },
+                    data: { revokedAt: new Date() } });
+                expect((await readCurrentness(DECLARED_VERSION)).materialization.kind).toBe("notCurrent");
+                await expect(readEventCurrentness()).rejects.toMatchObject({ code: "caller_materialization_not_current" });
+                expect(parse).not.toHaveBeenCalled();
+            } finally { parse.mockRestore(); }
         });
 
         it("refuses a daemon-selected materialization whose version differs from the claimed declaration", async () => {
@@ -3156,6 +3229,10 @@ describe("plugin Availability operations", () => {
         await seedAccountAndMachine();
         const service = operations();
         const facts = releaseFacts();
+        await expect(service.publishRelease({
+            accountId: ACCOUNT_ID,
+            input: { facts: { ...facts, uiSlots: [{ ...facts.uiSlots[0], artifactDigest: "invalid" }] }, sourceClass: "registryPackage" },
+        })).rejects.toMatchObject({ code: "plugin_availability_invalid_request" });
         await service.publishRelease({
             accountId: ACCOUNT_ID,
             input: { facts, sourceClass: "registryPackage" },
@@ -3184,24 +3261,30 @@ describe("plugin Availability operations", () => {
             input: { expectedRevision: null, snapshot },
         });
 
-        await expect(inTx(async (tx) => (
-            await resolveCurrentClaimablePluginMachineMaterializationTx({
-                tx,
-                accountId: ACCOUNT_ID,
-                serverIdentityId: SERVER_IDENTITY_ID,
-                machineId: MACHINE_ID,
-                machineInstallationId: "machine-installation-availability",
-                materializationId: "install-epoch-1",
-                pluginId: PLUGIN_ID,
-                version: RELEASE.version,
-            })
-        ))).resolves.toMatchObject({
-            kind: "current",
-            materialization: {
-                materializationId: "install-epoch-1",
-                trustState: "trusted",
-            },
-        });
+        const releaseParse = vi.spyOn(PluginReleaseFactsV1Schema, "parse");
+        try {
+            await expect(inTx(async (tx) => (
+                await resolveCurrentClaimablePluginMachineMaterializationTx({
+                    tx,
+                    accountId: ACCOUNT_ID,
+                    serverIdentityId: SERVER_IDENTITY_ID,
+                    machineId: MACHINE_ID,
+                    machineInstallationId: "machine-installation-availability",
+                    materializationId: "install-epoch-1",
+                    pluginId: PLUGIN_ID,
+                    version: RELEASE.version,
+                })
+            ))).resolves.toMatchObject({
+                kind: "current",
+                materialization: {
+                    materializationId: "install-epoch-1",
+                    trustState: "trusted",
+                },
+            });
+            expect(releaseParse).not.toHaveBeenCalled();
+        } finally {
+            releaseParse.mockRestore();
+        }
         await expect(inTx(async (tx) => (
             await resolveCurrentClaimablePluginMachineMaterializationTx({
                 tx,

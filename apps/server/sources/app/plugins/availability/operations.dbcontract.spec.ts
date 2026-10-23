@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, PluginReleaseFactsV1Schema } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
 
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
@@ -55,6 +57,91 @@ describe("plugin Availability report transaction contract", () => {
 
     afterAll(async () => {
         await db.$disconnect();
+    });
+
+    it.skipIf(provider !== "postgres").each([
+        { kind: "ui", change: "cursor" }, { kind: "package", change: "cursor" },
+        { kind: "ui", change: "inconsistent-mode" }, { kind: "package", change: "inconsistent-mode" },
+    ] as const)("preserves hosted $kind removal under $change contention", async ({ kind, change }) => {
+        const suffix = randomUUID();
+        const accountId = `${accountIdPrefix}${suffix}`;
+        activeAccountId = accountId;
+        await db.account.create({ data: { id: accountId, encryptionMode: "plain" } });
+        const ref = { pluginId: `com.acme.removal-${suffix}`, version: "1.0.0" };
+        const slot = { contributionId: "panel", artifactId: "panel", tier: "hostedWeb", platform: "web",
+            artifactDigest: `sha256:${"b".repeat(64)}`, hostUiApiRange: "^1.0.0" };
+        const facts = PluginReleaseFactsV1Schema.parse({
+            ref, archiveDigestSha256: `sha256:${"a".repeat(64)}`,
+            normalizedManifest: { schemaVersion: 2, id: ref.pluginId, version: ref.version,
+                displayName: "Removal fixture", engines: { happier: "^1.0.0" }, runtime: { apiVersion: 1 }, contributes: {} },
+            collectionContracts: [], uiSlots: [slot],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${"c".repeat(64)}`, resources: [] },
+        });
+        const release = await db.accountPluginRelease.create({ data: { accountId, pluginId: ref.pluginId,
+            version: ref.version, archiveDigestSha256: facts.archiveDigestSha256,
+            normalizedManifest: facts.normalizedManifest, collectionContracts: [], uiSlots: facts.uiSlots,
+            packageAssetArchive: facts.packageAssetArchive } });
+        const artifactId = randomUUID();
+        await db.artifact.create({ data: { id: artifactId, accountId,
+            header: Buffer.from("header"), body: Buffer.from("body"), dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) } });
+        if (kind === "ui") {
+            await db.accountPluginUiArtifact.create({ data: { releaseId: release.id, contributionId: slot.contributionId,
+                tier: slot.tier, platform: slot.platform, artifactId, artifactDigest: slot.artifactDigest,
+                compatibility: { hostUiApiRange: slot.hostUiApiRange } } });
+        } else {
+            await db.accountPluginRelease.update({ where: { id: release.id }, data: { packageAssetArtifactId: artifactId } });
+        }
+        const service = createPluginAvailabilityOperations();
+        const original = db.$transaction;
+        let advances = 0;
+        db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                const find = tx.account.findUnique.bind(tx.account);
+                let observed = false;
+                const account = new Proxy(tx.account, { get(owner, property, receiver) {
+                    if (property !== "findUnique") return Reflect.get(owner, property, receiver);
+                    return async (...values: Parameters<typeof find>) => {
+                        const row = await find(...values);
+                        if (!observed && (change === "cursor" || advances === 0)) {
+                            observed = true;
+                            await db.account.update({ where: { id: accountId }, data: change === "cursor"
+                                ? { seq: { increment: 1 } } : { encryptionMode: "e2ee" } });
+                            advances++;
+                        }
+                        return row;
+                    };
+                } });
+                return callback(new Proxy(tx, { get(owner, property, receiver) {
+                    return property === "account" ? account : Reflect.get(owner, property, receiver);
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        try {
+            const remove = async () => kind === "ui"
+                ? await service.removeUiArtifact({ accountId, input: { release: ref, contributionId: slot.contributionId,
+                    artifactId: slot.artifactId, tier: slot.tier, platform: slot.platform } })
+                : await service.removePackageAsset({ accountId, input: { release: ref } });
+            if (change === "inconsistent-mode") {
+                await expect(remove()).rejects.toMatchObject({ code: kind === "ui"
+                    ? "plugin_ui_artifact_invalid_content" : "plugin_package_asset_invalid_content" });
+                expect(await db.artifact.count({ where: { id: artifactId } })).toBe(1);
+                expect(await db.accountChange.count({ where: { accountId } })).toBe(0);
+                return;
+            }
+            const result = await remove();
+            expect(result.removed).toBe(true);
+            expect(await db.artifact.count({ where: { id: artifactId } })).toBe(0);
+            expect(await db.account.findUniqueOrThrow({ where: { id: accountId }, select: { seq: true } }))
+                .toEqual({ seq: advances + 1 });
+            expect(await db.accountChange.count({ where: { accountId, kind: "pluginDomain" } })).toBe(1);
+        } finally {
+            db.$transaction = original;
+            await db.accountPluginUiArtifact.deleteMany({ where: { artifactId } });
+            await db.accountPluginRelease.update({ where: { id: release.id }, data: { packageAssetArtifactId: null } });
+            await db.artifact.deleteMany({ where: { id: artifactId } });
+        }
     });
 
     it.skipIf(provider !== "postgres").each(["account cursor", "machine metadata"] as const)("publishes despite an unrelated %s writer during every report attempt", async writer => {

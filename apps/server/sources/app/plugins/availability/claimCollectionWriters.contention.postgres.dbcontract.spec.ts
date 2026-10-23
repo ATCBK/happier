@@ -95,7 +95,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
         await competitor;
     }
 
-    it.each([false, true])("rejoins an unchanged claim without exclusive admission (prepare: %s)", async prepare => {
+    it.each([false, true])("rejoins an unchanged claim without Account serialization (prepare: %s)", async prepare => {
         const { account, manifest, headers } = await fixture();
         const pending: Promise<unknown>[] = [];
         try {
@@ -105,7 +105,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
                 const before = await db.account.findUniqueOrThrow({ where: { id: account.id } });
                 let completed = false;
                 await inTx(async tx => {
-                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
                     await commitOrBlock(tx, async () => {
                         const response = await app.inject({ method: "POST", url: route, headers,
                             payload: { manifest, ...(prepare ? { prepare: true } : {}) } });
@@ -116,6 +116,42 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
                         completed = true;
                     }, pending);
                     expect(completed, "An unchanged declaration must not queue an exclusive Account waiter").toBe(true);
+                });
+                expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(before.seq);
+            });
+        } finally { await Promise.allSettled(pending); }
+    });
+
+    it.each([false, true])("rejoins a lagging declaration with accumulated writers without Account serialization (prepare: %s)", async prepare => {
+        const { account, manifest, ref, headers } = await fixture();
+        const newerManifest = PluginManifestV2Schema.parse({ ...manifest, version: "2.0.0", contributes: {
+            accountCollections: [{ ...manifest.contributes.accountCollections[0]!, id: "other-items" }],
+        } });
+        const pending: Promise<unknown>[] = [];
+        try {
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const claim = (value: typeof manifest, prepareClaim = false) => app.inject({
+                    method: "POST", url: route, headers, payload: { manifest: value, ...(prepareClaim ? { prepare: true } : {}) },
+                });
+                expect((await claim(manifest)).statusCode).toBe(200);
+                const latest = await claim(newerManifest);
+                expect(latest.statusCode, latest.body).toBe(200);
+                expect(latest.json().intent.writableCollections).toContainEqual(ref);
+                expect(latest.json().intent.writableCollections).toHaveLength(2);
+                const before = await db.account.findUniqueOrThrow({ where: { id: account.id } });
+                let completed = false;
+                await inTx(async tx => {
+                    // Exclusive admission also detects an unnecessary KEY SHARE rejoin.
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
+                    await commitOrBlock(tx, async () => {
+                        const response = await claim(manifest, prepare);
+                        expect(response.statusCode, response.body).toBe(200);
+                        const result = PluginAvailabilityCollectionWritersClaimActionOutputV1Schema.parse(response.json());
+                        expect(result.intent).toEqual(latest.json().intent);
+                        if (prepare) expect(result.preparation).toEqual([]);
+                        completed = true;
+                    }, pending);
+                    expect(completed, "A monotonic no-op claim must not queue behind unrelated Account publication").toBe(true);
                 });
                 expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(before.seq);
             });

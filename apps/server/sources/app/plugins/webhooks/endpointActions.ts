@@ -93,7 +93,7 @@ export async function configurePluginWebhookEndpointCredentialV1(params: Readonl
             credentialVersionId: material.credentialVersionId,
             oneTimeGeneratedSecret: material.secret,
         });
-    }, { /* Endpoint revision and credential rotation/retirement participate with authority readers. */ isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }
 
 export async function rotatePluginWebhookEndpointCredentialV1(params: Readonly<{

@@ -1,7 +1,6 @@
 import type { Fastify } from "@/app/api/types";
-import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema, PluginAvailabilityIntentsListActionInputV1Schema, PluginAvailabilityIntentSetActionInputV1Schema, PluginAvailabilityCollectionWritersClaimActionInputV1Schema, PluginAvailabilityMaterializationsReadActionInputV1Schema, PluginAvailabilityMaterializationsReportActionInputV1Schema, PluginAvailabilityPackageAssetPublishActionInputV1Schema, PluginAvailabilityPackageAssetReadActionInputV1Schema, PluginAvailabilityPackageAssetRemoveActionInputV1Schema, PluginAvailabilityReleaseReadActionInputV1Schema, PluginAvailabilityReleasePublishActionInputV1Schema, PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema, PluginAvailabilityUiArtifactPublishActionInputV1Schema, PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactRemoveActionInputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability/actions';
 import type { FastifyReply } from "fastify";
-import type { z } from "zod/mini";
 import { EPHEMERAL_HOSTED_WEB_ASSET_DELIVERY_HEADERS_V1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
 
 import {
@@ -28,17 +27,6 @@ function requestUserId(request: Readonly<{ userId?: unknown }>): string {
     }
     throw new PluginAvailabilityOperationError(
         "plugin_availability_authentication_required",
-    );
-}
-
-function parseOperationInput<TSchema extends z.ZodMiniType>(
-    schema: TSchema,
-    input: unknown,
-): z.infer<TSchema> {
-    const parsed = schema.safeParse(input);
-    if (parsed.success) return parsed.data;
-    throw new PluginAvailabilityOperationError(
-        "plugin_availability_invalid_request",
     );
 }
 
@@ -188,10 +176,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.readIntent({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityIntentReadActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -205,10 +190,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.listIntentIds({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityIntentsListActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -222,10 +204,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.setIntent({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityIntentSetActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -239,10 +218,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.claimCollectionWriters({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityCollectionWritersClaimActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -256,10 +232,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.readRelease({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityReleaseReadActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -273,10 +246,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.readMaterializations({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityMaterializationsReadActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -290,10 +260,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.publishUiArtifact({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityUiArtifactPublishActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -307,10 +274,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             const result = await operations.readUiArtifact({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityUiArtifactReadActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
             return result;
         } catch (error) {
@@ -325,10 +289,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.publishPackageAsset({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityPackageAssetPublishActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -342,10 +303,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             const result = await operations.readPackageAsset({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityPackageAssetReadActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
             return result;
         } catch (error) {
@@ -360,7 +318,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.removePackageAsset({
                 accountId: requestUserId(request),
-                input: parseOperationInput(PluginAvailabilityPackageAssetRemoveActionInputV1Schema, request.body),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -374,10 +332,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.issueBrowserArtifactFrame({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityUiArtifactBrowserFrameIssueActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -391,10 +346,7 @@ export function registerPluginAvailabilityRoutes(
         try {
             return await operations.removeUiArtifact({
                 accountId: requestUserId(request),
-                input: parseOperationInput(
-                    PluginAvailabilityUiArtifactRemoveActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -415,10 +367,7 @@ export function registerPluginAvailabilityRoutes(
             });
             return await operations.publishRelease({
                 accountId,
-                input: parseOperationInput(
-                    PluginAvailabilityReleasePublishActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);
@@ -445,10 +394,7 @@ export function registerPluginAvailabilityRoutes(
             return await operations.reportMaterializations({
                 accountId,
                 publisherMachineId: publisher.machineId,
-                input: parseOperationInput(
-                    PluginAvailabilityMaterializationsReportActionInputV1Schema,
-                    request.body,
-                ),
+                input: request.body,
             });
         } catch (error) {
             await sendOperationError(reply, error);

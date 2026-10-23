@@ -13,7 +13,6 @@ import {
     assertHomeOwnershipSurvivesTransitionInTx,
     authorizeHomeAccountErasureActorInTx,
     authorizeHomeGovernanceMutationInTx,
-    readHomeGovernanceAccountInTx,
 } from "@/app/home/governance/homeCapabilities";
 import { acquireAccountLifecycleAdmissionInTx, setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { publishHomeGovernanceChangedInTx } from "@/app/home/governance/governanceChanges";
@@ -452,7 +451,9 @@ export async function erasePluginAccountData(input: Readonly<{
     pluginId: string;
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<PluginAccountDataEraseResult> {
-    return await inTx(async (tx) => await erasePluginAccountDataInTx({ tx, ...input }), { /* Erasure dependency and last-owner censuses span Account, Team and managed rows. */ isolationLevel: "Serializable" });
+    // Existing exclusive Account admission precedes every dependency/collection
+    // census and excludes the canonical collection and managed-resource writers.
+    return await inTx(async (tx) => await erasePluginAccountDataInTx({ tx, ...input }), { isolationLevel: "ReadCommitted" });
 }
 
 export type DeleteAccountForErasureResult =
@@ -674,7 +675,7 @@ export async function deleteAccountForErasure(input: Readonly<{
             throw new TransactionReplayRequiredError('transaction-account-audience-changed');
         }
     };
-    const capturePreflight = async (tx: Tx, serializable: boolean) => {
+    const capturePreflight = async (tx: Tx) => {
         await fenceAccounts(tx, actor);
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
@@ -695,19 +696,8 @@ export async function deleteAccountForErasure(input: Readonly<{
         // request was admitted is honored here.
         const actorRejection = await admitAccountErasureActorInTx(tx, { actor, accountId: input.accountId });
         if (actorRejection) return { status: "rejected" as const, code: actorRejection };
-        if (!serializable) {
-            const target = await readHomeGovernanceAccountInTx(tx, input.accountId);
-            const teamOwnership = await tx.teamMembership.findFirst({
-                where: { accountId: input.accountId, role: "owner" }, select: { id: true },
-            });
-            // Only these ownership predicates need SSI. The Account fence
-            // prevents a non-owner from acquiring ownership after this choice.
-            // Escalate before retirement or any other domain write; the next
-            // transaction rechecks current authority and both ownership owners.
-            if ((target?.homeRole === "owner" && target.status === "active") || teamOwnership) {
-                return { status: "serializable-retirement-required" as const };
-            }
-        }
+        // Lifecycle admission already excludes competing Home/Team ownership
+        // changes through the complete existing exclusive Account cohort.
         // Ownership is decided before any irreversible external deletion, and
         // it applies to every entry point: a Home must never be left without an
         // active owner because one of its owners erased their Account.
@@ -794,17 +784,9 @@ export async function deleteAccountForErasure(input: Readonly<{
             locators: await captureAccountErasureBlobLocatorsInTx(tx, input.accountId),
         };
     };
-    let preflight = await inTx(tx => capturePreflight(tx, false), {
+    const preflight = await inTx(capturePreflight, {
         isolationLevel: "ReadCommitted", transactionClass: "account-erasure.retire",
     });
-    if (preflight.status === "serializable-retirement-required") {
-        preflight = await inTx(tx => capturePreflight(tx, true), {
-            isolationLevel: "Serializable", transactionClass: "account-erasure.retire-owner",
-        });
-    }
-    if (preflight.status === "serializable-retirement-required") {
-        throw new Error("Serializable Account erasure retirement did not establish ownership admission");
-    }
     if (preflight.status === "already-deleted") return { status: "already-deleted" };
     if (preflight.status === "rejected") {
         if (preflight.code === "account_erasure_managed_resources_review_required") return { status: "failed", code: preflight.code, resources: preflight.resources };

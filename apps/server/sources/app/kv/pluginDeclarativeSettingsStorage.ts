@@ -2,7 +2,7 @@ import { assertPluginAccountSettingsContentForModeV1, PluginAccountSettingsConte
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 
 import { buildPluginDeclarativeSettingsPhysicalKey } from "./accountScopedKv";
 import {
@@ -75,8 +75,8 @@ export async function readPluginDeclarativeSettingsInTx(
 export async function readPluginDeclarativeSettings(
     input: Readonly<{ accountId: string; pluginId: string }>,
 ): Promise<PluginDeclarativeSettingsReadResult> {
-    return await inTx(async (tx) =>
-        await readPluginDeclarativeSettingsInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+    return await inReadSnapshot(async (tx) =>
+        await readPluginDeclarativeSettingsInTx(tx, input));
 }
 
 export async function mutatePluginDeclarativeSettingsInTx(

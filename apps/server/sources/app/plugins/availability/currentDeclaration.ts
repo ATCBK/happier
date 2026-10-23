@@ -1,5 +1,5 @@
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
-import { PluginManifestV2Schema, type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
+import type { ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 import { computePluginUiArtifactSha256DigestV1, PluginUiArtifactDigestV1Schema, type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 
 import type { Tx } from "@/storage/inTx";
@@ -40,6 +40,20 @@ export function createReleaseLessDeclarationV1(manifest: ParsedPluginManifestV2)
     };
 }
 
+/**
+ * Claims and release publication validate and normalize the body before the
+ * sole Availability writer stores it. Reads check its identifying envelope;
+ * they do not re-admit every contribution in that server-owned body.
+ */
+export function readStoredPluginManifestV2(stored: unknown, pluginId: string): ParsedPluginManifestV2 | null {
+    if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return null;
+    const value = stored as Readonly<Record<string, unknown>>;
+    if (value.schemaVersion !== 2 || value.id !== pluginId || typeof value.version !== "string"
+        || value.contributes === null || typeof value.contributes !== "object" || Array.isArray(value.contributes)) return null;
+    // This database boundary reads the normalized output of the validated producer above.
+    return stored as ParsedPluginManifestV2;
+}
+
 function readReleaseLessDeclarationV1(
     stored: unknown,
     pluginId: string,
@@ -47,9 +61,9 @@ function readReleaseLessDeclarationV1(
     if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return null;
     const value = stored as Readonly<Record<string, unknown>>;
     const digest = PluginUiArtifactDigestV1Schema.safeParse(value.manifestDigestSha256);
-    const manifest = PluginManifestV2Schema.safeParse(value.manifest);
-    if (!digest.success || !manifest.success || manifest.data.id !== pluginId) return null;
-    return { manifestDigestSha256: digest.data, manifest: manifest.data };
+    const manifest = readStoredPluginManifestV2(value.manifest, pluginId);
+    if (!digest.success || !manifest) return null;
+    return { manifestDigestSha256: digest.data, manifest };
 }
 
 /**
@@ -121,11 +135,11 @@ export async function resolveCurrentPluginDeclarationsTx(params: Readonly<{
         const key = declarationRefKey(ref.pluginId, ref.version);
         if (intent.desiredVersion === ref.version) {
             const release = releasesByRef.get(key);
-            const manifest = PluginManifestV2Schema.safeParse(release?.normalizedManifest);
+            const manifest = readStoredPluginManifestV2(release?.normalizedManifest, ref.pluginId);
             const digest = PluginUiArtifactDigestV1Schema.safeParse(release?.archiveDigestSha256);
-            if (!manifest.success || !digest.success || manifest.data.id !== ref.pluginId) continue;
+            if (!manifest || !digest.success || manifest.version !== ref.version) continue;
             resolved.set(key, {
-                manifest: manifest.data,
+                manifest,
                 declarationDigestSha256: digest.data,
             });
             continue;

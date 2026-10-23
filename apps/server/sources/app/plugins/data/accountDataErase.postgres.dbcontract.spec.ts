@@ -1,14 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PluginManifestV2Schema } from '@happier-dev/protocol';
+import { defineProtocolObject, defineProtocolString } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { defineMachineProvisionerSchemas, MachineProvisionerCheckResultProtocolV1Schema,
+    MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerObservationV1Schema,
+    MachineProvisionerPowerResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { updatePendingMessage } from '@/app/session/pending/pendingMessageService';
 import { db, initDbPostgres, shutdownDbClient } from '@/storage/db';
-import { inReadSnapshot, inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/prisma';
+import { buildPluginAccountStoragePhysicalKey } from '@/app/kv/accountScopedKv';
+import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
+import { admitManagedAcquire } from '@/app/machines/managed/managedAcquire';
+import { submitManagedAcquire } from '@/app/machines/managed/managedMutations';
 
-import { deleteAccountForErasure } from './accountDataErase';
+import { deleteAccountForErasure, erasePluginAccountData } from './accountDataErase';
 
 function deferred() {
     let resolve!: () => void;
@@ -29,11 +38,14 @@ async function readBackendsBlockedBy(pid: number): Promise<BlockingBackend[]> {
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Account erasure terminal tail', () => {
     const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
     const previousStoragePolicy = process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY;
+    const previousServerIdentity = process.env.HAPPIER_SERVER_IDENTITY_ID;
+    const homeId = `srv_${'e'.repeat(32)}`;
 
     beforeAll(async () => {
         if (!process.env.DATABASE_URL) throw new Error('A disposable PostgreSQL contract DATABASE_URL is required');
         process.env.HAPPIER_DB_TX_MAX_RETRIES = '0';
         process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = 'optional';
+        process.env.HAPPIER_SERVER_IDENTITY_ID = homeId;
         initDbPostgres();
         await db.$connect();
     });
@@ -44,6 +56,174 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
         if (previousStoragePolicy === undefined) delete process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY;
         else process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = previousStoragePolicy;
+        if (previousServerIdentity === undefined) delete process.env.HAPPIER_SERVER_IDENTITY_ID;
+        else process.env.HAPPIER_SERVER_IDENTITY_ID = previousServerIdentity;
+    });
+
+    it.each(['plugin', 'owner-retirement'] as const)('commits %s erasure after a hot Account cursor advances', async shape => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain', homeRole: shape === 'owner-retirement' ? 'owner' : 'member' } });
+        const survivor = shape === 'owner-retirement' ? await db.account.create({ data: { encryptionMode: 'plain', homeRole: 'owner' } }) : null;
+        const pluginId = 'example.erasure-hot';
+        const key = buildPluginAccountStoragePhysicalKey(pluginId);
+        await db.userKVStore.create({ data: { accountId: account.id, key, version: 0, value: new TextEncoder().encode('erased fixture') } });
+        const transaction = db.$transaction;
+        let advances = 0;
+        // Real concurrent commits invalidate every SSI attempt's Account view;
+        // current admission under RC must still tombstone/retire exactly once.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                const current = await tx.account.findUnique({ where: { id: account.id }, select: { seq: true } });
+                if (current) {
+                    advances += 1;
+                    await db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                }
+                return callback(tx);
+            }, ...args.slice(1)]);
+        } });
+        try {
+            if (shape === 'plugin') {
+                expect(await erasePluginAccountData({ accountId: account.id, pluginId })).toMatchObject({ status: 'erased' });
+                expect((await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: account.id, key } } })).value).toBeNull();
+                expect(advances).toBe(1);
+            } else {
+                expect(await deleteAccountForErasure({ accountId: account.id })).toEqual({ status: 'deleted' });
+                expect(await db.account.findUnique({ where: { id: account.id } })).toBeNull();
+                expect(await db.account.findUniqueOrThrow({ where: { id: survivor!.id }, select: { homeRole: true, status: true } }))
+                    .toEqual({ homeRole: 'owner', status: 'active' });
+            }
+        } finally {
+            db.$transaction = transaction;
+            await db.account.deleteMany({ where: { id: { in: [account.id, ...(survivor ? [survivor.id] : [])] } } });
+        }
+    });
+
+    it('keeps one active Home owner when both owners concurrently erase themselves', async () => {
+        const owners = await Promise.all([0, 1].map(() => db.account.create({ data: { encryptionMode: 'plain', homeRole: 'owner' } })));
+        expect(await db.account.count({ where: { homeRole: 'owner', status: 'active' } })).toBe(2);
+        const transaction = db.$transaction;
+        const rounds = new Map<string, { arrivals: number; release: ReturnType<typeof deferred> }>();
+        // Both requests establish their view before either can acquire the
+        // existing complete sorted lifecycle cohort, for every isolation round.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            const options = args[1] as { isolationLevel?: string } | undefined;
+            const isolation = options?.isolationLevel ?? 'default';
+            let seen = false;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                return async (query: string, ...values: unknown[]) => {
+                    if (!seen && query.includes('FROM "Account"') && query.includes('FOR UPDATE')) {
+                        seen = true;
+                        let round = rounds.get(isolation);
+                        if (!round) { round = { arrivals: 0, release: deferred() }; rounds.set(isolation, round); }
+                        round.arrivals += 1;
+                        if (round.arrivals >= 2) round.release.resolve();
+                        await round.release.promise;
+                    }
+                    return inner.$queryRawUnsafe(query, ...values);
+                };
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            const outcomes = await Promise.allSettled(owners.map(owner => deleteAccountForErasure({ accountId: owner.id })));
+            for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+            const results = outcomes.flatMap(outcome => outcome.status === 'fulfilled' ? [outcome.value] : []);
+            expect(results).toContainEqual({ status: 'deleted' });
+            expect(results).toContainEqual({ status: 'failed', code: 'home_owner_transfer_required' });
+            expect(await db.account.count({ where: { homeRole: 'owner', status: 'active' } })).toBe(1);
+        } finally {
+            db.$transaction = transaction;
+            for (const round of rounds.values()) round.release.resolve();
+            await db.account.deleteMany({ where: { id: { in: owners.map(owner => owner.id) } } });
+        }
+    });
+
+    it('holds the plugin dependency census against the canonical managed submit producer', async () => {
+        const pluginId = 'example.erasure-managed';
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const controller = { machineId: randomUUID(), installationId: randomUUID() };
+        await db.machine.create({ data: { id: controller.machineId, accountId: account.id, metadata: '{}',
+            installationId: controller.installationId, pluginMaterializationRevision: BigInt(1) } });
+        const launch = defineProtocolObject({ image: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
+        const native = defineProtocolObject({ id: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
+        const roles = defineMachineProvisionerSchemas({ launch, resource: native });
+        const actions = [
+            { id: 'check', inputSchema: roles.checkInput.jsonSchema, resultSchema: MachineProvisionerCheckResultProtocolV1Schema.jsonSchema },
+            { id: 'acquire', inputSchema: roles.acquireInput.jsonSchema, resultSchema: roles.acquireResult.jsonSchema },
+            { id: 'bootstrap', inputSchema: roles.bootstrapInput.jsonSchema, resultSchema: MachineProvisionerBootstrapCarrierV1Schema.jsonSchema },
+            { id: 'inspect', inputSchema: roles.resourceInput.jsonSchema, resultSchema: MachineProvisionerObservationV1Schema.jsonSchema },
+            { id: 'destroy', inputSchema: roles.resourceInput.jsonSchema, resultSchema: MachineProvisionerPowerResultV1Schema.jsonSchema },
+            { id: 'power', inputSchema: roles.powerInput.jsonSchema, resultSchema: MachineProvisionerPowerResultV1Schema.jsonSchema },
+        ];
+        const manifest = PluginManifestV2Schema.parse({ schemaVersion: 2, id: pluginId, version: '1.0.0',
+            displayName: 'Erasure admission fixture', engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: {
+                machineProvisioners: [{ id: 'compute', title: 'Guest', icon: 'machine', resourceKind: 'vm', schemaVersion: 1,
+                    launchSchema: launch.jsonSchema, resourceSchema: native.jsonSchema, platforms: ['linux'], prerequisites: [],
+                    billing: { location: 'local', stoppedBilling: 'not-billed' }, retention: { supportedIntents: ['start', 'stop', 'delete'] },
+                    actions: { check: 'check', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy' } }],
+                actions: actions.map(action => ({ ...action, title: action.id, execution: { target: 'daemon' },
+                    surfaces: ['plugin'], scopes: ['global'], dangerLevel: 'safe' })),
+            } });
+        const declaration = createReleaseLessDeclarationV1(manifest);
+        await db.accountPluginIntent.create({ data: { accountId: account.id, pluginId, enabled: true,
+            writableCollections: [], releaseLessDeclaration: declaration } });
+        await db.pluginMachineMaterialization.create({ data: { accountId: account.id, serverIdentityId: homeId,
+            machineId: controller.machineId, materializationId: controller.installationId, pluginId, version: manifest.version,
+            sourceClass: 'bundledFirstParty', portableRelease: false, archiveDigestSha256: declaration.manifestDigestSha256,
+            uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: new Date() } });
+        const requestId = randomUUID();
+        const admitted = await admitManagedAcquire({ custodianAccountId: account.id, requesterAccountId: account.id,
+            requestEnvelopeDigest: 'erasure-admission-test', input: { requestId, continuationPresent: false, input: { selection: {
+                kind: 'one-off', homeId, controller, launch: { provider: { pluginId, localId: 'compute' }, schemaVersion: 1,
+                    name: 'Guest', choices: { image: 'linux' } }, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            } } } });
+        const transaction = db.$transaction;
+        let submit: ReturnType<typeof submitManagedAcquire> | undefined;
+        let settled = false;
+        let blockedAtAccount = false;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== 'managedMachine') return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.managedMachine, { get(delegate, method, delegateReceiver) {
+                    const operation = Reflect.get(delegate, method, delegateReceiver);
+                    if (method !== 'findMany') return operation;
+                    return async (...parameters: unknown[]) => {
+                        const result: unknown = await Reflect.apply(operation, delegate, parameters);
+                        if (!submit) {
+                            const [{ pid }] = await inner.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                            submit = submitManagedAcquire({ homeId, managedId: admitted.machine.id, controller,
+                                requestId, expectedIntentRevision: 0 }).finally(() => { settled = true; });
+                            while (!settled) {
+                                const waiting = await readBackendsBlockedBy(pid);
+                                if (waiting.length > 0) { blockedAtAccount = waiting.some(backend => backend.query.includes('Account')); break; }
+                            }
+                            expect(blockedAtAccount).toBe(true);
+                            expect((await db.managedMachine.findUniqueOrThrow({ where: { id: admitted.machine.id } })).allocation).toBe('unsubmitted');
+                        }
+                        return result;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            expect(await erasePluginAccountData({ accountId: account.id, pluginId })).toMatchObject({ status: 'erased' });
+            expect(await submit).toMatchObject({ submitted: true });
+            expect(blockedAtAccount).toBe(true);
+            expect(await erasePluginAccountData({ accountId: account.id, pluginId })).toMatchObject({
+                status: 'managed-resources-review-required', resources: [{ managedId: admitted.machine.id, allocation: 'may-exist' }],
+            });
+        } finally {
+            db.$transaction = transaction;
+            if (submit) await Promise.allSettled([submit]);
+            await db.managedMachine.deleteMany({ where: { custodianAccountId: account.id } });
+            await db.machine.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
     });
 
     it.each(['owned-discussion', 'foreign-discussion', 'authored-session'] as const)(

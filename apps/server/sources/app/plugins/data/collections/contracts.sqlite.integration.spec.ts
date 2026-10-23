@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import type { Prisma } from "@prisma/client";
 
 import {
@@ -148,7 +149,13 @@ describe("plugin collection writable-contract readiness", () => {
                 contractDigest: ref.contractDigest,
             },
         });
-        expect(readMaterializedPluginCollectionContract(persisted)).toMatchObject({
+        const contributionRuns = vi.spyOn(PluginAccountCollectionContributionV1Schema, 'parse');
+        let reconstructed;
+        try {
+            reconstructed = readMaterializedPluginCollectionContract(persisted);
+            expect(contributionRuns).toHaveBeenCalledTimes(1);
+        } finally { contributionRuns.mockRestore(); }
+        expect(reconstructed).toMatchObject({
             rowIdField: "id",
             serverReadable: ["dueAt", "projectId", "status", "title"],
             indexes: [{
