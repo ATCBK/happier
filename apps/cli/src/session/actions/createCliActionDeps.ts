@@ -3347,6 +3347,7 @@ export function createCliActionDeps(params: Readonly<{
                 ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
                 backendTarget: resolveScmBackendTarget(metadata), executeCanonicalAction,
                 ...(context.signal ? { signal: context.signal } : {}),
+                ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
               });
             },
           });

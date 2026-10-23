@@ -6,6 +6,7 @@ import { ScmBackendPreferenceSchema } from './backendIdentity.js';
 import { ScmComparisonSchema, ScmComparisonSourceSchema, type ScmComparison } from './comparison.js';
 import { ReviewLaunchFailureSchema } from '../reviews/reviewLaunchFailure.js';
 import { ReviewPublicationEvidenceSchema } from '../reviews/reviewPublicationEvidence.js';
+import { ExecutionRunTransportErrorCodeSchema } from '../execution/runs/runPrimitives.js';
 export * from './comparison.js';
 export * from './reviewedMarks.js';
 
@@ -246,9 +247,15 @@ export const ScmDiffSummaryModelOutputSchema = lazyZodSchema(() => (<T extends z
 })).check(z.refine((value) => Boolean(value.summaryMarkdown || value.walkthrough || value.commitPlan || value.reviewExplanations), 'A structured output is required')));
 export type ScmDiffSummaryModelOutput = z.infer<typeof ScmDiffSummaryModelOutputSchema>;
 
+export const ScmDiffSummaryFailureReasonCodeSchema = lazyZodSchema(() => z.union([
+  ExecutionRunTransportErrorCodeSchema,
+  z.enum(['generation_cancelled', 'RPC_CLIENT_NOT_AVAILABLE', 'DIFF_UNAVAILABLE', 'MODEL_UNAVAILABLE', 'SUMMARY_FAILED',
+    'action_failed', 'approval_required']),
+]));
+
 function progress<T extends z.ZodMiniType>(value: T) {
   return z.strictObject({ state: ScmDiffSummaryOutputStateSchema, value: z.optional(value),
-    reason: z.optional(z.string().check(z.minLength(1))), reasonCode: z.optional(z.enum(['generation_cancelled', 'RPC_CLIENT_NOT_AVAILABLE', 'DIFF_UNAVAILABLE', 'MODEL_UNAVAILABLE', 'SUMMARY_FAILED'])),
+    reason: z.optional(z.string().check(z.minLength(1))), reasonCode: z.optional(ScmDiffSummaryFailureReasonCodeSchema),
   }).check(z.refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value'));
 }
 export const ScmDiffSummaryOutputsSchema = lazyZodSchema(() => z.strictObject({

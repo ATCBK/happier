@@ -1,7 +1,8 @@
 import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
-import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { randomUUID } from 'node:crypto';
-import { ScmDiffSummaryGenerateOutputSchema, buildScmDiffSummaryCacheKey, SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryFailureReasonCodeSchema, buildScmDiffSummaryCacheKey, SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION } from '@happier-dev/protocol/scm/diffSummary';
+import { ActionApprovalRequestCreatedResultSchema, readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ActionExecuteResult, BackendTargetRefV2, ScmDiffSummaryGenerateInput, ScmDiffSummaryGenerateOutput, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs } from '@happier-dev/protocol';
 
@@ -16,6 +17,7 @@ import { resolveScmDiffSummaryModelSelection, resolveScmDiffSummarySettings, SCM
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import type { StoredCredentials } from '@/persistence';
 import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
+import { logger } from '@/ui/logger';
 
 type ExecuteCanonicalAction = (
     actionId: 'execution.run.start' | 'scm.pullRequest.openCompose',
@@ -31,6 +33,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
     readPullRequestComparisonPage?: ReadPullRequestComparisonPage;
     backendTarget: BackendTargetRefV2 | null;
     executeCanonicalAction: ExecuteCanonicalAction;
+    actionRequestId?: string;
     signal?: AbortSignal;
     credentials?: StoredCredentials;
 }>): Promise<ScmDiffSummaryGenerateOutput> {
@@ -127,7 +130,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 ...(output.success && inputId ? { inputId } : {}) });
         };
         const failed = async (reason: string, errorCode?: 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE',
-            reasonCode?: 'RPC_CLIENT_NOT_AVAILABLE'): Promise<ScmDiffSummaryGenerateOutput> => {
+            reasonCode?: NonNullable<ScmDiffSummaryOutputs['summary']>['reasonCode']): Promise<ScmDiffSummaryGenerateOutput> => {
             // A concurrent manual edit or started/terminal publication owns the newer revision.
             const output = failure(reason, errorCode, reasonCode);
             await scmDiffSummaryResultStore.publishProgress({ ...scope, expectedRevision: saved.revision, output });
@@ -159,10 +162,41 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 resultId: saved.resultId, expectedRevision: saved.revision },
             waitForCompletion: false,
         };
-        let startResult = await params.executeCanonicalAction('execution.run.start', startInput).catch(() => null);
+        const start = async (input: unknown): Promise<ActionExecuteResult> => {
+            let result: ActionExecuteResult;
+            let outcomeClass: 'started' | 'deferredApproval' | 'refused' | 'threw' | 'malformed';
+            let errorClass: string | null = null;
+            try {
+                result = await params.executeCanonicalAction('execution.run.start', input);
+                const approval = result.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(result.result) : null;
+                if (approval?.success) {
+                    outcomeClass = 'deferredApproval';
+                    result = { ok: false, errorCode: 'approval_required', error: 'Execution Run Start requires approval',
+                        details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') };
+                } else {
+                    outcomeClass = !result.ok ? 'refused'
+                        : ExecutionRunStartResponseSchema.safeParse(result.result).success ? 'started' : 'malformed';
+                }
+            } catch (error) {
+                outcomeClass = 'threw';
+                errorClass = readUnexpectedActionErrorDiagnosticV1(error).errorClass;
+                const details = error && typeof error === 'object' && 'details' in error ? error.details : undefined;
+                const code = ScmDiffSummaryFailureReasonCodeSchema.safeParse(
+                    error && typeof error === 'object' && 'code' in error ? error.code : undefined);
+                result = { ok: false, errorCode: code.success ? code.data : 'action_failed', error: 'Execution Run Start failed',
+                    details: withExecutionRunStartFailureDetails(details, readExecutionRunStartRunCreation(details)) };
+            }
+            const code = !result.ok ? ScmDiffSummaryFailureReasonCodeSchema.safeParse(result.errorCode) : null;
+            logger.infoFile('[scm.diffSummary] nested Start', { resultId: saved.resultId,
+                outerRequestId: params.actionRequestId ?? null, actionEntered: true, outcomeClass,
+                errorCode: code?.success ? code.data : result.ok ? null : 'action_failed', errorClass,
+                runCreation: outcomeClass === 'started' ? 'runCreated'
+                    : result.ok ? 'outcomeUnknown' : readExecutionRunStartRunCreation(result.details) });
+            return result;
+        };
+        let startResult = await start(startInput);
         // Losing Start's observation does not revoke its saved revision: that
         // same request may still be preparing or publishing on the receiver.
-        if (!startResult) return latestOutput(undefined, undefined, 'outcomeUnknown');
         if (!startResult.ok && startResult.errorCode === 'execution_run_parent_selection_unavailable'
             && readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated'
             && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId && selector?.modelId) {
@@ -174,7 +208,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             );
             if (!defaults.success) return failed('Diff-summary model is unavailable');
             const agentTargetKey = buildBackendTargetKeyV2(backendTarget);
-            startResult = await params.executeCanonicalAction('execution.run.start', {
+            startResult = await start({
                 ...startInput,
                 backendTarget,
                 modelId: selector.modelId,
@@ -182,8 +216,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                     ...(defaults.data[agentTargetKey]?.ref ?? { agentTargetKey, providerConnectionId: null }),
                     modelId: selector.modelId,
                 },
-            }).catch(() => null);
-            if (!startResult) return latestOutput(undefined, undefined, 'outcomeUnknown');
+            });
         }
         if (!startResult.ok) {
             const noRunCreated = readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated';
@@ -195,8 +228,9 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             // The typed refusal and its reason travel together; the code alone is not a reason.
             const refusal = startResult.error.includes(startResult.errorCode) ? startResult.error
                 : `${startResult.errorCode}: ${startResult.error}`;
+            const reasonCode = ScmDiffSummaryFailureReasonCodeSchema.safeParse(startResult.errorCode);
             return failed(refusal, startResult.errorCode === 'DIFF_UNAVAILABLE' ? 'DIFF_UNAVAILABLE' : undefined,
-                startResult.errorCode === 'RPC_CLIENT_NOT_AVAILABLE' ? startResult.errorCode : undefined);
+                reasonCode.success ? reasonCode.data : 'SUMMARY_FAILED');
         }
         const started = ExecutionRunStartResponseSchema.safeParse(startResult.result);
         return started.success

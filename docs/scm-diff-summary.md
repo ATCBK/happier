@@ -357,6 +357,16 @@ saved result and never sends Start. A fresh attempt remains explicit Regenerate
 or deletion followed by generation; no eventual receiver or automatic resolution
 is guaranteed. SCM Machine
 effects use the captured Action's lifetime rather than a subordinate RPC deadline.
+The Start owner distinguishes preparation and preflight failures from dispatched
+requests. A proven pre-send refusal or exception, deferred approval, or explicit
+`noRunCreated` receipt settles generation as a failed saved output with its typed
+`reasonCode`; it does not leave a pending uncertain revision. Deferred approval
+does not claim a Run exists. Dispatched failures without affirmative no-Run
+evidence and malformed replies remain uncertain, with no automatic resend.
+Each nested Start writes one content-free file-log observation containing the
+saved result id, outer Action request id, entry flag, outcome class, closed error
+code or class, and Run-creation evidence. Prompt, diff, arbitrary error prose and
+credential content are excluded.
 Initial output admission and publication use the Run's existing initial input
 identity, including its host default when no explicit input id was supplied.
 Ordinary later discussion retains an empty output scope.

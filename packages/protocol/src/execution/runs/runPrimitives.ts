@@ -27,6 +27,33 @@ export type ExecutionRunClass = z.infer<typeof ExecutionRunClassSchema>;
 export const ExecutionRunIoModeSchema = lazyZodSchema(() => z.enum(['request_response', 'streaming']));
 export type ExecutionRunIoMode = z.infer<typeof ExecutionRunIoModeSchema>;
 
+// Canonical, stable error code vocabulary for RPC `errorCode` and MCP `error.code`.
+// Keep this pinned and deterministic; clients should branch on these strings.
+export const ExecutionRunTransportErrorCodeSchema = lazyZodSchema(() => z.enum([
+  'execution_run_not_allowed',
+  'execution_run_not_found',
+  'execution_run_action_not_supported',
+  'execution_run_invalid_action_input',
+  'execution_run_stream_not_found',
+  'execution_run_busy',
+  'execution_run_send_outcome_unknown',
+  'execution_run_failed',
+  'execution_run_budget_exceeded',
+  'execution_run_output_limit_exceeded',
+  'execution_run_protocol_unsupported',
+  'execution_run_target_not_selected',
+  'execution_run_target_unavailable',
+  'execution_run_child_choice_required',
+  'execution_run_child_default_unavailable',
+  'execution_run_parent_selection_unavailable',
+  'execution_run_start_ambiguous',
+  'execution_run_scope_mismatch',
+  'execution_run_connected_service_generation_refresh_required',
+  'run_depth_exceeded',
+  'permission_denied',
+]));
+export type ExecutionRunTransportErrorCode = z.infer<typeof ExecutionRunTransportErrorCodeSchema>;
+
 /** Session prompt identity preserves the Run and the controller occurrence that owns the answer. */
 export function buildRunScopedExecutionPermissionRequestId(params: Readonly<{
   runId: string;

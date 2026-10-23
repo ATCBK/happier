@@ -4010,7 +4010,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     actionId: ActionId,
     result: ActionExecuteResult | ActionPrepareResult,
   ): ActionPrepareResult {
-    return 'kind' in result ? result : { kind: 'settled', result: settleActionOutput(actionId, result) };
+    return 'kind' in result ? result : { kind: 'settled', result: settleActionOutput(actionId,
+      result.ok ? result : classifyExecutionRunStartPreDispatchFailure(actionId, result)) };
   }
 
   const executeCore = async (
@@ -4788,6 +4789,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (approvalRouting.required && !isApprovalAction) {
         // A person is asked to approve only an add whose inputs this host's input owner already admits.
         if (actionId === 'widgets.item.add' && !existingAdmission && widgetTarget && deps.widgetInputs) {
+    let executionRunStartDispatched = false;
           const added = WidgetInstanceActionInputSchemasV1['widgets.item.add'].safeParse(admittedInput);
           const refusal = added.success ? await admitWidgetInstanceConfigurationV1(deps,
             { surface: widgetTarget, instanceId: added.data.instance.id }, added.data.instance, ctx) : null;
@@ -7967,6 +7969,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             const failure = normalizeActionExecutorThrownError(error);
             const details = readFailureEnvelopeDetails(readRecord(error));
             return classifyExecutionRunStartFailure(
+            executionRunStartDispatched = true;
               { ok: false, errorCode: failure.errorCode, error: failure.error, ...(details !== undefined ? { details } : {}) },
               readExecutionRunStartRunCreation(details),
             );
@@ -11699,7 +11702,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(normalized.details !== undefined ? { details: normalized.details } : {}),
       };
       return actionId === 'execution.run.start'
-        ? classifyExecutionRunStartFailure(failure, 'outcomeUnknown')
+        ? classifyExecutionRunStartFailure(failure, executionRunStartDispatched ? 'outcomeUnknown' : 'noRunCreated')
         : failure;
     }
   };
@@ -11771,7 +11774,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && ExecutionRunSendRequestSchema.safeParse(input).success;
   }
 
-  const prepareInvocation = async (
+  const prepareInvocationCore = async (
     actionId: ActionId,
     input: unknown,
     context?: ActionExecutorContext,
@@ -12030,6 +12033,22 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const result = prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
     // Admission may cancel before this read-only Action's observation arm runs.
     if (actionId === 'wait' && !result.ok && result.errorCode === 'cancelled') {
+  const prepareInvocation = async (
+    actionId: ActionId,
+    input: unknown,
+    context?: ActionExecutorContext,
+    hostInternal = false,
+    confirmUiDefault = false,
+  ): Promise<ActionPrepareResult> => {
+    try {
+      return await prepareInvocationCore(actionId, input, context, hostInternal, confirmUiDefault);
+    } catch (error) {
+      // Preparation never enters the Run transport; only the ready invocation can do so.
+      if (actionId !== 'execution.run.start') throw error;
+      return settlePrepareResult(actionId, { ok: false, ...normalizeActionExecutorThrownError(error) });
+    }
+  };
+
       const request = WaitActionInputV1Schema.safeParse(input);
       if (request.success) return settleActionOutput(actionId, { ok: true, result: {
         target: request.data.target, condition: request.data.condition, disposition: 'cancelled',

@@ -31,12 +31,13 @@ import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportD
 import { executeScmActionOperation } from './executeScmActionOperation';
 import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/ScmDiffSummaryProfile';
 import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
-import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { resolveTrackedSessionRunnerActivity } from '@/daemon/sessionRunnerRuntime/resolveRuntimeState';
 import type { TrackedSession } from '@/daemon/types';
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
+import { logger } from '@/ui/logger';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -207,15 +208,16 @@ describe('executeScmDiffSummaryAction', () => {
                     ] } });
                 expect(intent.outputs).toEqual(['summary']);
                 const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd: fixture.rootPath, sessionId, request: start });
+                if (!prepared) throw new Error('Pull request draft preparation is unavailable');
                 expect(prepared?.instructions).toContain('Prose language: fr');
                 expect(prepared?.instructions).toContain('Pull request drafting evidence:');
                 expect(prepared?.instructions).toContain('yarn test');
                 expect(prepared?.instructions).toContain('no claim that it passed');
                 expect(prepared?.instructions).not.toContain('User instructions:\nPull request drafting evidence:');
-                const run = { ...start, ...prepared, sessionId, runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain',
+                const run: ExecutionRunProfileStartParams = { ...start, ...prepared, sessionId, runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain',
                     modelSelection: prepared?.modelSelection ?? start.modelSelection ?? undefined,
                     backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
-                    backendId: 'codex', instructions: prepared?.instructions ?? '', startedAtMs: 1,
+                    backendId: 'codex', instructions: typeof prepared.instructions === 'string' ? prepared.instructions : '', startedAtMs: 1,
                     intent: 'scm_diff_summary' as const, retentionPolicy: 'resumable' as const,
                     runClass: 'long_lived' as const, ioMode: 'streaming' as const, permissionMode: 'read_only' };
                 const begun = await ScmDiffSummaryProfile.onStarted!({ start: run, rawText: '', finishedAtMs: 1 });
@@ -422,7 +424,7 @@ describe('executeScmDiffSummaryAction', () => {
         const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
             scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input,
                 workingDirectory: fixture.rootPath, authorizeSession: async id => id === sessionId,
-                executeDiffSummary: ({ request }) => executeScmDiffSummaryAction({ request, backendTarget: BACKEND_TARGET,
+                executeDiffSummary: ({ request }) => executeScmDiffSummaryAction({ request: ScmDiffSummaryGenerateInputSchema.parse(request), backendTarget: BACKEND_TARGET,
                     executeCanonicalAction: async () => {
                         startEntered();
                         await startGate;
@@ -698,6 +700,92 @@ describe('executeScmDiffSummaryAction', () => {
         expect(JSON.stringify(output)).not.toContain('+Later pending changes');
     });
 
+    it.each([
+        ['preflight refusal', 'execution_run_protocol_unsupported'],
+        ['preflight exception', 'action_failed'],
+        ['preparation exception', 'action_failed'],
+        ['deferred approval', 'approval_required'],
+        ['no-run service response', 'execution_run_not_allowed'],
+    ] as const)('settles nested Start %s through the real Action executor as a retryable saved failure', async (outcome, reasonCode) => {
+        const fixture = await changedRepository();
+        const sessionId = 'nested-admission-session';
+        const start = vi.fn(async () => ({ ok: false, code: 'execution_run_not_allowed', message: 'Start refused',
+            details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') }));
+        const observation = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+            isActionApprovalRequired: id => {
+                if (outcome === 'preparation exception' && id === 'execution.run.start') throw new TypeError('Private preparation content');
+                return outcome === 'deferred approval' && id === 'execution.run.start';
+            },
+            approvalsCreate: async () => ({ artifactId: 'nested-start-approval' }),
+            executionRunCheckProtocolV2: async () => {
+                if (outcome === 'preflight exception') throw new TypeError('Private preflight content');
+                return outcome === 'preflight refusal'
+                    ? { ok: false, errorCode: 'execution_run_protocol_unsupported', error: 'Protocol is unavailable' }
+                    : { ok: true, exactMachineId: 'machine' };
+            },
+            executionRunStart: start,
+            scmActionExecute: async ({ actionId, input, context, executeCanonicalAction }) => executeScmActionOperation({
+                actionId, input, workingDirectory: fixture.rootPath, sessionId, authorizeSession: async id => id === sessionId,
+                executeDiffSummary: ({ request }) => executeScmDiffSummaryAction({ request: request as ScmDiffSummaryGenerateInput,
+                    sessionId, backendTarget: BACKEND_TARGET, executeCanonicalAction,
+                    ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}) }),
+            }),
+        });
+        const response = await executor.execute('scm.diffSummary.generate', { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' }, outputs: ['walkthrough'] },
+        { surface: 'cli', defaultSessionId: sessionId, serverId: 'nested-home',
+            serverIdentityId: 'nested-home-identity', actionRequestId: 'outer-generation-request' });
+        expect(start).toHaveBeenCalledTimes(outcome === 'no-run service response' ? 1 : 0);
+        expect(response).toMatchObject({ ok: true, result: { success: false, revision: 1,
+            outputs: { walkthrough: { state: 'failed', reasonCode } } } });
+        if (!response.ok) throw new Error(response.errorCode);
+        const output = ScmDiffSummaryGenerateOutputSchema.parse(response.result);
+        expect(output).not.toHaveProperty('admission');
+        expect(output).not.toHaveProperty('runId');
+        expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId, resultId: output.resultId! }))
+            .toMatchObject({ success: true, result: { revision: 1, output } });
+        const logs = observation.mock.calls.filter(([label]) => label === '[scm.diffSummary] nested Start');
+        expect(logs).toHaveLength(1);
+        expect(logs[0]?.[1]).toMatchObject({ resultId: output.resultId, actionEntered: true,
+            outerRequestId: 'outer-generation-request', runCreation: 'noRunCreated', errorCode: reasonCode,
+            outcomeClass: outcome === 'deferred approval' ? 'deferredApproval' : 'refused' });
+        expect(JSON.stringify(logs)).not.toContain('Private preflight content');
+        expect(JSON.stringify(logs)).not.toContain('Private preparation content');
+    });
+
+    it.each(['success', 'lost transport reply', 'malformed transport reply'] as const)(
+        'retains nested Start creation evidence through the real Action executor after %s', async outcome => {
+            const fixture = await changedRepository();
+            const sessionId = 'nested-dispatch-session';
+            const observation = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+            const start = vi.fn(async () => {
+                if (outcome === 'lost transport reply') throw new Error('Private transport content');
+                return outcome === 'success' ? { runId: 'admitted-run', callId: 'call', sidechainId: 'sidechain' } : {};
+            });
+            const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+                isActionApprovalRequired: () => false,
+                executionRunCheckProtocolV2: async () => ({ ok: true }), executionRunStart: start,
+                scmActionExecute: async ({ input, executeCanonicalAction, context }) => executeScmDiffSummaryAction({
+                    request: input as ScmDiffSummaryGenerateInput, sessionId, backendTarget: BACKEND_TARGET,
+                    executeCanonicalAction, ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}) }),
+            });
+            const response = await executor.execute('scm.diffSummary.generate', { cwd: fixture.rootPath,
+                source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' }, outputs: ['walkthrough'] },
+            { surface: 'cli', defaultSessionId: sessionId, actionRequestId: 'outer-dispatched-request' });
+            expect(response).toMatchObject({ ok: true, result: { success: true, revision: 0,
+                ...(outcome === 'success' ? { runId: 'admitted-run' } : { admission: 'outcomeUnknown' }) } });
+            if (!response.ok) throw new Error(response.errorCode);
+            const output = ScmDiffSummaryGenerateOutputSchema.parse(response.result);
+            const logs = observation.mock.calls.filter(([label]) => label === '[scm.diffSummary] nested Start');
+            expect(logs).toHaveLength(1);
+            expect(logs[0]?.[1]).toMatchObject({ resultId: output.resultId,
+                outerRequestId: 'outer-dispatched-request', actionEntered: true,
+                runCreation: outcome === 'success' ? 'runCreated' : 'outcomeUnknown' });
+            expect(JSON.stringify(logs)).not.toContain('Private transport content');
+            expect(start).toHaveBeenCalledTimes(1);
+        });
+
     it.each(['lost response', 'unknown receipt', 'malformed receipt'] as const)('preserves typed unknown admission after %s across reads and matching requests without retrying', async outcome => {
         const fixture = await changedRepository();
         const executeCanonicalAction = vi.fn(async () => {
@@ -742,11 +830,13 @@ describe('executeScmDiffSummaryAction', () => {
                 const request = { ...(explicitInputId ? parsed : withoutInputId), intentInput: { ...ExecutionRunScmDiffSummaryInputV1Schema.parse(parsed.intentInput),
                     resultInitialInputId: 'caller-cannot-replace-the-initial-input' } };
                 const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
+                if (!prepared) throw new Error('Initial generator preparation is unavailable');
                 const intent = ExecutionRunScmDiffSummaryInputV1Schema.parse(prepared.intentInput);
                 const start: ExecutionRunProfileStartParams = { ...request, sessionId, runId: 'initial-generator', callId: 'call',
                     sidechainId: 'sidechain', backendId: 'codex', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
                     instructions: typeof prepared.instructions === 'string' ? prepared.instructions : '',
-                    intentInput: intent, startedAtMs: 1 };
+                    intentInput: intent, startedAtMs: 1, modelSelection: request.modelSelection ?? undefined,
+                    retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' };
                 const initial = await ScmDiffSummaryProfile.onStarted!({ start, rawText: '', finishedAtMs: 1 });
                 const deliveredInputId = explicitInputId ? generatedInputId : `execution-run-initial:${start.runId}`;
                 if (!deliveredInputId || !intent.resultId) throw new Error('Fresh generation lost its admitted input/result identity');
@@ -785,6 +875,7 @@ describe('executeScmDiffSummaryAction', () => {
             cachePolicy: { mode: 'bypass' } }, sessionId, backendTarget: BACKEND_TARGET, executeCanonicalAction });
         const request = ExecutionRunStartRequestSchema.parse(pendingStart);
         const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
+        if (!prepared) throw new Error('Pending generator preparation is unavailable');
         expect(prepared.intentInput).toMatchObject({ resultId: generated.resultId, resultBaseRevision: 0,
             comparison: { id: generated.comparison?.id }, outputs: ['walkthrough'] });
         expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId, resultId: generated.resultId! }))
