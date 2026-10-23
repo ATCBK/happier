@@ -96,6 +96,17 @@ not a claim that every native or loaded-runtime journey is verified.
 
 ## Session and turn lifecycle
 
+After the native Session factory confirms open, the host publishes `session_opened`
+through the existing durable turn-mutation owner before entering the Session loop.
+Home clears an older closed startup issue from `Session.lastRuntimeIssue` without
+allocating a new turn or changing the failed historical `SessionTurn`. The existing
+`latestTurnStatusObservedAt` frontier advances with that resolution, so a late
+heartbeat cannot restore the old issue. Non-startup issues and newer failures remain
+unresolved. Failed local publication custody preserves the opened runtime, following
+the existing lifecycle publication contract; accepted mutations use the durable
+outbox's retry owner. This is an unreleased 0.3 contract under the all-component direct cut;
+the strict V1 mutation envelope is unchanged and gains this host lifecycle arm.
+
 Codex app-server can finish a native turn while an already-started tool is still running. The
 host records the missing result truthfully. A later result for that exact native
 thread, turn and known tool call corrects the same transcript row through the

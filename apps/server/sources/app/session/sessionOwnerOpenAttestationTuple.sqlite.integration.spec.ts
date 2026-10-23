@@ -10,6 +10,16 @@ import { runWithServerHttpBaseUrl } from '../../../../cli/src/api/client/serverH
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '../../../../cli/src/api/clientCompatibility/cliClientCompatibility';
 import { buildSessionMetadataEnvelopeFields } from '../../../../cli/src/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { updateSessionMetadataWithRetry } from '../../../../cli/src/session/metadata/updateSessionMetadataWithRetry';
+import { createSessionTurnLifecycle } from '../../../../cli/src/agent/runtime/session/turn/lifecycle';
+import { classifyPrimarySessionRuntimeIssue } from '../../../../cli/src/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { awaitTrackedRunnerAgentSessionOpen, recordTrackedRunnerAgentSessionOpenAttestation } from '../../../../cli/src/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
+import { createAgentSessionRunnerFactoryBinding } from '../../../../cli/src/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import type { TrackedSession } from '../../../../cli/src/daemon/types';
+import { resolveSessionStartFailureNotice } from '../../../../ui/sources/components/sessions/startFailure/sessionStartFailureNotice';
+import { createPresentUserSessionAccessAuthentication } from './access/sessionAccessAuthentication.testkit';
+import { applySessionTurnMutation, reassertSessionLatestTurnStatus } from './sessionWriteService';
+import { parseStoredSessionRuntimeIssue } from './turns/parseSessionTurnState';
+import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
 
 describe('owner open-attestation metadata tuple (SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -24,6 +34,76 @@ describe('owner open-attestation metadata tuple (SQLite)', () => {
 
     afterAll(async () => {
         await harness?.close();
+    });
+
+    it('retires a recovered startup issue after confirmed idle open and stop without losing failed-turn history', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain',
+            metadata: JSON.stringify({ t: 'plain', v: {} }), active: false } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const lifecycle = createSessionTurnLifecycle({ session: { sessionId: session.id,
+            enqueueSessionTurnMutation: async mutation => {
+                expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation })).toMatchObject({ ok: true });
+            } } });
+        const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+            error: { code: 'native_agent_privileged_effect_authority_unavailable' }, occurredAt: Date.now() - 1000 });
+        await lifecycle.failTurn({ issue, allocateWhenIdle: true });
+        const failed = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        expect(resolveSessionStartFailureNotice({ issue: parseStoredSessionRuntimeIssue(failed.lastRuntimeIssue), sessionActive: failed.active }))
+            .toMatchObject({ code: issue.code });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'fixture' } });
+        const presence = createSessionPublisherPresence();
+        const socket = {};
+        expect(await presence.registerPublisher({ socket, binding: { accountId: owner.id, machineId: machine.id, sessionId: session.id },
+            completeActivitySnapshot: { state: 'idle', activeCount: 0 } })).toMatchObject({ status: 'registered' });
+        expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).active).toBe(true);
+        const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'fixture.open', pluginVersion: '1.0.0',
+            agentId: 'fixture-agent', localAgentId: 'fixture-agent',
+            sourceCustody: { kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+            locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+            normalizedModulePath: '/fixture/runtime.mjs', loadMode: 'immutable-js' });
+        const runner = { pid: 4321, processStartTimeMs: Date.now(), processCommandHash: 'a'.repeat(64), snapshotIdentity: 'fixture-open' };
+        const tracked: TrackedSession = { startedBy: 'daemon', pid: runner.pid, happySessionId: session.id,
+            processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash,
+            runnerAgentSourceCustodyV1: binding.sourceCustody, agentRuntimeDaemonServiceAuthorityFilePath: '/fixture/authority' };
+        const request = { kind: 'resume' as const, sessionId: session.id, cwd: '/fixture', providerSessionId: 'native-session' };
+        // The provider's successful open and marker filesystem are external boundaries;
+        // retained failure, attestation admission, turn persistence and notice stay real.
+        expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner, retainedAgent: binding,
+            phase: 'commit', request, providerSessionId: request.providerSessionId, updateMarker: async () => true })).not.toBeNull();
+        expect(await awaitTrackedRunnerAgentSessionOpen({ sessionId: session.id, getTrackedSessions: () => [tracked] }))
+            .toMatchObject({ status: 'opened' });
+        await lifecycle.confirmSessionOpened();
+        expect(await presence.closePublisher({ socket })).toMatchObject({ status: 'closed' });
+        const stopped = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        expect(stopped.active).toBe(false);
+        expect(stopped.lastRuntimeIssue).toBeNull();
+        expect(resolveSessionStartFailureNotice({ issue: parseStoredSessionRuntimeIssue(stopped.lastRuntimeIssue), sessionActive: stopped.active })).toBeNull();
+        const history = await db.sessionTurn.findMany({ where: { sessionId: session.id } });
+        expect(history).toHaveLength(1);
+        expect(parseStoredSessionRuntimeIssue(history[0]!.lastRuntimeIssueJson)).toMatchObject({ code: issue.code });
+        expect(await reassertSessionLatestTurnStatus({ actorUserId: owner.id, sessionId: session.id,
+            latestTurnStatus: failed.latestTurnStatus, latestTurnStatusObservedAt: Number(history[0]!.updatedAt) })).toMatchObject({ ok: true, didApply: false });
+        expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).lastRuntimeIssue).toBeNull();
+    });
+
+    it.each(['runtime-failure', 'newer-startup'] as const)('keeps an unresolved %s when an idle open cannot supersede it', async scenario => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const openedAt = Date.now();
+        const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', occurredAt: openedAt + (scenario === 'newer-startup' ? 1 : -1000),
+            error: { code: scenario === 'newer-startup' ? 'native_agent_privileged_effect_authority_unavailable' : 'ordinary_runtime_error' } });
+        const lifecycle = createSessionTurnLifecycle({ session: { sessionId: session.id, enqueueSessionTurnMutation: async mutation => {
+            expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation })).toMatchObject({ ok: true });
+        } } });
+        await lifecycle.failTurn({ issue, occurredAt: issue.occurredAt, allocateWhenIdle: true });
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+            v: 1, sessionId: session.id, mutationId: randomUUID(), action: 'session_opened', observedAt: openedAt,
+        } })).toMatchObject({ ok: true, didApply: false });
+        expect(parseStoredSessionRuntimeIssue((await db.session.findUniqueOrThrow({ where: { id: session.id } })).lastRuntimeIssue))
+            .toMatchObject({ code: issue.code, occurredAt: issue.occurredAt });
     });
 
     it('keeps an unrelated owner PATCH predecessor-compatible and still refuses an Account-mode mismatch', async () => {

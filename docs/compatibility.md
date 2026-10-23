@@ -3246,6 +3246,16 @@ authority and do not promise that a retained creation settlement will refresh
 when a Runner later registers. The private preparation RPC request,
 authorization and installed response remain unchanged.
 
+In unreleased 0.3, the closed `SessionTurnMutationV1` and receipt envelopes also
+admit the host's `session_opened` action. It retires only an older startup issue
+from the Session projection after confirmed native open; the historical failed
+turn remains readable. CLI producer, durable transport and Home consumer update
+together under the all-component direct cut. The scoped clean `../0.2` frontier
+at `a487b2ec48873bfc0ad67bb1d31be0a2cffd3c92` lacks this action; current readers
+still accept its existing mutations, while mixed 0.2/0.3 components and reverse
+writes are unsupported. The existing receipt table records the new action; no
+persisted fields or database migration are introduced.
+
 ## Plugin Platform direct-cut frontier
 
 The Plugin Platform simplification is a direct cut within the unreleased 0.3

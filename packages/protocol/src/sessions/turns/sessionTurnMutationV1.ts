@@ -74,6 +74,7 @@ export const SessionTurnMutationActionV1Schema = lazyZodSchema(() => z.enum([
   'fail',
   'cancel',
   'end_session',
+  'session_opened',
   'mark_rollback_eligible',
   'mark_rolled_back',
 ]));
@@ -107,6 +108,9 @@ const TurnScopedMutationBaseV1Schema = lazyZodSchema(() => z.extend(SessionTurnM
 }));
 
 const CanonicalSessionTurnMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionTurnMutationBaseV1Schema, {
+    action: z.literal('session_opened'),
+  })),
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TurnScopedMutationBaseV1Schema, {
     action: z.literal('begin'),
     /** Host-correlated input that caused this exact native turn start. */

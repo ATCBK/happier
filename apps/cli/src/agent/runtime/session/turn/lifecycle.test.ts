@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     AgentSessionRuntimeEventV1Schema,
     type AgentSessionRuntimeEventV1,
-    type SessionTurnMutationV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/runtime/agentSessionV1';
+import { SessionTurnMutationV1Schema, type SessionTurnMutationV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 
 import { createSessionTurnLifecycle } from './lifecycle';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
@@ -22,6 +22,21 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('createSessionTurnLifecycle', () => {
+    it.each(['accepted', 'unavailable'] as const)('keeps confirmed open usable when local mutation custody is %s', async custody => {
+        const mutations: unknown[] = [];
+        const lifecycle = createSessionTurnLifecycle({ session: { sessionId: 'confirmed-session',
+            enqueueSessionTurnMutation: async mutation => {
+                mutations.push(mutation);
+                if (custody === 'unavailable') throw new Error('fixture local custody unavailable');
+            },
+        } });
+        await expect(lifecycle.confirmSessionOpened()).resolves.toBeUndefined();
+        expect(mutations.map(mutation => SessionTurnMutationV1Schema.parse(mutation))).toEqual([
+            expect.objectContaining({ action: 'session_opened', sessionId: 'confirmed-session' }),
+        ]);
+        expect(lifecycle.hasActiveTurn()).toBe(false);
+    });
+
     it('publishes the exact accepted failure issue once per turn to the recovery observer', async () => {
         const mutations: SessionTurnMutationV1[] = [];
         const accepted = vi.fn(async (_event: unknown, _issue: unknown) => {});

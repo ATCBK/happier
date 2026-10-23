@@ -29,6 +29,7 @@ import { SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT, agentEventLocalIdAttentionImp
 import { AccountEncryptionMigrateSessionsDirectiveSchema, type AccountEncryptionMigrateSessionsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
 import { ExactSessionTurnEndMutationV1Schema, SessionTurnMutationActionV1Schema, SessionTurnMutationV1Schema, type SessionTurnMutationActionV1, type SessionTurnMutationDecisionV1, type SessionTurnMutationReceiptV1, type SessionTurnMutationV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
+import { readSessionStartupFailurePreview } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { PrimaryTurnStatusV1Schema, sanitizeSessionRuntimeIssueV1, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { SessionRuntimeActivityProjectionSchema, SessionRuntimeActivitySnapshotSchema, type SessionRuntimeActivityState } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { SessionTranscriptObservationProvenanceV1Schema, isRecoveredHistoryTranscriptObservationProvenance, type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
@@ -3418,6 +3419,33 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         });
         if (!session) {
             return { ok: false, error: "session-not-found" };
+        }
+
+        if (params.turnMutation.action === 'session_opened') {
+            const state = materializedSessionTurnState(session);
+            const issue = state.lastRuntimeIssue;
+            const resolved = issue?.scope === 'primary_session' && issue.status === 'failed'
+                && readSessionStartupFailurePreview(issue.code) !== null
+                && params.turnMutation.observedAt > Math.max(issue.occurredAt, state.latestTurnStatusObservedAt ?? 0);
+            const receipt = await updateSessionTurnMutationReceipt(tx, params.turnMutation,
+                resolved ? 'applied' : 'stale-terminal', session.latestTurnId);
+            if (!resolved) return createSessionTurnNoOpResult({ reason: 'terminal-turn', state, receipt });
+            // Opening resolves the Session's startup projection, not the failed
+            // historical turn. Advance its existing freshness frontier so a late
+            // heartbeat of that turn cannot restore the resolved issue.
+            await tx.session.update({ where: { id: sessionId }, data: {
+                lastRuntimeIssue: null,
+                latestTurnStatusObservedAt: toObservedAtBigInt(params.turnMutation.observedAt),
+            } });
+            const recipientCursors = params.markParticipants ? await markSessionProjectionRecipientsChanged({
+                tx, sessionId, recipientAccountIds: access.recipientAccountIds,
+            }) : [];
+            return sessionRecipientPublicationResult({ ok: true as const, didApply: true, receipt,
+                ...state, lastRuntimeIssue: null, latestTurnStatusObservedAt: params.turnMutation.observedAt,
+                recipientCursors,
+                badgeAttentionChanged: didSessionActivityBadgeSignalChange(toSessionActivityBadgeInputs(session),
+                    { ...toSessionActivityBadgeInputs(session), lastRuntimeIssue: null }),
+            });
         }
 
         const requestedTurnId = "turnId" in params.turnMutation ? params.turnMutation.turnId : undefined;

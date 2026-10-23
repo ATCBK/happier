@@ -35,6 +35,7 @@ type SessionTurnLifecycleParams = Readonly<{
 }>;
 
 export type SessionTurnLifecycle = Readonly<{
+    confirmSessionOpened(): Promise<void>;
     observeRuntimeEvent(event: AgentSessionRuntimeEvent): void;
     failTurn(input: Readonly<{
         issue: SessionRuntimeIssueV1;
@@ -200,6 +201,22 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
     }
 
     const lifecycle: SessionTurnLifecycle = {
+        async confirmSessionOpened() {
+            await acceptedLifecycleTail;
+            try {
+                await params.session.enqueueSessionTurnMutation?.({
+                    v: 1,
+                    sessionId: params.session.sessionId,
+                    mutationId: randomUUID(),
+                    action: 'session_opened',
+                    observedAt: Date.now(),
+                    ...(params.agentId ? { agentId: params.agentId } : {}),
+                });
+            } catch {
+                // As with turn publication, failed local custody must not tear
+                // down an opened runtime. Accepted mutations retain outbox retry.
+            }
+        },
         retireAcceptedLifecyclePublication() {
             acceptedLifecyclePublicationRetired = true;
         },

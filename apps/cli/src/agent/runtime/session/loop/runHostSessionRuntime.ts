@@ -3020,6 +3020,7 @@ export async function runHostSessionRuntime(
     await publishRunnerSkillNotice(currentLifecycleSession, runnerSkills, false);
   }
   constructedRuntimeForConstructionCleanup = hookRuntime;
+  await createSessionTurnLifecycle({ session: currentLifecycleSession, agentId: policyAgentId }).confirmSessionOpened();
   const parentRegistrationStartedAt = performance.now();
   // The accepted native open already admits ordinary input. Registration is
   // needed by child inheritance and later auth changes, which join this same

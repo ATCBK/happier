@@ -7590,6 +7590,28 @@ describe('runHostSessionRuntime', () => {
     }
   });
 
+  it('publishes confirmed idle open through the turn lifecycle before entering the loop', async () => {
+    const harness = createHarness();
+    harness.deps.runSessionLoopLifecycleFn = async () => {
+      const mutations = harness.session.enqueueSessionTurnMutation.mock.calls.map(([mutation]: readonly unknown[]) =>
+        SessionTurnMutationV1Schema.parse(mutation));
+      expect(mutations).toContainEqual(expect.objectContaining({ action: 'session_opened', sessionId: harness.session.sessionId }));
+      expect(mutations.some(mutation => mutation.action === 'begin')).toBe(false);
+    };
+    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps a confirmed runtime usable when open-projection custody is unavailable', async () => {
+    const harness = createHarness();
+    harness.session.enqueueSessionTurnMutation.mockRejectedValue(new Error('fixture durable custody unavailable'));
+    const enterLoop = vi.fn(async () => {});
+    harness.deps.runSessionLoopLifecycleFn = enterLoop;
+    await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).resolves.toBeUndefined();
+    expect(enterLoop).toHaveBeenCalledOnce();
+    expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+  });
+
   it.each(['metadata', 'home-http'] as const)('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed (%s)', async source => {
     const harness = createHarness();
     const { createHttpStatusError } = await import('@/api/client/httpStatusError');
