@@ -163,6 +163,7 @@ export type HappierTreeRowProps = Readonly<{
   onContextMenu?: (event: unknown) => void;
   keyboardShortcuts?: string;
   onFocus: () => void;
+  onBlur?: () => void;
   onKeyDown: (key: string, event: unknown) => boolean;
   controlRef: (target: HappierFocusable | null) => void;
   disclosure?: Readonly<{
@@ -256,6 +257,7 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
       onFocusChange={(focused) => {
         setRowFocused(focused);
         if (focused) props.onFocus();
+        else props.onBlur?.();
       }}
       onLongPress={props.renderActions && props.touch ? () => {
         props.onActionsLongPress?.();

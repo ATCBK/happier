@@ -89,6 +89,16 @@ export function useHappierTreeInteraction(input: HappierTreeInteraction) {
   const previousNodes = useRef<readonly HappierTreeNode[]>([]);
   const targets = useRef(new Map<string, HappierFocusable>());
   const pendingFocus = useRef<string | null>(null);
+  const focusedTargetKey = useRef<string | null>(null);
+  const onFocusChange = useCallback((key: string, focused: boolean) => {
+    if (focused) {
+      focusedTargetKey.current = key;
+      inputRef.current.onFocus(key);
+    } else if (focusedTargetKey.current === key) {
+      focusedTargetKey.current = null;
+      pendingFocus.current = null;
+    }
+  }, []);
   const activeKey = useMemo(() => resolveHappierTreeFocusKey(input.visibleNodes, input.focusedKey, previousNodes.current),
     [input.visibleNodes, input.focusedKey]);
   const focusKey = useCallback((key: string) => {
@@ -115,7 +125,9 @@ export function useHappierTreeInteraction(input: HappierTreeInteraction) {
 
   const bindFocusTarget = useCallback((key: string, target: HappierFocusable | null) => {
     if (!target) {
-      if (inputRef.current.focusedKey === key) pendingFocus.current = key;
+      // The roving tab stop survives focus moving into an editor. A ref rebind
+      // is not an intent to pull that external focus back into the tree.
+      if (focusedTargetKey.current === key) pendingFocus.current = key;
       targets.current.delete(key);
       return;
     }
@@ -141,5 +153,5 @@ export function useHappierTreeInteraction(input: HappierTreeInteraction) {
       && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(keyboardKey));
   }, [focusKey]);
 
-  return { activeKey, focusKey, bindFocusTarget, onKeyDown };
+  return { activeKey, focusKey, bindFocusTarget, onFocusChange, onKeyDown };
 }

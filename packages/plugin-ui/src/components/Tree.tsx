@@ -123,7 +123,8 @@ export function Tree(props: TreeProps): ReactElement {
             theme={theme}
             reducedMotion={reducedMotion}
             onActivate={() => props.onActivate(item.key)}
-            onFocus={() => onFocus(item.key)}
+            onFocus={() => interaction.onFocusChange(item.key, true)}
+            onBlur={() => interaction.onFocusChange(item.key, false)}
             onKeyDown={(keyboardKey, event) =>
               interaction.onKeyDown(item.key, keyboardKey, event)
             }
