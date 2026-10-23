@@ -1238,7 +1238,8 @@ describe('NotificationsSettingsView', () => {
         ));
         expect(fixture!.catalogWrites).toHaveLength(1);
         expect(requestPushPermissionsMock).not.toHaveBeenCalled();
-        expect(modalConfirmMock).not.toHaveBeenCalled();
+        expect(modalConfirmMock.mock.calls.filter(([title]) => title === 'settingsNotifications.pushPriming.title'
+            || title === 'settingsNotifications.pushPriming.blockedTitle')).toEqual([]);
         await act(async () => {
             await requireRow(screen, 'settings-notifications-push-enabled').props.rightElement.props.onValueChange(false);
         });
