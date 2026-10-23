@@ -12,6 +12,62 @@ const output = process.env.CLISTART_TRACE;
 const events = [{ kind: 'preload', ms: performance.now(), pid: process.pid }];
 const loads = [];
 const resolutions = [];
+const phaseSpans = [];
+let flushPhaseSpans = () => {};
+let instrumentPhaseSource;
+// Separate opt-in attribution only: ordinary timing/count runs do not rewrite
+// loaded code. Observe coarse existing functions, never their argument details.
+if (process.env.CLISTART_PHASE_SPANS === '1') {
+  const { PerformanceObserver } = require('node:perf_hooks');
+  const { pathToFileURL } = require('node:url');
+  const { resolve, sep } = require('node:path');
+  const root = process.env.CLISTART_PHASE_BUNDLE_ROOT;
+  if (!root) throw new Error('Phase attribution requires the compiled bundle root');
+  const prefix = pathToFileURL(resolve(root) + sep).href;
+  const symbol = 'happier.clistart.phase-spans';
+  const functions = new Map();
+  const moduleStarts = new Map();
+  const consume = entries => {
+    for (const entry of entries) {
+      const owner = functions.get(entry.name);
+      if (owner) phaseSpans.push({ kind: 'function', ...owner,
+        start: entry.startTime, end: entry.startTime + entry.duration });
+    }
+  };
+  const observer = new PerformanceObserver(list => consume(list.getEntries()));
+  observer.observe({ entryTypes: ['function'] });
+  flushPhaseSpans = () => consume(observer.takeRecords());
+  globalThis[Symbol.for(symbol)] = {
+    start(url) { moduleStarts.set(url, performance.now()); },
+    end(url) {
+      phaseSpans.push({ kind: 'module-evaluation', url,
+        start: moduleStarts.get(url), end: performance.now() });
+      moduleStarts.delete(url);
+    },
+    wrap(name, fn, url) {
+      functions.set(fn.name, { name, url });
+      return performance.timerify(fn);
+    },
+  };
+  const watched = ['resolveCliApiToken', 'readStoredCredentials', 'readStoredCredentialsForServerId',
+    'applyServerSelectionFromArgs', 'createAccountSecurityActionRuntime',
+    'createCliActionExecutorFromCredentials', 'createCliActionExecutor', 'createCliActionExecutorHarness',
+    'createActionSettingsProvider', 'fetchServerFeaturesSnapshot', 'ensureCliActionPolicySettings',
+    'refreshTerminalPresentUserPolicy'].map(name => ({ name, pattern: new RegExp(
+      `(?:^|[\\n;}])[\\t ]*(?:export[\\t ]+)?(?:async[\\t ]+)?function[\\t ]+${name}\\s*\\(`,
+    ) }));
+  instrumentPhaseSource = (url, result) => {
+    if (result.format !== 'module' || !url.startsWith(prefix)) return result;
+    const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
+    const headerEnd = source.startsWith('#!') ? source.indexOf('\n') : -1;
+    const header = source.startsWith('#!') ? (headerEnd < 0 ? `${source}\n` : source.slice(0, headerEnd + 1)) : '';
+    const body = header ? (headerEnd < 0 ? '' : source.slice(headerEnd + 1)) : source;
+    const target = `globalThis[Symbol.for(${JSON.stringify(symbol)})]`;
+    const wrappers = watched.filter(({ pattern }) => pattern.test(source))
+      .map(({ name }) => `${name} = ${target}.wrap(${JSON.stringify(name)}, ${name}, ${JSON.stringify(url)});`);
+    return { ...result, source: `${header}${target}.start(${JSON.stringify(url)});\n${body}\n${wrappers.join('\n')}\n${target}.end(${JSON.stringify(url)});` };
+  };
+}
 let coverageSession;
 let coverageAtFirstRequest;
 function takeCoverage() {
@@ -109,7 +165,7 @@ if (process.env.CLISTART_IMPORT_TRACE === '1') {
       const start = performance.now();
       const result = nextLoad(url, context);
       mark('module:loaded', { url, start });
-      return result;
+      return instrumentPhaseSource ? instrumentPhaseSource(url, result) : result;
     },
   });
   const { Session } = require('node:inspector');
@@ -128,5 +184,7 @@ process.once('exit', code => {
   // A same-thread inspector post completes synchronously, including during exit.
   // Keep coverage separate from timed runs; parsed/loaded is not evaluated.
   const coverage = takeCoverage();
-  if (output) write(output, JSON.stringify({ events, loads, resolutions, coverage, coverageAtFirstRequest, modules: Object.keys(require.cache) }));
+  flushPhaseSpans();
+  if (output) write(output, JSON.stringify({ events, loads, resolutions, coverage, coverageAtFirstRequest,
+    phaseSpans, modules: Object.keys(require.cache) }));
 });

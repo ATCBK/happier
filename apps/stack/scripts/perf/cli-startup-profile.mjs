@@ -89,9 +89,16 @@ for (const key of process.argv.length > 4 ? process.argv.slice(4) : ['noop', 'he
   const homeFileIo = summarizeHomeIo(trace.events);
   const preRequestHomeFileIo = firstRequest
     ? summarizeHomeIo(trace.events.filter(event => event.ms <= firstRequest.ms)) : null;
+  // Coarse asynchronous phases overlap module work and IO. Preserve intervals
+  // rather than adding inclusive wall durations into a fictional partition.
+  const beforeFirstRequestPhaseSpans = (trace.phaseSpans ?? [])
+    .filter(span => firstRequest === undefined || span.start < firstRequest.ms)
+    .map(span => ({ ...span, observedEnd: span.end,
+      end: Math.min(span.end, firstRequest?.ms ?? Infinity),
+      inFlightAtFirstRequest: firstRequest !== undefined && span.end > firstRequest.ms }));
   const row = { runtime, command, evaluatedScriptCount: urls.length, evaluatedBundleChunkCount: compiled.length,
     beforeFirstRequestEvaluated: evaluated(trace.coverageAtFirstRequest).length,
-    homeFileIo, preRequestHomeFileIo, cpuScope,
+    homeFileIo, preRequestHomeFileIo, beforeFirstRequestPhaseSpans, cpuScope,
     dnsLookups: trace.events.filter(event => event.kind === 'dns:lookup').length,
     preRequestCalls,
     milestones: trace.events.filter(event => ['preload', 'existsSync', 'existsSync:end', 'readFileSync', 'readFileSync:end',

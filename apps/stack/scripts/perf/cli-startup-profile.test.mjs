@@ -15,7 +15,11 @@ test('startup attribution excludes CPU and Home reads after the first request', 
     await mkdir(join(root, 'apps/cli'), { recursive: true });
     await writeFile(join(root, 'apps/cli/metafile.json'), JSON.stringify({ outputs: {} }));
     await writeFile(join(root, 'bundle-security-cpu-profile.json'), JSON.stringify({
-      coverage: [], coverageAtFirstRequest: [], events: [
+      coverage: [], coverageAtFirstRequest: [], phaseSpans: [
+        { kind: 'module-evaluation', url: 'file:///fixture.mjs', start: 2, end: 4 },
+        { kind: 'function', name: 'createAccountSecurityActionRuntime', start: 3, end: 12 },
+        { kind: 'function', name: 'readSettings', start: 20, end: 22 },
+      ], events: [
         { kind: 'existsSync', path: '/fixture/settings', ms: 1 },
         { kind: 'existsSync:end', path: '/fixture/settings', ms: 2 },
         { kind: 'http:request', clockUs: 200, ms: 10 },
@@ -42,6 +46,10 @@ test('startup attribution excludes CPU and Home reads after the first request', 
     assert.deepEqual(row.preRequestHomeFileIo, {
       existenceProbes: 1, existenceMs: 1, contentReads: 0, contentReadMs: 0,
     });
+    assert.deepEqual(row.beforeFirstRequestPhaseSpans, [
+      { kind: 'module-evaluation', url: 'file:///fixture.mjs', start: 2, end: 4, observedEnd: 4, inFlightAtFirstRequest: false },
+      { kind: 'function', name: 'createAccountSecurityActionRuntime', start: 3, end: 10, observedEnd: 12, inFlightAtFirstRequest: true },
+    ], 'overlapping async spans are clipped, not summed or mislabeled completed');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
