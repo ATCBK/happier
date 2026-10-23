@@ -29,6 +29,29 @@ describe('HappierStatusDot', () => {
     }
   });
 
+  it('draws a state glyph by shape in the status colour, and keeps the dot for unread news', () => {
+    const glyph = mountThroughReactNativeWeb(
+      <HappierStatusDot color="rgb(217, 119, 6)" glyph="review" size={14} testID="status" accessibilityLabel="Needs permission" />,
+    );
+    try {
+      const slot = byTestId(glyph.container, 'status');
+      expect(slot!.style.width).toBe('14px');
+      expect(slot!.querySelector('svg')).not.toBeNull();
+      expect(slot!.querySelector('path')?.getAttribute('stroke')).toBe('rgb(217, 119, 6)');
+      expect(slot!.style.backgroundColor).toBe('');
+      expect(slot!.getAttribute('aria-label')).toBe('Needs permission');
+    } finally {
+      glyph.unmount();
+    }
+    const unread = mountThroughReactNativeWeb(<HappierStatusDot color="rgb(0, 0, 0)" glyph="new" size={6} testID="status" />);
+    try {
+      expect(byTestId(unread.container, 'status')!.querySelector('svg')).toBeNull();
+      expect(byTestId(unread.container, 'status')!.style.backgroundColor).toBe('rgb(0, 0, 0)');
+    } finally {
+      unread.unmount();
+    }
+  });
+
   it('draws no ring when no halo is asked for', () => {
     const mounted = mountThroughReactNativeWeb(<HappierStatusDot color="red" size={8} testID="status-dot" />);
     try {

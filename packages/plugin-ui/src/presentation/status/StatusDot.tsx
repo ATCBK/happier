@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Platform, View, type ViewStyle } from 'react-native';
+import { Circle, Path, Rect, Svg } from 'react-native-svg';
+import type { PluginUiIconTokenV1 } from '@happier-dev/plugin-sdk/ui';
 
 import { useHappierUiAnimationActivityInternal, useOptionalHappierUiAccessibility } from '../../environment/context.js';
 import type { HappierStyleProp } from '../portableTypes.js';
@@ -47,7 +49,49 @@ export type HappierStatusDotProps = Readonly<{
    * is used; when there is no environment the dot animates.
    */
   reducedMotion?: boolean;
+  /**
+   * A work state's glyph (lab `clstatus`): the shape carries the state, never colour alone — a shield with a
+   * question for permission, a speech bubble for a question, an alert circle for failure, a stop circle, an
+   * offline machine, an hourglass, a check circle for finished-unseen, an @ for a mention, a lock for denied
+   * access. `new` keeps the dot (unread). `size` is the glyph box (14 in a list row's status slot); a token
+   * without a status shape draws the dot. Working is the host's activity spinner, never a glyph.
+   */
+  glyph?: PluginUiIconTokenV1;
 }>;
+
+/** The status glyph shapes, on a 24 grid at the lab's 1.5 stroke (`clstatus`). */
+const STATUS_GLYPH_PATHS: Partial<Record<PluginUiIconTokenV1, readonly string[]>> = Object.freeze({
+  review: ['M12 3.5 5 6v5.6c0 4.1 2.9 7.4 7 8.9 4.1-1.5 7-4.8 7-8.9V6l-7-2.5Z', 'M10.1 9.7a2 2 0 0 1 3.8.7c0 1.3-1.9 1.6-1.9 2.9M12 15.9h.01'],
+  attention: ['M4.5 5.5h15V16h-8.2l-4.3 3.4V16H4.5z', 'M10.2 9a1.9 1.9 0 0 1 3.6.7c0 1.2-1.8 1.5-1.8 2.6M12 14.3h.01'],
+  failure: ['M12 7.6v5M12 16.2h.01'],
+  pause: [],
+  unavailable: ['M4.5 15V7A1.5 1.5 0 0 1 6 5.5h12A1.5 1.5 0 0 1 19.5 7v8M3 18.5h18', 'm4 3.5 16 16'],
+  waiting: ['M7 3.5h10M7 20.5h10', 'M8 3.5c0 4.2 4 5.2 4 8.5s-4 4.3-4 8.5M16 3.5c0 4.2-4 5.2-4 8.5s4 4.3 4 8.5'],
+  check: ['m8.6 12.2 2.3 2.3 4.6-4.8'],
+  mention: ['M15.5 12v1.3a2.7 2.7 0 0 0 5.4 0V12a8.9 8.9 0 1 0-3.6 7.2'],
+  denied: ['M8 10.5V8a4 4 0 0 1 8 0v2.5'],
+});
+/** Glyphs drawn around a full circle (failure, stop, finished) or with a circle inside (@, lock body). */
+const STATUS_GLYPH_RING = new Set<PluginUiIconTokenV1>(['failure', 'pause', 'check']);
+
+function HappierStatusGlyph(props: Readonly<{ glyph: PluginUiIconTokenV1; color: string; size: number }>) {
+  const paths = STATUS_GLYPH_PATHS[props.glyph] ?? [];
+  const stroke = { stroke: props.color, strokeWidth: 1.5, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
+  return (
+    <Svg width={props.size} height={props.size} viewBox="0 0 24 24">
+      {STATUS_GLYPH_RING.has(props.glyph) ? <Circle cx={12} cy={12} r={8.5} {...stroke} /> : null}
+      {props.glyph === 'pause' ? <Rect x={9.3} y={9.3} width={5.4} height={5.4} rx={1} {...stroke} /> : null}
+      {props.glyph === 'mention' ? <Circle cx={12} cy={12} r={3.5} {...stroke} /> : null}
+      {props.glyph === 'denied' ? <Rect x={6} y={10.5} width={12} height={9.5} rx={2} {...stroke} /> : null}
+      {paths.map((d) => <Path key={d} d={d} {...stroke} />)}
+    </Svg>
+  );
+}
+
+/** Whether the shared status renderer draws this token as a glyph (otherwise it is the dot). */
+function hasHappierStatusGlyph(glyph: PluginUiIconTokenV1 | undefined): boolean {
+  return glyph !== undefined && STATUS_GLYPH_PATHS[glyph] !== undefined;
+}
 
 function accessibilityProps(accessibilityLabel: string | undefined) {
   return accessibilityLabel
@@ -71,7 +115,19 @@ function dotStyle(color: string, size: number): ViewStyle {
   };
 }
 
-export function HappierStatusDot({ halo, ...props }: HappierStatusDotProps) {
+export function HappierStatusDot({ halo, glyph, ...props }: HappierStatusDotProps) {
+  if (glyph !== undefined && hasHappierStatusGlyph(glyph)) {
+    const size = props.size ?? 14;
+    return (
+      <View
+        testID={props.testID}
+        {...accessibilityProps(props.accessibilityLabel)}
+        style={[{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }, props.style]}
+      >
+        <HappierStatusGlyph glyph={glyph} color={props.color} size={size} />
+      </View>
+    );
+  }
   const dot = !props.isPulsing || props.animationEnabled === false
     ? <StaticStatusDot {...props} />
     : <MotionAwareStatusDot {...props} />;
