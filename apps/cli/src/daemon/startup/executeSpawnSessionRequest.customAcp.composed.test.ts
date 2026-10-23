@@ -15,6 +15,8 @@ import { configuration } from '@/configuration';
 import { ApiClient } from '@/api/api';
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
 import { createDeferred } from '@/testkit/async/deferred';
+import { createConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { QualifiedConnectedAccountPurposeBindingsV1Schema } from '@happier-dev/protocol';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
   commitActiveAcpCatalog, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -89,7 +91,7 @@ import { installAxiosRequestMethodAdapter } from '@/testkit/http/axiosAdapter';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { notifyDaemonSessionStarted } from '../controlClient';
-import { createRunnerAgentSessionRuntimeSource } from '@/agent/runtime/session/process/runnerAgentSessionRuntimeSource';
+import { createRunnerAgentSessionRuntimeBootstrap, createRunnerAgentSessionRuntimeSource } from '@/agent/runtime/session/process/runnerAgentSessionRuntimeSource';
 import { authorizeResolvedAgentNativeExecLaunchForHost, issueAgentNativeLaunchQualifierForHost } from '@/plugins/runtime/invocation/services/exec';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
@@ -223,10 +225,11 @@ beforeAll(async () => {
   storage.home = await mkdtemp(join(tmpdir(), 'happier-df38-spawn-'));
   runtimeHome = storage.home;
   runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: configuration.happyHomeDir,
-    controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.custom-acp', 'happier.agent.claude'] } });
+    controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.custom-acp', 'happier.agent.claude', 'happier.agent.opencode'] } });
   await runtime.registry.activateContributionsOnDemand([
     { pluginId: 'happier.agent.custom-acp', family: 'agents', localId: 'custom-acp' },
     { pluginId: 'happier.agent.claude', family: 'agents', localId: 'claude' },
+    { pluginId: 'happier.agent.opencode', family: 'agents', localId: 'opencode' },
   ]);
   api = await ApiClient.create(storage.credentials);
 });
@@ -296,6 +299,59 @@ function readFixtureCatalogResponse(path: string) {
 }
 
 describe('Custom ACP fresh daemon launch composition', () => {
+  it.each([
+    ['claude', 'unifiedTerminal', 'runtime'], ['claude', 'agentSdk', undefined],
+    ['opencode', 'server', 'runtime'],
+  ] as const)('carries the selected %s %s terminal owner into the private runner bootstrap', async (agentId, backendMode, terminalHostOwner) => {
+    const previousFeature = process.env.HAPPIER_FEATURE_AGENTS_CLAUDE_UNIFIED_TERMINAL__ENABLED;
+    process.env.HAPPIER_FEATURE_AGENTS_CLAUDE_UNIFIED_TERMINAL__ENABLED = '1';
+    let inspected = false;
+    try {
+      const executable = await writeExecutableShim({ dir: storage.home, fileName: agentId, contents: `#!${process.execPath}\nif (process.argv.slice(2).join(' ') === 'auth list') console.log('1 credential');\nprocess.exit(0)\n` });
+      let bindings = QualifiedConnectedAccountPurposeBindingsV1Schema.parse({ v: 1, bindings: [] });
+      // Real binding authority over an isolated Account persistence boundary.
+      // This launch stops before Session creation or credential disclosure.
+      const purposes = createConnectedAccountPurposeBindingOwner({
+        store: { read: async () => bindings, update: async mutate => { bindings = mutate(bindings); return bindings; },
+          subscribe: () => ({ dispose() {} }) },
+        selectTarget: async () => { throw new Error('Prelaunch inspection must not select credentials'); },
+        resolveTarget: async () => null,
+        materializeAccount: async () => { throw new Error('Prelaunch inspection must not materialize credentials'); },
+        projectTargetAccounts: async () => { throw new Error('Prelaunch inspection must not list Accounts'); },
+        assertTargetAccountMaterializable: async () => { throw new Error('Prelaunch inspection must not disclose credentials'); },
+      });
+      const prepared = params('alpha', async () => {
+        const directory = join(storage.home, 'tmp', 'runner-agent-session-bootstraps');
+        const [file] = await readdir(directory);
+        const bootstrapFilePath = join(directory, file!);
+        const bootstrap = AgentRuntimeRunnerBootstrapV1Schema.parse(JSON.parse(await readFile(bootstrapFilePath, 'utf8')));
+        expect(bootstrap.launch).toMatchObject({ runtimeDescriptorV1: { agent: { backendMode } } });
+        expect(bootstrap.launch).toEqual(expect.objectContaining(terminalHostOwner ? { terminalHostOwner } : {}));
+        if (!terminalHostOwner) expect(bootstrap.launch).not.toHaveProperty('terminalHostOwner');
+        const source = await createRunnerAgentSessionRuntimeBootstrap({ happyHomeDir: storage.home,
+          publicReleaseRing: configuration.publicReleaseRing, bootstrapFilePath,
+          authorityFilePath: join(storage.home, 'unclaimed-runner-authority.json') });
+        expect(source).not.toBeNull();
+        if (terminalHostOwner) expect(source).toMatchObject({ startupTerminalHostOwner: terminalHostOwner });
+        else expect(source).not.toHaveProperty('startupTerminalHostOwner');
+        inspected = true;
+        return false;
+      });
+      const result = await executeSpawnSessionRequest({ ...prepared, activateSessionPurposeBindings: purposes.activateSessionPurposeBindings,
+        processEnv: { ...prepared.processEnv, [agentId === 'claude' ? 'HAPPIER_CLAUDE_PATH' : 'HAPPIER_OPENCODE_PATH']: executable }, options: {
+        directory: storage.home, backendTarget: { kind: 'backend', backendId: agentId, sourceKind: 'built_in' },
+        connectedServices: { v: 2, bindingsByServiceId: {} },
+        runtimeDescriptorV1: { v: 1, agentId, agent: { backendMode, terminalHostKind: 'tmux' } },
+        terminal: { mode: 'tmux', tmux: { sessionName: 'owner-test' } },
+        beforeSessionRunnerLaunch: prepared.options.beforeSessionRunnerLaunch,
+      } });
+      expect(inspected, JSON.stringify(result)).toBe(true);
+    } finally {
+      if (previousFeature === undefined) delete process.env.HAPPIER_FEATURE_AGENTS_CLAUDE_UNIFIED_TERMINAL__ENABLED;
+      else process.env.HAPPIER_FEATURE_AGENTS_CLAUDE_UNIFIED_TERMINAL__ENABLED = previousFeature;
+    }
+  });
+
   it.each(['started', 'child-failed', 'stale-caller-resume', 'delayed-local-stop-resume', 'stopped-before-restart', 'archive-during-explicit-resume',
     'signed-stop', 'stale-signed-stop', 'foreign-machine-stop', 'manager-child-resume', 'manager-reassigned-resume', 'archived-before-launch',
     'automation-forged-resume', 'manager-not-parent-resume', 'manager-person-hold-resume', 'manager-settings-disabled-resume',
