@@ -108,7 +108,6 @@ export type PreparedProjectSetupPlan = Readonly<{
     executionEnvironmentEffectDigest: string;
     reviewedEffect: ProjectSetupReviewedEffect;
     reviewedEffectDigest: string;
-    setupInputsDigest: string;
     successBasis: Omit<ProjectSetupSuccessV1, 'v' | 'workspaceRefId' | 'completedAtMs'>;
 }>;
 
@@ -371,7 +370,7 @@ export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInp
             environmentBindingReferences: bindings.map(binding => createCanonicalJsonSigningInput(binding)) };
         return { kind: 'reviewed', plan: { workspace: input.workspace, project: input.projectAssociation.project, purpose: input.purpose, manifest,
             fileBasis: snapshot.basis, commands, environment, environmentReviewInputs, ...(environmentAdapterLease ? { environmentAdapterLease } : {}),
-            configEnvironment: Object.freeze(configEnvironment), executionEnvironmentEffectDigest, reviewedEffect, reviewedEffectDigest, setupInputsDigest, successBasis } };
+            configEnvironment: Object.freeze(configEnvironment), executionEnvironmentEffectDigest, reviewedEffect, reviewedEffectDigest, successBasis } };
     } catch (error) {
         preserveUnconfirmedNativeProcess(error);
         if (error instanceof LaunchSecretReferenceOverlayError) return refuse('project_environment_binding_unavailable');
