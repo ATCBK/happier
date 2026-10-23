@@ -97,6 +97,7 @@ import type {
 type RunnerLocalPluginServices = Pick<
     PluginServices,
     | 'availability'
+    | 'backgroundServices'
     | 'logger'
     | 'sessions'
     | 'managedServices'
@@ -1471,6 +1472,7 @@ export async function createRunnerManagedServiceInvocationOwner(input: Readonly<
                 })(seed, binding);
                 return Object.freeze({
                     availability: services.availability,
+                    backgroundServices: services.backgroundServices,
                     logger: services.logger,
                     sessions: services.sessions,
                     managedServices: services.managedServices,

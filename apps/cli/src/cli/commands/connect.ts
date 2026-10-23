@@ -93,7 +93,7 @@ async function loadConnectTargets(): Promise<readonly ConnectTarget[]> {
   const registry = await resolveMergedContributionRegistry({
     happyHomeDir: configuration.happyHomeDir,
   });
-  return projectConnectTargets({ connectedAccountDescriptors: registry.connectedAccountDescriptors.flatMap((contribution) => {
+  return projectConnectTargets({ connectedAccountDescriptors: (registry.connectedAccountDescriptors ?? []).flatMap((contribution) => {
     const parsed = PluginConnectedAccountDescriptorContributionV2Schema.safeParse(contribution.definition);
     return parsed.success ? [{ ...contribution, definition: parsed.data }] : [];
   }) });

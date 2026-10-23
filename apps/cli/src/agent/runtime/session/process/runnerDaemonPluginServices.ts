@@ -483,6 +483,7 @@ export async function prepareRunnerDaemonPluginServices(
         local: Pick<
             HostPluginServices,
             | 'availability'
+            | 'backgroundServices'
             | 'logger'
             | 'sessions'
             | 'managedServices'
@@ -618,6 +619,7 @@ export async function prepareRunnerDaemonPluginServices(
     const availability = (serviceId: PluginServiceId) => {
         if (
             serviceId === 'logger'
+            || serviceId === 'backgroundServices'
             || serviceId === 'sessions'
             || serviceId === 'managedServices'
             || serviceId === 'machineProvisioners'
@@ -3263,6 +3265,8 @@ export async function prepareRunnerDaemonPluginServices(
     }
     return Object.freeze({
         availability,
+        // Background service demand belongs to the runner's own invocation owner.
+        backgroundServices: input.local.backgroundServices,
         logger,
         storage,
         settings,

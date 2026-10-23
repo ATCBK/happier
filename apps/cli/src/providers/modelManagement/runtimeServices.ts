@@ -113,11 +113,15 @@ function resolveTeamCredentialRequestPolicyProtocolKind(
   return null;
 }
 
+/** The wire projection carrying the already admitted descriptor; its response boundary parses it once. */
+export type ProjectedTeamCredentialRequestPolicySupportV1 = Omit<DaemonProviderTeamCredentialRequestPolicySupportV1, 'descriptor'>
+  & Readonly<{ descriptor: ProviderModelDescriptorV1 }>;
+
 export function projectDaemonProviderTeamCredentialRequestPolicySupportV1(input: Readonly<{
   application: ProviderBrokerApplicationBindingV1;
   sourceRevision: string;
   descriptor: ProviderModelDescriptorV1;
-}>): DaemonProviderTeamCredentialRequestPolicySupportV1 | null {
+}>): ProjectedTeamCredentialRequestPolicySupportV1 | null {
   const protocolKind = resolveTeamCredentialRequestPolicyProtocolKind(input.application.protocol);
   if (protocolKind === null) return null;
 

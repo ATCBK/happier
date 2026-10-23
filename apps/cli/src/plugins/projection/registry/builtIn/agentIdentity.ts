@@ -34,7 +34,7 @@ export function projectBuiltInAgentFields(manifestContribution: ResolvedAgentCon
         ...manifestContribution.richDefinition,
         definition: Object.freeze({ ...manifestContribution.richDefinition.definition, id: canonicalAgentId }),
     }) : undefined;
-    return Object.freeze({
+    const projected: ResolvedAgentContribution = {
         ...manifestContribution,
         id: canonicalAgentId,
         provenance: 'first_party',
@@ -42,5 +42,6 @@ export function projectBuiltInAgentFields(manifestContribution: ResolvedAgentCon
         definition: Object.freeze({ ...manifestContribution.definition, id: canonicalAgentId }),
         richDefinition,
         runtimeSpec: manifestContribution.runtimeSpec ? Object.freeze({ ...manifestContribution.runtimeSpec, id: canonicalAgentId }) : null,
-    });
+    };
+    return Object.freeze(projected);
 }

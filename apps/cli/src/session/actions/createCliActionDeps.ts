@@ -1183,7 +1183,7 @@ export function createCliActionDeps(params: Readonly<{
             seq: 0, createdAt: 0, updatedAt: 0,
           })), options?.signal);
           return rows.map((row, index) => row.artifactId === artifactIds[index]
-            && row.bodyVersion !== undefined && 'body' in row
+            && row.bodyVersion !== undefined && row.body !== undefined
             ? { artifactId: row.artifactId, header: row.header, body: row.body,
                 ownerAccountId: row.ownerAccountId, access: row.access, publicAudience: row.publicAudience,
                 headerVersion: row.headerVersion, revision: { headerVersion: row.headerVersion, bodyVersion: row.bodyVersion } }

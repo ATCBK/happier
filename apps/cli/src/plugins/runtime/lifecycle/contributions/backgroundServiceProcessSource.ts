@@ -3,11 +3,12 @@ import type { PluginActivationSource, PluginActivationProcessEntry } from '../..
 import type { PluginRuntimeSourceAuthority, PluginSourceCustody } from '../../sourceAuthority';
 import { resolvePluginSourceCustody, pluginSourceCustodyEqual } from '../../sourceAuthority';
 import type { PluginDaemonModuleNamespace } from '../../types';
+import type { PluginRuntimeOccurrenceId } from '../../runtimeSlots';
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
 export type AdmittedBackgroundServicePlugin = Readonly<{
     target: ActivationTarget;
-    occurrenceId: string;
+    occurrenceId: PluginRuntimeOccurrenceId;
     sourceCustody: PluginSourceCustody;
     sourceAuthority: PluginRuntimeSourceAuthority;
     processEntry: PluginActivationProcessEntry;
@@ -18,7 +19,7 @@ export type AdmittedBackgroundServicePlugin = Readonly<{
 /** Project the source selected by the canonical admission owner; never discover another source. */
 export function projectAdmittedBackgroundServicePlugin(input: Readonly<{
     target: ActivationTarget;
-    occurrenceId: string;
+    occurrenceId: PluginRuntimeOccurrenceId;
     sourceCustody: PluginSourceCustody;
     source: PluginActivationSource<PluginDaemonModuleNamespace>;
 }>): AdmittedBackgroundServicePlugin {

@@ -336,6 +336,8 @@ type ActionDefinitionV1NonExecutionFields = Pick<ActionDefinitionV1,
     | 'kindVersion'
     | 'id'
     | 'title'
+    | 'confirmVerb'
+    | 'irreversible'
     | 'description'
     | 'safety'
     | 'approval'

@@ -394,10 +394,10 @@ function snapshotMaterialization(
         throw materializationOutOfScope();
     }
     const rawScope = materialization.usageAccountScope;
-    if (rawScope !== undefined && rawScope !== 'personal' && rawScope !== 'workspace' && rawScope !== 'unknown') {
-        throw materializationOutOfScope();
-    }
-    const scope = rawScope === undefined ? {} : { usageAccountScope: rawScope };
+    const usageAccountScope: PluginConnectedAccountMaterialization['usageAccountScope'] = rawScope === 'personal' || rawScope === 'workspace' || rawScope === 'unknown'
+        ? rawScope : undefined;
+    if (rawScope !== undefined && usageAccountScope === undefined) throw materializationOutOfScope();
+    const scope = usageAccountScope === undefined ? {} : { usageAccountScope };
     if (request.kind === 'httpHeaders') {
         if (!isUnknownRecord(materialization.headers)) throw materializationOutOfScope();
         const requestedNames = new Set(request.headerNames.map((name) => name.toLowerCase()));

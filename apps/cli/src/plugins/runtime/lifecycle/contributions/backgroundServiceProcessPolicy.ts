@@ -8,7 +8,7 @@ export const BACKGROUND_SERVICE_PROCESS_SUPPORTED_SERVICE_IDS: readonly string[]
 
 /** Project exactly the admitted v1 SDK proxy surfaces; Account collections are not part of v1. */
 export function projectBackgroundServiceProcessProxiedServices(services: object): Readonly<Record<string, unknown>> {
-    const projected = Object.fromEntries(BACKGROUND_SERVICE_PROCESS_PROXIED_SERVICE_IDS.flatMap((serviceId) => {
+    const projected = Object.fromEntries(BACKGROUND_SERVICE_PROCESS_PROXIED_SERVICE_IDS.flatMap((serviceId): Array<readonly [string, unknown]> => {
         if (!Object.hasOwn(services, serviceId)) return [];
         const service: unknown = Reflect.get(services, serviceId);
         if (serviceId !== 'storage') return [[serviceId, service]];

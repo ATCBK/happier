@@ -4283,7 +4283,7 @@ export class ApiSessionClient extends EventEmitter {
                 if (mutation.action === 'fail') {
                     void this.usageLimitRecoveryRuntime.observeFailure(mutation.issue)
                         .catch(this.usageLimitRecoveryRuntime.reportError);
-                } else if (mutation.action === 'complete' || mutation.action === 'cancel' || mutation.action === 'end_session') {
+                } else if (mutation.action === 'complete' || mutation.action === 'cancel') {
                     void this.usageLimitRecoveryRuntime.observeSupersession()
                         .catch(this.usageLimitRecoveryRuntime.reportError);
                 }
