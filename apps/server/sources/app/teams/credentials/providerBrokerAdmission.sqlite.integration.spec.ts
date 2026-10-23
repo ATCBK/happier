@@ -35,6 +35,7 @@ import { hashPasswordMaterial } from '@/app/auth/password/passwordMaterialVerifi
 import { deleteMachinePool } from '@/app/machines/pools/machinePoolService';
 import type { MachineDaemonPresenceSocketServer } from '@/app/machines/machineDaemonPresence';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { selectMachinePoolCandidate } from '@happier-dev/protocol/machines/pools';
 import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
 import { setTeamPolicyInTx } from '@/app/teams/policy';
@@ -56,6 +57,9 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
 import { setMachineAccessGrantInTx, removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
 import { getMachineSocketRoom } from '@/app/api/socketRooms';
+import { createSessionMachineAccessKeyInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
+import { PROVIDER_BROKER_ACCOUNT_OPEN_HTTP_PATH_V2, PROVIDER_BROKER_ACCOUNT_ADMIT_HTTP_PATH_V2,
+    ProviderBrokerAccountOpenResponseV2Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import {
     createServiceAccountTokenIdentityFields,
     createQualifiedConnectedAccountGroupDigest,
@@ -367,6 +371,7 @@ describe('Team credential Provider broker admission', () => {
             env: {
                 HAPPIER_FEATURE_TEAMS__ENABLED: '1',
                 HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: '1',
+                HAPPIER_FEATURE_PROVIDERS__ENABLED: '1',
                 // The Home offers email/password, so a restricted Team can
                 // accept it and a credential's evidence of it can be current.
                 HAPPIER_FEATURE_AUTH_EMAIL_PASSWORD__ENABLED: '1',
@@ -488,8 +493,9 @@ describe('Team credential Provider broker admission', () => {
         const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
         const verifyAuthority = (authority: unknown) => verifyProviderBrokerRouteGrantSignatureV2({ authority, nowMs: 100,
             signingCapability: { keyId: 'personal-home', publicKey: Buffer.from(key.publicKey).toString('base64url'), expiresAt: null } });
+        const connectedPresence = { state: 'partial' as const, machineIds: new Set([worker.id, hub.id]) };
         const common = { homeId: 'personal-home', actorAccountId: account.id,
-            presence: { state: 'partial' as const, machineIds: new Set([worker.id, hub.id]) },
+            readCurrentPresence: async () => ({ initiatorPresence: connectedPresence, targetPresence: connectedPresence }),
             resolveExecutionRunCurrentness: async () => ({ ok: false as const, reasonCode: 'execution_run_not_found' as const }) };
         const opened = await openAccountConnectionProviderBroker({ ...common, nowMs: 100, grantId: 'personal-grant', tokenEpoch: 0,
             signingKey: { keyId: 'personal-home', secretKey: key.secretKey }, verifyRefreshAuthority: verifyAuthority,
@@ -505,13 +511,227 @@ describe('Team credential Provider broker admission', () => {
         await expect(admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
             request: { v: 2, authority: opened.authority } })).resolves.toEqual({ ok: true });
         await expect(admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
-            presence: { state: 'partial', machineIds: new Set([worker.id]) },
+            readCurrentPresence: async () => ({ initiatorPresence: connectedPresence,
+                targetPresence: { state: 'partial', machineIds: new Set([worker.id]) } }),
             request: { v: 2, authority: opened.authority } })).resolves.toMatchObject({ ok: false });
         await db.machine.update({ where: { id: hub.id }, data: { operationProtocolCapabilities: {
             irohMachineEndpoint: { protocolVersions: [1], endpointId: 'b'.repeat(64) }, providerBrokerIngress: { protocolVersions: [1] },
         }, operationProtocolCapabilitiesRevision: 2 } });
         await expect(admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
             request: { v: 2, authority: opened.authority } })).resolves.toEqual({ ok: false, reasonCode: 'update_required' });
+    });
+
+    it('admits a personal hub from a granted foreign worker and withdraws authority with Machine Use', async () => {
+        const fixture = await createBrokerFixture('personal-foreign');
+        await db.machine.update({ where: { id: fixture.worker.id }, data: {
+            accountId: fixture.custodian.id, installationId: crypto.randomUUID(),
+            metadata: encodePlainMachineStoredContent({ host: 'worker', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: new Uint8Array(Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+        } });
+        const grant = () => inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+            principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+        }));
+        await expect(grant()).resolves.toMatchObject({ kind: 'saved', readiness: 'ready' });
+        const session = await fixture.createSession();
+        // The hub remains independently owned by the requester, even though
+        // the execution Machine is supplied by another Account.
+        const hub = await db.machine.create({ data: {
+            id: crypto.randomUUID(), accountId: fixture.requester.id, metadata: '{}', active: true,
+            operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1, 2] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '3'.repeat(64) } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
+        await db.machine.update({ where: { id: fixture.broker.id }, data: { operationProtocolCapabilities: {
+            providerBrokerIngress: { protocolVersions: [1, 2] },
+            irohMachineEndpoint: { protocolVersions: [1], endpointId: '2'.repeat(64) },
+        } } });
+        const token = await auth.createToken(fixture.requester.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        const presenceRooms: string[] = [];
+        let presenceFetches = 0;
+        let revokeDuringPresence = false;
+        const sockets = [
+            { data: { clientType: 'machine-scoped', userId: fixture.custodian.id, machineId: fixture.worker.id } },
+            { data: { clientType: 'machine-scoped', userId: fixture.requester.id, machineId: hub.id } },
+        ];
+        app.decorate('machineDaemonPresence', { in: (rooms: string | string[]) => ({ fetchSockets: async () => {
+            presenceFetches += 1;
+            const demanded = typeof rooms === 'string' ? [rooms] : rooms;
+            presenceRooms.push(...demanded);
+            if (revokeDuringPresence) {
+                revokeDuringPresence = false;
+                await inTx(tx => removeMachineAccessGrantInTx(tx, {
+                    actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                    principal: { kind: 'account', accountId: fixture.requester.id },
+                }));
+            }
+            return sockets.filter(socket => demanded.includes(getMachineSocketRoom(socket.data.userId, socket.data.machineId)));
+        } }) });
+        registerTeamCredentialProviderBrokerRoutes(app);
+        const request = { v: 2, initiatorMachineId: fixture.worker.id, targetMachineId: hub.id,
+            consumer: { kind: 'session', sessionId: session.id }, application: FIXTURE_APPLICATION,
+            source: { kind: 'account_connection', connectionId: 'personal-foreign-connection',
+                expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
+                expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:test' } };
+        const open = (extra = {}) => app.inject({ method: 'POST', url: PROVIDER_BROKER_ACCOUNT_OPEN_HTTP_PATH_V2,
+            headers: { authorization: `Bearer ${token}` }, payload: { ...request, ...extra } });
+        try {
+            await db.machine.update({ where: { id: hub.id }, data: { operationProtocolCapabilities: {
+                providerBrokerIngress: { protocolVersions: [1, 2] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) },
+            } } });
+            const coinciding = await open();
+            expect({ status: coinciding.statusCode, body: coinciding.json(), presenceFetches }).toEqual({
+                status: 200, body: { ok: false, reasonCode: 'resource_unavailable' }, presenceFetches: 0,
+            });
+            await db.machine.update({ where: { id: hub.id }, data: { operationProtocolCapabilities: {
+                providerBrokerIngress: { protocolVersions: [1, 2] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '3'.repeat(64) },
+            } } });
+            const response = await open();
+            const opened = ProviderBrokerAccountOpenResponseV2Schema.parse(response.json());
+            if (!opened.ok) throw new Error(`personal foreign open refused: ${opened.reasonCode}`);
+            expect({ status: response.statusCode, body: response.json(), presenceRooms }).toMatchObject({
+                status: 200, body: { ok: true }, presenceRooms: [
+                    getMachineSocketRoom(fixture.custodian.id, fixture.worker.id),
+                    getMachineSocketRoom(fixture.requester.id, hub.id),
+                ],
+            });
+            expect(opened.authority.payload).toMatchObject({ accountId: fixture.requester.id,
+                initiator: { accountId: fixture.requester.id, machineId: fixture.worker.id, endpointId: '1'.repeat(64) },
+                target: { custodianAccountId: fixture.requester.id, machineId: hub.id, endpointId: '3'.repeat(64) } });
+            expect(presenceFetches).toBe(2);
+            const ownWorker = await db.machine.create({ data: {
+                id: crypto.randomUUID(), accountId: fixture.requester.id, metadata: '{}',
+                operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: '4'.repeat(64) } },
+                operationProtocolCapabilitiesRevision: 1,
+            } });
+            await expect(inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: fixture.requester.id,
+                machineId: ownWorker.id, sessionId: session.id, data: '{}' }))).resolves.toMatchObject({ ok: true });
+            sockets.push({ data: { clientType: 'machine-scoped', userId: fixture.requester.id, machineId: ownWorker.id } });
+            expect((await open({ initiatorMachineId: ownWorker.id })).json()).toMatchObject({ ok: true });
+            // The original same-Account path needs one exact batched census;
+            // supporting a foreign custodian must not split that read in two.
+            expect(presenceFetches).toBe(3);
+            const admit = async () => (await app.inject({ method: 'POST', url: PROVIDER_BROKER_ACCOUNT_ADMIT_HTTP_PATH_V2,
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 2, authority: opened.authority } })).json();
+            expect((await open({ refreshAuthority: opened.authority })).json()).toMatchObject({ ok: true });
+            expect(await admit()).toEqual({ ok: true });
+            await inTx(tx => removeMachineAccessGrantInTx(tx, {
+                actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                principal: { kind: 'account', accountId: fixture.requester.id },
+            }));
+            const reads = presenceRooms.length;
+            expect((await open()).json()).toMatchObject({ ok: false, reasonCode: 'resource_forbidden' });
+            expect((await open({ refreshAuthority: opened.authority })).json()).toMatchObject({ ok: false });
+            expect(await admit()).toMatchObject({ ok: false });
+            expect(presenceRooms).toHaveLength(reads);
+            await grant();
+            // A grant is sufficient for the initiator only; it cannot turn a
+            // foreign Machine into this Account's private catalog hub.
+            expect((await open({ targetMachineId: fixture.broker.id })).json()).toMatchObject({ ok: false });
+            expect(presenceRooms).toHaveLength(reads);
+            revokeDuringPresence = true;
+            expect((await open()).json()).toMatchObject({ ok: false, reasonCode: 'resource_forbidden' });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it.each([
+        ['session', 'open'], ['session', 'refresh'], ['session', 'admit'],
+        ['execution_run', 'open'], ['execution_run', 'refresh'], ['execution_run', 'admit'],
+    ] as const)('settles personal %s %s authority inside the transaction before grant withdrawal', async (consumerKind, operation) => {
+        const fixture = await createBrokerFixture(`personal-transaction-${consumerKind}-${operation}`);
+        await db.machine.update({ where: { id: fixture.worker.id }, data: {
+            accountId: fixture.custodian.id, installationId: crypto.randomUUID(),
+            metadata: encodePlainMachineStoredContent({ host: 'worker', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: new Uint8Array(Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+        } });
+        await expect(inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+            principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+        }))).resolves.toMatchObject({ kind: 'saved', readiness: 'ready' });
+        const session = consumerKind === 'session' ? await fixture.createSession() : null;
+        const consumer = session ? { kind: 'session' as const, sessionId: session.id }
+            : { kind: 'execution_run' as const, executionRunId: 'personal-transaction-run' };
+        const hub = await db.machine.create({ data: {
+            id: crypto.randomUUID(), accountId: fixture.requester.id, metadata: '{}', active: true,
+            operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1, 2] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '3'.repeat(64) } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
+        const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(47));
+        const verifyAuthority = (authority: unknown) => verifyProviderBrokerRouteGrantSignatureV2({ authority, nowMs: 100,
+            signingCapability: { keyId: 'personal-transaction-home', publicKey: Buffer.from(key.publicKey).toString('base64url'), expiresAt: null } });
+        let presenceReads = 0;
+        const common = { homeId: 'personal-transaction-home', actorAccountId: fixture.requester.id,
+            readCurrentPresence: async () => {
+                presenceReads += 1;
+                return { initiatorPresence: { state: 'partial' as const, machineIds: new Set([fixture.worker.id]) },
+                    targetPresence: { state: 'partial' as const, machineIds: new Set([hub.id]) } };
+            },
+            resolveExecutionRunCurrentness: async () => ({ ok: true as const, parentSessionId: null, occurrenceId: 'personal-transaction-occurrence' }) };
+        const request = { v: 2 as const, initiatorMachineId: fixture.worker.id, targetMachineId: hub.id, consumer,
+            application: FIXTURE_APPLICATION, source: { kind: 'account_connection' as const,
+                connectionId: ProviderConnectionIdSchema.parse('personal-transaction'),
+                expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
+                expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:test' } };
+        const openInput = { ...common, request, tokenEpoch: 0, nowMs: 100, grantId: crypto.randomUUID(),
+            signingKey: { keyId: 'personal-transaction-home', secretKey: key.secretKey }, verifyRefreshAuthority: verifyAuthority };
+        const initial = operation === 'open' ? null : await openAccountConnectionProviderBroker(openInput);
+        if (initial && !initial.ok) throw new Error(initial.reasonCode);
+        presenceReads = 0;
+        const originalTransaction = db.$transaction;
+        let successfulAdmissions = 0;
+        let committedAdmission: unknown;
+        let withdrawnBeforeDelivery = false;
+        // Schedule the genuine DB transport's completed response. Domain reads,
+        // grant mutation and signing remain real; no internal owner is mocked.
+        db.$transaction = new Proxy(originalTransaction, { async apply(target, receiver, args) {
+            const result: unknown = await Reflect.apply(target, receiver, args);
+            if (result && typeof result === 'object' && 'result' in result) {
+                const admission = result.result;
+                if (admission && typeof admission === 'object' && 'ok' in admission && admission.ok === true
+                    && ++successfulAdmissions === 2) {
+                    committedAdmission = admission;
+                    db.$transaction = originalTransaction;
+                    await expect(inTx(tx => removeMachineAccessGrantInTx(tx, {
+                        actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+                        principal: { kind: 'account', accountId: fixture.requester.id },
+                    }))).resolves.toMatchObject({ kind: 'removed', effectiveAccess: 'none' });
+                    withdrawnBeforeDelivery = true;
+                }
+            }
+            return result;
+        } });
+        try {
+            const result = operation === 'admit' && initial?.ok
+                ? await admitAccountConnectionProviderBroker({ ...common, verifyAuthority, request: { v: 2, authority: initial.authority } })
+                : await openAccountConnectionProviderBroker({ ...openInput,
+                    request: { ...request, ...(initial?.ok ? { refreshAuthority: initial.authority } : {}) } });
+            expect(withdrawnBeforeDelivery).toBe(true);
+            expect(presenceReads).toBe(1);
+            if (operation === 'admit') {
+                expect(committedAdmission).toEqual({ ok: true });
+                expect(result).toEqual(committedAdmission);
+            } else {
+                const signedAtCommit = ProviderBrokerAccountOpenResponseV2Schema.parse(committedAdmission);
+                if (!signedAtCommit.ok) throw new Error(signedAtCommit.reasonCode);
+                expect(verifyAuthority(signedAtCommit.authority)).toBe(true);
+                expect(result).toEqual(signedAtCommit);
+            }
+            expect(await openAccountConnectionProviderBroker(openInput)).toMatchObject({ ok: false });
+            expect(presenceReads).toBe(1);
+        } finally {
+            db.$transaction = originalTransaction;
+        }
     });
 
     it('uses the native direct TCP tunnel admission window for new broker streams', () => {
@@ -670,6 +890,66 @@ describe('Team credential Provider broker admission', () => {
             }));
             revokeDuringProjection = true;
             expect((await open()).json()).toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it.each(['machine', 'pool', 'endpoint'] as const)('refuses coinciding Team broker %s identities before projection or signing', async topology => {
+        const fixture = await createBrokerFixture(`coinciding-${topology}`);
+        const session = await fixture.createSession();
+        await db.machine.update({ where: { id: fixture.worker.id }, data: {
+            accountId: fixture.custodian.id, installationId: crypto.randomUUID(),
+            metadata: encodePlainMachineStoredContent({ host: 'worker', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: new Uint8Array(Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
+            operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) } },
+        } });
+        await expect(inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: fixture.custodian.id, machineId: fixture.worker.id,
+            principal: { kind: 'account', accountId: fixture.requester.id }, level: 'view',
+        }))).resolves.toMatchObject({ kind: 'saved', readiness: 'ready' });
+        const resource = await fixture.createResource(`connection-coinciding-${topology}`);
+        if (topology === 'pool') {
+            const pool = await db.machinePool.create({ data: { id: crypto.randomUUID(), accountId: fixture.custodian.id, name: 'Coinciding broker',
+                members: { create: { machineId: fixture.worker.id, priorityTier: 0, enabled: true } } } });
+            await db.teamCredentialResource.update({ where: { id: resource.id }, data: { brokerMachineId: null, brokerPoolId: pool.id } });
+        } else if (topology === 'machine') {
+            await db.teamCredentialResource.update({ where: { id: resource.id }, data: { brokerMachineId: fixture.worker.id } });
+        } else {
+            await db.machine.update({ where: { id: fixture.broker.id }, data: { operationProtocolCapabilities: {
+                providerBrokerIngress: { protocolVersions: [1] },
+                irohMachineEndpoint: { protocolVersions: [1], endpointId: '1'.repeat(64) },
+            } } });
+        }
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        const token = await auth.createToken(fixture.requester.id, undefined, { kind: 'terminal', authority: 'account_automation' });
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app);
+        let projectionReads = 0;
+        app.decorate('forwardRpcForUser', async ({ method }: { method: string }) => {
+            if (method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY}`)) {
+                return { ok: true, result: { status: 'eligible' } };
+            }
+            projectionReads += 1;
+            return { ok: true, result: fixtureProviderProjection(`connection-coinciding-${topology}`) };
+        });
+        app.decorate('machineDaemonPresence', { in: () => ({ fetchSockets: async () => [fixture.worker, fixture.broker]
+            .map(machine => ({ data: { clientType: 'machine-scoped', userId: fixture.custodian.id, machineId: machine.id } })) }) });
+        registerTeamCredentialProviderBrokerRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/teams/credential-resources/broker/open',
+                headers: { authorization: `Bearer ${token}` }, payload: {
+                    v: 1, resourceId: resource.id, expectedResourceRevision: resource.revision,
+                    modelId: 'model-1', sourceRevision: 'source-revision-1', initiatorMachineId: fixture.worker.id,
+                    consumer: { kind: 'session', sessionId: session.id }, application: FIXTURE_APPLICATION,
+                } });
+            expect({ status: response.statusCode, body: response.json(), projectionReads }).toEqual({
+                status: 200, body: { ok: false, reasonCode: 'resource_unavailable' }, projectionReads: 0,
+            });
         } finally {
             await app.close();
         }

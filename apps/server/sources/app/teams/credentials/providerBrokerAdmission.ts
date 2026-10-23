@@ -3,7 +3,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 import { PROVIDER_BROKER_ROUTE_AUDIENCE_V1, ProviderBrokerOpenRequestV1Schema, ProviderBrokerRequestAdmissionV1Schema, SignedProviderBrokerRouteGrantV1Schema, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerOpenRequestV1, type ProviderBrokerOpenResponseV1, type ProviderBrokerRequestAdmissionV1, type SignedProviderBrokerRouteGrantV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
 import { IrohEndpointDescriptorV1Schema } from '@happier-dev/protocol/connectivity/iroh/endpointDescriptorV1';
-import { readMachineIrohEndpointAuthorityV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import { TeamCredentialRequestPolicyV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
@@ -13,8 +13,6 @@ import type { VerifiedEphemeralSessionRunnerPrincipal } from '@happier-dev/proto
 
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from '@/app/auth/auth';
-import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
-import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
@@ -32,7 +30,7 @@ import type { MachinePoolCandidateSnapshot } from '@/app/machines/pools/machineP
 import { verifyRunnerBrokerOpenSelectionInTx } from '@/app/ephemeralRunner/runnerBrokerOpenSelection';
 import { readRunnerActivationAuthentication } from '@/app/ephemeralRunner/activationAuthentication';
 import { readRunnerCreatorCurrentnessInTx } from '@/app/ephemeralRunner/activationCurrentness';
-import { admitProviderBrokerConsumerInTx } from '@/app/providers/brokerConsumerAdmission';
+import { admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx } from '@/app/providers/brokerConsumerAdmission';
 
 type ProviderProjectionReader = (input: Readonly<{
     custodianAccountId: string;
@@ -259,7 +257,7 @@ async function authorizeCurrentBrokerOperationInTx(
     const consumer = brokerOperationConsumer(grant.consumer, input.executionRun ?? null, grant.resourceId);
     if ('ok' in consumer) return consumer;
     if (grant.target.custodianAccountId !== input.authenticatedBrokerAccountId) return failure('resource_forbidden');
-    const initiatorEndpoint = await readCurrentInitiatorEndpointInTx(tx, {
+    const initiatorEndpoint = await readProviderBrokerInitiatorEndpointInTx(tx, {
         accountId: grant.initiator.accountId,
         machineId: grant.initiator.machineId,
         sessionId,
@@ -443,39 +441,6 @@ export async function authorizeTeamCredentialProviderModelCatalog(
         });
         return authorized.ok ? { ok: true } : authorized;
     }, { isolationLevel: "Serializable" /* Broker model disclosure composes entitlement, resource revision and current signing authority. */ });
-}
-
-async function readCurrentInitiatorEndpointInTx(
-    tx: Tx,
-    input: Readonly<{ accountId: string; machineId: string; sessionId: string | null }>,
-) {
-    const machine = await tx.machine.findUnique({
-        where: { id: input.machineId },
-        select: {
-            accountId: true,
-            kind: true,
-            revokedAt: true,
-            replacedByMachineId: true,
-            operationProtocolCapabilities: true,
-            operationProtocolCapabilitiesRevision: true,
-        },
-    });
-    if (!machine || classifyMachineAvailabilityState(machine) !== 'available') return null;
-    // The signed Account is the requester, while this endpoint and its
-    // presence belong to the Machine custodian. Session-bound consumers prove
-    // current Machine Use through their exact AccessKey at consumer admission;
-    // a sessionless Run must obtain that admission here instead.
-    if (machine.accountId !== input.accountId && input.sessionId === null) {
-        const admission = await resolveMachineAdmissionInTx(tx, {
-            actorAccountId: input.accountId, machineId: input.machineId,
-        });
-        if (admission.kind !== 'admitted') return null;
-    }
-    const endpoint = readMachineIrohEndpointAuthorityV1({
-        capabilities: machine.operationProtocolCapabilities,
-        revision: machine.operationProtocolCapabilitiesRevision,
-    });
-    return endpoint ? { ...endpoint, machineKind: machine.kind, custodianAccountId: machine.accountId } : null;
 }
 
 type CurrentExecutionRun = Extract<
@@ -774,7 +739,7 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         || !pluginJsonValuesEqual(runnerSelection.application, request.application)
         || runnerSelection.sourceRevision !== request.sourceRevision
     )) return failure('resource_changed');
-    const initiatorEndpoint = await readCurrentInitiatorEndpointInTx(tx, {
+    const initiatorEndpoint = await readProviderBrokerInitiatorEndpointInTx(tx, {
         accountId: input.actorAccountId,
         machineId: request.initiatorMachineId,
         sessionId,
@@ -847,6 +812,15 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
     const broker = placement.broker === null || endpointAuthority === null
         ? null
         : { machineId: placement.broker.machineId, endpointAuthority };
+    // Check the resolved target (including Pool selection), not the saved
+    // location. The peer carrier requires separate Machine/endpoint identities.
+    if (broker !== null) {
+        const topology = admitProviderBrokerTopology(
+            { machineId: parsedRequest.initiatorMachineId, endpointId: initiatorEndpoint.endpointId },
+            { machineId: broker.machineId, endpointId: broker.endpointAuthority.endpointId },
+        );
+        if (!topology.ok) return topology;
+    }
     return {
         request: authorized.request,
         sessionId: authorized.sessionId,

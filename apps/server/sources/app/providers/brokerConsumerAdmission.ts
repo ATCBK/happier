@@ -1,11 +1,56 @@
 import type { ProviderBrokerAdmissionFailureCodeV1, ProviderBrokerConsumerV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import type { Tx } from '@/storage/inTx';
+import { readMachineIrohEndpointAuthorityV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
+import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
 
 export type ProviderBrokerConsumerCurrentness = Readonly<{
     parentSessionId: string | null;
     occurrenceId: string;
 }>;
+
+/** The peer carrier requires distinct resolved Machine and endpoint identities. */
+export function admitProviderBrokerTopology(
+    initiator: Readonly<{ machineId: string; endpointId: string }>,
+    target: Readonly<{ machineId: string; endpointId: string }>,
+): Readonly<{ ok: true }> | Readonly<{ ok: false; reasonCode: 'resource_unavailable' }> {
+    return initiator.machineId === target.machineId || initiator.endpointId === target.endpointId
+        ? { ok: false, reasonCode: 'resource_unavailable' }
+        : { ok: true };
+}
+
+/** Endpoint custody is independent of requester identity. Session consumers
+ * already prove Machine Use through the exact AccessKey at consumer admission;
+ * sessionless Runs need their own admission here. Both source arms use this reader. */
+export async function readProviderBrokerInitiatorEndpointInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; machineId: string; sessionId: string | null }>,
+): Promise<(MachineIrohEndpointAuthorityV1 & Readonly<{ machineKind: string; custodianAccountId: string }>) | null> {
+    const machine = await tx.machine.findUnique({
+        where: { id: input.machineId },
+        select: {
+            accountId: true,
+            kind: true,
+            revokedAt: true,
+            replacedByMachineId: true,
+            operationProtocolCapabilities: true,
+            operationProtocolCapabilitiesRevision: true,
+        },
+    });
+    if (!machine || classifyMachineAvailabilityState(machine) !== 'available') return null;
+    if (machine.accountId !== input.accountId && input.sessionId === null) {
+        const admission = await resolveMachineAdmissionInTx(tx, {
+            actorAccountId: input.accountId, machineId: input.machineId,
+        });
+        if (admission.kind !== 'admitted') return null;
+    }
+    const endpoint = readMachineIrohEndpointAuthorityV1({
+        capabilities: machine.operationProtocolCapabilities,
+        revision: machine.operationProtocolCapabilitiesRevision,
+    });
+    return endpoint ? { ...endpoint, machineKind: machine.kind, custodianAccountId: machine.accountId } : null;
+}
 
 /** Session/Run identity and Machine access are independent of the source arm.
  * Team entitlement and the hub's private catalog remain their own authorities. */

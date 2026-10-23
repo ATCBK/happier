@@ -12,8 +12,9 @@ import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { inTx, type Tx } from '@/storage/inTx';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import { signRouteGrantPayload } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
-import { admitProviderBrokerConsumerInTx, type ProviderBrokerConsumerCurrentness } from './brokerConsumerAdmission';
+import { admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx, type ProviderBrokerConsumerCurrentness } from './brokerConsumerAdmission';
 
 type ConsumerResolver = (input: Readonly<{
     executionRunId: string; requestingAccountId: string; workerMachineId: string; expectedOccurrenceId: string | null;
@@ -21,12 +22,13 @@ type ConsumerResolver = (input: Readonly<{
 type Common = Readonly<{
     homeId: string;
     actorAccountId: string;
-    presence: MachineDaemonPresenceInventory;
+    readCurrentPresence(input: Readonly<{
+        initiatorAccountId: string; initiatorMachineId: string; targetAccountId: string; targetMachineId: string;
+    }>): Promise<Readonly<{ initiatorPresence: MachineDaemonPresenceInventory; targetPresence: MachineDaemonPresenceInventory }>>;
     resolveExecutionRunCurrentness: ConsumerResolver;
 }>;
 
-async function readMachine(tx: Tx, accountId: string, machineId: string, presence: MachineDaemonPresenceInventory) {
-    if (classifyMachineDaemonPresence(presence, machineId) !== 'connected') return null;
+async function readOwnedTargetInTx(tx: Tx, accountId: string, machineId: string) {
     const machine = await tx.machine.findFirst({ where: { id: machineId, accountId }, select: {
         id: true, kind: true, revokedAt: true, replacedByMachineId: true,
         operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true,
@@ -40,6 +42,89 @@ async function readMachine(tx: Tx, accountId: string, machineId: string, presenc
 function supportsAccountConnectionIngress(capabilities: unknown): boolean {
     const parsed = MachineOperationProtocolCapabilitiesV1StoredReadSchema.safeParse(capabilities);
     return parsed.success && parsed.data.providerBrokerIngress?.protocolVersions.some(version => version === 2) === true;
+}
+
+type MachineAdmissionInput = Common & Readonly<{
+    initiatorMachineId: string;
+    targetMachineId: string;
+    consumer: ProviderBrokerAccountOpenRequestV2['consumer'];
+    tokenEpoch: number | undefined;
+    expectedOccurrenceId: string | null;
+}>;
+
+async function authorizeMachinesInTx(tx: Tx, input: MachineAdmissionInput, executionRun: ProviderBrokerConsumerCurrentness | null) {
+    if (!await auth.isSignedCredentialCurrent(tx, input.actorAccountId, input.tokenEpoch)) {
+        return { ok: false, reasonCode: 'operation_not_current' } as const;
+    }
+    const admitted = await admitProviderBrokerConsumerInTx(tx, { accountId: input.actorAccountId,
+        initiatorMachineId: input.initiatorMachineId, consumer: input.consumer, executionRun });
+    if (!admitted.ok) return admitted;
+    const sessionId = input.consumer.kind === 'session' ? input.consumer.sessionId : executionRun?.parentSessionId ?? null;
+    const [initiator, target] = await Promise.all([
+        readProviderBrokerInitiatorEndpointInTx(tx, { accountId: input.actorAccountId,
+            machineId: input.initiatorMachineId, sessionId }),
+        readOwnedTargetInTx(tx, input.actorAccountId, input.targetMachineId),
+    ]);
+    if (!initiator || !target || target.machine.kind !== 'persistent') return { ok: false, reasonCode: 'broker_unavailable' } as const;
+    const topology = admitProviderBrokerTopology(
+        { machineId: input.initiatorMachineId, endpointId: initiator.endpointId },
+        { machineId: input.targetMachineId, endpointId: target.endpoint.endpointId },
+    );
+    if (!topology.ok) return topology;
+    if (!supportsAccountConnectionIngress(target.machine.operationProtocolCapabilities)) {
+        return { ok: false, reasonCode: 'update_required' } as const;
+    }
+    return { ok: true, initiator, target, executionRunOccurrenceId: admitted.executionRunOccurrenceId } as const;
+}
+
+/** Admit before transport discovery, then recheck after that asynchronous boundary.
+ * Presence belongs to the actual Machine custodian; the signed requester and
+ * private catalog hub remain the requesting Account. The terminal result is
+ * produced while the authorizing transaction still holds its admission fence. */
+async function withCurrentMachines<T extends Readonly<{ ok: boolean }>>(
+    input: MachineAdmissionInput,
+    finalize: (current: Extract<Awaited<ReturnType<typeof authorizeMachinesInTx>>, { ok: true }>) => T,
+) {
+    const resolveRun = async (expectedOccurrenceId: string | null) => input.consumer.kind === 'execution_run'
+        ? await input.resolveExecutionRunCurrentness({ executionRunId: input.consumer.executionRunId,
+            requestingAccountId: input.actorAccountId, workerMachineId: input.initiatorMachineId, expectedOccurrenceId })
+        : null;
+    const run = await resolveRun(input.expectedOccurrenceId);
+    if (run && !run.ok) return run;
+    const prepared = await inTx(tx => authorizeMachinesInTx(tx, input, run));
+    if (!prepared.ok) return prepared;
+    let presence: Awaited<ReturnType<Common['readCurrentPresence']>>;
+    try {
+        presence = await input.readCurrentPresence({
+            initiatorAccountId: prepared.initiator.custodianAccountId, initiatorMachineId: input.initiatorMachineId,
+            targetAccountId: input.actorAccountId, targetMachineId: input.targetMachineId,
+        });
+    } catch {
+        return { ok: false, reasonCode: 'broker_unavailable' } as const;
+    }
+    const currentRun = await resolveRun(prepared.executionRunOccurrenceId);
+    if (currentRun && !currentRun.ok) return currentRun;
+    return await inTx(async tx => {
+        // Grant withdrawal publishes to the requester through this same Account
+        // fence. Hold its serializing intent through signing/terminal admission,
+        // so withdrawal cannot complete between the final grant read and effect.
+        await acquireAccountChangePublicationLocksInTx(tx, [input.actorAccountId], {
+            includeSingleAccount: true, intent: 'serializing',
+        });
+        const current = await authorizeMachinesInTx(tx, input, currentRun);
+        if (!current.ok) return current;
+        if (current.executionRunOccurrenceId !== prepared.executionRunOccurrenceId) {
+            return { ok: false, reasonCode: 'operation_not_current' } as const;
+        }
+        if (current.initiator.custodianAccountId !== prepared.initiator.custodianAccountId
+            || current.initiator.endpointId !== prepared.initiator.endpointId
+            || current.target.endpoint.endpointId !== prepared.target.endpoint.endpointId
+            || classifyMachineDaemonPresence(presence.initiatorPresence, input.initiatorMachineId) !== 'connected'
+            || classifyMachineDaemonPresence(presence.targetPresence, input.targetMachineId) !== 'connected') {
+            return { ok: false, reasonCode: 'broker_unavailable' } as const;
+        }
+        return finalize(current);
+    });
 }
 
 /** Home admits transport identity and consumer currentness only. An encrypted
@@ -62,25 +147,10 @@ export async function openAccountConnectionProviderBroker(input: Common & Readon
         || refresh.initiatorTokenEpoch !== input.tokenEpoch
         || !pluginJsonValuesEqual(refresh.consumer, request.consumer) || !pluginJsonValuesEqual(refresh.source, request.source)
         || !pluginJsonValuesEqual(refresh.application, request.application))) return { ok: false, reasonCode: 'invalid_request' };
-    const run = request.consumer.kind === 'execution_run' ? await input.resolveExecutionRunCurrentness({
-        executionRunId: request.consumer.executionRunId, requestingAccountId: input.actorAccountId,
-        workerMachineId: request.initiatorMachineId, expectedOccurrenceId: refresh?.executionRunOccurrenceId ?? null,
-    }) : null;
-    if (run && !run.ok) return run;
-    return await inTx(async tx => {
-        if (!await auth.isSignedCredentialCurrent(tx, input.actorAccountId, input.tokenEpoch)) return { ok: false, reasonCode: 'operation_not_current' };
-        const admitted = await admitProviderBrokerConsumerInTx(tx, { accountId: input.actorAccountId,
-            initiatorMachineId: request.initiatorMachineId, consumer: request.consumer, executionRun: run });
-        if (!admitted.ok) return admitted;
-        const [initiator, target] = await Promise.all([
-            readMachine(tx, input.actorAccountId, request.initiatorMachineId, input.presence),
-            readMachine(tx, input.actorAccountId, request.targetMachineId, input.presence),
-        ]);
-        if (!initiator || !target || target.machine.kind !== 'persistent') return { ok: false, reasonCode: 'broker_unavailable' };
-        if (!supportsAccountConnectionIngress(target.machine.operationProtocolCapabilities)) {
-            return { ok: false, reasonCode: 'update_required' };
-        }
-        if (refresh && (refresh.initiator.endpointId !== initiator.endpoint.endpointId || refresh.target.endpointId !== target.endpoint.endpointId)) {
+    return await withCurrentMachines<ProviderBrokerAccountOpenResponseV2>({ ...input, initiatorMachineId: request.initiatorMachineId,
+        targetMachineId: request.targetMachineId, consumer: request.consumer, expectedOccurrenceId: refresh?.executionRunOccurrenceId ?? null }, admitted => {
+        const { initiator, target } = admitted;
+        if (refresh && (refresh.initiator.endpointId !== initiator.endpointId || refresh.target.endpointId !== target.endpoint.endpointId)) {
             return { ok: false, reasonCode: 'broker_unavailable' };
         }
         const payload = {
@@ -88,7 +158,7 @@ export async function openAccountConnectionProviderBroker(input: Common & Readon
             issuedAt: input.nowMs, expiresAt: input.nowMs + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
             homeId: input.homeId, accountId: input.actorAccountId, source: request.source,
             initiatorTokenEpoch: input.tokenEpoch ?? 0,
-            initiator: { accountId: input.actorAccountId, machineId: request.initiatorMachineId, endpointId: initiator.endpoint.endpointId },
+            initiator: { accountId: input.actorAccountId, machineId: request.initiatorMachineId, endpointId: initiator.endpointId },
             target: { custodianAccountId: input.actorAccountId, machineId: request.targetMachineId, endpointId: target.endpoint.endpointId },
             consumer: request.consumer, application: request.application,
             ...(admitted.executionRunOccurrenceId ? { executionRunOccurrenceId: admitted.executionRunOccurrenceId } : {}),
@@ -115,23 +185,12 @@ export async function admitAccountConnectionProviderBroker(input: Common & Reado
     if (!parsed.success || !input.verifyAuthority(parsed.data.authority)) return { ok: false, reasonCode: 'invalid_request' };
     const payload = parsed.data.authority.payload;
     if (payload.homeId !== input.homeId || payload.accountId !== input.actorAccountId) return { ok: false, reasonCode: 'resource_forbidden' };
-    const run = payload.consumer.kind === 'execution_run' ? await input.resolveExecutionRunCurrentness({
-        executionRunId: payload.consumer.executionRunId, requestingAccountId: input.actorAccountId,
-        workerMachineId: payload.initiator.machineId, expectedOccurrenceId: payload.executionRunOccurrenceId ?? null,
-    }) : null;
-    if (run && !run.ok) return run;
-    return await inTx(async tx => {
-        if (!await auth.isSignedCredentialCurrent(tx, input.actorAccountId, payload.initiatorTokenEpoch)) return { ok: false, reasonCode: 'operation_not_current' };
-        const admitted = await admitProviderBrokerConsumerInTx(tx, { accountId: input.actorAccountId,
-            initiatorMachineId: payload.initiator.machineId, consumer: payload.consumer, executionRun: run });
-        if (!admitted.ok) return admitted;
-        const [initiator, target] = await Promise.all([
-            readMachine(tx, input.actorAccountId, payload.initiator.machineId, input.presence),
-            readMachine(tx, input.actorAccountId, payload.target.machineId, input.presence),
-        ]);
-        if (!initiator || !target || target.machine.kind !== 'persistent' || initiator.endpoint.endpointId !== payload.initiator.endpointId
-            || target.endpoint.endpointId !== payload.target.endpointId) return { ok: false, reasonCode: 'broker_unavailable' };
-        if (!supportsAccountConnectionIngress(target.machine.operationProtocolCapabilities)) return { ok: false, reasonCode: 'update_required' };
+    return await withCurrentMachines<ProviderBrokerAccountAdmissionResponseV2>({ ...input, tokenEpoch: payload.initiatorTokenEpoch,
+        initiatorMachineId: payload.initiator.machineId, targetMachineId: payload.target.machineId,
+        consumer: payload.consumer, expectedOccurrenceId: payload.executionRunOccurrenceId ?? null }, admitted => {
+        if (admitted.initiator.endpointId !== payload.initiator.endpointId || admitted.target.endpoint.endpointId !== payload.target.endpointId) {
+            return { ok: false, reasonCode: 'broker_unavailable' };
+        }
         return { ok: true };
     });
 }

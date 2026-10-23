@@ -12,6 +12,9 @@ import { signProviderBrokerRouteGrantV1, verifyProviderBrokerRouteGrantSignature
 import { authorizeTeamCredentialProviderModelCatalog } from './providerBrokerAdmission';
 import { writeSessionTeamCredentialBindingsInTx } from './sessionBinding';
 import { resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
+import { openAccountConnectionProviderBroker, admitAccountConnectionProviderBroker } from '@/app/providers/providerBrokerAdmission';
+import { verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Granted broker initiator (PostgreSQL)', () => {
     beforeAll(async () => {
@@ -85,16 +88,91 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Granted broker 
                     signingCapability: { keyId: 'pg-home', publicKey: Buffer.from(signing.publicKey).toString('base64url'), expiresAt: null } }),
             });
             expect(await read()).toEqual({ ok: true });
+            const hub = await db.machine.create({ data: {
+                id: randomUUID(), accountId: requester.id, metadata: '{}', active: true,
+                operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1, 2] },
+                    irohMachineEndpoint: { protocolVersions: [1], endpointId: '3'.repeat(64) } },
+                operationProtocolCapabilitiesRevision: 1,
+            } });
+            const verifyAuthority = (candidate: unknown) => verifyProviderBrokerRouteGrantSignatureV2({ authority: candidate, nowMs: 1,
+                signingCapability: { keyId: 'pg-home', publicKey: Buffer.from(signing.publicKey).toString('base64url'), expiresAt: null } });
+            let presenceReads = 0;
+            const common = { homeId: 'pg-home', actorAccountId: requester.id,
+                readCurrentPresence: async () => {
+                    presenceReads += 1;
+                    return { initiatorPresence: { state: 'partial' as const, machineIds: new Set([worker.id]) },
+                        targetPresence: { state: 'partial' as const, machineIds: new Set([hub.id]) } };
+                },
+                resolveExecutionRunCurrentness: async () => ({ ok: true as const, parentSessionId: null, occurrenceId: 'pg-run-occurrence' }) };
+            const personalAuthorities = [];
+            const originalTransaction = db.$transaction;
+            let successfulAdmissions = 0;
+            let fencedFinalAdmissions = 0;
+            // Observe the real callback/commit boundary. The contender probes
+            // the same Account publication lock required to complete withdrawal;
+            // NOWAIT is test-only evidence, not a production timeout or retry.
+            db.$transaction = new Proxy(originalTransaction, { apply(target, receiver, args) {
+                const callback: unknown = args[0];
+                if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                const observed = new Proxy(callback, { async apply(fn, context, callbackArgs) {
+                    const result: unknown = await Reflect.apply(fn, context, callbackArgs);
+                    if (result && typeof result === 'object' && 'result' in result) {
+                        const admission = result.result;
+                        if (admission && typeof admission === 'object' && 'ok' in admission && admission.ok === true
+                            && ++successfulAdmissions % 2 === 0) {
+                            await expect(db.$queryRawUnsafe(
+                                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', requester.id,
+                            )).rejects.toMatchObject({ code: 'P2010', meta: { code: '55P03' } });
+                            fencedFinalAdmissions += 1;
+                        }
+                    }
+                    return result;
+                } });
+                return Reflect.apply(target, receiver, [observed, ...args.slice(1)]);
+            } });
+            try {
+                for (const consumer of [{ kind: 'session', sessionId: session.id },
+                    { kind: 'execution_run', executionRunId: 'pg-run' }] as const) {
+                    const openInput = { ...common, tokenEpoch: requester.tokenEpoch,
+                        nowMs: 1, grantId: randomUUID(), signingKey: { keyId: 'pg-home', secretKey: signing.secretKey },
+                        verifyRefreshAuthority: verifyAuthority,
+                        request: { v: 2 as const, initiatorMachineId: worker.id, targetMachineId: hub.id, consumer,
+                            application: authority.payload.application,
+                            source: { kind: 'account_connection' as const, connectionId: ProviderConnectionIdSchema.parse('pg-personal'),
+                                expectedConnectionSecurityFingerprint: 'connection-security:v1:pg-personal',
+                                expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:pg-personal' } } };
+                    const opened = await openAccountConnectionProviderBroker(openInput);
+                    expect(opened).toMatchObject({ ok: true, authority: { payload: {
+                        initiator: { accountId: requester.id, machineId: worker.id }, target: { custodianAccountId: requester.id, machineId: hub.id },
+                    } } });
+                    if (!opened.ok) throw new Error(opened.reasonCode);
+                    expect(verifyAuthority(opened.authority)).toBe(true);
+                    expect(await admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
+                        request: { v: 2, authority: opened.authority } })).toEqual({ ok: true });
+                    expect(await openAccountConnectionProviderBroker({ ...openInput,
+                        request: { ...openInput.request, refreshAuthority: opened.authority } })).toMatchObject({ ok: true });
+                    personalAuthorities.push(opened.authority);
+                }
+                expect(fencedFinalAdmissions).toBe(6);
+            } finally {
+                db.$transaction = originalTransaction;
+            }
             await inTx(tx => removeMachineAccessGrantInTx(tx, {
                 actorAccountId: custodian.id, machineId: worker.id,
                 principal: { kind: 'account', accountId: requester.id },
             }));
             expect(await read()).toEqual({ ok: false, reasonCode: 'operation_not_current' });
+            const readsBeforeRevocation = presenceReads;
+            for (const personalAuthority of personalAuthorities) {
+                expect(await admitAccountConnectionProviderBroker({ ...common, verifyAuthority,
+                    request: { v: 2, authority: personalAuthority } })).toMatchObject({ ok: false });
+            }
+            expect(presenceReads).toBe(readsBeforeRevocation);
         } finally {
             await db.team.delete({ where: { id: team.id } });
             await db.accessKey.deleteMany({ where: { accountId: requester.id } });
             await db.session.deleteMany({ where: { accountId: requester.id } });
-            await db.machine.deleteMany({ where: { accountId: custodian.id } });
+            await db.machine.deleteMany({ where: { accountId: { in: [requester.id, custodian.id] } } });
             await db.account.deleteMany({ where: { id: { in: [requester.id, custodian.id] } } });
         }
     });

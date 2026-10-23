@@ -42,6 +42,20 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
         resolveServerIdentityId: () => getOrCreateServerIdentityId(process.env),
         createNonce: () => crypto.randomUUID(),
     });
+    const readAccountConnectionPresence: Parameters<typeof openAccountConnectionProviderBroker>[0]['readCurrentPresence'] = async input => {
+        if (input.initiatorAccountId === input.targetAccountId) {
+            const presence = await getMachineDaemonPresenceInventory({ accountId: input.targetAccountId, io: app.machineDaemonPresence,
+                machineIds: [input.initiatorMachineId, input.targetMachineId] });
+            return { initiatorPresence: presence, targetPresence: presence };
+        }
+        const [initiatorPresence, targetPresence] = await Promise.all([
+            getMachineDaemonPresenceInventory({ accountId: input.initiatorAccountId, io: app.machineDaemonPresence,
+                machineIds: [input.initiatorMachineId] }),
+            getMachineDaemonPresenceInventory({ accountId: input.targetAccountId, io: app.machineDaemonPresence,
+                machineIds: [input.targetMachineId] }),
+        ]);
+        return { initiatorPresence, targetPresence };
+    };
     personalApp.post(PROVIDER_BROKER_ACCOUNT_OPEN_HTTP_PATH_V2, {
         preHandler: app.authenticate, attachValidation: true,
         config: { restrictedCredentialBinding: { scope: 'session', session: 'body.consumer.sessionId', machine: 'body.initiatorMachineId' } },
@@ -60,8 +74,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
         if (request.sessionRuntimePrincipal) return reply.send({ ok: false, reasonCode: 'update_required' });
         const result = await openAccountConnectionProviderBroker({
             actorAccountId: request.userId, homeId: await getOrCreateServerIdentityId(process.env),
-            presence: await getMachineDaemonPresenceInventory({ accountId: request.userId, io: app.machineDaemonPresence,
-                machineIds: [parsed.data.initiatorMachineId, parsed.data.targetMachineId] }),
+            readCurrentPresence: readAccountConnectionPresence,
             request: parsed.data, tokenEpoch: readSessionAccessAuthenticationFromRequest(request).tokenEpoch,
             nowMs: Date.now(), grantId: crypto.randomUUID(),
             signingKey: { keyId: signing.keyId, secretKey: signing.secretKey }, resolveExecutionRunCurrentness,
@@ -85,8 +98,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
         if (!signing.ok) return reply.send({ ok: false, reasonCode: 'update_required' });
         const result = await admitAccountConnectionProviderBroker({
             actorAccountId: request.userId, homeId: await getOrCreateServerIdentityId(process.env),
-            presence: await getMachineDaemonPresenceInventory({ accountId: request.userId, io: app.machineDaemonPresence,
-                machineIds: [parsed.data.authority.payload.initiator.machineId, parsed.data.authority.payload.target.machineId] }),
+            readCurrentPresence: readAccountConnectionPresence,
             request: parsed.data, resolveExecutionRunCurrentness,
             verifyAuthority: authority => verifyProviderBrokerRouteGrantSignatureV2({
                 authority, signingCapability: signing.capability, nowMs: Date.now(),
