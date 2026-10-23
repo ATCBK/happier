@@ -3,7 +3,7 @@ import { ScmDiffSummaryResultClearInputSchema, ScmDiffSummaryResultClearResponse
 import { isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
 import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmComparisonSourceKey, buildScmReviewScopeId, buildReviewUnits, ScmStatusSnapshotResponseSchema, ScmDiffFileResponseSchema, type ScmReviewedMarksSource } from '@happier-dev/protocol/scm';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
 import { runMachineScmRpcWithFallback } from '@/sync/ops/scm/machineScm';
 import { runSessionScmRpc } from '@/sync/ops/sessionScm';
 import type { LazyActionAccountContext } from './actionAccountContext';
@@ -144,6 +144,8 @@ export function createUiScmAction(
             options?.onDispatched?.();
             const result = await runMachineScmRpcWithFallback(target.machineId, method, request, {
                 serverId, accountId, signal: context.signal,
+                ...(context.defaultSessionId && resolveSocketRpcSessionAuthorization(method)?.optionalSessionScope
+                    ? { authorization: { kind: 'session.write', sessionId: context.defaultSessionId } } : {}),
             });
             account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
             return result;

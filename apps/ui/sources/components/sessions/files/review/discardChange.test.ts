@@ -91,6 +91,35 @@ describe('comparison Discard and guarded Undo', () => {
     entry: { kind: 'comparison' as const, path: 'a.txt', against: { source: { kind: 'workingTree' as const } }, changeKeys: ['key'], expectedHash: beforeHash },
     messages, readCurrentText: async () => '\ufeffold\r\n', refresh: async () => {} });
 
+  it('addresses a machine-routed Discard to the same session as its Undo note', async () => {
+    rpc.responses.push({ success: true, noteDelivery: { status: 'queued' }, entries: [{
+      path: 'a.txt', status: 'reverted', hashBefore: beforeHash, hashAfter: afterHash,
+    }] });
+    const result = await discardChange({ ...input(), sessionTarget: { sessionId: 'review-session', serverId } });
+    expect(result).toMatchObject({ ok: true, noteDelivery: 'queued' });
+    expect(rpc.requests).toEqual(expect.arrayContaining([expect.objectContaining({
+      authorization: { kind: 'session.write', sessionId: 'review-session' },
+      payload: expect.objectContaining({ entries: [expect.objectContaining({
+        against: { source: { kind: 'workingTree' } },
+      })] }),
+    })]));
+  });
+
+  it('carries the retained turn session through Action admission to authenticated machine ingress', async () => {
+    rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'reverted', hashBefore: beforeHash, hashAfter: afterHash }] });
+    const params = input();
+    const result = await discardChange({ ...params, entry: { ...params.entry,
+      against: { source: { kind: 'turnCheckpoint', sessionId: 'review-session', turnId: 'turn-1' }, comparisonId: 'c'.repeat(64), sessionId: 'review-session' },
+    }, sessionTarget: { sessionId: 'review-session', serverId } });
+    expect(result.ok).toBe(true);
+    expect(rpc.requests).toEqual(expect.arrayContaining([expect.objectContaining({
+      authorization: { kind: 'session.write', sessionId: 'review-session' },
+      payload: expect.objectContaining({ entries: [expect.objectContaining({
+        against: expect.objectContaining({ comparisonId: 'c'.repeat(64), sessionId: 'review-session' }),
+      })] }),
+    })]));
+  });
+
   it('publishes sticky Undo and restores exact inverse bytes guarded by the post-discard hash', async () => {
     rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'reverted', hashBefore: beforeHash, hashAfter: afterHash,
       inverseEdits: [{ startUtf16: 1, deleteLength: 3, insertText: 'old', originalText: 'new' }] }] }, { success: true, hash: beforeHash });

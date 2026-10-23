@@ -69,7 +69,8 @@ export async function discardChange(params: DiscardChangeParams): Promise<Discar
   let response: Awaited<ReturnType<typeof machineScmChangeDiscard>>;
   try {
     response = await machineScmChangeDiscard(params.target.machineId, { cwd: params.target.rootPath,
-      entries: [{ ...params.entry, includeUndo: true }] }, { ...params.options, serverId: params.target.serverId });
+      entries: [{ ...params.entry, includeUndo: true }] }, { ...params.options, serverId: params.target.serverId,
+      ...(params.sessionTarget ? { authorization: { kind: 'session.write', sessionId: params.sessionTarget.sessionId } } : {}) });
   } catch {
     notice(params.messages.unknown, 'error');
     await refresh();

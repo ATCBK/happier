@@ -69,7 +69,8 @@ describe('SCM Action target binding', () => {
                 context: { serverId, runtimeAccountId: 'account-other', defaultSessionId: 'selected' }, executeCanonicalAction });
             expect(result).toMatchObject({ success: true, entries: [{ path: 'file.txt', hashAfter: 'b'.repeat(64) }] });
             expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-other',
-                method: 'scm.change.discard', payload: expect.objectContaining({ cwd: '/repo/selected' }) }));
+                method: 'scm.change.discard', payload: expect.objectContaining({ cwd: '/repo/selected' }),
+                authorization: { kind: 'session.write', sessionId: 'selected' } }));
             expect(hashes).toEqual(['b'.repeat(64)]);
             expect(wrong).toEqual([]);
         } finally { dispose(); disposeWrong(); }
