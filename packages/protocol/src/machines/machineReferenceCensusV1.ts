@@ -19,7 +19,10 @@ export const MachineReferenceCensusV1Schema = lazyZodSchema(() => z.readonly(z.s
 export type MachineReferenceV1 = z.infer<typeof MachineReferenceV1Schema>;
 export type MachineReferenceCensusV1 = z.infer<typeof MachineReferenceCensusV1Schema>;
 export type MachineReferenceCensusPortsV1 = Readonly<{
-  artifacts: Pick<WorkflowDefinitionArtifactOperations, 'read' | 'list'>;
+  artifacts: Pick<WorkflowDefinitionArtifactOperations, 'read' | 'list'> & Readonly<{
+    readMany(artifactIds: readonly string[], options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]):
+      Promise<readonly Awaited<ReturnType<WorkflowDefinitionArtifactOperations['read']>>[]>;
+  }>;
   readSettings(): Promise<Readonly<Record<string, unknown>>>;
   readProfileCatalog?(settings: Readonly<Record<string, unknown>>): Promise<ProfileCatalogSnapshotV1>;
   readPools(): Promise<MachinePoolListOutputV1>;
@@ -72,6 +75,7 @@ export async function readMachineReferenceCensusV1(input: Readonly<{
       : Array.isArray(settings.profiles) ? settings.profiles : [];
     const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, {
       read: (artifactId, options) => ports.artifacts.read(artifactId, { ...options, fresh: true }),
+      readMany: (artifactIds, options) => ports.artifacts.readMany(artifactIds, { ...options, fresh: true }),
     }, input.signal);
     // The catalog gives exact ids for referenced profile Artifacts. Shared-only
     // profiles remain undiscoverable until Artifacts expose a narrow public

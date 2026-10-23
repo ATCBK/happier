@@ -470,6 +470,8 @@ export function prepareLegacyProfileRecordsV1(raw: Readonly<Record<string, unkno
 /** Fetching stays in the mode-aware, grant-authorized Artifact store; all hosts share this inventory. */
 export async function loadAiLaunchProfileArtifacts(raw: unknown, store: Readonly<{
   read: (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => Promise<ArtifactSharingResourceV1 | null>;
+  readMany?: (artifactIds: readonly string[], options?: Readonly<{ signal?: AbortSignal }>) =>
+    Promise<readonly (ArtifactSharingResourceV1 | null)[]>;
   list?: (options: Readonly<{ limit: number; cursor?: string; signal?: AbortSignal }>) => Promise<Readonly<{
     items: readonly ArtifactSharingResourceV1[]; nextCursor?: string;
   }>>;
@@ -498,11 +500,22 @@ export async function loadAiLaunchProfileArtifacts(raw: unknown, store: Readonly
     } while (cursor);
   }
   const artifacts = new Map<string, ArtifactSharingResourceV1>();
-  for (const id of ids) {
+  const orderedIds = [...ids];
+  if (store.readMany && orderedIds.length > 0) {
     signal?.throwIfAborted();
-    const artifact = await store.read(id, signal ? { signal } : undefined);
+    const rows = await store.readMany(orderedIds, signal ? { signal } : undefined);
     signal?.throwIfAborted();
-    if (artifact?.artifactId === id) artifacts.set(id, artifact);
+    if (rows.length !== orderedIds.length) throw new Error('artifact_read_batch_invalid');
+    rows.forEach((artifact, index) => {
+      if (artifact?.artifactId === orderedIds[index]) artifacts.set(orderedIds[index]!, artifact);
+    });
+  } else {
+    for (const id of orderedIds) {
+      signal?.throwIfAborted();
+      const artifact = await store.read(id, signal ? { signal } : undefined);
+      signal?.throwIfAborted();
+      if (artifact?.artifactId === id) artifacts.set(id, artifact);
+    }
   }
   return artifacts;
 }

@@ -1214,7 +1214,18 @@ export function createCliActionDeps(params: Readonly<{
       let profileStore: ReturnType<typeof createCliProfileStore> | undefined;
       return await readMachineReferenceCensusV1({ homeId: input.homeId, machineId: machine.enrolledMachineId ?? null,
         homeAliases: [projectHomeId], signal }, {
-        artifacts: roleArtifactStore,
+        artifacts: { ...roleArtifactStore, readMany: async (artifactIds, options) => {
+          const rows = await roleArtifactStore.readBodies(artifactIds.map(artifactId => ({
+            artifactId, ownerAccountId: '', access: 'view' as const, header: {}, headerVersion: 0,
+            seq: 0, createdAt: 0, updatedAt: 0,
+          })), options?.signal);
+          return rows.map((row, index) => row.artifactId === artifactIds[index]
+            && row.bodyVersion !== undefined && 'body' in row
+            ? { artifactId: row.artifactId, header: row.header, body: row.body,
+                ownerAccountId: row.ownerAccountId, access: row.access, publicAudience: row.publicAudience,
+                headerVersion: row.headerVersion, revision: { headerVersion: row.headerVersion, bodyVersion: row.bodyVersion } }
+            : null);
+        } },
         readSettings: async () => {
           await readRawRoleSettings();
           profileStore = params.savedSecretOperationContext

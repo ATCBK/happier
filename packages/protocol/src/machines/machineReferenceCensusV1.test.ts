@@ -29,6 +29,7 @@ describe('readMachineReferenceCensusV1', () => {
     ]);
     const listCalls: Parameters<MachineReferenceCensusPortsV1['artifacts']['list']>[0][] = [];
     const readCalls: { artifactId: string; fresh: boolean | undefined }[] = [];
+    const readManyCalls: { artifactIds: readonly string[]; fresh: boolean | undefined }[] = [];
     const unrelatedOtherArtifacts = Array.from({ length: 5_000 }, (_, index) => ({
       artifactId: `unrelated-other-${index}`, header: { kind: 'unrelated-other.v1' }, headerVersion: 1,
       updatedAt: index, ownerAccountId: 'account', access: 'owner' as const,
@@ -52,6 +53,10 @@ describe('readMachineReferenceCensusV1', () => {
         async read(artifactId, options) {
           readCalls.push({ artifactId, fresh: options?.fresh });
           return artifacts.get(artifactId) ?? null;
+        },
+        async readMany(artifactIds, options) {
+          readManyCalls.push({ artifactIds, fresh: options?.fresh });
+          return artifactIds.map(artifactId => artifacts.get(artifactId) ?? null);
         },
       },
       readSettings: async () => ({}),
@@ -94,10 +99,8 @@ describe('readMachineReferenceCensusV1', () => {
     expect(listCalls.map(({ kind, coarseKind, includeBody }) => ({ kind, coarseKind, includeBody }))).toEqual([
       { kind: 'work-board.v1', coarseKind: 'work_board', includeBody: undefined },
     ]);
-    expect(readCalls).toEqual([
-      { artifactId: 'board-one', fresh: true },
-      { artifactId: 'profile-one', fresh: true },
-    ]);
+    expect(readCalls).toEqual([{ artifactId: 'board-one', fresh: true }]);
+    expect(readManyCalls).toEqual([{ artifactIds: ['profile-one'], fresh: true }]);
     expect(assignmentReads).toBe(1);
   });
 
@@ -113,6 +116,7 @@ describe('readMachineReferenceCensusV1', () => {
           readCalls.push({ artifactId, fresh: options?.fresh });
           throw new Error('artifact_content_unavailable');
         },
+        readMany: async () => [],
       },
       readSettings: async () => ({}),
       readProfileCatalog: async () => ({

@@ -123,7 +123,8 @@ function transport(input: Readonly<{ current?: () => boolean; wait?: () => Promi
             homeId: request.homeId, machineId: machine.enrolledMachineId ?? null, signal,
         }, {
             // Genuine Account persistence ports; requester census and Profile authority remain real.
-            artifacts: { list: async () => ({ items: [], coverage: 'complete' }), read: async () => null },
+            artifacts: { list: async () => ({ items: [], coverage: 'complete' }), read: async () => null,
+                readMany: async artifactIds => artifactIds.map(() => null) },
             readSettings: async () => ({}),
             readProfileCatalog: () => loadProfileCatalogV1({ mode: 'plain', material: null,
                 readPage: async () => ({ status: 'listed', rows: [], nextCursor: null, complete: true,

@@ -27,7 +27,9 @@ export function createUiManagedMachineReferenceReader(account: LazyActionAccount
         if (machine.homeId !== input.homeId || machine.id !== input.managedId) return unavailable('target');
         const census = await readMachineReferenceCensusV1({ homeId: input.homeId,
             machineId: machine.enrolledMachineId ?? null, homeAliases: [account.serverId], signal }, {
-            artifacts: account.workflowArtifacts,
+            artifacts: { ...account.workflowArtifacts,
+                readMany: async (artifactIds, options) => (await account.readArtifactContents(artifactIds, options))
+                    .map(result => result.status === 'fulfilled' ? result.value : null) },
             readSettings: account.readRawSettings,
             readProfileCatalog: () => readProfileCatalogInContext(account, signal, { readSourceBaseline: true }),
             readPools: () => createMachinePoolActionClient({ request: account.request }).execute('machines.pools.list', {}, {
