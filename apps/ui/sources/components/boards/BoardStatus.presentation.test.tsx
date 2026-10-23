@@ -182,7 +182,7 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
         active: true, presence: 'online', activeAt: now, updatedAt: now - 4 * 60_000, ...extra,
         metadata: { ...createSessionFixture().metadata!, name, flavor: 'claude', machineId: machine.id, path: '/Users/alice/projects/payments',
             homeDir: '/Users/alice', host: 'MacBook Pro' } });
-    const inboxLead = inboxSession('rollout', 'Payments v2 rollout', { managedSessions: { total: 3, working: 1, needsYou: 1, stalled: 1 } });
+    const inboxLead = inboxSession('rollout', 'Payments v2 rollout', { managedSessions: { total: 3, working: 1, needsYou: 1, stalled: 1, finished: 0, attentionPrimary: null } });
     const inboxStalled = inboxSession('ledger', 'Backfill intent ledger', { manager: { sessionId: 'rollout' }, presence: 'offline', active: false });
     const inboxRunbook = inboxSession('runbook', 'Support runbook for retries', { manager: { sessionId: 'rollout' } });
     const inboxModal = inboxSession('modal', 'Fix settings modal remount');

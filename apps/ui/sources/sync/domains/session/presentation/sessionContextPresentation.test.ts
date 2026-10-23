@@ -35,6 +35,7 @@ function makeAwareness(params: Readonly<{
 }
 
 const VIEWER_RESPONSIBLE: SessionViewerProjectionV1 = {
+    latestFailureSeq: null,
     readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: null },
     relevance: { relevant: true, reasons: ['responsible_for_me'] },
     follow: { follows: true, notificationLevel: 'important' },

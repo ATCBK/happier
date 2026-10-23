@@ -10,6 +10,7 @@ describe('buildActivitySurfaceViewModel', () => {
     it('uses the admitted candidate word without reintroducing filtered viewer news', () => {
         const session = createSessionFixture({ active: true, activeAt: 1_000, encryptionMode: 'plain',
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -40,6 +41,7 @@ describe('buildActivitySurfaceViewModel', () => {
                 summary: { text: 'PRIVATE-TITLE-SENTINEL', updatedAt: 1 },
             },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['responsible_for_me'] },
                 follow: { follows: true, notificationLevel: 'important' },
@@ -118,6 +120,7 @@ describe('buildActivitySurfaceViewModel', () => {
             encryptionMode: 'plain',
             metadata: { path: '/private/path', host: 'private-host', summary: { text: 'Private title', updatedAt: 1 } },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },

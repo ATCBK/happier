@@ -82,6 +82,7 @@ function readableRow(id: string): V2SessionRecord {
             capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }),
         },
         viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: false, reasons: [] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

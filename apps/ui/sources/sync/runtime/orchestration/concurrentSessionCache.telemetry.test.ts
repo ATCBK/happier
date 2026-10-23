@@ -129,6 +129,7 @@ describe('concurrent session cache telemetry', () => {
                 return Response.json(SessionListQueryResponseV1Schema.parse({
                     sessions: [{ ...teamRow, responsibleAccountId: null, responsibleAccount: null,
                         viewer: {
+                            latestFailureSeq: null,
                             readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
                             follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
@@ -657,6 +658,7 @@ describe('concurrent session cache telemetry', () => {
                         metadata: 'encrypted-unopenable-metadata',
                     }), responsibleAccountId: null, responsibleAccount: null,
                     viewer: {
+                        latestFailureSeq: null,
                         readState: { state: 'not_started' },
                         relevance: { relevant: true, reasons: ['owned_by_me'] },
                         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

@@ -210,6 +210,7 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
     it('does not write a read cursor or metadata when browsing an untracked viewer', async () => {
         const sessionId = 'untracked';
         const session = { ...createPlainSession({ sessionId }), access: createSessionAccessFixture('view'), viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' as const },
             relevance: { relevant: false, reasons: [] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
@@ -235,6 +236,7 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
     it('uses the acknowledged viewer projection to clear personal attention', async () => {
         const sessionId = 'viewer-ack';
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: 1 },
             relevance: { relevant: true, reasons: ['owned_by_me' as const] },
             attention: { needsAttention: true, reasons: ['unread' as const], primary: 'unread' as const, presentation: 'full' as const },
@@ -257,6 +259,7 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
         const { sync } = await import('./sync');
         const sessionId = 'viewer-snapshot-race';
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: 1 },
             relevance: { relevant: true, reasons: ['owned_by_me' as const] },
             attention: { needsAttention: true, reasons: ['unread' as const], primary: 'unread' as const, presentation: 'full' as const },

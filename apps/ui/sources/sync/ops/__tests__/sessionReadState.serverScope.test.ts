@@ -20,6 +20,7 @@ describe('sessionSetManualReadStateWithServerScope (real Action and scoped trans
     const mutations: Array<{ url: string; init: RequestInit | undefined }> = [];
 
     const tracking = (): SessionViewerProjectionV1 => ({
+        latestFailureSeq: null,
         readState: { state: 'tracking', lastViewedSessionSeq: 7, unreadSince: null },
         relevance: { relevant: true, reasons: ['owned_by_me'] },
         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

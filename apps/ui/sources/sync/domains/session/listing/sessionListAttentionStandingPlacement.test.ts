@@ -20,6 +20,7 @@ function sessionKey(sessionId: string): string {
 
 function viewer(overrides: Partial<SessionViewerProjectionV1> = {}): SessionViewerProjectionV1 {
     return {
+        latestFailureSeq: null,
         readState: { state: 'not_started' },
         relevance: { relevant: false, reasons: [] },
         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
@@ -197,6 +198,7 @@ describe('attention standing placement', () => {
                     lastTurnCompletedAt: undefined,
                     meaningfulActivityAt: NOW_MS - 900_000,
                     viewer: viewer({
+                        latestFailureSeq: null,
                         readState: { state: 'tracking', lastViewedSessionSeq: 11, unreadSince: NOW_MS - 900_000 },
                         relevance: { relevant: true, reasons: ['followed_by_me'] },
                         attention: { needsAttention: true, reasons: ['unread'], primary: 'unread', presentation: 'full' },

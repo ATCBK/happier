@@ -443,6 +443,7 @@ describe('Home Customize entity reorder binding', () => {
             // in the real Sessions options source before the Artifact write.
             if (path === '/v2/sessions/query') return Response.json(SessionListQueryResponseV1Schema.parse({
                 sessions: [...wireSessions.values()].map(session => ({ ...session, viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                     attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
                     follow: { follows: false, notificationLevel: null, includeInVoice: false },

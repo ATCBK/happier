@@ -19,7 +19,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { ChatListFooterWithKeyboardInset } = await import('./ChatListFrameSlots');
 const { AppSessionTranscriptSourceProvider } = await import('./source/appSessionTranscriptSource');
 
-const reports = (total: number) => ({ total, working: total, needsYou: 0, stalled: 0 });
+const reports = (total: number) => ({ total, working: total, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null });
 
 describe('transcript Sessions chip', () => {
     it('shows the Session\'s own reports.total at the end of the transcript and opens the Agents destination; absent without children', async () => {

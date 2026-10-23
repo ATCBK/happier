@@ -16,7 +16,7 @@ import {
   SessionRowReportsDisclosure,
 } from './SessionRowReportsChip';
 
-const REPORTS: SessionManagedSessionsV1 = { total: 3, needsYou: 1, working: 1, stalled: 0 };
+const REPORTS: SessionManagedSessionsV1 = { total: 3, needsYou: 1, working: 1, stalled: 0, finished: 0, attentionPrimary: null };
 
 describe('SessionRowReportsChip', () => {
   afterEach(() => {
@@ -31,7 +31,7 @@ describe('SessionRowReportsChip', () => {
     const reports = selectSessionReportSubtree({}, 'lead', 'home', { home: { child: row } });
     const status = readSessionAwarenessWorkStatusV1({ awareness: readSessionWorkStatusFacts(row, now).awareness });
     const stalled = readSessionWorkStalled(row, now);
-    const counts = SessionManagedSessionsV1Schema.parse({ total: 1, working: Number(status.bucket === 'working'), needsYou: Number(status.bucket === 'needs_you'), stalled: Number(stalled) });
+    const counts = SessionManagedSessionsV1Schema.parse({ total: 1, working: Number(status.bucket === 'working'), needsYou: Number(status.bucket === 'needs_you'), stalled: Number(stalled), finished: 0, attentionPrimary: null });
     const work = projectWork({ sessionId: 'lead', reportSessions: reports.map(session => ({
       sessionId: session.id, managerSessionId: 'lead', title: 'Payment retries', agentId: null, facts: [],
       statusFacts: readSessionWorkStatusFacts(session, now), stalled: readSessionWorkStalled(session, now), archived: false,
@@ -56,7 +56,7 @@ describe('SessionRowReportsChip', () => {
     const settled = await renderScreen(
       <SessionRowReportsChip
         sessionId="bot"
-        reports={{ total: 3, needsYou: 0, working: 0, stalled: 0 }}
+        reports={{ total: 3, needsYou: 0, working: 0, stalled: 0, finished: 0, attentionPrimary: null }}
         collapsed
       />,
     );
@@ -66,11 +66,11 @@ describe('SessionRowReportsChip', () => {
 
   it('counts only the sub-sessions that are not archived, and says nothing when every report is archived', async () => {
     const counted = await renderScreen(
-      <SessionRowReportsChip sessionId="bot" reports={{ total: 3, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 3, needsYou: 0, working: 0, stalled: 0, archived: 1, finished: 0, attentionPrimary: null }} collapsed />,
     );
     expect(counted.findByTestId('session-row-reports-chip:bot')?.props.accessibilityLabel).toContain('2');
     const archivedOnly = await renderScreen(
-      <SessionRowReportsChip sessionId="bot" reports={{ total: 1, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 1, needsYou: 0, working: 0, stalled: 0, archived: 1, finished: 0, attentionPrimary: null }} collapsed />,
     );
     expect(archivedOnly.findByTestId('session-row-reports-chip:bot')).toBeNull();
   });

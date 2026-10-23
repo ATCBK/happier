@@ -274,7 +274,7 @@ describe('SessionItem outer row accessible semantics', () => {
     });
 
     it('keeps reports disclosure independent of Session navigation', async () => {
-        const session = createRowSession({ managedSessions: { total: 4, working: 0, needsYou: 2, stalled: 0 } }, 'lead');
+        const session = createRowSession({ managedSessions: { total: 4, working: 0, needsYou: 2, stalled: 0, finished: 0, attentionPrimary: null } }, 'lead');
         const onSetReportsCollapsed = vi.fn();
         const screen = await renderScreen(<SessionItem session={session}
             rowViewModel={createSessionItemRowViewModel({ session })}

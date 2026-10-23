@@ -356,6 +356,7 @@ describe('unread attention placement', () => {
     it('configures background placement using authoritative modern unread facts', () => {
         const source = createSource(['modern-unread-background']);
         const viewer = (needsAttention: boolean) => ({
+            latestFailureSeq: null,
             readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: 100 },
             relevance: { relevant: true, reasons: ['followed_by_me' as const] },
             follow: { follows: true, notificationLevel: 'none' as const },
@@ -397,6 +398,7 @@ describe('unread attention placement', () => {
             runtimeActivityObservedAt: nowMs - 1_000,
             runtimeActivityRevision: 1,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },
@@ -517,6 +519,7 @@ describe('unread attention placement', () => {
                 hasUnreadMessages: true,
                 pendingBlockedCount: 1,
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'not_started' },
                     relevance: { relevant: false, reasons: [] },
                     follow: { follows: false, notificationLevel: null },
@@ -559,6 +562,7 @@ describe('unread attention placement', () => {
                 id: sessionId,
                 meaningfulActivityAt: sessionId === 'older-entry-new-activity' ? nowMs - 100 : nowMs - 500_000,
                 viewer: {
+                    latestFailureSeq: null,
                     readState: {
                         state: 'tracking',
                         lastViewedSessionSeq: 0,
@@ -588,6 +592,7 @@ describe('unread attention placement', () => {
             resolveSessionRow: (_serverId, sessionId) => createRow({
                 id: sessionId,
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 100 },
                     relevance: { relevant: true, reasons: ['followed_by_me'] },
                     follow: { follows: true, notificationLevel: 'none' },

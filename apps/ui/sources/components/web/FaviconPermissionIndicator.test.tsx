@@ -40,6 +40,7 @@ function seedStorage(state: Pick<StorageState, 'sessions'> & Partial<Pick<Storag
 
 function createPermissionViewer(): NonNullable<Session['viewer']> {
     return {
+        latestFailureSeq: null,
         readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
         relevance: { relevant: true, reasons: ['followed_by_me'] },
         follow: { follows: true, notificationLevel: 'none' },

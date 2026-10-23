@@ -27,6 +27,7 @@ function createStrictQueryRow() {
       capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
     },
     viewer: {
+      latestFailureSeq: null,
       readState: { state: 'not_started' as const },
       relevance: { relevant: false, reasons: [] },
       attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

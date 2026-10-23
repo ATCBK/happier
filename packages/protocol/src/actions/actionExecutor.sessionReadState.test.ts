@@ -116,6 +116,7 @@ describe('Session read-state Action vertical', () => {
 
   it('retains the canonical private viewer projection for the interactive host cache', async () => {
     const viewer = {
+      latestFailureSeq: null,
       readState: { state: 'tracking' as const, lastViewedSessionSeq: 7, unreadSince: null },
       relevance: { relevant: true, reasons: ['owned_by_me' as const] },
       attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
@@ -189,6 +190,7 @@ describe('Session read-state Action vertical', () => {
 
   it('projects only exact route failures into the closed Action vocabulary', () => {
     const viewer = {
+      latestFailureSeq: null,
       readState: { state: 'not_started' as const },
       relevance: { relevant: false, reasons: [] },
       attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

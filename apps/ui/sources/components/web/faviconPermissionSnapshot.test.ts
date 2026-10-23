@@ -22,6 +22,7 @@ function createSession(overrides: Partial<Session> & Pick<Session, 'id'>): Sessi
 
 function createPermissionViewer(): NonNullable<Session['viewer']> {
     return {
+        latestFailureSeq: null,
         readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
         relevance: { relevant: true, reasons: ['followed_by_me'] },
         follow: { follows: true, notificationLevel: 'none' },
@@ -121,6 +122,7 @@ describe('createFaviconPermissionSnapshotSelector', () => {
     it('clears permission pressure on a viewer-only Unfollow update', () => {
         const session = createSession({ id: 'shared', active: true, pendingPermissionRequestCount: 1,
             pendingRequestObservedAt: Date.now(), viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },

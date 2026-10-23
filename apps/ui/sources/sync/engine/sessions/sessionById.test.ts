@@ -545,6 +545,7 @@ describe('fetchAndApplySessionById', () => {
           capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
         },
         viewer: {
+          latestFailureSeq: null,
           readState: { state: 'not_started' },
           relevance: { relevant: false, reasons: [] },
           attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

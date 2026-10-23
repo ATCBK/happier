@@ -465,7 +465,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         sessions: [{ ...selectedSession.session, responsibleAccountId: null, responsibleAccount: null,
           effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
             capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
-          viewer: { readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
+          viewer: { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } },
         }], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,

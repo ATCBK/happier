@@ -25,6 +25,7 @@ function candidate(
         serverId,
         ...sessionOverrides,
         viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
             relevance: { relevant: true, reasons: ['owned_by_me'] },
             follow: { follows: false, notificationLevel: null },

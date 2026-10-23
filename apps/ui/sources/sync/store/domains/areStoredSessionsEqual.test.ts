@@ -83,12 +83,12 @@ describe('areStoredSessionsEqual', () => {
             makeSession({ manager: null }),
         )).toBe(false);
         expect(areStoredSessionsEqual(
-            makeSession({ managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0 } }),
-            makeSession({ managedSessions: { total: 2, working: 1, needsYou: 1, stalled: 0 } }),
+            makeSession({ managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null } }),
+            makeSession({ managedSessions: { total: 2, working: 1, needsYou: 1, stalled: 0, finished: 0, attentionPrimary: null } }),
         )).toBe(false);
         expect(areStoredSessionsEqual(
-            makeSession({ manager: { sessionId: 'lead-a' }, managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0 } }),
-            makeSession({ manager: { sessionId: 'lead-a' }, managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0 } }),
+            makeSession({ manager: { sessionId: 'lead-a' }, managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null } }),
+            makeSession({ manager: { sessionId: 'lead-a' }, managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null } }),
         )).toBe(true);
     });
 

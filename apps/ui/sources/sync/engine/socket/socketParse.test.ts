@@ -4,6 +4,7 @@ import { parseEphemeralUpdate, parseUpdateContainer } from './socketParse';
 describe('socketParse', () => {
     it.each(['new-session', 'update-session'])('rejects malformed explicit viewers before %s ingestion can use legacy tracking', (type) => {
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
             relevance: { relevant: true, reasons: ['owned_by_me'] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

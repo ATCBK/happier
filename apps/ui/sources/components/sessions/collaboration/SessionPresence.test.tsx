@@ -38,6 +38,7 @@ function publishViewerAttention(reasons: readonly ('mentioned' | 'unread_discuss
     const row = createSessionListRenderableSessionFixture({
         id: target.sessionId,
         viewer: {
+            latestFailureSeq: null,
             readState: tracked
                 ? { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null }
                 : { state: 'not_started' },

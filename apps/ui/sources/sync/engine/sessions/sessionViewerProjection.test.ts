@@ -8,6 +8,7 @@ import { buildNewSessionFromSocketUpdate, buildUpdatedSessionProjectionFromSocke
 describe('private viewer projection through synchronized Session rows', () => {
     it('uses the initialized private viewer when a new Session arrives', async () => {
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: null },
             relevance: { relevant: true, reasons: ['owned_by_me' as const] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
@@ -22,6 +23,7 @@ describe('private viewer projection through synchronized Session rows', () => {
 
     it('applies a private viewer-only socket change without a transcript revision and carries it through list projection', async () => {
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'not_started' as const },
             relevance: { relevant: true, reasons: ['responsible_for_me' as const] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

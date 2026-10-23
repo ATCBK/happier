@@ -39,11 +39,11 @@ describe('projectCliSessionAwarenessV1', () => {
     const awareness = project({ id: 'locked-step', encryptionMode: 'e2ee',
       metadata: 'unavailable', origin: { kind: 'run_step', runId: 'workflow-run' },
       manager: { sessionId: 'lead' },
-      managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 1 },
+      managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 1, finished: 0, attentionPrimary: null },
     });
     expect(awareness.origin).toEqual({ kind: 'run_step', runId: 'workflow-run' });
     expect(awareness.manager).toEqual({ sessionId: 'lead' });
-    expect(awareness.managedSessions).toEqual({ total: 2, working: 1, needsYou: 0, stalled: 1 });
+    expect(awareness.managedSessions).toEqual({ total: 2, working: 1, needsYou: 0, stalled: 1, finished: 0, attentionPrimary: null });
     expect(awareness).not.toHaveProperty('lineage');
     expect(SessionAwarenessProjectionV1Schema.safeParse(awareness).success).toBe(true);
   });

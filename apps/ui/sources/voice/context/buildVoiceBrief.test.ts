@@ -22,7 +22,7 @@ function source(): VoiceBriefSource {
     ].map(([id, reason]) => buildSessionActivityAttention({
         session: createSessionFixture({ id, serverId: 'home-a', latestTurnStatus: 'completed',
             metadata: { path: '/home/alice/private', host: 'test-host', summary: { text: `${id} /home/alice/private`, updatedAt: 1 } },
-            viewer: { readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
+            viewer: { latestFailureSeq: null, readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] }, follow: { follows: false, notificationLevel: null, includeInVoice: true },
                 notification: { level: 'important', source: 'owner' },
                 attention: { needsAttention: true, reasons: [reason as 'failed' | 'permission_required' | 'ready_after_read'],
@@ -40,9 +40,9 @@ function source(): VoiceBriefSource {
 
 describe('Voice brief from the mounted Inbox', () => {
     it.each([
-        { total: 2, working: 0, needsYou: 0, stalled: 2 },
-        { total: 2, working: 0, needsYou: 2, stalled: 0 },
-        { total: 6, working: 2, needsYou: 1, stalled: 3 },
+        { total: 2, working: 0, needsYou: 0, stalled: 2, finished: 0, attentionPrimary: null },
+        { total: 2, working: 0, needsYou: 2, stalled: 0, finished: 0, attentionPrimary: null },
+        { total: 6, working: 2, needsYou: 1, stalled: 3, finished: 0, attentionPrimary: null },
     ])('keeps report buckets truthful in the spoken session context: %j', (reports) => {
         const inbox = source();
         const candidates = [...inbox.sessionPresentation.sessionsNeedingAttention.map(entry => entry.candidate),

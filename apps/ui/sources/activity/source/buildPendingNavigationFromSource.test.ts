@@ -71,6 +71,7 @@ describe('pending navigation projection', () => {
         const locked = createSessionFixture({ id: 'locked', serverId: 'a', active: true,
             encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending',
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -88,6 +89,7 @@ describe('pending navigation projection', () => {
         const session = createSessionFixture({ id: 'locked', serverId: 'a', active: true,
             encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable',
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] }, follow: { follows: false, notificationLevel: null },
                 notification: { level: 'important', source: 'owner' },

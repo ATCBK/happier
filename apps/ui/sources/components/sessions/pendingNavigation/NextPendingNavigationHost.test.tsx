@@ -71,6 +71,7 @@ describe('mounted app-shell Next navigation', () => {
             effectiveAccess: { v: 1, level: session.access.level, sources: [{ kind: 'owner' }], capabilities: session.access.capabilities },
             responsibleAccountId: null, responsibleAccount: null,
             viewer: SessionViewerProjectionV1Schema.parse({
+                latestFailureSeq: null,
                 readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
                 attention: { needsAttention: true, reasons: ['user_action_required'], primary: 'user_action_required', presentation: 'full' },

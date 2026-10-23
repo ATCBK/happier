@@ -428,6 +428,7 @@ describe('voiceHooks privacy settings (opt-out defaults)', () => {
       s1: {
         ...state.sessions.s1,
         viewer: SessionViewerProjectionV1Schema.parse({
+          latestFailureSeq: null,
           readState: { state: 'not_started' },
           relevance: { relevant: true, reasons: ['followed_by_me'] },
           attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

@@ -160,6 +160,7 @@ describe('PushNotificationClient.sendToAllDevicesAsync', () => {
       if (String(url).includes('/v2/sessions/')) return { status: 200, data: { session: {
         ...createSessionNotificationContextFixture('s_1'),
         viewer: {
+          latestFailureSeq: null,
           readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
           attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
           follow: { follows: false, notificationLevel },

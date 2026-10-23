@@ -294,6 +294,7 @@ describe('exact-Home pending navigation details', () => {
             effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                 capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -411,6 +412,7 @@ describe('exact-Home pending navigation details', () => {
         const source = pendingSource([address.sessionId]);
         const locked = createSessionFixture({ id: 'locked', serverId: address.serverId, active: true,
             encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending', viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
                 attention: { needsAttention: true, reasons: ['permission_required'], primary: 'permission_required', presentation: 'status_only' },

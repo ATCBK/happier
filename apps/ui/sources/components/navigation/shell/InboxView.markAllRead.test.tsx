@@ -70,6 +70,7 @@ function unreadSession(serverId: string) {
             machineId: 'machine-1',
         },
         viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: 2 },
             relevance: { relevant: true, reasons: ['owned_by_me'] },
             follow: { follows: false, notificationLevel: null },

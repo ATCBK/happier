@@ -246,7 +246,7 @@ describe('qualified input field options scope', () => {
             metadataVersion: 1, agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null,
             effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
             responsibleAccountId: null, responsibleAccount: null,
-            viewer: { readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+            viewer: { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
                 follow: { follows: false, notificationLevel: null }, notification: { level: 'none', source: 'none' } },
         });
@@ -270,7 +270,7 @@ describe('qualified input field options scope', () => {
     it('checks a saved Session through its own read instead of paging the Session list', async () => {
         const serverId = await harness.addHome({ name: 'Saved Home', serverUrl: 'https://saved-session-options.example',
             accountId: 'viewer', currentAccount: true });
-        const viewer = { readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+        const viewer = { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             follow: { follows: false, notificationLevel: null }, notification: { level: 'none', source: 'none' } };
         const record = (id: string, title: string) => V2SessionRecordSchema.parse({ id, seq: 1, createdAt: 1, updatedAt: 1,

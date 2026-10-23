@@ -127,7 +127,7 @@ describe('projectWork', () => {
         expect(projection.summary).toMatchObject({ needsYou, stalled, outstanding });
         expect(groupWorkByState(projection)[group].map(item => item.key)).toEqual(['session:child']);
         const lead = createSessionListRenderableSessionFixture({ active: true, activeAt: now, latestTurnStatus: 'completed',
-            managedSessions: { total: 1, working: 0, needsYou, stalled } });
+            managedSessions: { total: 1, working: 0, needsYou, stalled, finished: 0, attentionPrimary: null } });
         expect(readSessionWorkStatusFacts(lead, now).settled).toBe(outstanding === 0);
     });
 

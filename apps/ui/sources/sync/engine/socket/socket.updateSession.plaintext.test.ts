@@ -2216,6 +2216,7 @@ describe('socket update handling: plaintext update-session', () => {
 
     it('replaces private cache-only attention on an otherwise ordinary session update', async () => {
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'not_started' as const },
             relevance: { relevant: true, reasons: ['responsible_for_me' as const] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

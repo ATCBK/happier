@@ -62,6 +62,7 @@ it('discloses a request only for its qualified Home without the active duplicate
     [remote.serverId]: { collision: {
       ...remoteSession,
       viewer: SessionViewerProjectionV1Schema.parse({
+        latestFailureSeq: null,
         readState: { state: 'not_started' },
         relevance: { relevant: true, reasons: ['followed_by_me'] },
         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

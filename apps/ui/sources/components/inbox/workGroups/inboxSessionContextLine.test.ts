@@ -23,6 +23,7 @@ function readyCandidate() {
       displayName: 'Marker adoption',
     },
     viewer: {
+      latestFailureSeq: null,
       readState: {
         state: 'tracking',
         lastViewedSessionSeq: 0,
@@ -54,9 +55,9 @@ function readyCandidate() {
 
 describe('Inbox session row line', () => {
   it.each([
-    { total: 2, working: 0, needsYou: 0, stalled: 2 },
-    { total: 2, working: 0, needsYou: 2, stalled: 0 },
-    { total: 6, working: 2, needsYou: 1, stalled: 3 },
+    { total: 2, working: 0, needsYou: 0, stalled: 2, finished: 0, attentionPrimary: null },
+    { total: 2, working: 0, needsYou: 2, stalled: 0, finished: 0, attentionPrimary: null },
+    { total: 6, working: 2, needsYou: 1, stalled: 3, finished: 0, attentionPrimary: null },
   ])('labels only server-bucketed working reports as still working: %j', (reports) => {
     const candidate = readyCandidate();
     const line = buildInboxSessionContextLine({ ...candidate, session: { ...candidate.session, managedSessions: reports } }) ?? '';

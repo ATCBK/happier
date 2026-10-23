@@ -20,7 +20,7 @@ describe('buildSessionActivityAttention', () => {
     it('does not resurrect an acknowledged failure from the operational history', () => {
         const session = createSessionFixture({ active: true, activeAt: 1_000, encryptionMode: 'plain',
             latestTurnStatus: 'failed', metadata: createMetadata(),
-            viewer: { readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
+            viewer: { latestFailureSeq: null, readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' } },
@@ -47,6 +47,7 @@ describe('buildSessionActivityAttention', () => {
                 path: '/private/retained/path',
             }),
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -76,6 +77,7 @@ describe('buildSessionActivityAttention', () => {
             encryptedContentAvailability: 'ready',
             metadata: createMetadata({ name: 'Readable owner session' }),
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -128,6 +130,7 @@ describe('buildSessionActivityAttention', () => {
             pendingRequestObservedAt: 990,
         }), {
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' },
                 relevance: { relevant: true, reasons: ['responsible_for_me'] },
                 follow: { follows: false, notificationLevel: 'none' },
@@ -149,6 +152,7 @@ describe('buildSessionActivityAttention', () => {
             latestTurnStatus: 'in_progress',
         }), {
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: 2 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -168,6 +172,7 @@ describe('buildSessionActivityAttention', () => {
     it('surfaces canonical discussion attention without inventing transcript unread', () => {
         const session = Object.assign(createSessionFixture({ active: true, activeAt: 1_000, presence: 'online', seq: 20, lastViewedSessionSeq: 20 }), {
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },
@@ -185,6 +190,7 @@ describe('buildSessionActivityAttention', () => {
     it('counts a mention of the viewer as unread content, like the Session row', () => {
         const session = Object.assign(createSessionFixture({ seq: 20, lastViewedSessionSeq: 20 }), {
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },
@@ -203,6 +209,7 @@ describe('buildSessionActivityAttention', () => {
         (reason) => {
             const session = Object.assign(createSessionFixture({ active: true, activeAt: 1_000, presence: 'online', seq: 20, lastViewedSessionSeq: 20 }), {
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                     relevance: { relevant: true, reasons: ['followed_by_me'] },
                     follow: { follows: true, notificationLevel: 'none' },
@@ -228,6 +235,7 @@ describe('buildSessionActivityAttention', () => {
                 lastTurnCompletedAt: 900,
             }), {
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'tracking', lastViewedSessionSeq: 20, unreadSince: null },
                     relevance: { relevant: true, reasons: ['followed_by_me'] },
                     follow: { follows: true, notificationLevel: 'none' },

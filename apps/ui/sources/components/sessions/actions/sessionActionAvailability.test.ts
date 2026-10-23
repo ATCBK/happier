@@ -246,6 +246,7 @@ describe('session action availability', () => {
         const session: SessionListRenderableSession = {
             id: 'session_1',
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

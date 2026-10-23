@@ -103,6 +103,7 @@ describe('sessionReadState', () => {
             hasUnreadMessages: true,
             metadata: null,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' as const },
                 relevance: { relevant: false, reasons: [] },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

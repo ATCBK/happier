@@ -123,7 +123,7 @@ function sessionHttpRecord(session: ReturnType<typeof createSessionFixture>) {
         agentState: null, agentStateVersion: 1, share: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
             capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
-        viewer: { readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
+        viewer: { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } },
         responsibleAccountId: null, responsibleAccount: null,

@@ -225,6 +225,7 @@ describe('live Follow socket notifications', () => {
         storage.setState({ settings: settingsParse({}), localSettings: localSettingsParse({}) });
         saveAccountSettings({ serverId: 'srv_home_a', accountId: 'account-a' }, settingsParse({}), 1);
         applySessions([createSessionFixture({ id: 'session-1', serverId: 'srv_home_a', seq: 0, active: true, viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
             follow: { follows: false, notificationLevel: null },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
@@ -256,6 +257,7 @@ describe('live Follow socket notifications', () => {
     it.each([false, true])('delivers live Follow messages on desktop=%s without remote enrollment or history replay', async (desktop) => {
         boundary.desktop = desktop;
         applySessions([{ ...getSession(), viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
@@ -296,6 +298,7 @@ describe('live Follow socket notifications', () => {
         await act(async () => { await deliver(); });
         expect(boundary.expo).toHaveBeenCalledTimes(1);
         await act(async () => { applySessions([{ ...getSession(), access: createSessionAccessFixture('view'), viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
             follow: { follows: false, notificationLevel: null },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

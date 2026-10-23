@@ -325,7 +325,7 @@ describe('private external Action origins with the real CLI executor', () => {
           stopSession: true,
           deleteSession: true,
         } },
-      viewer: { readState: { state: 'not_started' as const },
+      viewer: { latestFailureSeq: null, readState: { state: 'not_started' as const },
         relevance: { relevant: true, reasons: ['owned_by_me' as const] },
         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
         follow: { follows: false, notificationLevel: null },

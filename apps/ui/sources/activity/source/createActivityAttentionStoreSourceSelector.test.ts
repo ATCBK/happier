@@ -152,6 +152,7 @@ describe('createActivityAttentionStoreSourceSelector', () => {
         const { buildPendingNavigationFromSource } = await import('./buildPendingNavigationFromSource');
         const session = createSessionFixture({ id: 'waiting', serverId: 'home-a', active: true,
             encryptionMode: 'e2ee', encryptedContentAvailability: 'ready', viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
                 attention: { needsAttention: true, reasons: ['permission_required'], primary: 'permission_required', presentation: 'full' },
@@ -364,6 +365,7 @@ describe('createActivityAttentionStoreSourceSelector', () => {
         const selector = createActivityAttentionStoreSourceSelector();
         const base = storage.getState();
         const session = Object.assign(createSessionFixture({ access: createSessionAccessFixture('edit') }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: false, notificationLevel: null },

@@ -164,6 +164,7 @@ describe('buildVoiceInitialContext', () => {
     const session: Session = {
       ...createSession('Followed session summary'),
       viewer: {
+        latestFailureSeq: null,
         readState: { state: 'not_started' },
         relevance: { relevant: true, reasons: ['followed_by_me'] },
         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

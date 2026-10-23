@@ -51,6 +51,7 @@ function trackedViewerWithReasons(
     reasons: readonly SessionPersonalAttentionReasonV1[],
 ): SessionViewerProjectionV1 {
     return {
+        latestFailureSeq: null,
         readState: { state: 'tracking', lastViewedSessionSeq: 2, unreadSince: 3 },
         relevance: { relevant: true, reasons: [] },
         attention: {

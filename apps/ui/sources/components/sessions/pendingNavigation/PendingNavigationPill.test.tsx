@@ -161,6 +161,7 @@ describe('PendingNavigationPill', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         const session = createSessionFixture({ id: 'modern', serverId: 'home-b', active: true, viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
             follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
             attention: { needsAttention: true, reasons: ['user_action_required'], primary: 'user_action_required', presentation: 'full' },

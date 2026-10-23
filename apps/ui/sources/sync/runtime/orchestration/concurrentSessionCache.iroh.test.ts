@@ -119,6 +119,7 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
                     agentState: null, dataEncryptionKey: null, share: null, archivedAt: null,
                     effectiveAccess: { v: 1, level: access.level, sources: [{ kind: 'owner' }], capabilities: access.capabilities },
                     viewer: {
+                        latestFailureSeq: null,
                         readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
                         attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
                         follow: { follows: false, notificationLevel: 'none' },

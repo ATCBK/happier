@@ -88,7 +88,7 @@ function storedSession(id: string, facts: Readonly<{ lead?: string; managedSessi
         presence: 'online',
         updatedAt: NOW - 3 * 60_000,
         ...(facts.lead ? { manager: { sessionId: facts.lead } } : {}),
-        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: 1, needsYou: 1, stalled: 1 } } : {}),
+        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: 1, needsYou: 1, stalled: 1, finished: 0, attentionPrimary: null } } : {}),
         ...(facts.turn ? { latestTurnStatus: facts.turn } : {}),
     });
 }

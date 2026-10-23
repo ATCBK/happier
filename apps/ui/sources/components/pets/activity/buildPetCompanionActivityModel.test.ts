@@ -59,6 +59,7 @@ describe('buildPetCompanionActivityModel', () => {
             id: 'private-session', active: true, thinking: true, thinkingAt: 990,
             metadata: { path: '/private/path', host: 'private-host', name: 'Private title' },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },
@@ -72,6 +73,7 @@ describe('buildPetCompanionActivityModel', () => {
         const untracked = createSessionFixture({
             ...session,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' },
                 relevance: { relevant: false, reasons: [] },
                 follow: { follows: false, notificationLevel: null },
@@ -410,6 +412,7 @@ describe('buildPetCompanionActivityModel', () => {
             latestTurnStatusObservedAt: nowMs,
             metadata: { path: '/private/path', host: 'private-host', name: 'Private title' },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'none' },

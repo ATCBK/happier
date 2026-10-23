@@ -240,6 +240,7 @@ describe('ActivityLocalNotificationRuntime', () => {
         sessionsByIdValue['session-1'] = {
             id: 'session-1', serverId: 'srv_home_a', accessLevel: 'edit', active: true,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' },
                 relevance: { relevant: false, reasons: [] },
                 follow: { follows: false, notificationLevel: null },
@@ -306,6 +307,7 @@ describe('ActivityLocalNotificationRuntime', () => {
             access: createSessionAccessFixture(),
             active: true,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
@@ -500,6 +502,7 @@ describe('ActivityLocalNotificationRuntime', () => {
 
     it('delivers followed ready events with status-only privacy and honors explicit notification suppression', async () => {
         const viewer: NonNullable<Session['viewer']> = {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
@@ -543,6 +546,7 @@ describe('ActivityLocalNotificationRuntime', () => {
             encryptedContentAvailability: 'encrypted_access_pending',
             metadata: { summary: { text: 'Private retained title', updatedAt: 1 } },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -578,6 +582,7 @@ describe('ActivityLocalNotificationRuntime', () => {
             encryptionMode: 'e2ee',
             metadata: { summary: { text: 'Private retained title', updatedAt: 1 } },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },

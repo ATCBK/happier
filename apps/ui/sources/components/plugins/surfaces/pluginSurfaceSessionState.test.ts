@@ -272,7 +272,7 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
         storage.getState().applySessions([
             waitingSession({ id: 'working', agentState: null, thinking: true, thinkingAt: NOW, latestTurnStatus: 'in_progress' }),
             waitingSession({ id: 'finished', agentState: null, latestTurnStatus: 'completed' }),
-            waitingSession({ id: 'lead', agentState: null, latestTurnStatus: 'completed', managedSessions: { total: 1, working: 1, needsYou: 0, stalled: 0 } }),
+            waitingSession({ id: 'lead', agentState: null, latestTurnStatus: 'completed', managedSessions: { total: 1, working: 1, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null } }),
             waitingSession({ id: 'offline', agentState: null, active: false, activeAt: 1, presence: 1, latestTurnStatus: 'completed' }),
         ]);
         const mounted = mountSurface();
@@ -473,7 +473,7 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
     it('invalidates when outstanding reports change the Work presentation without changing awareness', async () => {
         storage.getState().applySessions([waitingSession({
             agentState: null, latestTurnStatus: 'completed',
-            managedSessions: { total: 1, working: 1, needsYou: 0, stalled: 0 },
+            managedSessions: { total: 1, working: 1, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null },
         })]);
         const mounted = mountSurface();
         const events: ResourceSubscriptionEvent[] = [];
@@ -481,7 +481,7 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
 
         storage.getState().applySessions([waitingSession({
             agentState: null, latestTurnStatus: 'completed', updatedAt: NOW + 2,
-            managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0 },
+            managedSessions: { total: 1, working: 0, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null },
         })]);
 
         await vi.waitFor(() => expect(events).toHaveLength(1));

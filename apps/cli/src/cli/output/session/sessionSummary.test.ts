@@ -44,7 +44,7 @@ describe('summarizeSessionRow', () => {
 
   it('preserves the canonical manager facts used by direct worker target resolution', () => {
     const manager = { sessionId: 'c222222222222222222222222' };
-    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 0 };
+    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 0, finished: 0, attentionPrimary: null };
     const row = createSessionRecordFixture({ id: 'c111111111111111111111111', encryptionMode: 'plain',
       metadata: JSON.stringify({}), manager, managedSessions });
     const summary = SessionSummarySchema.parse(summarizeSessionRow({ credentials, row }));

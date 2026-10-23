@@ -512,7 +512,7 @@ describe('WidgetAddSurface', () => {
             if (!response || typeof response !== 'object' || !('session' in response)) throw new Error('Missing HTTP Session');
             return SessionCurrentProjectionRecordV1Schema.parse(response.session);
         };
-        const viewer = SessionViewerProjectionV1Schema.parse({ readState: { state: 'not_started' },
+        const viewer = SessionViewerProjectionV1Schema.parse({ latestFailureSeq: null, readState: { state: 'not_started' },
             relevance: { relevant: false, reasons: [] }, attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } });
         const b = { ...await wire('B'), viewer, agentState: JSON.stringify({ requests: {

@@ -378,6 +378,7 @@ describe('mounted Voice Brief request', () => {
         const sessions = (['permission_required', 'failed', 'ready_after_read'] as const).map((reason, index) => createSessionFixture({
             id: `work-${index}`, serverId: account!.home.id, metadata: { path: '/repo', host: 'test', summary: { text: `Release captain ${index}`, updatedAt: 1 } },
             latestTurnStatus: 'completed', viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null, includeInVoice: true },

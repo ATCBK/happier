@@ -149,6 +149,7 @@ describe('warmCacheAdapters', () => {
 
     it('roundtrips a private quiet viewer without reviving a stale unread cache flag', () => {
         const viewer = {
+            latestFailureSeq: null,
             readState: { state: 'not_started' as const },
             relevance: { relevant: true, reasons: ['responsible_for_me' as const] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },

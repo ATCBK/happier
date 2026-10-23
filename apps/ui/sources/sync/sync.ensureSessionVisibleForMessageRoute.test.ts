@@ -713,6 +713,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                     capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }),
                 },
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'not_started' },
                     relevance: { relevant: true, reasons: ['owned_by_me'] },
                     attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
@@ -849,6 +850,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                     capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }),
                 },
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'not_started' },
                     relevance: { relevant: true, reasons: ['owned_by_me'] },
                     attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

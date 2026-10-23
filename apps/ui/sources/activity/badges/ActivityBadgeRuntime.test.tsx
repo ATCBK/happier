@@ -740,6 +740,7 @@ describe('ActivityBadgeRuntime', () => {
             seq: 8,
             metadata: { path: '', host: '' },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'not_started' },
                 relevance: { relevant: false, reasons: [] },
                 follow: { follows: false, notificationLevel: null },
@@ -753,6 +754,7 @@ describe('ActivityBadgeRuntime', () => {
             seq: 9,
             metadata: { path: '', host: '' },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: 100 },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
                 follow: { follows: true, notificationLevel: 'important' },

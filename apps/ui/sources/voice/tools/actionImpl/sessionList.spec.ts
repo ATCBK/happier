@@ -47,6 +47,7 @@ function row(id = 's1', overrides: Partial<V2SessionRecord> = {}) {
       capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
     responsibleAccountId: null, responsibleAccount: null,
     viewer: {
+      latestFailureSeq: null,
       readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
       attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
       follow: { follows: false, notificationLevel: null }, notification: { level: 'none', source: 'none' },

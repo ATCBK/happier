@@ -284,7 +284,7 @@ describe('Bots roster', () => {
     const population = Array.from({ length: 16 }, (_, index) =>
       createSessionListRenderableSessionFixture({ id: `measured-bot-${index}`, activeAt: now,
         metadata: { path: '/project', name: `Measured Bot ${index}`, bot: { kind: 'bot' } },
-        ...(index === 0 ? { managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0 } } : {}) }));
+        ...(index === 0 ? { managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0, finished: 0, attentionPrimary: null } } : {}) }));
     population.push(createSessionListRenderableSessionFixture({ id: 'measured-child',
       metadata: { path: '/project' }, manager: { sessionId: 'measured-bot-0' } }));
     population.push(...Array.from({ length: 983 }, (_, index) =>
@@ -468,7 +468,7 @@ describe('Bots roster', () => {
     storage.getState().applyLocalSettings({ collapsedGroupKeysV1: {} });
     storage.getState().applyServerScopedSessionListRows(serverId, [
       createSessionListRenderableSessionFixture({ id: 'lead-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
-        managedSessions: { total: 9, working: 0, stalled: 0, needsYou: 0 } }),
+        managedSessions: { total: 9, working: 0, stalled: 0, needsYou: 0, finished: 0, attentionPrimary: null } }),
       createSessionListRenderableSessionFixture({ id: 'child-session', metadata: { path: '/project' },
         manager: { sessionId: 'lead-bot' } }),
       createSessionListRenderableSessionFixture({ id: 'child-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
@@ -497,9 +497,9 @@ describe('Bots roster', () => {
     const serverId = connection!.home.id;
     storage.getState().applyServerScopedSessionListRows(serverId, [
       createSessionListRenderableSessionFixture({ id: 'archived-only-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
-        managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+        managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0, archived: 1, finished: 0, attentionPrimary: null } }),
       createSessionListRenderableSessionFixture({ id: 'mixed-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
-        managedSessions: { total: 3, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+        managedSessions: { total: 3, working: 0, stalled: 0, needsYou: 0, archived: 1, finished: 0, attentionPrimary: null } }),
     ], { source: 'ordinary', mode: 'replace' });
     const { BotsPopoverContent } = await import('./BotsPopoverContent');
     const screen = await renderScreen(<InjectedAuthProvider credentials={null}>

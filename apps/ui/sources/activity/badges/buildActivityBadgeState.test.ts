@@ -302,6 +302,7 @@ describe('buildActivityBadgeState', () => {
                     active: true,
                     metadata: { path: '', host: '' },
                     viewer: {
+                        latestFailureSeq: null,
                         readState: { state: 'not_started' },
                         relevance: { relevant: true, reasons: ['explicit_attention'] },
                         follow: { follows: false, notificationLevel: null },

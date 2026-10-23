@@ -220,6 +220,7 @@ describe('Session awareness Action acquisition', () => {
           },
         },
         viewer: {
+          latestFailureSeq: null,
           readState: { state: 'not_started' },
           relevance: { relevant: true, reasons: ['owned_by_me'] },
           attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

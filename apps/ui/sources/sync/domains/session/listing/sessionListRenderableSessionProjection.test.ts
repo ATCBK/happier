@@ -94,7 +94,7 @@ describe('locked shared title projection', () => {
 describe('buildSessionFromListRenderable', () => {
     it('carries rule membership through cold row projection, filter facts and reconstruction without guessing missing counts', () => {
         const session = createSessionFixture({ ownerAccountId: 'owner', origin: { kind: 'none' },
-            managedSessions: { total: 0, working: 0, needsYou: 0, stalled: 0 }, receivedRuleCount: 1 });
+            managedSessions: { total: 0, working: 0, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null }, receivedRuleCount: 1 });
         const row = buildSessionListRenderableFromSession(session);
         expect(row.receivedRuleCount).toBe(1);
         expect(buildSessionFromListRenderable(row).receivedRuleCount).toBe(1);

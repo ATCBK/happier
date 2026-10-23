@@ -15,7 +15,7 @@ function session(id: string, facts: Readonly<{ lead?: string; managedSessions?: 
         serverId: 'home-a',
         updatedAt: 1,
         ...(facts.lead ? { manager: { sessionId: facts.lead } } : {}),
-        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: facts.managedSessions, needsYou: 0, stalled: 0 } } : {}),
+        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: facts.managedSessions, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null } } : {}),
     } as Session;
 }
 

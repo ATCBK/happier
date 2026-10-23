@@ -38,6 +38,7 @@ describe('Project Changes destination', () => {
                 effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
                 responsibleAccountId: null, responsibleAccount: null,
             }), viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

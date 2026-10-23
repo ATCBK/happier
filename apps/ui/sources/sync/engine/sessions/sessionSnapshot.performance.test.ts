@@ -197,7 +197,7 @@ function createOwnerChoicesPage() {
         share: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
             capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
-        viewer: { readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+        viewer: { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } },
         responsibleAccountId: null, responsibleAccount: null,
@@ -538,6 +538,7 @@ it('measures real encrypted hydration and rapid query replacement across three f
                     capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }),
                 },
                 viewer: {
+                    latestFailureSeq: null,
                     readState: { state: 'not_started' },
                     relevance: { relevant: true, reasons: ['owned_by_me'] },
                     attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

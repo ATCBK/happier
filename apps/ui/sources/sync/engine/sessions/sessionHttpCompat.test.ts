@@ -92,6 +92,7 @@ describe('legacy session record coercion', () => {
             ...buildLegacyCompatSession('viewer-session'),
             lastViewedSessionSeq: 2,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: '2', unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },

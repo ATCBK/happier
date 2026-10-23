@@ -445,6 +445,7 @@ describe('buildActivityOverviewFromSource', () => {
             seq: 4,
             lastViewedSessionSeq: 4,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important' },
@@ -458,6 +459,7 @@ describe('buildActivityOverviewFromSource', () => {
             seq: 7,
             lastViewedSessionSeq: 0,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: true, reasons: ['responsible_for_me'] },
             follow: { follows: false, notificationLevel: null },
@@ -496,6 +498,7 @@ describe('buildActivityOverviewFromSource', () => {
             serverId: 'server-a',
             active: true,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important' },
@@ -529,6 +532,7 @@ describe('buildActivityOverviewFromSource', () => {
             seq: 4,
             lastViewedSessionSeq: 1,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: 2 },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important' },
@@ -655,6 +659,7 @@ describe('buildActivityOverviewFromSource', () => {
             active: false,
             archivedAt: 900,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
             follow: { follows: true, notificationLevel: 'important' },
@@ -724,6 +729,7 @@ describe('buildActivityOverviewFromSource', () => {
             encryptedContentAvailability: 'encrypted_access_pending',
             metadata: { path: '/private/location', host: 'private-host', name: 'Secret title' },
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },
@@ -746,6 +752,7 @@ describe('buildActivityOverviewFromSource', () => {
             id: `team-${index}`, seq: 50, lastViewedSessionSeq: 0,
             active: true, presence: 'online', thinking: true, thinkingAt: 990,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: false, reasons: [] },
             follow: { follows: false, notificationLevel: null },
@@ -764,6 +771,7 @@ describe('buildActivityOverviewFromSource', () => {
             seq: 50,
             lastViewedSessionSeq: 0,
         }), { viewer: {
+            latestFailureSeq: null,
             readState: { state: 'not_started' },
             relevance: { relevant: true, reasons: ['explicit_attention'] },
             follow: { follows: false, notificationLevel: null },
@@ -1473,6 +1481,7 @@ describe('buildActivityOverviewFromSource', () => {
             agentState: pendingAgentState('permission', 975),
             updatedAt: 45,
             viewer: {
+                latestFailureSeq: null,
                 readState: { state: 'tracking', lastViewedSessionSeq: 2, unreadSince: null },
                 relevance: { relevant: true, reasons: ['owned_by_me'] },
                 follow: { follows: false, notificationLevel: null },

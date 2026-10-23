@@ -14874,7 +14874,7 @@ describe('installed Session widget through the mounted plugin controller', () =>
                 metadataVersion: selected.metadataVersion, metadata: JSON.stringify(selected.metadata),
                 agentStateVersion: selected.agentStateVersion, agentState: null, share: null,
                 effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: selected.access?.capabilities },
-                viewer: { readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
+                viewer: { latestFailureSeq: null, readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
                     attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
                     follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } },
                 responsibleAccountId: null, responsibleAccount: null,
