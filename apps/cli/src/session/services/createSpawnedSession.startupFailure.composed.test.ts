@@ -35,6 +35,7 @@ import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetad
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { SessionTeamCredentialLaunchUnavailableError } from './sessionTeamCredentialLaunch';
 
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
@@ -42,6 +43,7 @@ describe('durable creation after daemon startup refusal', () => {
     it.each([
         [null, 'returned'], [null, 'nonce'],
         ['plugin_mcp_preparation_unavailable', 'returned'], ['plugin_mcp_preparation_unavailable', 'nonce'],
+        ['broker_unavailable', 'returned'], ['broker_unavailable', 'nonce'],
     ] as const)('preserves the same creation refusal (%s, %s) after its runner exits before native startup despite published Activity and hostPid', async (preparationCode, settlementKind) => {
         const home = await mkdtemp(join(tmpdir(), 'happier-native-startup-failure-'));
         const sessionId = 'c1234567890123456789012345';
@@ -102,7 +104,8 @@ describe('durable creation after daemon startup refusal', () => {
             stopSession: async () => ({ status: 'not_found' }),
         }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [...tracked.values()],
             readStartupFailure: async () => preparationCode ? classifyPrimarySessionRuntimeIssue({
-                cause: 'session_error', error: { code: preparationCode }, occurredAt: Date.now(),
+                cause: 'session_error', error: preparationCode === 'broker_unavailable'
+                    ? new SessionTeamCredentialLaunchUnavailableError(preparationCode) : { code: preparationCode }, occurredAt: Date.now(),
             }) : null,
         }) });
         const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,

@@ -15,7 +15,7 @@ import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
-import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS } from './sessionPreparationFailure';
+import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS, TEAM_CREDENTIAL_FAILURE_PREVIEW } from './sessionPreparationFailure';
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { classifyProviderOutputFailure } from '@/agent/runtime/classifyProviderOutputFailure';
@@ -68,7 +68,7 @@ const sanitizedPreviewBySource = {
   agent_process_exit_after_switch: 'Provider process exited after connected-service switch',
   agent_session_error: 'Provider session failed',
   usage_limit: 'Usage limit reached',
-  team_credential: 'Shared Team credential refused the request',
+  team_credential: TEAM_CREDENTIAL_FAILURE_PREVIEW,
   auth_error: 'Authentication failed',
   dependency_failure: 'Provider dependency failed',
   stream_error: 'Provider stream failed',
@@ -524,6 +524,9 @@ export function classifyPrimarySessionRuntimeIssue(
   const declaredSource = input.cause === 'session_error'
     ? readDeclaredRuntimeIssueSource(input.error)
     : null;
+  const brokerCode = errorCode.kind === 'string'
+    ? ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(errorCode.value) : null;
+  const brokerStartupCode = brokerCode?.success && declaredSource === 'team_credential' ? brokerCode.data : null;
   const agentProcessExitAfterSwitch = readProviderProcessExitAfterSwitchDetails(input.error);
   // A shared Team credential refusing the request is the fact the member has to
   // act on, so it outranks the Agent-shaped cause that carried it.
@@ -532,7 +535,8 @@ export function classifyPrimarySessionRuntimeIssue(
   const startupFailureCode = !teamCredentialDenial && input.cause === 'session_error'
     && errorCode.kind === 'string' ? readAgentStartupFailureCode(errorCode.value) : null;
   const sessionPreparationFailureCode = !teamCredentialDenial && input.cause === 'session_error'
-    && errorCode.kind === 'string' ? readSessionPreparationFailureCode(errorCode.value) : null;
+    && errorCode.kind === 'string' ? brokerStartupCode
+      ?? (brokerCode?.success ? null : readSessionPreparationFailureCode(errorCode.value)) : null;
   const missingCli = !teamCredentialDenial
     && errorCode.kind === 'string'
     && errorCode.value === SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING;
@@ -559,7 +563,7 @@ export function classifyPrimarySessionRuntimeIssue(
     ? errorCode.value : null;
   const source = missingCli || catalogUnavailable || metadataPrivacyUpgradeRequired || promptPreparationCode
     ? 'dependency_failure' as const
-    : teamCredentialDenial
+    : teamCredentialDenial || brokerStartupCode
     ? 'team_credential' as const
     : runtimeAuthSource
     ? runtimeAuthSource

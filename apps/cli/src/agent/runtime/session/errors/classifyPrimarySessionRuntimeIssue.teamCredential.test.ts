@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { classifyPrimarySessionRuntimeIssue } from './classifyPrimarySessionRuntimeIssue';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 /**
  * The Team-credential broker refuses inside the Agent's own provider call, so
@@ -10,6 +13,16 @@ import { classifyPrimarySessionRuntimeIssue } from './classifyPrimarySessionRunt
  * generic Agent failure.
  */
 describe('classifyPrimarySessionRuntimeIssue — Team credential broker refusals', () => {
+  it.each(ProviderBrokerAdmissionFailureCodeV1Schema.options)('preserves the closed startup refusal %s through issue publication', code => {
+    const issue = SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({
+      cause: 'session_error', error: new SessionTeamCredentialLaunchUnavailableError(code), occurredAt: 1_000,
+    }));
+    expect(issue).toMatchObject({ source: 'team_credential', code, status: 'failed' });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
+      code: issue.code, message: issue.sanitizedPreview, details: { v: 1, source: issue.source },
+    } })).toMatchObject({ source: 'team_credential', code });
+  });
+
   it('names an exhausted shared allowance with its metric and reset', () => {
     const issue = classifyPrimarySessionRuntimeIssue({
       cause: 'session_error',
@@ -78,5 +91,8 @@ describe('classifyPrimarySessionRuntimeIssue — Team credential broker refusals
 
     expect(issue.source).not.toBe('team_credential');
     expect(issue.teamCredential).toBeUndefined();
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: Object.assign(new Error('Invalid input'), {
+      code: 'invalid_request',
+    }) })).toMatchObject({ source: 'agent_session_error', code: 'agent_session_error' });
   });
 });
