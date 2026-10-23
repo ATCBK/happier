@@ -352,7 +352,9 @@ function bindingPolicyFromCollectionValue(
 
 async function readCollectionValues(
   context: PluginInvocationContext,
-  query: Pick<PluginCollectionQuery, 'index' | 'prefix'>,
+  query: Pick<PluginCollectionQuery<
+    typeof CHANNEL_STATE_INDEX_ID.byKind | typeof CHANNEL_STATE_INDEX_ID.byConnectionBindingV2
+  >, 'index' | 'prefix'>,
 ): Promise<ReconciliationCollectionRead> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const values: JsonValue[] = [];
