@@ -157,24 +157,26 @@ export function buildGlassBorderColor(dark: boolean): string {
 }
 
 /**
- * The seam between a docked side pane and the content sheet it sits beside.
+ * The seam between the lifted page sheet and the navigation plane beside it (calm-shell `csedge.S1`).
  *
- * X-offset only, no spread: the cast has to travel sideways onto the neighbouring pane
- * rather than pool underneath the sheet. It is deliberately far wider and fainter than a
- * card shadow — a full-height edge at card opacity reads as a hard dark line.
+ * Two layers: a long, faint blur that carries the depth, and a 1 px contact shade that draws the
+ * edge the old hairline used to. X-offset only, no spread: the cast travels sideways onto the
+ * neighbouring plane rather than pooling under the sheet.
+ *
+ * `side` says which page edge casts: `leading` falls on the column left of the page; `trailing` is
+ * its mirror, for a side panel standing on the canvas right of the page. Same blur and alpha.
  *
  * Web-only by contract. Native has no sideways-only box-shadow equivalent, and the RN
  * `shadow*`/`elevation` approximation would paint on all four edges; native separates the
- * two planes with the seam hairline instead.
+ * two planes by their paint (canvas beside the page) and the sheet's corners.
  *
- * One owner on purpose: this recipe was previously re-typed at three call sites (the app
- * shell's content sheet and both `MultiPaneHost` docked panes), which is exactly the shape
- * that lets one quietly fall behind the others.
+ * One owner on purpose: every page seam reads this recipe through its theme tokens.
  */
-export function buildSeamCastShadow(dark: boolean): string {
+export function buildSeamCastShadow(dark: boolean, side: 'leading' | 'trailing' = 'leading'): string {
+    const sign = side === 'leading' ? '-' : '';
     return dark
-        ? '-5px 0 22px rgba(0, 0, 0, 0.13)'
-        : '-5px 0 22px rgba(0, 0, 0, 0.035)';
+        ? `${sign}6px 0 32px rgba(0, 0, 0, 0.34), ${sign}1px 0 2px rgba(0, 0, 0, 0.42)`
+        : `${sign}6px 0 30px rgba(0, 0, 0, 0.055), ${sign}1px 0 2px rgba(0, 0, 0, 0.035)`;
 }
 
 /**

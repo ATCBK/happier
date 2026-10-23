@@ -4,15 +4,23 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { glassSurfacePlaneStyle } from '@/components/ui/glass/glassSurfacePaint';
 
 /**
- * The column's plane: the sidebar grey with its hairline edge against the page. One owner for the
- * docked column and for a peeked column standing in its place, so a peek reads as the column itself.
+ * The navigation plane's colour: the canvas the rail and title strip stand on. A navigation column
+ * (the shell's, a peeked one, Settings' and a Home console's) reads as part of that one quiet plane,
+ * and only the page is lifted off it (calm-shell `csedge.S1`). Every plane and peek coat reads it here.
+ */
+export function appShellColumnPlaneColor(colors: Readonly<{ background: Readonly<{ canvas: string }> }>): string {
+    return colors.background.canvas;
+}
+
+/**
+ * The column's plane: the navigation canvas, with no edge of its own. The page's seam shadow is what
+ * separates it from the page. One owner for the docked column and for a peeked column standing in its
+ * place, so a peek reads as the column itself.
  */
 export const appShellColumnSurface = StyleSheet.create((theme) => ({
     column: {
         flexShrink: 0,
-        ...glassSurfacePlaneStyle(theme.colors.surface.inset, 'sidebar'),
-        borderRightWidth: StyleSheet.hairlineWidth,
-        borderRightColor: theme.colors.border.default,
+        ...glassSurfacePlaneStyle(appShellColumnPlaneColor(theme.colors), 'sidebar'),
     },
     /**
      * The plane alone, for a navigation column that stands beside the shell's (a Home console's own
@@ -20,21 +28,12 @@ export const appShellColumnSurface = StyleSheet.create((theme) => ({
      * paint it themselves.
      */
     plane: {
-        ...glassSurfacePlaneStyle(theme.colors.surface.inset, 'sidebar'),
-    },
-    /**
-     * A peeked column floats over the open column or the page, so its sidebar coat paints through
-     * `GlassSurface` (the floating-capable owner, which blurs what lies under it) inside this edge.
-     */
-    peekEdge: {
-        flexShrink: 0,
-        borderRightWidth: StyleSheet.hairlineWidth,
-        borderRightColor: theme.colors.border.default,
+        ...glassSurfacePlaneStyle(appShellColumnPlaneColor(theme.colors), 'sidebar'),
     },
     /**
      * A peeked column is a layer over the open column or the page: its lift falls on the trailing
-     * edge (the content sheet clips the other edges, and the leading one sits against the rail). The
-     * same level as the other floating layers (`FloatingOverlay`).
+     * edge (the leading one sits against the rail). The same level as the other floating layers
+     * (`FloatingOverlay`); no hairline, the lift is the edge.
      */
     peekLift: shadowLevelStyle(theme.colors.shadowLevels[4]),
 }));

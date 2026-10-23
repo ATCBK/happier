@@ -79,3 +79,13 @@ describe('buildGlassInnerShadow opacity scale', () => {
         }
     });
 });
+
+describe('card grounding shadow', () => {
+    it('grounds a light card at 2%, below the 5% control step, and keeps the dark card on its level-1 ground', async () => {
+        const { buildCardShadow } = await import('./shadowElevation');
+        expect(buildCardShadow(false).boxShadow).toBe('0 1px 2px rgba(0, 0, 0, 0.02)');
+        expect(buildCardShadow(false).shadowOpacity).toBe(0.02);
+        expect(buildLightShadowLevels()[1].boxShadow).toBe('0 1px 2px rgba(0, 0, 0, 0.05)');
+        expect(buildCardShadow(true)).toEqual(buildDarkShadowLevels()[1]);
+    });
+});

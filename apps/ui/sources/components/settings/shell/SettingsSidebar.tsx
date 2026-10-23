@@ -16,6 +16,7 @@ import { SettingsSearchResults, useSettingsSearch } from '@/components/settings/
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
+import { appShellColumnPlaneColor } from '@/components/navigation/shell/appRail/appShellColumnSurface';
 
 /** The indent of each disclosed level. */
 const RAIL_INDENT_STEP_PX = 12;
@@ -298,7 +299,7 @@ export const SettingsSidebar = React.memo(function SettingsSidebar() {
                         </ItemList>
 
                         <ScrollEdgeFades
-                            color={theme.colors.surface.inset}
+                            color={appShellColumnPlaneColor(theme.colors)}
                             size={18}
                             edges={scrollFades.visibility}
                         />

@@ -5,7 +5,7 @@ import { useContainingHappierMaterialRole, useHappierMaterialColorResolver } fro
 import { AppShellMaterialPlane } from '@/components/navigation/shell/AppShellMaterialFrame';
 
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
-import { appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
+import { appShellColumnPlaneColor, appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
 import { isRenderableElementType } from '@/components/ui/icons/isRenderableElementType';
 import { ResizableDockedPane } from '@/components/ui/panels/ResizableDockedPane';
 import { resolveViewportMinEdgePx, VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX } from '@/utils/platform/viewportClass';
@@ -141,7 +141,7 @@ export const SettingsShell = React.memo(function SettingsShell(props: Readonly<{
                             getStorage().getState().applyLocalSettings({ settingsNavSidebarWidthPx: SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX }, { source: 'ui' });
                         }}
                     >
-                        <AppShellMaterialPlane group="sidebar" color={theme.colors.surface.inset} translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, styles.sidebarColumn]}>
+                        <AppShellMaterialPlane group="sidebar" color={appShellColumnPlaneColor(theme.colors)} translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, styles.sidebarColumn]}>
                             <SettingsSidebarComponent />
                         </AppShellMaterialPlane>
                     </ResizableDockedPaneComponent>

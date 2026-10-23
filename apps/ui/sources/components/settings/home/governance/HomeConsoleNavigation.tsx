@@ -12,7 +12,7 @@ import type { HomeGovernanceProjectionV1 } from '@happier-dev/protocol/home/gove
 
 import { SettingsFloatingControlsHost } from '@/components/settings/shell/SettingsModalFloatingControls';
 import { CollectionNavigationRow } from '@/components/ui/lists/collection/CollectionList';
-import { appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
+import { appShellColumnPlaneColor, appShellColumnSurface } from '@/components/navigation/shell/appRail/appShellColumnSurface';
 import { AppShellMaterialPlane } from '@/components/navigation/shell/AppShellMaterialFrame';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -175,7 +175,7 @@ export const HomeConsoleSidebar = React.memo(function HomeConsoleSidebar(props: 
     const identity = useHomeConsoleIdentity(props.serverId);
     const groups = resolveHomeConsoleDestinations(identity.projection);
     return (
-        <AppShellMaterialPlane testID="home-console-sidebar" group="sidebar" color={theme.colors.surface.inset} translucentColor={theme.colors.surface.selected} style={[styles.sidebar, appShellColumnSurface.plane]}>
+        <AppShellMaterialPlane testID="home-console-sidebar" group="sidebar" color={appShellColumnPlaneColor(theme.colors)} translucentColor={theme.colors.surface.selected} style={[styles.sidebar, appShellColumnSurface.plane]}>
             <View style={styles.header}>
                 <HomeMark serverUrl={identity.serverUrl} />
                 <View style={styles.identity}>
@@ -186,7 +186,7 @@ export const HomeConsoleSidebar = React.memo(function HomeConsoleSidebar(props: 
                     ) : null}
                 </View>
             </View>
-            <ItemList presentation="grouped" style={[styles.scroller, { backgroundColor: theme.colors.surface.inset }]} accessibilityLabel={t('homeGovernance.console.navigation')}>
+            <ItemList presentation="grouped" style={[styles.scroller, { backgroundColor: appShellColumnPlaneColor(theme.colors) }]} accessibilityLabel={t('homeGovernance.console.navigation')}>
                 {groups.map((group, index) => (
                     <React.Fragment key={group[0]!.id}>
                         {index > 0 ? <View style={styles.groupGap} /> : null}

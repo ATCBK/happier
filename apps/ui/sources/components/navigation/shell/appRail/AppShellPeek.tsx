@@ -9,7 +9,7 @@ import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentat
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
 import type { AppShellShownColumn } from './appRailModel';
-import { appShellColumnSurface } from './appShellColumnSurface';
+import { appShellColumnPlaneColor, appShellColumnSurface } from './appShellColumnSurface';
 
 /** A peek is keyed by the destination whose column it shows (a built-in or a plugin page). */
 type PeekKind = string;
@@ -82,7 +82,7 @@ export function AppShellPeekProvider(props: Readonly<{
 }
 
 /**
- * The peeked column, laid over the column's place in the content sheet: the same plane
+ * The peeked column, laid over the column's place beside the rail: the same plane
  * (`appShellColumnSurface`), width and full height, rendered by the column's own component, lifted
  * above what it covers. It slides in from under the rail and back out, turning around in place when
  * the pointer changes its mind; moving to another icon swaps the column in the standing layer. While
@@ -132,7 +132,6 @@ export function AppShellPeekLayer(props: Readonly<{
             pointerEvents={pointerEvents.nativePointerEvents}
             {...(leaving ? null : context.panelProps)}
             style={[
-                appShellColumnSurface.peekEdge,
                 appShellColumnSurface.peekLift,
                 styles.layer,
                 { width: props.widthPx },
@@ -141,7 +140,7 @@ export function AppShellPeekLayer(props: Readonly<{
             ]}
         >
             {/* Native keeps the opaque column plane; web blurs the page under the peek when its group does. */}
-            <GlassSurface surfaceGroup="sidebar" solidColor={theme.colors.surface.inset} enabled={Platform.OS === 'web'}
+            <GlassSurface surfaceGroup="sidebar" solidColor={appShellColumnPlaneColor(theme.colors)} enabled={Platform.OS === 'web'}
                 style={styles.material}>
                 <PluginSurfaceFocusEligibilityProvider active={focusReady}
                     presentationActive={peek !== null && columnKind === peek.kind} currentUiContextActive={false}>
