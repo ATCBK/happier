@@ -10,8 +10,13 @@ export function workspaceSingletonDestinationIds(catalog: readonly CompactAppDes
     return catalog.filter(item => item.id === 'workflows' || (item.kind === 'plugin' && item.container === 'appPage')).map(item => item.id);
 }
 
+/** New workflow documents are independent editors, even though their route belongs to the hub. */
+function isWorkflowDraftDestination(target: DestinationRef): boolean {
+    return target.kind === 'workflows' && target.params.workspacePathname === '/workflows/new';
+}
+
 export function isWorkspaceSingletonDestination(catalog: readonly CompactAppDestination[], target: DestinationRef): boolean {
-    return workspaceSingletonDestinationIds(catalog).includes(target.kind);
+    return !isWorkflowDraftDestination(target) && workspaceSingletonDestinationIds(catalog).includes(target.kind);
 }
 
 /** Keep the door in the URL, while the catalog's Machine policy owns its resource identity. */
@@ -49,11 +54,12 @@ export function workspaceDestinationNavigationIdentity(target: DestinationRef, c
 export function workspaceDestinationAdmissionIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[] = []): string {
     const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog);
     if (navigationIdentity !== null) return navigationIdentity;
-    if (target.kind !== 'workflow' && target.kind !== 'workflowRun') return target.kind;
+    if (target.kind !== 'workflow' && target.kind !== 'workflowRun' && !isWorkflowDraftDestination(target)) return target.kind;
     return JSON.stringify([target.kind, Object.keys(target.params).sort().map(key => [key, target.params[key]])]);
 }
 
 function destinationAdmissionKey(target: DestinationRef, singletonKinds: ReadonlySet<string>): string | null {
+    if (isWorkflowDraftDestination(target)) return null;
     if (singletonKinds.has(target.kind)) return workspaceDestinationAdmissionIdentity(target);
     // Workflow definitions and runs are separate destinations; only identical
     // references contract, retaining Home/Account and other route qualifiers.

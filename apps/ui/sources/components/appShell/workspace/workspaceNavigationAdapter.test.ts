@@ -605,6 +605,30 @@ describe('workspace navigation adapter', () => {
       ),
     ).toHaveLength(2);
   });
+  it('gives each Import entrance its own editor instead of reusing the singleton Workflows tab', () => {
+    const h = harness();
+    h.adapter.openHref('/workflows', { mode: 'newTab' });
+    const library = h.active().id;
+    h.adapter.openHref('/workflows/new?importJson=1', { mode: 'newTab' });
+    const first = h.active();
+    expect(first.id).not.toBe(library);
+    h.adapter.openHref('/workflows/new?importJson=1', { mode: 'newTab' });
+    expect(h.active().id).not.toBe(first.id);
+    expect(h.state().tabs[first.id]).toBe(first);
+    expect(h.state().tabs[library].target).toEqual({ kind: 'workflows', params: {} });
+    expect(hrefForDestinationRef(h.catalog, h.active().target)).toBe('/workflows/new?importJson=1');
+    const shared = projectWorkspaceSharedTabs(h.state());
+    expect(normalizeWorkspaceSingletonTabs(shared, h.catalog)).toBe(shared);
+  });
+  it('opens the Workflows library without retargeting an independently opened Import draft', () => {
+    const h = harness();
+    h.adapter.openHref('/workflows/new?importJson=1', { mode: 'newTab' });
+    const draft = h.active();
+    h.adapter.openHref('/workflows', { mode: 'newTab' });
+    expect(h.active().id).not.toBe(draft.id);
+    expect(h.state().tabs[draft.id]).toBe(draft);
+    expect(h.active().target).toEqual({ kind: 'workflows', params: {} });
+  });
   it('qualifies implicit current-realm Session destinations without conflating another Account or Home', () => {
     const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
     h.adapter.dispatch({

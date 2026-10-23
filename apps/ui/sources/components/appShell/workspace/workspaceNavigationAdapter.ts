@@ -123,7 +123,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         const tab = Object.values(state.tabs).find(tab => {
             if (tabId && tab.id !== tabId) return false;
             if (groupId && !state.groups[groupId]?.tabIds.includes(tab.id)) return false;
-            if (singleton) return tab.target.kind === target.kind;
+            if (singleton) return tab.target.kind === target.kind && isWorkspaceSingletonDestination(catalog, tab.target);
             if (navigationIdentity !== null) return workspaceDestinationNavigationIdentity(tab.target, catalog, scope) === navigationIdentity;
             const href = hrefForDestinationRef(catalog, tab.target);
             const normalized = href ? resolveDestinationRefFromHref(catalog, href) : null;
