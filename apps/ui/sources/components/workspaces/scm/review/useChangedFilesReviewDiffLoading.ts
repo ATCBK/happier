@@ -105,6 +105,13 @@ export function useChangedFilesReviewDiffLoading(input: {
         diffStateSourceRef.current = createChangedFilesReviewDiffStateSource();
     }
     const diffStateSource = diffStateSourceRef.current;
+    const setLoadedDiff = React.useCallback((path: string, diff: string, emptyFile = false) => {
+        diffStateSource.updateDiffState(path, previous => {
+            // Revalidation must not discard Find's already-loaded revision corpus.
+            if (previous.status === 'loaded' && previous.diff === diff && Boolean(previous.emptyFile) === emptyFile) return previous;
+            return { status: 'loaded', diff, error: null, ...(emptyFile ? { emptyFile: true } : {}) };
+        });
+    }, [diffStateSource]);
     const findContext = input.findContext === true;
     const { serverId, machineId, rootPath } = input.workspaceScope ?? {};
     const comparisonFiles = input.comparisonFiles;
@@ -155,6 +162,7 @@ export function useChangedFilesReviewDiffLoading(input: {
 
     React.useEffect(() => {
         if (!providerDiffByPath || providerDiffByPath.size === 0) return;
+        if (findContext) return; // The worker publishes a patch and its revision context together.
         const pathsToEnsure = resolveReviewDiffPathsToEnsure({
             requestedPaths: requestedPathsNormalizedRef.current,
             tooLarge,
@@ -164,21 +172,18 @@ export function useChangedFilesReviewDiffLoading(input: {
         for (const path of pathsToEnsure) {
             const providerDiff = providerDiffByPath.get(path);
             if (providerDiff === undefined) continue;
-            diffStateSource.setDiffState(path, providerDiff === null ? {
+            if (providerDiff === null) diffStateSource.setDiffState(path, {
                 status: 'error',
                 diff: '',
                 error: fallbackError,
-            } : {
-                status: 'loaded',
-                diff: providerDiff,
-                error: null,
             });
+            else setLoadedDiff(path, providerDiff);
             lastFetchAtMsByPathRef.current[path] = Date.now();
         }
-    }, [diffStateSource, fallbackError, providerDiffByPath, requestedPathsKey, reviewFiles, selectedPath, tooLarge]);
+    }, [diffStateSource, setLoadedDiff, fallbackError, providerDiffByPath, requestedPathsKey, reviewFiles, selectedPath, tooLarge, findContext]);
 
     React.useEffect(() => {
-        if (!sessionId && !fetchUnifiedDiffForPath) return;
+        if (!sessionId && !fetchUnifiedDiffForPath && !providerDiffByPath) return;
         if (!isRepo) return;
         if (reviewFiles.length === 0) return;
 
@@ -187,14 +192,22 @@ export function useChangedFilesReviewDiffLoading(input: {
         const inFlightPaths = new Set<string>();
         inFlightPathsRef.current = inFlightPaths;
 
-        const ensureFindContext = async (path: string) => {
-            const state = diffStateSource.getDiffState(path);
-            if (!findContext || state.status !== 'loaded' || (state.context && state.context.status !== 'loading') || !state.diff) return;
+        const ensureFindContext = async (path: string, next?: Readonly<{ diff: string; emptyFile?: true }>) => {
+            const previous = diffStateSource.getDiffState(path);
+            const state = next ? { status: 'loaded' as const, error: null, ...next } : previous;
+            if (!findContext || state.status !== 'loaded' || (!next && previous.context && previous.context.status !== 'loading') || !state.diff) {
+                if (next) setLoadedDiff(path, next.diff, next.emptyFile);
+                return;
+            }
             const file = fileStatusByPath.get(path);
-            if (file?.isBinary) return;
+            if (file?.isBinary) {
+                if (next) setLoadedDiff(path, next.diff, next.emptyFile);
+                return;
+            }
             const captured = comparisonFiles?.find(file => file.path === path);
             const scope = machineId && rootPath ? input.workspaceScope : resolveWorkspaceTargetForSession(sessionId);
-            diffStateSource.setDiffState(path, { ...state, context: { status: 'loading' } });
+            const retainCorpus = previous.status === 'loaded' && previous.context?.status === 'loaded';
+            if (!retainCorpus) diffStateSource.setDiffState(path, { ...state, context: { status: 'loading' } });
             let baseText: string | null = null;
             try {
                 if (file?.status === 'added' || file?.status === 'untracked') baseText = '';
@@ -207,16 +220,17 @@ export function useChangedFilesReviewDiffLoading(input: {
                 }
             } catch { /* The patch remains searchable; unreadable context is partial coverage. */ }
             if (cancelled) return;
-            diffStateSource.updateDiffState(path, current => current.diff !== state.diff ? current : { ...current,
+            diffStateSource.updateDiffState(path, current => current.diff !== (retainCorpus ? previous.diff : state.diff) ? current : { ...state,
                 context: baseText === null ? { status: 'unavailable' } : { status: 'loaded', baseText } });
         };
 
         const loadDiff = async (path: string) => {
             const existing = diffStateSource.getDiffState(path);
+            const providerDiff = providerDiffByPath?.get(path);
             const nowMs = Date.now();
             if (existing?.status === 'loaded' || existing?.status === 'error') {
                 const lastFetchAtMs = lastFetchAtMsByPathRef.current[path] ?? 0;
-                if (lastFetchAtMs > 0) {
+                if (lastFetchAtMs > 0 && (providerDiff === undefined || providerDiff === existing.diff)) {
                     // Default behavior is stale-while-revalidate: do not refetch already-loaded diffs
                     // unless explicitly requested (refreshToken/snapshotSignature clears lastFetchAt).
                     // A snapshot's lifetime is owned by SCM invalidation, not render
@@ -234,21 +248,17 @@ export function useChangedFilesReviewDiffLoading(input: {
             if (inFlightPaths.has(path)) {
                 return;
             }
-            const providerDiff = providerDiffByPath?.get(path);
             if (providerDiff !== undefined) {
-                diffStateSource.setDiffState(path, providerDiff === null ? {
+                if (providerDiff === null) diffStateSource.setDiffState(path, {
                     status: 'error',
                     diff: '',
                     error: fallbackError,
-                } : {
-                    status: 'loaded',
-                    diff: providerDiff,
-                    error: null,
                 });
-                lastFetchAtMsByPathRef.current[path] = Date.now();
-                await ensureFindContext(path);
+                else await ensureFindContext(path, { diff: providerDiff });
+                if (!cancelled) lastFetchAtMsByPathRef.current[path] = Date.now();
                 return;
             }
+            if (!sessionId && !fetchUnifiedDiffForPath) return;
             inFlightPaths.add(path);
 
             diffStateSource.updateDiffState(path, (prev) => {
@@ -281,8 +291,8 @@ export function useChangedFilesReviewDiffLoading(input: {
                         diffCache,
                     });
                 if (cancelled) return;
-                lastFetchAtMsByPathRef.current[path] = Date.now();
                 if (!response.success) {
+                    lastFetchAtMsByPathRef.current[path] = Date.now();
                     diffStateSource.updateDiffState(path, (prev) => {
                         if (prev?.status === 'loaded' && prev.diff) {
                             return prev;
@@ -292,9 +302,10 @@ export function useChangedFilesReviewDiffLoading(input: {
                     return;
                 }
 
-                diffStateSource.setDiffState(path, { status: 'loaded', diff: response.diff ?? '', error: null,
-                    ...('emptyFile' in response && response.emptyFile ? { emptyFile: true } : {}) });
-                await ensureFindContext(path);
+                // Equal patches can still have different omitted base lines after SCM changes.
+                await ensureFindContext(path, { diff: response.diff ?? '',
+                    ...('emptyFile' in response && response.emptyFile ? { emptyFile: true as const } : {}) });
+                if (!cancelled) lastFetchAtMsByPathRef.current[path] = Date.now();
 
             } catch (err) {
                 if (cancelled) return;
@@ -348,6 +359,7 @@ export function useChangedFilesReviewDiffLoading(input: {
     }, [
         diffArea,
         diffCache,
+        setLoadedDiff,
         fallbackError,
         fileStatusByPath,
         fetchUnifiedDiffForPath,

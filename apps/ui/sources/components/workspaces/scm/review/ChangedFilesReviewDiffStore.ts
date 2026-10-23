@@ -15,11 +15,11 @@ export type ChangedFilesReviewDiffStateSource = Readonly<{
 
 const INITIAL_DIFF_STATE: ReviewDiffState = { status: 'idle', diff: '', error: null };
 
-export function createChangedFilesReviewDiffStateSource(): ChangedFilesReviewDiffStateSource {
-    const stateByPath = new Map<string, ReviewDiffState>();
+export function createChangedFilesReviewDiffStateSource(initialStates?: Iterable<readonly [string, ReviewDiffState]>): ChangedFilesReviewDiffStateSource {
+    const stateByPath = new Map<string, ReviewDiffState>(initialStates);
     const listenersByPath = new Map<string, Set<Listener>>();
     const allListeners = new Set<Listener>();
-    let snapshot: ReadonlyMap<string, ReviewDiffState> = new Map();
+    let snapshot: ReadonlyMap<string, ReviewDiffState> = new Map(stateByPath);
 
     const emit = (path: string) => {
         snapshot = new Map(stateByPath);

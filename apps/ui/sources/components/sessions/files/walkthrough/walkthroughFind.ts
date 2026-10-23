@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { createChangedFilesReviewDiffStateSource } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffStore';
+import type { ReviewDiffState } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffBlock';
 import {
   useChangedFilesReviewFind,
   type ChangedFilesReviewFindModel,
@@ -32,12 +33,12 @@ function walkthroughFindInput(
   reading: WalkthroughReading,
   reveal: (target: ReviewFindTarget | null) => void,
 ): Connection {
-  const source = createChangedFilesReviewDiffStateSource();
+  const states: Array<readonly [string, ReviewDiffState]> = [];
   const keys: string[] = [];
   const add = (key: string, diff: string, unavailableReason: string | null) => {
     keys.push(key);
     // Captured evidence is already here; code the reading cannot show counts against Find's coverage.
-    source.setDiffState(
+    states.push([
       key,
       diff
         ? { status: 'loaded', diff, error: null }
@@ -46,7 +47,7 @@ function walkthroughFindInput(
             diff: '',
             error: unavailableReason ?? 'unavailable',
           },
-    );
+    ]);
   };
   for (const stop of reading.stops)
     for (const file of stop.files)
@@ -61,7 +62,7 @@ function walkthroughFindInput(
       other.unifiedDiff,
       other.unavailableReason,
     );
-  return { paths: keys, diffStateSource: source, reveal, filePathOf };
+  return { paths: keys, diffStateSource: createChangedFilesReviewDiffStateSource(states), reveal, filePathOf };
 }
 
 /** Connects the canonical review Find model to one reading (tests and the view use the same projection). */
