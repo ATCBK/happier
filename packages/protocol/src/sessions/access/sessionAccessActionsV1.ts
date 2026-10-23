@@ -6,12 +6,13 @@ import { SessionAccessLevelV1Schema, SessionGrantIntentV1Schema } from './sessio
 import { RequiredSessionTeamCredentialV1Schema, SessionAccessGrantsListRequestV1Schema } from './sessionAccessOperationsV1.js';
 import { buildStoredContentPublicShareUrlV1 } from '../../sharing/storedContentPublicShareV1.js';
 import { SessionIdSchema } from '../idsV1.js';
+import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionDataKeyEnvelopeRecipientAccountIdV1Schema, SessionDataKeyEnvelopeSummaryV1Schema, SessionDataKeyRecipientUnavailableReasonV1Schema } from '../encryption/sessionDataKeyEnvelopes.js';
 
 /** Logical client intents; no caller-supplied key, envelope or metadata payload. */
-export const SessionAccessEncryptionPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: SessionIdSchema }));
+export const SessionAccessEncryptionPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: asProtocolZod(SessionIdSchema) }));
 export const SessionAccessEncryptionReprepareInputV1Schema = lazyZodSchema(() => z.strictObject({
-  sessionId: SessionIdSchema, recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
+  sessionId: asProtocolZod(SessionIdSchema), recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
 }));
 export const SessionAccessEncryptionPrepareResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['complete', 'incomplete', 'scope_changed', 'not_required', 'session_data_key_unavailable']),
