@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSessionMetadataEnvelopeFields,
 } from './buildSessionMetadataEnvelopeCreateFields';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import {
   createPlainSessionOwnerMetadataEnvelopeV1,
   createAccountScopedCryptoMaterialSnapshotV1,
@@ -95,6 +96,40 @@ function e2eeCurrentness(credentials: Readonly<{
 }
 
 describe('updateSessionMetadataWithRetry', () => {
+  it('migrates a retained legacy Session before publishing its accepted Project relationship', async () => {
+    const credentials = { token: 'project-token', encryption: null };
+    const rawSession = { id: 'legacy-project-session', encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify({ path: '/repo', host: 'host' }), ownerMetadata: null,
+      metadataVersion: 4, agentState: null, agentStateVersion: 7, dataEncryptionKey: null };
+    patchSessionMetadataEnvelopeTupleMock
+      .mockResolvedValueOnce({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 5 }, agentState: { version: 8 } })
+      .mockResolvedValueOnce({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 6 }, agentState: { version: 9 } });
+    await updateSessionMetadataWithRetry({ token: credentials.token, credentials, accountEncryptionCurrentness: plainCurrentness,
+      sessionId: rawSession.id, rawSession, projectKey: 'accepted-project', updater: metadata => metadata });
+    const patches = patchSessionMetadataEnvelopeTupleMock.mock.calls.map(([request]) => SessionMetadataTuplePatchV1Schema.parse(request.patch));
+    expect(patches).toHaveLength(2);
+    expect(patches[0]).toMatchObject({ mode: 'owner_migration' });
+    expect(patches[0]).not.toHaveProperty('projectKey');
+    expect(patches[1]).toMatchObject({ mode: 'owner', projectKey: 'accepted-project' });
+  });
+  it.each(['plain', 'e2ee'] as const)('publishes a Project key through the owner tuple without changing the %s envelope', async mode => {
+    const credentials = mode === 'plain' ? { token: 'project-token', encryption: null }
+      : { token: 'project-token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(9) } };
+    const currentness = credentials.encryption ? e2eeCurrentness({ encryption: credentials.encryption }) : plainCurrentness;
+    const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: mode,
+      storedContentMode: 'plain', metadata: { path: '/private/checkout', host: 'host', workspaceId: 'checkout', projectId: 'accepted-project' }, agentState: null });
+    const rawSession = { id: 'project-session', encryptionMode: 'plain', metadataLayoutVersion: 1,
+      metadata: fields.sharedMetadata.ciphertext, ownerMetadata: fields.ownerMetadata,
+      metadataVersion: 4, agentState: null, agentStateVersion: 7, dataEncryptionKey: null };
+    patchSessionMetadataEnvelopeTupleMock.mockResolvedValue({ success: true, metadataLayoutVersion: 1,
+      sharedMetadata: { version: 5 }, agentState: { version: 8 } });
+    await updateSessionMetadataWithRetry({ token: credentials.token, credentials, accountEncryptionCurrentness: currentness,
+      sessionId: rawSession.id, rawSession, projectKey: 'accepted-project', updater: metadata => metadata });
+    expect(patchSessionMetadataEnvelopeTupleMock).toHaveBeenCalledTimes(1);
+    expect(patchSessionMetadataEnvelopeTupleMock.mock.calls[0]?.[0].patch).toMatchObject({ mode: 'owner',
+      projectKey: 'accepted-project', ownerMetadata: fields.ownerMetadata });
+    expect(patchSessionMetadataEnvelopeTupleMock.mock.calls[0]?.[0].patch.sharedMetadata.ciphertext).not.toContain('/private/checkout');
+  });
   it('drops persisted extras recursively while applying a real Bot field mutation to an owner tuple', async () => {
     const credentials = { token: 'token-1', encryption: null };
     const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain', storedContentMode: 'plain',

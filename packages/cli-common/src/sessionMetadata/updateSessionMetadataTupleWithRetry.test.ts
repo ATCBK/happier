@@ -98,6 +98,17 @@ function legacyOwnerSnapshot(params: Readonly<{
 }
 
 describe('updateSessionMetadataTupleWithRetry', () => {
+  it('commits an accepted Project column without rewriting unchanged private metadata', async () => {
+    const current = ownerSnapshot();
+    const commit = vi.fn(async (_patch: SessionMetadataTuplePatchV1) => ({ result: 'success' as const, metadataVersion: 3, agentStateVersion: 5 }));
+    const crypto = cryptoAdapter();
+    await updateSessionMetadataTupleWithRetry({ initialSnapshot: current,
+      mutation: { kind: 'metadata', update: metadata => metadata },
+      projectKey: 'accepted-project', crypto, commit });
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ mode: 'owner', projectKey: 'accepted-project',
+      ownerMetadata: current.mode === 'owner' ? current.ownerMetadataEnvelope : undefined }));
+    expect(crypto.encodeOwnerMetadata).not.toHaveBeenCalled();
+  });
   it.each(['legacy_writer', 'owner_migration'] as const)('cannot add attestation through %s on an older Session', async (path) => {
     const initialSnapshot = legacyOwnerSnapshot({ metadata: { path: '/repo', host: 'host' }, metadataVersion: 1,
       metadataCiphertext: 'legacy-before', agentStateVersion: 0 });

@@ -435,6 +435,7 @@ async function prepareTupleMutation<M, A>(params: Readonly<{
   current: SessionMetadataTupleMutationSnapshotV1<M, A>;
   mutation: SessionMetadataTupleMutationV1<M, A>;
   crypto: SessionMetadataTupleMutationCryptoV1;
+  projectKey?: string;
 }>): Promise<
   | PreparedOwnerMutation<M, A>
   | PreparedSharedEditorMutation<M>
@@ -443,6 +444,9 @@ async function prepareTupleMutation<M, A>(params: Readonly<{
   const { current, mutation, crypto } = params;
 
   assertReviewedMetadataRevision(current, mutation);
+  if (params.projectKey !== undefined && current.mode !== 'owner') {
+    throw createTupleMutationError('Project publication requires a layout-one owner tuple', 'metadata_privacy_upgrade_required');
+  }
   if (current.mode === 'legacy_owner') {
     throw createTupleMutationError(
       'Legacy Session metadata mutation delegate is unavailable',
@@ -490,7 +494,7 @@ async function prepareTupleMutation<M, A>(params: Readonly<{
   let updatedAgentState = current.value.agentState;
   if (mutation.kind === 'metadata') {
     updatedMetadata = await applyMetadataUpdate(current.value.metadata, mutation.update);
-    if (tupleValuesEqual(updatedMetadata, current.value.metadata)) {
+    if (params.projectKey === undefined && tupleValuesEqual(updatedMetadata, current.value.metadata)) {
       return null;
     }
   } else {
@@ -642,6 +646,8 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
   params: Readonly<{
     initialSnapshot: SessionMetadataTupleMutationSnapshotV1<M, A>;
     mutation: SessionMetadataTupleMutationV1<M, A>;
+    /** An already accepted owner-only row relationship; the caller supplies it only on a real change. */
+    projectKey?: string;
     crypto: SessionMetadataTupleMutationCryptoV1;
     commit: (
       patch: SessionMetadataTuplePatchV1,
@@ -674,6 +680,9 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
   const maxAttempts = resolveMaxAttempts(params.maxAttempts);
   let current = params.initialSnapshot;
   assertReviewedMetadataRevision(current, params.mutation);
+  if (params.projectKey !== undefined && current.mode !== 'owner') {
+    throw createTupleMutationError('Project publication requires a layout-one owner tuple', 'metadata_privacy_upgrade_required');
+  }
 
   params.assertCurrent?.();
 
@@ -866,6 +875,7 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
       current,
       mutation: params.mutation,
       crypto: params.crypto,
+      ...(params.projectKey !== undefined ? { projectKey: params.projectKey } : {}),
     });
     if (prepared === null) {
       return current;
@@ -878,7 +888,9 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
     }
 
     params.assertCurrent?.();
-    const patch = buildPreparedSessionMetadataTuplePatchV1(current, prepared);
+    const tuplePatch = buildPreparedSessionMetadataTuplePatchV1(current, prepared);
+    const patch = tuplePatch.mode === 'owner' && params.projectKey !== undefined
+      ? { ...tuplePatch, projectKey: params.projectKey } : tuplePatch;
 
     let result: SessionMetadataTupleMutationCommitResultV1<M, A>;
     try {
