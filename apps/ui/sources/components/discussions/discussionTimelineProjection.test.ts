@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DiscussionDocEditProposalContentV1Schema, DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
+import { DiscussionDocEditProposalContentV1Schema, DiscussionMessageContentV1Schema, DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
 
 import {
     NO_SESSION_AGENT_ACTIVITY_ATTENTION,
@@ -322,6 +322,16 @@ describe('Workflow-produced messages', () => {
     });
     const result = (value: unknown, summary = 'Ship it') => DiscussionMessageContentV1Schema.parse({ kind: 'workflow_result', value, summary,
         source: { runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } });
+
+    it('reads an Agent-produced Workflow reply from committed Run provenance without changing its Agent outcome', () => {
+        const producer = DiscussionProducerV1Schema.parse({ v: 1, kind: 'agent', sessionId: 'external-plugin-session', runId: 'run-1',
+            replyReturn: { serverId: 'home', requestLocalId: 'ask-1', outcome: 'answer',
+                workflow: { runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } } });
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: producer })).toEqual({ runId: 'run-1', outcome: 'answer' });
+        expect(resolveDiscussionReplyOutcome({ producerV1: producer })).toBe('answer');
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: { v: 1, kind: 'agent', sessionId: 'external-plugin-session', runId: 'run-1' } }))
+            .toEqual({ runId: 'run-1', outcome: null });
+    });
 
     it('is attributed to its exact Run with its own outcome, never as an Agent reply', () => {
         expect(resolveDiscussionWorkflowAttribution(workflow('answer'))).toEqual({ runId: 'run-1', outcome: 'answer' });

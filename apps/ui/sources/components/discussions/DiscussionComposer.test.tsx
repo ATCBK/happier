@@ -138,6 +138,23 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
         } });
     });
 
+    it('does not read the participant roster while the picker is closed, then reads once for a demanded query', async () => {
+        const screen = await render(<Harness />);
+        try {
+            await act(async () => { composerInput(screen).props.onFocus?.(); });
+            for (let index = 0; index < 25; index += 1) {
+                await act(async () => { changeTextTestInstance(composerInput(screen), `Please review this change ${index}`); });
+            }
+            await settle();
+            expect(readParticipants).not.toHaveBeenCalled();
+            await composer().autocompleteSuggestions('@session:', new AbortController().signal);
+            expect(readParticipants).toHaveBeenCalledTimes(1);
+            await act(async () => { composerInput(screen).props.onBlur?.(); });
+            await settle();
+            expect(readParticipants).toHaveBeenCalledTimes(1);
+        } finally { await screen.unmount(); }
+    });
+
     it('lets an external Composer host apply a participant reference to the actual Discussion input and retires it on unmount', async () => {
         const emittedActions: unknown[] = [];
         let sent: Promise<unknown> | undefined;
