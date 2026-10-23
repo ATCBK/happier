@@ -6370,6 +6370,7 @@ export function createCliActionDeps(params: Readonly<{
             finalDirectory: preparedTarget.checkout.finalDirectory,
             baseRef: preparedTarget.checkout.baseRef,
             branchMode: preparedTarget.checkout.branchMode,
+            ...(preparedTarget.checkout.branchName !== undefined ? { branchName: preparedTarget.checkout.branchName } : {}),
           }
         : null;
       const correspondence = buildSessionCreationCorrespondence({
