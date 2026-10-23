@@ -22,6 +22,11 @@ import * as scmRuntime from '@/scm/runtime';
 import { readRepositoryCheckpointInitialEvidence } from '@/scm/checkpoints/sessionEvidence';
 import { encodeRepositoryCheckpointScope } from '@/scm/checkpoints/refs';
 import { recoverRepositoryCheckpointEvidence } from '@/scm/checkpoints/recoverRepositoryCheckpointEvidence';
+import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
+import { createRuntimeTranscriptProjector } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
+import { extractCanonicalDiffFiles, readTurnChangeToolMetadata } from '@happier-dev/protocol/sessions/messages/canonicalTurnDiffTool';
+import { readTurnChangesFromDiffTool } from '../../../../../ui/sources/components/sessions/files/turnChanges/readTurnChangesFromDiffTool';
+import { createDeferred } from '@/testkit/async/deferred';
 
 /**
  * Only the SCM/process boundary is controlled: the real Git checkpoint adapter still runs, but the
@@ -30,6 +35,7 @@ import { recoverRepositoryCheckpointEvidence } from '@/scm/checkpoints/recoverRe
 const checkpointBoundaryHooks = vi.hoisted(() => ({
     beforeFinalCapture: null as null | (() => void),
     beforeDiff: null as null | (() => void),
+    beforeAlias: null as null | (() => Promise<void>),
 }));
 
 vi.mock('@/scm/checkpoints/gitCheckpointAdapter', async (importOriginal) => {
@@ -38,6 +44,10 @@ vi.mock('@/scm/checkpoints/gitCheckpointAdapter', async (importOriginal) => {
         ...actual,
         gitCheckpointAdapter: {
             ...actual.gitCheckpointAdapter,
+            async alias(request: Parameters<typeof actual.gitCheckpointAdapter.alias>[0]) {
+                await checkpointBoundaryHooks.beforeAlias?.();
+                return await actual.gitCheckpointAdapter.alias(request);
+            },
             async capture(request: Parameters<typeof actual.gitCheckpointAdapter.capture>[0]) {
                 if (request.checkpointRef.phase === 'turn-final') {
                     checkpointBoundaryHooks.beforeFinalCapture?.();
@@ -99,6 +109,100 @@ function readCheckpointMeta(messages: readonly ACPMessageData[]): Record<string,
 }
 
 describe('createRepositoryCheckpointPromptLifecycle', () => {
+    it.each([
+        { status: 'completed', checkpoint: 'git', evidence: 'tool' },
+        { status: 'interrupted', checkpoint: 'git', evidence: 'tool' },
+        { status: 'aborted', checkpoint: 'git', evidence: 'tool' },
+        { status: 'completed', checkpoint: 'git', evidence: 'native' },
+        { status: 'completed', checkpoint: 'not_repo', evidence: 'tool' },
+        { status: 'completed', checkpoint: 'failed_capture', evidence: 'tool' },
+        { status: 'completed', checkpoint: 'delayed_alias', evidence: 'tool' },
+        { status: 'completed', checkpoint: 'thrown_capture', evidence: 'tool' },
+    ] as const)('publishes one combined card for a $status runtime turn ($checkpoint/$evidence)', async ({ status, checkpoint, evidence }) => {
+        const repoRoot = checkpoint === 'not_repo' ? await mkdtemp(join(tmpdir(), 'happier-no-checkpoint-')) : await createGitRepo();
+        const { session, messages } = createMessageCapturingSession(`combined-${status}-${checkpoint}-${evidence}`);
+        const lifecycle = createRepositoryCheckpointPromptLifecycle({ session, runtimeDirectory: repoRoot, provider: 'codex', protocol: 'codex' });
+        const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session });
+        const project = createRuntimeTranscriptProjector();
+        const tracker = new NormalizedToolTurnChangeTracker({ provider: 'codex' });
+        const aliasEntered = createDeferred<void>();
+        const releaseAlias = createDeferred<void>();
+        let aliasReleased = checkpoint !== 'delayed_alias';
+        let capturedBeforeAlias = false;
+        const checkpointAvailable = checkpoint === 'git' || checkpoint === 'delayed_alias';
+        let sequence = 0;
+        const projectEvent = (event: Record<string, unknown>) => project({
+            session, provider: 'codex', runtimeMessageDeltaBridge: bridge, normalizedToolTurnChangeTracker: tracker,
+            toolNormalizationProtocol: 'codex', publishTurnChangeSet: lifecycle.publishTurnChangeSet,
+            event: { sessionId: session.sessionId, turnId: 'turn', emittedAtMs: ++sequence, sequence, ...event },
+        });
+        try {
+            await lifecycle.onBeforePromptDispatch?.({ messageId: 'message', prompt: 'edit' });
+            if (checkpoint === 'delayed_alias') {
+                checkpointBoundaryHooks.beforeAlias = async () => { aliasEntered.resolve(); await releaseAlias.promise; };
+                checkpointBoundaryHooks.beforeFinalCapture = () => { capturedBeforeAlias = !aliasReleased; };
+            }
+            if (checkpoint === 'thrown_capture') checkpointBoundaryHooks.beforeFinalCapture = () => { throw new Error('Git capture process failed'); };
+            const start = lifecycle.onTurnStarted?.({ messageId: 'message', turnId: 'turn', sequence: 1 });
+            if (checkpoint === 'delayed_alias') await aliasEntered.promise;
+            else await start;
+            await projectEvent({ kind: 'turn-start', startedBy: 'host' });
+            if (evidence === 'native') await projectEvent({ kind: 'file-edit', editId: 'edit', path: 'tracked.txt', oldContent: 'initial\n', newContent: 'changed\n' });
+            else {
+                await projectEvent({ kind: 'tool-call', toolCallId: 'edit', toolName: 'Edit', input: {
+                    file_path: 'tracked.txt', old_string: 'initial\n', new_string: 'changed\n',
+                } });
+                await projectEvent({ kind: 'tool-result', toolCallId: 'edit', output: { status: 'completed' } });
+            }
+            await writeFile(join(repoRoot, 'tracked.txt'), 'changed\n');
+            if (checkpoint === 'failed_capture') await rename(join(repoRoot, '.git'), join(repoRoot, '.git.removed'));
+            const terminal = projectEvent(status === 'completed' ? { kind: 'turn-complete', agentTurnId: 'native-turn' }
+                : status === 'interrupted' ? { kind: 'turn-failed', agentTurnId: 'native-turn', diagnostic: { code: 'provider_error', severity: 'error' } }
+                    : { kind: 'turn-cancelled', agentTurnId: 'native-turn', cause: 'user' });
+            if (checkpoint === 'delayed_alias') {
+                await new Promise<void>(resolve => setImmediate(resolve));
+                aliasReleased = true;
+                releaseAlias.resolve();
+            }
+            await terminal;
+            await start;
+            // The original required terminal projection owns durable publication; the later
+            // prompt-loop cleanup hook must neither publish a second card nor hide a refusal.
+            expect(messages.filter(message => message.type === 'tool-call' && message.name === 'Diff')).toHaveLength(1);
+            await lifecycle.onTurnFinal?.({ messageId: 'message', turnId: 'turn', status, sequence });
+            const cards = messages.filter(message => message.type === 'tool-call' && message.name === 'Diff');
+            expect(cards).toHaveLength(1);
+            const card = cards[0];
+            if (!card || card.type !== 'tool-call') throw new Error('Missing combined card');
+            const metadata = readTurnChangeToolMetadata(card.input);
+            expect(metadata).toMatchObject({ turnId: 'turn', turnStatus: status, provider: 'codex', seqRange: { startSeqInclusive: 1, endSeqInclusive: sequence },
+                repositoryCheckpoint: { contentConfidence: checkpointAvailable ? 'exact' : 'unavailable', baseRefSource: checkpoint === 'not_repo' ? 'unavailable' : 'turn_start' } });
+            const files = extractCanonicalDiffFiles(card.input, metadata!);
+            expect(files).toEqual(expect.arrayContaining([
+                expect.objectContaining({ filePath: 'tracked.txt', source: evidence === 'native' ? 'provider_native' : 'provider_tool', agentTurnId: 'native-turn', providerMessageId: 'edit' }),
+            ]));
+            if (checkpointAvailable) expect(files).toContainEqual(expect.objectContaining({ filePath: 'tracked.txt', source: 'scm_checkpoint' }));
+            else expect(files).toHaveLength(1);
+            if (evidence === 'native') expect(messages).toContainEqual(expect.objectContaining({ type: 'file-edit', filePath: 'tracked.txt' }));
+            else {
+                expect(messages).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'Edit' }));
+                expect(messages).toContainEqual(expect.objectContaining({ type: 'tool-result' }));
+            }
+            const turns = deriveTurnChangeSetsFromMessages([{ kind: 'tool-call', id: 'card', localId: null, createdAt: 1, children: [],
+                tool: { name: 'Diff', state: 'completed', input: card.input, createdAt: 1, startedAt: 1, completedAt: 1, description: null, result: { status: 'completed' } } }]);
+            expect(mergeTurnChangeSets({ sessionId: session.sessionId, turns }).files).toHaveLength(1);
+            expect(readTurnChangesFromDiffTool({ name: 'Diff', input: card.input })).toMatchObject({ turnId: 'turn',
+                files: [{ fullPath: 'tracked.txt', linesAdded: 1, linesRemoved: 1 }],
+                firstHunkAnchors: { 'tracked.txt': { kind: 'diffLine', startLine: 1 } },
+            });
+            expect(capturedBeforeAlias).toBe(false);
+        } finally {
+            releaseAlias.resolve();
+            checkpointBoundaryHooks.beforeAlias = null;
+            checkpointBoundaryHooks.beforeFinalCapture = null;
+            bridge.clear(); await lifecycle.onSessionEnd?.(); await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
     it('does not invent a session initial baseline when a resumed session has no retained local evidence', async () => {
         const repoRoot = await createGitRepo();
         const { session } = createMessageCapturingSession('old-session-with-pruned-checkpoints');
@@ -149,13 +253,14 @@ describe('createRepositoryCheckpointPromptLifecycle', () => {
     it('recovers an older initial receipt from complete canonical transcript pages but never a later receipt', async () => {
         const repoRoot = await createGitRepo(); const { session, messages } = createMessageCapturingSession('legacy-initial');
         const scopeId = `${session.sessionId}:${repoRoot}`;
+        const firstMessageId = 'plugin-input-v1:first-id';
         const lifecycle = createRepositoryCheckpointPromptLifecycle({ session, runtimeDirectory: repoRoot, provider: 'codex', protocol: 'codex', sessionIsNew: true });
         try {
             await writeFile(join(repoRoot, 'tracked.txt'), 'legacy initial dirt\n');
-            await lifecycle.onBeforePromptDispatch?.({ messageId: 'first', prompt: 'edit' });
-            await lifecycle.onTurnStarted?.({ messageId: 'first', turnId: 'legacy-turn', sequence: 2 });
+            await lifecycle.onBeforePromptDispatch?.({ messageId: firstMessageId, prompt: 'edit' });
+            await lifecycle.onTurnStarted?.({ messageId: firstMessageId, turnId: 'legacy-turn', sequence: 2 });
             await writeFile(join(repoRoot, 'tracked.txt'), 'legacy agent change\n');
-            await lifecycle.onTurnFinal?.({ messageId: 'first', turnId: 'legacy-turn', status: 'completed', sequence: 3 });
+            await lifecycle.onTurnFinal?.({ messageId: firstMessageId, turnId: 'legacy-turn', status: 'completed', sequence: 3 });
             const toolCall = messages.find((message) => message.type === 'tool-call');
             if (!toolCall) throw new Error('Missing canonical tool message');
             const clearInitial = async () => {
@@ -168,11 +273,27 @@ describe('createRepositoryCheckpointPromptLifecycle', () => {
                 : { messages: [{ seq: 1, createdAt: 1, localId: firstPromptId, content: { role: 'user', content: { type: 'text', text: 'edit' } } }], hasMore: true, nextAfterSeq: 1 };
             await recoverRepositoryCheckpointEvidence({ cwd: repoRoot, scopeId, sessionId: session.sessionId, readTranscriptPage: read('earlier-unrepresented-prompt') });
             expect(await readRepositoryCheckpointInitialEvidence({ cwd: repoRoot, scopeId })).toBeNull();
-            await recoverRepositoryCheckpointEvidence({ cwd: repoRoot, scopeId, sessionId: session.sessionId, readTranscriptPage: read('first') });
+            await recoverRepositoryCheckpointEvidence({ cwd: repoRoot, scopeId, sessionId: session.sessionId, readTranscriptPage: read(firstMessageId) });
             const initial = await readRepositoryCheckpointInitialEvidence({ cwd: repoRoot, scopeId });
             expect(initial?.state).toBe('available');
             if (initial?.state !== 'available') throw new Error('Missing recovered initial receipt');
             expect(await runGit(repoRoot, ['show', `${initial.commitSha}:tracked.txt`])).toBe('legacy initial dirt');
+        } finally { await lifecycle.onSessionEnd?.(); await rm(repoRoot, { recursive: true, force: true }); }
+    });
+
+    it('does not promote a later dispatch when an earlier opaque message-start checkpoint exists', async () => {
+        const repoRoot = await createGitRepo();
+        const { session } = createMessageCapturingSession('opaque-history');
+        const scopeId = `${session.sessionId}:${repoRoot}`;
+        const lifecycle = createRepositoryCheckpointPromptLifecycle({ session, runtimeDirectory: repoRoot,
+            provider: 'codex', protocol: 'codex', sessionIsNew: true });
+        try {
+            await lifecycle.onBeforePromptDispatch?.({ messageId: 'plugin-input-v1:first-id', prompt: 'edit' });
+            await runGit(repoRoot, ['update-ref', '-d', `refs/happier/checkpoints/${encodeRepositoryCheckpointScope(scopeId)}/session-initial`]);
+            await rm(join(repoRoot, '.git', 'happier', 'checkpoint-evidence', encodeRepositoryCheckpointScope(scopeId), 'initial.json'));
+            await writeFile(join(repoRoot, 'tracked.txt'), 'already changed after first dispatch\n');
+            await lifecycle.onBeforePromptDispatch?.({ messageId: 'later-safe-id', prompt: 'continue' });
+            expect(await readRepositoryCheckpointInitialEvidence({ cwd: repoRoot, scopeId })).toMatchObject({ state: 'unavailable', recoverable: true });
         } finally { await lifecycle.onSessionEnd?.(); await rm(repoRoot, { recursive: true, force: true }); }
     });
 

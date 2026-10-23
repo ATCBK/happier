@@ -23,7 +23,7 @@ const execFile = promisify(execFileCallback);
 describe('initial checkpoint of an attached Session', () => {
     afterEach(() => vi.restoreAllMocks());
 
-    it.each(['first', 'historical-first', null])('uses canonical earliest prompt evidence (%s)', async earliestLocalId => {
+    it.each(['first', 'plugin-input-v1:SypCNfDzbNO_myZIqQ-M7kJK6VmcoEMhfSXzr-hGsRA', 'historical-first', null])('uses canonical earliest prompt evidence (%s)', async earliestLocalId => {
         await withTempDir('happier-attached-initial-', async repoRoot => {
             const git = async (...args: string[]) => (await execFile('git', args, { cwd: repoRoot })).stdout.trim();
             await git('init');
@@ -66,9 +66,10 @@ describe('initial checkpoint of an attached Session', () => {
             const lifecycle = createRepositoryCheckpointPromptLifecycle({ session, runtimeDirectory: repoRoot,
                 provider: 'codex', protocol: 'codex', sessionIsNew: false });
             try {
-                await lifecycle.onBeforePromptDispatch?.({ messageId: 'first', prompt: 'edit' });
+                const messageId = earliestLocalId?.startsWith('plugin-input-v1:') ? earliestLocalId : 'first';
+                await lifecycle.onBeforePromptDispatch?.({ messageId, prompt: 'edit' });
                 const initial = await readRepositoryCheckpointInitialEvidence({ cwd: repoRoot, scopeId: `${sessionId}:${repoRoot}` });
-                if (earliestLocalId === 'first') {
+                if (earliestLocalId === messageId) {
                     expect(initial?.state).toBe('available');
                     if (initial?.state !== 'available') throw new Error('Missing proven initial checkpoint');
                     expect(await git('show', `${initial.commitSha}:tracked.txt`)).toBe('before first dispatch');

@@ -388,13 +388,14 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     runtimeDirectory: params.runtimeDirectory,
     policyAgentId: params.policyAgentId,
   }) ?? null;
-  const checkpointLifecycle = configuredCheckpointLifecycle ?? createRepositoryCheckpointPromptLifecycle({
+  const repositoryCheckpointLifecycle = configuredCheckpointLifecycle ? null : createRepositoryCheckpointPromptLifecycle({
     session: params.session,
     sessionIsNew: params.sessionIsNew,
     runtimeDirectory: params.runtimeDirectory,
     provider: params.config.agentMessageType,
     protocol: toolNormalizationProtocol,
   });
+  const checkpointLifecycle = configuredCheckpointLifecycle ?? repositoryCheckpointLifecycle;
   const terminalRemoteModeLoop = params.terminalRemoteModeLoop ?? null;
   const resolvedStartingMode = resolveStartingMode({
     terminalCapable: terminalRemoteModeLoop !== null,
@@ -754,6 +755,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       runtimeMessageDeltaBridge,
       normalizedToolTurnChangeTracker,
       toolNormalizationProtocol,
+      publishTurnChangeSet: repositoryCheckpointLifecycle?.publishTurnChangeSet,
       mcpServerIdentities: params.config.mcpServerIdentities,
       skillDelivery: params.config.readSkillDelivery?.(),
       usageAccount: params.config.skillUsageAccount,
@@ -1645,7 +1647,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           await params.sessionSwapStrategy.flushPendingSessionSwap?.();
           await params.config.lifecycleHooks?.onAfterLoopBoundary?.({ ...loopParams, session: params.session, runtime: hookRuntimeForCallbacks });
         },
-      checkpointLifecycle,
+      checkpointLifecycle: checkpointLifecycle ? {
+        ...checkpointLifecycle,
+        onTurnFinal: async (input) => {
+          // Native terminal projection normally finalizes the combined card. Drain it
+          // before the prompt-loop fallback so cleanup cannot publish it a second time.
+          await drainRuntimeTranscriptProjections();
+          await checkpointLifecycle.onTurnFinal?.(input);
+        },
+      } : null,
       beforePendingMaterialize,
       formatPromptErrorMessage: params.config.formatPromptErrorMessage,
     });

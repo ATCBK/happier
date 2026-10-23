@@ -429,14 +429,26 @@ function readNormalizedToolChangeResult(value: unknown): NormalizedToolChangeRes
   };
 }
 
-async function publishNormalizedToolTurnChangeSet(params: Readonly<{
-  session: RuntimeTranscriptProjectionSession;
-  provider: ACPProvider;
-  protocol: ToolNormalizationProtocol;
+export type RuntimeTurnChangeSetPublication = Readonly<{
   turnChangeSet: TurnChangeSet;
   eventKind: string;
   admission?: CommittedTranscriptAdmission;
+}>;
+
+export async function publishRuntimeTurnChangeSet(params: RuntimeTurnChangeSetPublication & Readonly<{
+  session: RuntimeTranscriptProjectionSession;
+  provider: ACPProvider;
+  protocol: ToolNormalizationProtocol;
+  publishTurnChangeSet?: (publication: RuntimeTurnChangeSetPublication) => Promise<void>;
 }>): Promise<void> {
+  if (params.publishTurnChangeSet) {
+    await params.publishTurnChangeSet({
+      turnChangeSet: params.turnChangeSet,
+      eventKind: params.eventKind,
+      ...(params.admission === undefined ? {} : { admission: params.admission }),
+    });
+    return;
+  }
   const messages: Array<Readonly<{ body: ACPMessageData; localId: string }>> = [];
   emitCanonicalTurnDiffTool({
     turnChangeSet: params.turnChangeSet,
@@ -636,6 +648,8 @@ export function projectRuntimeTranscriptEvent(params: Readonly<{
   runtimeMessageDeltaBridge?: RuntimeMessageDeltaBridge;
   admission?: CommittedTranscriptAdmission;
   normalizedToolTurnChangeTracker?: NormalizedToolTurnChangeTracker;
+  /** Foreground checkpoint finalization joins native evidence before publishing the single card. */
+  publishTurnChangeSet?: (publication: RuntimeTurnChangeSetPublication) => Promise<void>;
   toolNormalizationProtocol?: ToolNormalizationProtocol;
   /** Host-owned yield witness captured before asynchronous transcript projection. */
   questionWaitTurnId?: string | null;
@@ -891,7 +905,8 @@ async function projectRuntimeTranscriptEventNow(
       status: 'completed',
     });
     if (normalizedTurnChangeSet && params.provider && params.toolNormalizationProtocol) {
-      await publishNormalizedToolTurnChangeSet({
+      await publishRuntimeTurnChangeSet({
+        publishTurnChangeSet: params.publishTurnChangeSet,
         session: params.session,
         provider: params.provider,
         protocol: params.toolNormalizationProtocol,
@@ -950,7 +965,8 @@ async function projectRuntimeTranscriptEventNow(
       status: 'interrupted',
     });
     if (normalizedTurnChangeSet && params.provider && params.toolNormalizationProtocol) {
-      await publishNormalizedToolTurnChangeSet({
+      await publishRuntimeTurnChangeSet({
+        publishTurnChangeSet: params.publishTurnChangeSet,
         session: params.session,
         provider: params.provider,
         protocol: params.toolNormalizationProtocol,
@@ -1001,7 +1017,8 @@ async function projectRuntimeTranscriptEventNow(
       status: 'aborted',
     });
     if (normalizedTurnChangeSet && params.provider && params.toolNormalizationProtocol) {
-      await publishNormalizedToolTurnChangeSet({
+      await publishRuntimeTurnChangeSet({
+        publishTurnChangeSet: params.publishTurnChangeSet,
         session: params.session,
         provider: params.provider,
         protocol: params.toolNormalizationProtocol,

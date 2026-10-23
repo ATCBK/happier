@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { CheckpointCodeRollbackRequest, CheckpointCodeRollbackResult, ToolNormalizationProtocol, TurnChangeSet } from '@happier-dev/protocol';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
-import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
+import type { ACPProvider } from '@/api/session/sessionMessageTypes';
+import { publishRuntimeTurnChangeSet, RuntimeTranscriptRequiredAdmissionError, type RuntimeTurnChangeSetPublication } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import type { PromptLoopCheckpointLifecycle } from '@/agent/runtime/runPermissionModePromptLoop';
 import type { ScmBackendContext } from '@/scm/types';
 import { buildRepositoryCheckpointRefs, projectRepositoryCheckpointTurnChangeSet } from '@/scm/checkpoints';
@@ -33,6 +33,13 @@ type ActiveCheckpointBinding = Readonly<{
     attributionInterval?: WorktreeAttributionInterval;
     startSequence?: number;
     finalSequence?: number;
+    turnId?: string;
+    publication?: RuntimeTurnChangeSetPublication;
+    startAlias?: Promise<void>;
+}>;
+
+type RepositoryCheckpointPromptLifecycle = PromptLoopCheckpointLifecycle & Readonly<{
+    publishTurnChangeSet: (publication: RuntimeTurnChangeSetPublication) => Promise<void>;
 }>;
 
 function buildScopeId(params: Readonly<{
@@ -145,55 +152,6 @@ function buildUnavailableDiffResult(input: Readonly<{
     };
 }
 
-async function emitCheckpointTurnChangeSet(input: Readonly<{
-    session: ApiSessionClient;
-    provider: ACPProvider;
-    protocol: ToolNormalizationProtocol;
-    turnChangeSet: TurnChangeSet;
-}>): Promise<void> {
-    const messages: Array<Readonly<{ body: ACPMessageData; localId: string }>> = [];
-    emitCanonicalTurnDiffTool({
-        turnChangeSet: input.turnChangeSet,
-        protocol: input.protocol,
-        rawToolName: 'RepositoryCheckpointDiff',
-        sendToolCall: ({ toolName, input: toolInput, callId }) => {
-            const resolvedCallId = callId ?? `repository-checkpoint-${input.turnChangeSet.turnId}`;
-            messages.push({
-                body: {
-                    type: 'tool-call',
-                    id: resolvedCallId,
-                    callId: resolvedCallId,
-                    name: toolName,
-                    input: toolInput,
-                },
-                localId: `${resolvedCallId}:tool-call`,
-            });
-            return resolvedCallId;
-        },
-        sendToolResult: ({ callId, output }) => {
-            messages.push({
-                body: {
-                    type: 'tool-result',
-                    id: callId,
-                    callId,
-                    output,
-                },
-                localId: `${callId}:tool-result`,
-            });
-        },
-    });
-    for (const message of messages) {
-        await input.session.enqueueAgentMessageCommitted(
-            input.provider,
-            message.body,
-            {
-                localId: message.localId,
-                provenance: { kind: 'non_dependent', source: 'external' },
-            },
-        );
-    }
-}
-
 export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
     session: ApiSessionClient;
     runtimeDirectory: string;
@@ -201,7 +159,7 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
     protocol: ToolNormalizationProtocol;
     attributionRegistry?: WorktreeAttributionRegistry;
     sessionIsNew?: boolean;
-}>): PromptLoopCheckpointLifecycle {
+}>): RepositoryCheckpointPromptLifecycle {
     const initialSessionId = params.session.sessionId;
     const bindingsByMessageId = new Map<string, ActiveCheckpointBinding>();
     const attributionRegistry = params.attributionRegistry ?? defaultWorktreeAttributionRegistry;
@@ -226,8 +184,8 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
         startRef?: string;
         finalRef?: string;
     }>): Promise<void> {
-        const checkpointOnlyTurnChangeSet = projectRepositoryCheckpointTurnChangeSet({
-            providerTurnChangeSet: {
+        const turnChangeSet = projectRepositoryCheckpointTurnChangeSet({
+            providerTurnChangeSet: input.binding.publication?.turnChangeSet ?? {
                 sessionId: params.session.sessionId,
                 turnId: input.turnId,
                 // Capture runtime chronology before asynchronous Git work/publication. Both
@@ -248,20 +206,36 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
         });
         if (input.binding.repoRoot) {
             try {
-                await retainRepositoryCheckpointTurnEvidence({ cwd: input.binding.repoRoot, scopeId: input.binding.scopeId, turnChangeSet: checkpointOnlyTurnChangeSet });
+                await retainRepositoryCheckpointTurnEvidence({ cwd: input.binding.repoRoot, scopeId: input.binding.scopeId, turnChangeSet });
             } catch (error) {
                 logger.debug('Repository turn checkpoint retention unavailable (non-fatal)', error);
             }
         }
-        await emitCheckpointTurnChangeSet({
+        await publishRuntimeTurnChangeSet({
             session: params.session,
             provider: params.provider,
             protocol: params.protocol,
-            turnChangeSet: checkpointOnlyTurnChangeSet,
+            ...input.binding.publication,
+            eventKind: input.binding.publication?.eventKind ?? 'turn-final',
+            turnChangeSet,
         });
     }
 
-    return {
+    const lifecycle: RepositoryCheckpointPromptLifecycle = {
+        async publishTurnChangeSet(publication) {
+            for (const [messageId, binding] of bindingsByMessageId) {
+                if (binding.turnId !== publication.turnChangeSet.turnId) continue;
+                bindingsByMessageId.set(messageId, { ...binding, publication });
+                // Keep the combined durable write inside the original native terminal
+                // projection: a refused transcript write must still fail that turn.
+                await binding.startAlias;
+                await lifecycle.onTurnFinal?.({ messageId, turnId: publication.turnChangeSet.turnId,
+                    status: publication.turnChangeSet.status, sequence: publication.turnChangeSet.seqRange.endSeqInclusive });
+                return;
+            }
+            // Native turns without a dispatched prompt have no checkpoint binding to join.
+            await publishRuntimeTurnChangeSet({ ...publication, session: params.session, provider: params.provider, protocol: params.protocol });
+        },
         async onBeforePromptDispatch({ messageId }) {
             const context = await resolveGitCheckpointContext({
                 runtimeDirectory: params.runtimeDirectory,
@@ -319,7 +293,7 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
                 messageId,
                 turnId,
             });
-            let nextBinding: ActiveCheckpointBinding = { ...binding, refs, startSequence: sequence };
+            let nextBinding: ActiveCheckpointBinding = { ...binding, refs, turnId, startSequence: sequence };
             bindingsByMessageId.set(messageId, nextBinding);
             if (binding.unavailableReason || !binding.context) return;
             if (!refs.messageStart || !refs.turnStart) {
@@ -330,26 +304,27 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
                 });
                 return;
             }
-            const aliased = await gitCheckpointAdapter.alias({
-                context: binding.context,
-                sourceRef: refs.messageStart,
-                targetRef: refs.turnStart,
-            });
-            if (!aliased.success) {
-                bindingsByMessageId.set(messageId, {
-                    ...nextBinding,
-                    receipts: appendReceipts(nextBinding.receipts, aliased.receipts),
-                    unavailableReason: aliased.reason,
-                    unavailableError: aliased.error,
-                });
-                logger.debug('Repository turn-start checkpoint alias unavailable (non-fatal)', aliased);
-                return;
-            }
-            nextBinding = {
-                ...nextBinding,
-                receipts: appendReceipts(nextBinding.receipts, aliased.receipts),
-            };
+            const alias = gitCheckpointAdapter.alias({ context: binding.context, sourceRef: refs.messageStart, targetRef: refs.turnStart });
+            const startAlias = (async () => {
+                try {
+                    const aliased = await alias;
+                    const current = bindingsByMessageId.get(messageId);
+                    if (!current) return;
+                    bindingsByMessageId.set(messageId, { ...current,
+                        receipts: appendReceipts(current.receipts, aliased.receipts),
+                        ...(!aliased.success ? { unavailableReason: aliased.reason, unavailableError: aliased.error } : {}),
+                    });
+                    if (!aliased.success) logger.debug('Repository turn-start checkpoint alias unavailable (non-fatal)', aliased);
+                } catch (error) {
+                    const current = bindingsByMessageId.get(messageId);
+                    if (current) bindingsByMessageId.set(messageId, { ...current, unavailableReason: 'command_failed',
+                        unavailableError: 'Repository turn-start checkpoint alias failed.' });
+                    logger.debug('Repository turn-start checkpoint alias failed (non-fatal)', error);
+                }
+            })();
+            nextBinding = { ...nextBinding, startAlias };
             bindingsByMessageId.set(messageId, nextBinding);
+            await startAlias;
         },
         async onTurnFinal({ messageId, turnId, status, sequence }) {
             const activeBinding = bindingsByMessageId.get(messageId);
@@ -370,20 +345,20 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
                 }
                 return capturedAttributionScope;
             };
+            const refs = buildRepositoryCheckpointRefs({
+                scopeId: binding.scopeId,
+                messageId,
+                turnId,
+            });
+            const baseRef = binding.refs.turnStart ?? binding.refs.messageStart;
+            const baseRefSource: RepositoryCheckpointDiffBaseRefSource = binding.unavailableReason
+                ? 'unavailable'
+                : binding.refs.turnStart
+                    ? 'turn_start'
+                    : binding.refs.messageStart
+                        ? 'message_start'
+                        : 'unavailable';
             try {
-                const refs = buildRepositoryCheckpointRefs({
-                    scopeId: binding.scopeId,
-                    messageId,
-                    turnId,
-                });
-                const baseRef = binding.refs.turnStart ?? binding.refs.messageStart;
-                const baseRefSource: RepositoryCheckpointDiffBaseRefSource = binding.unavailableReason
-                    ? 'unavailable'
-                    : binding.refs.turnStart
-                        ? 'turn_start'
-                        : binding.refs.messageStart
-                            ? 'message_start'
-                            : 'unavailable';
                 if (binding.unavailableReason || !binding.context) {
                     await emitProjectedDiff({
                         binding,
@@ -471,6 +446,13 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
                     startRef: baseRef.ref,
                     finalRef: refs.turnFinal.ref,
                 });
+            } catch (error) {
+                if (error instanceof RuntimeTranscriptRequiredAdmissionError) throw error;
+                logger.debug('Repository final checkpoint projection failed (non-fatal)', error);
+                await emitProjectedDiff({ binding, turnId, status, startRef: baseRef?.ref, finalRef: refs.turnFinal?.ref,
+                    checkpointDiff: buildUnavailableDiffResult({ reason: 'capture_failed',
+                        error: 'Repository final checkpoint projection failed.', baseRefSource,
+                        attributionScope: snapshotAttributionScope(binding), receipts: binding.receipts }) });
             } finally {
                 endAttributionInterval(binding);
             }
@@ -487,4 +469,5 @@ export function createRepositoryCheckpointPromptLifecycle(params: Readonly<{
             bindingsByMessageId.clear();
         },
     };
+    return lifecycle;
 }

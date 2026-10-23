@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { readTurnChangeToolMetadata, extractCanonicalDiffFiles } from '@happier-dev/protocol/sessions/messages/canonicalTurnDiffTool';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1,
@@ -46,12 +53,24 @@ vi.mock('@/api/session/sockets', async importOriginal => ({
 
 describe('host ready after a provider successor starts', () => {
   it.each([
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false },
-    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false },
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: true, retirePreview: false, omitReceipt: false },
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: true, omitReceipt: false },
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: true },
-  ])('preserves host results across preview retirement=$retirePreview, receipt omission=$omitReceipt and eager startup=$eagerStartup/$hostAnswer', async ({ hostAnswer, eagerStartup, retirePreview, omitReceipt }) => {
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false },
+    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: true, retirePreview: false, omitReceipt: false, combinedCard: false, rejectDiff: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: true, omitReceipt: false, combinedCard: false, rejectDiff: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: true, combinedCard: false, rejectDiff: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: true, rejectDiff: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false, combinedCard: true, rejectDiff: true },
+  ])('preserves host results across preview retirement=$retirePreview, receipt omission=$omitReceipt and eager startup=$eagerStartup/$hostAnswer (combined card=$combinedCard, reject Diff=$rejectDiff)', async ({ hostAnswer, eagerStartup, retirePreview, omitReceipt, combinedCard, rejectDiff }) => {
+    const checkpointRoot = combinedCard ? await mkdtemp(join(tmpdir(), 'happier-host-turn-card-')) : null;
+    if (checkpointRoot) {
+      const git = promisify(execFileCallback);
+      await git('git', ['init'], { cwd: checkpointRoot });
+      await git('git', ['config', 'user.email', 'test@example.com'], { cwd: checkpointRoot });
+      await git('git', ['config', 'user.name', 'Happier Test'], { cwd: checkpointRoot });
+      await writeFile(join(checkpointRoot, 'tracked.txt'), 'initial\n');
+      await git('git', ['add', 'tracked.txt'], { cwd: checkpointRoot });
+      await git('git', ['commit', '-m', 'initial'], { cwd: checkpointRoot });
+    }
     const accountRequests: string[] = [];
     // Account HTTP is outside the host. The real project resolver receives a
     // current empty association census; unexpected network reads still fail.
@@ -100,6 +119,7 @@ describe('host ready after a provider successor starts', () => {
     let providerDispatchCount = 0;
     const secondHostAnswer = hostAnswer === null ? 'SECOND_HOST_ANSWER' : null;
     const committedMessages: unknown[] = [];
+    const agentMessages: ACPMessageData[] = [];
     const terminalMutations: Array<Extract<ReturnType<typeof SessionTurnMutationV1Schema.parse>, { action: 'complete' | 'fail' }>> = [];
     const inputAnchors = new Map<string, Extract<ReturnType<typeof SessionTurnMutationV1Schema.parse>, { action: 'append_transcript_anchors' }>['transcriptAnchors']>();
     const transcriptRows: Array<{ id: string; localId: string; seq: number; createdAt: number; updatedAt: number;
@@ -129,6 +149,12 @@ describe('host ready after a provider successor starts', () => {
         const answer = providerDispatchCount === 1 ? hostAnswer : secondHostAnswer;
         emit({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
         emit({ kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' });
+        if (checkpointRoot && providerDispatchCount === 1) {
+          emit({ kind: 'tool-call', turnId: request.delivery.turnId, toolCallId: 'edit', toolName: 'Edit',
+            input: { file_path: 'tracked.txt', old_string: 'initial\n', new_string: 'changed\n' } });
+          await writeFile(join(checkpointRoot, 'tracked.txt'), 'changed\n');
+          emit({ kind: 'tool-result', turnId: request.delivery.turnId, toolCallId: 'edit', output: { status: 'completed' } });
+        }
         if (answer) emit({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: answer });
         emit({ kind: 'turn-complete', turnId: request.delivery.turnId });
         const successorTurnId = `provider-successor-${providerDispatchCount}`;
@@ -149,7 +175,7 @@ describe('host ready after a provider successor starts', () => {
       capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
       cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
     });
-    const metadata = createTestMetadata({ path: '/tmp/ready-handoff', permissionMode: 'default' });
+    const metadata = createTestMetadata({ path: checkpointRoot ?? '/tmp/ready-handoff', permissionMode: 'default' });
     const snapshots = createTurnAssistantTextSnapshotStore();
     let observedSeq = 1;
     let secondHostSeq: number | null = null;
@@ -183,6 +209,8 @@ describe('host ready after a provider successor starts', () => {
         options: Parameters<NonNullable<typeof fixture.enqueueAgentMessageCommitted>>[2],
       ) => {
         committedMessages.push(body);
+        agentMessages.push(body);
+        if (rejectDiff && body.type === 'tool-call' && body.name === 'Diff') return { persisted: false as const, delivered: false as const };
         const extracted = extractAssistantTextSnapshotFromAcpMessage(providerId, body);
         if (extracted) {
           const seq = ++observedSeq;
@@ -230,7 +258,7 @@ describe('host ready after a provider successor starts', () => {
         providerName: 'Test Agent', waitingForCommandLabel: 'Test Agent', agentMessageType: 'codex',
         runtimeActivityApplicability: 'not_applicable', machineMetadata: { host: 'test', platform: 'linux', happyCliVersion: '0.0.0-test', homeDir: '/tmp', happyHomeDir: '/tmp/happier', happyLibDir: '/tmp/happier/lib' },
         loadTerminalDisplay: async () => () => null, shouldRenderTerminalDisplay: () => false, formatPromptErrorMessage: String,
-        lifecycleHooks: { createCheckpointLifecycle: () => ({}) },
+        ...(combinedCard ? {} : { lifecycleHooks: { createCheckpointLifecycle: () => ({}) } }),
         publishHostRuntimeEvent: event => metadataPublication?.observeRuntimeEvent(event),
       },
       api: { push: () => ({
@@ -261,7 +289,7 @@ describe('host ready after a provider successor starts', () => {
         runPermissionModePromptLoopFn: input => runPermissionModePromptLoop({ ...input, shouldExit: () => ready, getAbortSignal: () => controller.signal }),
         sendReadyWithPushNotificationFn: async input => {
           readyPreviews.push(input.assistantPreviewText);
-          expect(input.completedTurn).toEqual(omitReceipt && readyPreviews.length === 1 ? undefined
+          expect(input.completedTurn).toEqual((omitReceipt || rejectDiff) && readyPreviews.length === 1 ? undefined
             : { turnId: hostTurnIds[readyPreviews.length - 1] });
           await sendReadyWithPushNotification(input);
           thinkingAtReady.push(runtimeState.thinking);
@@ -294,6 +322,24 @@ describe('host ready after a provider successor starts', () => {
     }
     try {
       await runSessionLoopLifecycle({ ...params, runtime: runtimeForLoop });
+      if (rejectDiff) {
+        expect(terminalMutations).toContainEqual(expect.objectContaining({ action: 'fail', turnId: hostTurnIds[0],
+          issue: expect.objectContaining({ code: 'runtime_transcript_required_admission_failed' }) }));
+        expect(terminalMutations).not.toContainEqual(expect.objectContaining({ action: 'complete', turnId: hostTurnIds[0] }));
+        return;
+      }
+      if (combinedCard) {
+        const cards = agentMessages.filter(message => message.type === 'tool-call' && message.name === 'Diff');
+        expect(cards).toHaveLength(1);
+        const card = cards[0];
+        if (!card || card.type !== 'tool-call') throw new Error('Missing combined host card');
+        const meta = readTurnChangeToolMetadata(card.input);
+        expect(meta).toMatchObject({ turnId: hostTurnIds[0], repositoryCheckpoint: { contentConfidence: 'exact' } });
+        expect(extractCanonicalDiffFiles(card.input, meta!)).toEqual(expect.arrayContaining([
+          expect.objectContaining({ source: 'provider_tool', filePath: 'tracked.txt' }),
+          expect.objectContaining({ source: 'scm_checkpoint', filePath: 'tracked.txt' }),
+        ]));
+      }
       expect(providerDispatchCount, JSON.stringify({ committedMessages, accountRequests })).toBe(2);
       for (const [index, answer] of [hostAnswer, secondHostAnswer].entries()) {
         if (omitReceipt && answer) {
@@ -341,6 +387,7 @@ describe('host ready after a provider successor starts', () => {
       accountGet.mockRestore();
       accountPost.mockRestore();
       clearActiveAccountSettingsSnapshot();
+      if (checkpointRoot) await rm(checkpointRoot, { recursive: true, force: true });
     }
   });
 });
