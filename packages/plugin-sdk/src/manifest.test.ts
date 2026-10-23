@@ -32,7 +32,8 @@ describe('manifest authoring contract', () => {
     it('lets an external author bind an automatic sidebar tab to its declared live JSON count', () => {
         const plugin = sdk.definePlugin({
             id: 'acme.counted-sidebar', version: '1.0.0',
-            resources: { 'issues-count': { source: 'dynamic', kind: 'config', scope: 'session', contentType: 'application/json' } },
+            resources: { 'issues-count': { source: 'dynamic', kind: 'config', scope: 'session', contentType: 'application/json',
+                runtime: { read: () => JSON.stringify({ count: null }), observe: () => ({ dispose() {} }) } } },
             ui: { views: [{ id: 'issues', renderer: 'native', container: 'rightSidebarTab', target: { kind: 'session' },
                 defaultPlacement: 'auto', countResourceId: 'issues-count' }],
                 renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Issues' } }] },

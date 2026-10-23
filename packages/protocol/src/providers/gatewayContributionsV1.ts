@@ -26,7 +26,7 @@ export function readProviderGatewayContributionPurposesV1(contributionKey: strin
 }
 
 /** Descriptor-only enumeration: no saved-connection read or runtime activation. */
-export function listProviderGatewayContributionsV1(declarations: readonly AccountProviderDeclarationV1[]): readonly ProviderGatewayContributionV1[] {
+export function listProviderGatewayContributionsV1(declarations: readonly AccountProviderDeclarationV1[]): ProviderGatewayContributionV1[] {
     return declarations.flatMap(declaration => {
         const purposes = readProviderGatewayContributionPurposesV1(declaration.contributionKey, [declaration]) ?? [];
         return purposes.length ? [{ contributionKey: declaration.contributionKey, purposes: purposes.map(({ purpose, service }) => ({ purpose, service })) }] : [];
