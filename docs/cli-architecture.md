@@ -3408,6 +3408,16 @@ equality does not make argv or the current exec environment immutable. Shared
 captures coalesce only identical field and command-root demand. These changes
 neither add a census timer nor alter the inventory/watch owners' cadence.
 
+Local Services discovery still scans at the inventory runtime's existing cadence
+while readers are parked. Its registry advances `generatedAt` and wakes that
+Machine's watch only for material inventory or launcher changes; `lastSeenAt`
+and endpoint `probedAt` remain current on demand without publishing each scan.
+The runtime compares the canonical launcher projection as well, so declaration
+changes and endpoint-free managed starts/stops retain scan-driven freshness.
+Missing-listener transitions use the latest observation, not the last publication.
+Action identity probes consume the existing fresh native observation stage;
+neither their freshness proof nor discovery admission uses the material cursor.
+
 [`processes/tree/processTree.ts`](../apps/cli/src/processes/tree/processTree.ts) owns
 pure ancestor, descendant and containment queries over those rows, without per-hop
 reads or a lineage-depth limit. Synchronous `cli-common/processInstance` lock
