@@ -55,11 +55,11 @@ describe('native transport through the remote bootstrap task', () => {
       const result = task.run({ params: {}, emit() {}, prompt: async () => ({ approved: true }) });
       await expect(result).resolves.toMatchObject({ machineId: 'joined' });
       expect(seen).toEqual(signInMs === 60_000 ? [
-        ['service', 'install', '--wait-timeout-ms', '720000', '--json'],
-        ['service', 'start', '--wait-timeout-ms', '575000', '--json'],
+        ['service', 'install', '--wait-timeout-ms', '840000', '--json'],
+        ['service', 'start', '--wait-timeout-ms', '695000', '--json'],
       ] : [
-        ['service', 'install', '--wait-timeout-ms', '300000', '--json'],
-        ['service', 'start', '--wait-timeout-ms', '155000', '--json'],
+        ['service', 'install', '--wait-timeout-ms', '420000', '--json'],
+        ['service', 'start', '--wait-timeout-ms', '275000', '--json'],
       ]);
     } finally { vi.useRealTimers(); }
   });
@@ -490,8 +490,8 @@ describe('createRemoteSshBootstrapMachineTaskKind', () => {
     });
     const completed = await waitForResult(runner, { taskId: 'iroh-only-enrollment', cursor: 0 });
     expect(completed.result).toMatchObject({ ok: true, data: { machineId: 'machine-iroh' } });
-    expect(controllerDeadline).toBeGreaterThanOrEqual(startedAt + 10 * 60_000);
-    expect(controllerDeadline).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+    expect(controllerDeadline).toBeGreaterThanOrEqual(startedAt + 15 * 60_000);
+    expect(controllerDeadline).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
     expect(labels).toEqual(['auth.status']);
     expect(JSON.stringify(completed)).not.toContain(Buffer.alloc(32, 2).toString('base64url'));
   });

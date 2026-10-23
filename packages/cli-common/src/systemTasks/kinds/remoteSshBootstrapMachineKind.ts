@@ -876,7 +876,12 @@ async function runRemoteMachineBootstrapRecipe({
   ctx, parsedRemote, parsedLocalForApproval, relayRuntime, relayRuntimeLocalServerUrl,
   remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO, enrollmentDeadlineMs, onEnrollmentDeadline,
 }: RemoteMachineBootstrapRecipeParams) {
-  const deadlineMs = enrollmentDeadlineMs ?? Date.now() + REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS;
+  let deadlineMs = enrollmentDeadlineMs ?? Date.now() + REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS;
+  const updateEnrollmentDeadline = (nextDeadlineMs: number): void => {
+    if (deadlineMs === nextDeadlineMs) return;
+    deadlineMs = nextDeadlineMs;
+    onEnrollmentDeadline?.(nextDeadlineMs);
+  };
   const remainingEnrollmentMs = () => {
     ctx.signal?.throwIfAborted();
     const remaining = deadlineMs - Date.now();
@@ -934,7 +939,7 @@ async function runRemoteMachineBootstrapRecipe({
               : { kind: 'https_url', url: parsedRemote.relay.relayUrl },
             signal: ctx.signal,
             timeoutMs: remainingEnrollmentMs(),
-            onEnrollmentDeadline,
+            onEnrollmentDeadline: updateEnrollmentDeadline,
             ...(parsedRemote.managedEnrollment ? { managedEnrollment: parsedRemote.managedEnrollment } : {}),
             approvePairingRequest: async (request) => {
               publicKey = request.publicKey;
