@@ -10,6 +10,7 @@ import {
     mapV2SessionOwnerRow,
 } from "@/app/session/listing/rows";
 import { readSessionListViewerDiscussionFacts } from "@/app/session/listing/page";
+import { loadSessionLatestFailureSequencesInTx } from "@/app/session/personal/projection";
 import {
     createSessionMetadataPrivacyUpgradeRequiredResponse,
     isSessionMetadataPrivacyUpgradeRequiredError,
@@ -70,12 +71,14 @@ export function registerSessionLookupByTagsRoute(app: Fastify) {
                     )
                     : undefined;
                 const discussionFacts = await readSessionListViewerDiscussionFacts(sessions, userId, tx);
+                const failureSequences = await loadSessionLatestFailureSequencesInTx(tx, sessions);
                 return reply.send({
                     sessions: sessions.map((session) =>
                         mapV2SessionOwnerRow(
                             session,
                             ownerAccountMode,
                             discussionFacts,
+                            failureSequences,
                         )),
                 });
             } catch (error) {
