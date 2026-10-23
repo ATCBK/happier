@@ -26,6 +26,83 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 // Collect the real Action graph outside the finite operation's deadline.
 const { withDefaultActionExecuteContext } = await import('./defaultActionExecutor');
 
+it.each(['inventory', 'launcher'] as const)('publishes %s catalog replies only into the captured current credential binding', async kind => {
+    const inventory = await import('@/sync/domains/local/services/inventory/sharedStore');
+    const launcher = await import('@/sync/domains/local/services/launch/sharedStore');
+    const inventoryRpc = await import('@/sync/domains/local/services/inventory/machineRpc');
+    const { resolveAuthCredentialsScopeKey } = await import('@/auth/storage/resolveAuthCredentialsScopeKey');
+    // The daemon transport may deliver a reply after its Account signal was withdrawn.
+    const watch = vi.spyOn(inventoryRpc, 'watchLocalServiceInventorySnapshotViaMachineRpc')
+        .mockImplementation(async () => new Promise(() => {}));
+    const entered = createDeferred<void>();
+    const reply = createDeferred<void>();
+    const transportAccounts: Array<string | null | undefined> = [];
+    const inventorySnapshot = { v: 1 as const, machineId: 'catalog-machine', generatedAt: 1_500,
+        refreshState: 'idle' as const, entries: [], diagnostics: [] };
+    const launcherSnapshot = { v: 1 as const, machineId: 'catalog-machine', updatedAt: 2_000, targets: [] };
+    const options = { runtimeActions: { localServices: {
+        fetchInventorySnapshot: async (input: import('@/sync/domains/local/services/inventory/api').LocalServiceInventorySnapshotClientInput) => {
+            transportAccounts.push(Reflect.get(input, 'accountId'));
+            entered.resolve(); await reply.promise;
+            return { ok: true as const, snapshot: { ...inventorySnapshot, generatedAt: 3_000 } };
+        },
+        fetchLauncherSnapshot: async (input: import('@/sync/domains/local/services/launch/api').LocalServiceLauncherSnapshotClientInput) => {
+            transportAccounts.push(input.accountId);
+            entered.resolve(); await reply.promise;
+            return { ok: true as const, snapshot: { ...launcherSnapshot, updatedAt: 3_000 } };
+        },
+    } } };
+    let cacheReads = 0;
+    let release = () => {};
+    let readVersion: () => number | null = () => null;
+    const expectedInitial = kind === 'inventory' ? 1_500 : 2_000;
+    const actionId = kind === 'inventory' ? 'localServices.inventory.list' : 'localServices.launcher.snapshot';
+    const home = homes.homes.a!;
+    const invoke = () => withDefaultActionExecuteContext(options, { serverId: home.id }, async (executor, account) => {
+        const key = { machineId: 'catalog-machine', serverId: account.serverId, accountId: account.accountId,
+            credentialKey: resolveAuthCredentialsScopeKey(account.credentials) };
+        if (kind === 'inventory') {
+            release = inventory.subscribeLocalServiceInventoryStore(key, () => {}, {
+                snapshotClient: async () => { cacheReads++; return { ok: true, snapshot: inventorySnapshot }; },
+                watchClient: async () => new Promise(() => {}),
+            });
+            readVersion = () => inventory.getLocalServiceInventoryState(key).generatedAt;
+        } else {
+            release = launcher.subscribeLocalServiceLauncherStore(key, () => {}, {
+                snapshotClient: async () => { cacheReads++; return { ok: true, snapshot: launcherSnapshot }; },
+                inventorySnapshotClient: async () => ({ ok: true, snapshot: inventorySnapshot }),
+            });
+            readVersion = () => launcher.getLocalServiceLauncherState(key).updatedAt;
+        }
+        await vi.waitFor(() => expect(readVersion()).toBe(expectedInitial));
+        // Finish the inventory's initial reconciliation before counting Action publication.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        return executor.execute(actionId, { machineId: 'catalog-machine' }, { serverId: account.serverId, surface: 'ui' });
+    }, actionId);
+    const stale = Promise.allSettled([invoke()]);
+    try {
+        await entered.promise;
+        const readsBeforeReply = cacheReads;
+        expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        reply.resolve();
+        expect((await stale)[0]).toMatchObject({ status: 'rejected', reason: { code: 'action_account_scope_changed' } });
+        expect(readVersion()).toBe(expectedInitial);
+        expect(cacheReads).toBe(readsBeforeReply);
+        release();
+        const current = await invoke();
+        expect(current).toMatchObject({ ok: true });
+        expect(readVersion()).toBe(3_000);
+        expect(transportAccounts).toEqual(['account-a', 'account-b']);
+    } finally {
+        reply.resolve(); await stale;
+        release(); watch.mockRestore();
+        launcher.resetLocalServiceLauncherStoreForTests();
+        inventory.resetLocalServiceInventoryStoreForTests();
+    }
+});
+
 let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
 let accountMode: 'plain' | 'e2ee';
 const network = vi.fn<(url: URL, init?: RequestInit) => Promise<Response>>();
