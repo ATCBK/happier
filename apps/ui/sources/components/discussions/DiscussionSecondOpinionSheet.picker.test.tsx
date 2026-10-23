@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
 import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
@@ -203,13 +203,12 @@ it('uses newly available sharing on the same mounted sheet without losing questi
   await act(async () => setSharing(serverId, true));
   expect(screen.findByTestId('second-opinion.question')?.props.value).toBe(question);
   expect(selected()?.props.selected).toBe(true);
-  await screen.pressByTestIdAsync('second-opinion.reviewer:unopened-session');
   await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(1));
   await vi.waitFor(() => expect(screen.findByTestId('second-opinion.ask')?.props.disabled).toBe(false));
   await screen.pressByTestIdAsync('second-opinion.ask');
   await vi.waitFor(() => expect(boundary.http.requestsFor('/v1/discussions').length).toBeGreaterThan(0));
   const previewInput = boundary.http.requestsFor(previewPath)[0]!.input as { reviewers: unknown[] };
-  expect(previewInput.reviewers).toHaveLength(2);
+  expect(previewInput.reviewers).toEqual([{ selection: { kind: 'session', session: { serverId, sessionId: 'reviewer-session' } } }]);
   expect(screen.findByTestId('second-opinion.question')?.props.value).toBe(question);
   await screen.unmount();
 });
@@ -243,14 +242,52 @@ it('lets a retained Discuss draft preview, create and retry with the same identi
 
 it('keeps an unavailable sheet closed when another Home publishes sharing enabled', async () => {
   const { screen, previewPath } = await mount({ sharingEnabled: false });
-  await act(async () => setSharing(boundary.serverIds[2]!, true));
   await vi.waitFor(() => expect(screen.findByTestId('second-opinion.reviewer:reviewer-session')).not.toBeNull());
   await screen.pressByTestIdAsync('second-opinion.reviewer:reviewer-session');
   await vi.waitFor(() => expect(screen.findByTestId('second-opinion.failed-diagnostic-unsupported_action')).not.toBeNull());
+  await act(async () => setSharing(boundary.serverIds[2]!, true));
   expect(screen.findByTestId('second-opinion.ask')?.props.disabled).toBe(true);
   expect(boundary.http.requestsFor(previewPath)).toHaveLength(0);
   expect(boundary.http.requestsFor('/v1/discussions')).toHaveLength(0);
   await screen.unmount();
+});
+
+it('recovers after availability changes during a pending preview without replacing the selected reviewer', async () => {
+  const { screen, serverId, previewPath } = await mount();
+  const release = createDeferred<void>();
+  let pending = true;
+  boundary.http.answer(serverId, `POST ${previewPath}`, { select: input => {
+    if (pending) return { respondAfter: release.promise, status: 503, body: { error: 'unsupported_action' } };
+    const request = input as { source: unknown; reviewers: Array<{ selection: unknown }> };
+    return { body: { ok: true, value: DiscussionSecondOpinionPreviewV1Schema.parse({ source: request.source,
+      sourceAudienceAccountIds: [boundary.accountId(serverId)], sourceContentReady: true,
+      discussionAudienceAccountIds: [boundary.accountId(serverId)], missingDiscussionSourceAccountIds: [],
+      discussionDisclosure: { ok: true }, canGrantSource: true, reviewers: request.reviewers.map(reviewer => ({
+        ...reviewer, sourceAccess: 'read', runtimeAccountId: boundary.accountId(serverId),
+        audienceAccountIds: [boundary.accountId(serverId)], missingSourceAccountIds: [], canGrantSource: true, disclosure: { ok: true },
+      })) }) } };
+  } });
+  try {
+    await vi.waitFor(() => expect(screen.findByTestId('second-opinion.reviewer:reviewer-session')).not.toBeNull());
+    await screen.pressByTestIdAsync('second-opinion.reviewer:reviewer-session');
+    await vi.waitFor(() => expect(boundary.http.requestsFor(previewPath)).toHaveLength(1));
+    await act(async () => setSharing(serverId, false));
+    pending = false;
+    await act(async () => setSharing(serverId, true));
+    expect(boundary.http.requestsFor(previewPath)).toHaveLength(1);
+    expect(screen.findByTestId('second-opinion.ask')?.props.disabled).toBe(true);
+    await act(async () => release.resolve());
+    await vi.waitFor(() => expect(screen.findByTestId('second-opinion.ask')?.props.disabled).toBe(false));
+    expect(boundary.http.requestsFor(previewPath)).toHaveLength(2);
+    const inputs = boundary.http.requestsFor(previewPath).map(request => request.input);
+    expect(inputs[1]).toEqual(inputs[0]);
+    await act(async () => setSharing(serverId, true));
+    expect(boundary.http.requestsFor(previewPath)).toHaveLength(2);
+    expect(boundary.http.requestsFor('/v1/discussions')).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await screen.unmount();
+  }
 });
 
 it('refuses an already previewed Ask when sharing becomes disabled on its Home', async () => {

@@ -197,9 +197,22 @@ function BoundForm(
     binding.scope.serverId,
   ) ?? null;
 
-  // Discuss… previews at once (people only); a second opinion previews per chosen reviewer set.
+  // Discuss… previews at once; a selected second opinion also recovers when this Home becomes available.
   React.useEffect(() => {
-    if (discuss) void controller.preview();
+    const current = controller.getSnapshot();
+    if (current.submitted || (!discuss && (availability !== 'available' || current.draft.reviewers.length === 0))) return;
+    if (!current.working) {
+      void controller.preview();
+      return;
+    }
+    // A feature change can arrive during a preview. Finish it before refreshing the same draft once.
+    const unsubscribe = controller.subscribe(() => {
+      const next = controller.getSnapshot();
+      if (next.working) return;
+      unsubscribe();
+      if (!next.submitted) void controller.preview();
+    });
+    return unsubscribe;
   }, [controller, discuss, availability]);
   const ask = async (sourceAccess?: 'quote_only') => {
     const draft = snapshot.draft;
