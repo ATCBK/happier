@@ -329,8 +329,21 @@ describe('Workflow-produced messages', () => {
                 workflow: { runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } } });
         expect(resolveDiscussionWorkflowAttribution({ producerV1: producer })).toEqual({ runId: 'run-1', outcome: 'answer' });
         expect(resolveDiscussionReplyOutcome({ producerV1: producer })).toBe('answer');
-        expect(resolveDiscussionWorkflowAttribution({ producerV1: { v: 1, kind: 'agent', sessionId: 'external-plugin-session', runId: 'run-1' } }))
-            .toEqual({ runId: 'run-1', outcome: null });
+    });
+
+    it.each([false, true])('does not attribute an ordinary execution-run Agent publication to a Workflow (reply return: %s)', (reply) => {
+        const producer = DiscussionProducerV1Schema.parse({ v: 1, kind: 'agent', sessionId: 'external-plugin-session', runId: 'execution-run-1',
+            ...(reply ? { replyReturn: { serverId: 'home', requestLocalId: 'ordinary-ask', outcome: 'answer' } } : {}) });
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: producer })).toBeNull();
+        expect(resolveDiscussionReplyOutcome({ producerV1: producer })).toBe(reply ? 'answer' : null);
+    });
+
+    it.each(['execution-run-1', undefined])('uses the protected Workflow marker even when the generic runId is %s', (runId) => {
+        const producer = DiscussionProducerV1Schema.parse({ v: 1, kind: 'agent', sessionId: 'external-plugin-session',
+            ...(runId ? { runId } : {}), replyReturn: { serverId: 'home', requestLocalId: 'workflow-ask', outcome: 'cancelled',
+                workflow: { runId: 'workflow-run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } } });
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: producer })).toEqual({ runId: 'workflow-run-1', outcome: 'cancelled' });
+        expect(resolveDiscussionReplyOutcome({ producerV1: producer })).toBe('cancelled');
     });
 
     it('is attributed to its exact Run with its own outcome, never as an Agent reply', () => {

@@ -210,17 +210,19 @@ export function resolveDiscussionReplyOutcome(
 }
 
 /**
- * A message published for a Workflow (C4): its committed producer carries the exact Run,
- * including when an Agent answered. Producer kind still owns speaker identity; the stamped
- * outcome distinguishes a published answer from a pass, failure or stop.
+ * A message published for a Workflow (C4): an Agent's protected reply return carries the exact
+ * Workflow Run; its generic runId can identify an ordinary execution run. Producer kind still owns
+ * speaker identity; the stamped outcome distinguishes a published answer from a pass, failure or stop.
  */
 export function resolveDiscussionWorkflowAttribution(
   message: Pick<DiscussionOpenedMessageV1, 'producerV1'>,
 ): Readonly<{ runId: string; outcome: DiscussionReplyOutcome | null }> | null {
   const producer = message.producerV1;
-  if (!producer?.runId) return null;
+  if (!producer) return null;
+  const runId = producer.kind === 'workflow' ? producer.runId : producer.replyReturn?.workflow?.runId;
+  if (!runId) return null;
   return {
-    runId: producer.runId,
+    runId,
     outcome: projectReplyOutcome(
       producer.kind === 'workflow' ? producer.outcome : producer.replyReturn?.outcome,
     ),

@@ -160,9 +160,9 @@ describe('projectWorkflowRunPublishedAnswerIds', () => {
     });
 
     it('attributes committed Agent answers to their stamped Workflow Run, retaining outcome and selection eligibility', () => {
-        const agent = (id: string, seq: number, outcome: 'answer' | 'pass' | 'failed' | 'cancelled', runId?: string) => message({
+        const agent = (id: string, seq: number, outcome: 'answer' | 'pass' | 'failed' | 'cancelled', runId?: string, runtimeRunId = runId) => message({
             id, seq, authorAccountId: 'alice', producerV1: { v: 1, kind: 'agent', sessionId: 'external-plugin-session',
-                ...(runId ? { runId } : {}), replyReturn: { serverId: 'home-a', requestLocalId: `request-${id}`, outcome,
+                ...(runtimeRunId ? { runId: runtimeRunId } : {}), replyReturn: { serverId: 'home-a', requestLocalId: `request-${id}`, outcome,
                     ...(runId ? { workflow: { runId, invocationRecordId: `invocation-${id}`, invocationAttempt: '0' } } : {}) } },
         });
         const unavailable = { ...agent('unavailable', 8, 'answer', 'run-a'), content: null };
@@ -171,7 +171,8 @@ describe('projectWorkflowRunPublishedAnswerIds', () => {
             agent('early-agent', 1, 'answer', 'run-a'), agent('pass', 3, 'pass', 'run-a'),
             agent('failed', 4, 'failed', 'run-a'), agent('cancelled', 5, 'cancelled', 'run-a'),
             agent('ordinary-agent', 6, 'answer'), unavailable, agent('other-run', 9, 'answer', 'run-b'),
+            agent('ordinary-execution-reply', 10, 'answer', undefined, 'run-a'), agent('marker-owned-answer', 11, 'answer', 'run-a', 'run-b'),
         ]);
-        expect(Object.fromEntries(byRun)).toEqual({ 'run-a': ['early-agent', 'workflow-answer', 'late-agent'], 'run-b': ['other-run'] });
+        expect(Object.fromEntries(byRun)).toEqual({ 'run-a': ['early-agent', 'workflow-answer', 'late-agent', 'marker-owned-answer'], 'run-b': ['other-run'] });
     });
 });
