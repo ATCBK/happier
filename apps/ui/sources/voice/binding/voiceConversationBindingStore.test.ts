@@ -10,7 +10,81 @@ import {
   unbindVoiceRuntimeAttemptBindingIfOwned,
 } from './voiceConversationBindingStore';
 
+// Transform the real storage/resolver graph as suite setup, outside the cost scenario.
+const { createVoiceConversationBindingResolver } = await import('./VoiceConversationBindingResolver');
+
 describe('createVoiceSessionBindingStore', () => {
+  it('refreshes admitted lookup metadata when a retained Home spelling becomes canonical', async () => {
+    const profiles = await import('@/sync/domains/server/serverProfiles');
+    const { syncPersistedVoiceConversationBindings } = await import('./voiceConversationBindingStore');
+    const { writeVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
+    const profile = await profiles.upsertServerProfile({ serverUrl: 'https://voice-perf-binding.example.test', source: 'manual' });
+    const canonicalHome = 'srv_voice_perf_binding';
+    try {
+      const store = createVoiceSessionBindingStore();
+      const metadata = writeVoiceConversationBindingMetadata(
+        { path: '/voice', host: 'test', ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) },
+        { adapterId: 'local_conversation', controlSessionId: 'voice-global', conversationSessionId: 'carrier-alias',
+          conversationSessionAddress: { serverId: canonicalHome, sessionId: 'carrier-alias' },
+          transcriptMode: 'synthetic', targetSessionAddress: null, updatedAt: 1 },
+      );
+      const state = {
+        sessions: { 'carrier-alias': createSessionFixture({ id: 'carrier-alias', serverId: profile.id, metadata: null }) },
+        sessionListRowsByServerId: { [canonicalHome]: {
+          'carrier-alias': createSessionListRenderableSessionFixture({ id: 'carrier-alias', metadata }),
+        } },
+      };
+      syncPersistedVoiceConversationBindings({ state, store });
+      expect(store.getState().getByControlSessionId('voice-global')).toBeNull();
+      await profiles.setServerProfileIdentityForUrl(profile.serverUrl, canonicalHome);
+      syncPersistedVoiceConversationBindings({ state, store });
+      expect(store.getState().getByControlSessionId('voice-global')?.conversationSessionId).toBe('carrier-alias');
+    } finally {
+      const installed = profiles.getServerProfileById(profile.id) ?? profiles.getServerProfileById(canonicalHome);
+      if (installed) await profiles.removeServerProfile(installed.id);
+    }
+  });
+
+  it('does not revisit a thousand retained Sessions for unrelated storage arrivals', async () => {
+    const { syncPersistedVoiceConversationBindings } = await import('./voiceConversationBindingStore');
+    const { writeVoiceConversationBindingMetadata } = await import('./voiceConversationBindingMetadata');
+    const store = createVoiceSessionBindingStore();
+    const binding = {
+      adapterId: 'local_conversation', controlSessionId: 'voice-global',
+      conversationSessionId: 'carrier',
+      conversationSessionAddress: { serverId: 'server-1', sessionId: 'carrier' },
+      transcriptMode: 'synthetic' as const, targetSessionAddress: null, updatedAt: 1,
+    };
+    let inventoryScans = 0;
+    const retained = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [
+      `session-${index}`, createSessionFixture({ id: `session-${index}`, serverId: 'server-1' }),
+    ]));
+    const carrier = createSessionFixture({ id: 'carrier', serverId: 'server-1', metadata:
+      writeVoiceConversationBindingMetadata({ path: '/voice', host: 'test', ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }) }, binding),
+    });
+    const sessions = new Proxy({ ...retained, carrier }, {
+      ownKeys(target) { inventoryScans += 1; return Reflect.ownKeys(target); },
+    });
+    let state = { sessions, unrelatedArrival: 0 };
+    const resolver = createVoiceConversationBindingResolver({ getState: () => state, store });
+    syncPersistedVoiceConversationBindings({ state, store });
+    expect(resolver.resolveByControlSessionId({ controlSessionId: 'voice-global' })).toEqual(binding);
+    inventoryScans = 0;
+    for (let index = 0; index < 20; index += 1) {
+      state = { ...state, unrelatedArrival: index + 1 };
+      syncPersistedVoiceConversationBindings({ state, store });
+      expect(resolver.resolveByControlSessionId({ controlSessionId: 'voice-global' })).toEqual(binding);
+      expect(resolver.resolveByConversationSessionId({ conversationSessionId: 'carrier' })).toEqual(binding);
+      expect(resolver.resolveLatest()).toEqual(binding);
+    }
+    expect(inventoryScans).toBe(0);
+
+    // A real metadata withdrawal must still retire the discovery immediately.
+    state = { ...state, sessions: { ...sessions, carrier: { ...carrier, metadata: null } } };
+    syncPersistedVoiceConversationBindings({ state, store });
+    expect(resolver.resolveByControlSessionId({ controlSessionId: 'voice-global' })).toBeNull();
+  });
+
   it('does not notify subscribers when a storage refresh has equivalent persisted bindings', () => {
     const store = createVoiceSessionBindingStore();
     const binding = {
@@ -281,8 +355,11 @@ describe('createVoiceSessionBindingStore', () => {
       sessionId: 'owner-target',
     });
 
-    state.sessions['carrier-owner'].ownerMetadataView = null;
-    syncPersistedVoiceConversationBindings({ store, state });
+    const withdrawnSession = { ...session, ownerMetadataView: null };
+    syncPersistedVoiceConversationBindings({ store, state: {
+      ...state,
+      sessions: { ...state.sessions, 'carrier-owner': withdrawnSession },
+    } });
     expect(store.getState().getByControlSessionId('__voice_agent__')).toBeNull();
   });
 

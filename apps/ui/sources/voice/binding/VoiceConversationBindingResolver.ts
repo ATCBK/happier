@@ -2,7 +2,6 @@ import { storage } from '@/sync/domains/state/storage';
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
 
 import {
-    listPersistedVoiceBindingsFromState,
     mergeVoiceConversationBindings,
     pickNewerVoiceBinding,
     voiceSessionBindingStore,
@@ -50,7 +49,7 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
                 .filter(([, binding]) => isBindingAvailableInState(binding, state))),
             Object.fromEntries([
                 ...Object.values(store.getState().persistedBindingsByConversationSessionId),
-                ...listPersistedVoiceBindingsFromState(state),
+                ...store.getState().readPersistedBindings(state),
             ].filter(binding => isBindingAvailableInState(binding, state) && !isSyncedBindingForLiveControl(binding, snapshot))
                 .map(binding => [binding.conversationSessionId, binding])),
         ));
@@ -73,9 +72,8 @@ export function createVoiceConversationBindingResolver(params?: Readonly<{
         const ownerMetadata = conversationAddress
             ? readVoiceSessionOwnerMetadataFromState(state as any, conversationAddress)
             : null;
-        // Single guarded read path: caller-supplied `sessionMetadata` is funneled
-        // through the same `isVoiceConversationSystemSessionMetadata` guard as every
-        // other persisted read (audit F2) instead of an unguarded fallback.
+        // Exact-address reads stay narrow even before the inventory projection is demanded.
+        // Both paths use the same metadata admission and system-session guard.
         const persistedBinding = readPreferredVoiceConversationBindingMetadata({
             conversationSessionId,
             preferredMetadata: ownerMetadata,

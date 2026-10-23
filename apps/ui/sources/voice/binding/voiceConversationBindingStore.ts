@@ -7,6 +7,7 @@ import { readPreferredVoiceConversationBindingMetadata } from './voiceConversati
 import type { VoiceSessionBinding } from './voiceConversationBindingTypes';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getServerProfilesGeneration } from '@/sync/domains/server/serverProfiles';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 
 type BindingsByConversationSessionId = Record<string, VoiceSessionBinding>;
@@ -70,6 +71,7 @@ type VoiceSessionBindingStoreState = Readonly<{
     getByConversationSessionId: (conversationSessionId: string) => VoiceSessionBinding | null;
     getByControlSessionId: (controlSessionId: string) => VoiceSessionBinding | null;
     list: () => ReadonlyArray<VoiceSessionBinding>;
+    readPersistedBindings: (state: SessionServerLookupStateLike) => ReadonlyArray<VoiceSessionBinding>;
 }>;
 
 function normalizeId(value: unknown): string | null {
@@ -195,12 +197,6 @@ export function mergeVoiceConversationBindings(
     ]);
 }
 
-export function listPersistedVoiceBindingsFromState(
-    state: SessionServerLookupStateLike,
-): ReadonlyArray<VoiceSessionBinding> {
-    return listPersistedBindingsFromState(state);
-}
-
 function listPersistedBindingsFromState(state: SessionServerLookupStateLike): ReadonlyArray<VoiceSessionBinding> {
     const bindings: VoiceSessionBinding[] = [];
     if (!state || typeof state !== 'object') {
@@ -226,6 +222,16 @@ function listPersistedBindingsFromState(state: SessionServerLookupStateLike): Re
 }
 
 export function createVoiceSessionBindingStore() {
+    // Ingestion and lookup share one projection of the metadata-bearing source slices.
+    // Root storage notifications (messages, Machines, settings, etc.) cannot change
+    // these bindings. Retain only the current inputs, never superseded snapshots.
+    let persistedSource: Readonly<{
+        sessions: NonNullable<SessionServerLookupStateLike>['sessions'];
+        rows: NonNullable<SessionServerLookupStateLike>['sessionListRowsByServerId'];
+        activeServerId: string;
+        profilesGeneration: number;
+    }> | null = null;
+    let persistedBindings: ReadonlyArray<VoiceSessionBinding> = [];
     return createStore<VoiceSessionBindingStoreState>((set, get) => ({
         bindingsByConversationSessionId: {},
         runtimeBindingsByConversationSessionId: {},
@@ -302,6 +308,19 @@ export function createVoiceSessionBindingStore() {
             return resolved;
         },
         list: () => Object.values(get().bindingsByConversationSessionId),
+        readPersistedBindings: (state) => {
+            const sessions = state?.sessions;
+            const rows = state?.sessionListRowsByServerId;
+            const activeServerId = getActiveServerSnapshot().serverId;
+            const profilesGeneration = getServerProfilesGeneration();
+            if (!persistedSource || persistedSource.sessions !== sessions
+                || persistedSource.rows !== rows || persistedSource.activeServerId !== activeServerId
+                || persistedSource.profilesGeneration !== profilesGeneration) {
+                persistedBindings = listPersistedBindingsFromState(state);
+                persistedSource = { sessions, rows, activeServerId, profilesGeneration };
+            }
+            return persistedBindings;
+        },
     }));
 }
 
@@ -369,7 +388,7 @@ export function syncPersistedVoiceConversationBindings(params?: Readonly<{
         ?? readRegisteredStorageState()
         ?? { sessions: {} };
     const store = params?.store ?? voiceSessionBindingStore;
-    store.getState().replacePersistedBindings(listPersistedBindingsFromState(nextState));
+    store.getState().replacePersistedBindings(store.getState().readPersistedBindings(nextState));
 }
 
 syncPersistedVoiceConversationBindings();
