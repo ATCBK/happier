@@ -726,6 +726,13 @@ reason, while the earlier blocked row owns its explanation and repair controls.
 The per-row Retry Send control is for a failed local outbox operation, not a
 second recovery owner for uncertain server custody.
 
+In 0.3 development, Send as new is shown only when the server's Pending recovery
+projection permits it. Originals with reply custody, including addressed
+Discussion asks, cannot be copied to a new identity; Dismiss remains available.
+The server derives this eligibility from the same reply-custody fact checked by
+the recovery mutation, without exposing reply progress. An absent or malformed
+projection supplies no Send as new eligibility.
+
 Session Follow originals also re-enter Pending's settlement owner before a
 provider effect. The existing Follow owner checks the original's current
 relations and rules, including the exact manager attachment. A removed or
