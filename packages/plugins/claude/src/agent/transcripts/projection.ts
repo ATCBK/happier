@@ -151,17 +151,27 @@ type ClaudeJsonlContentSearchProjection = Readonly<{
 }>;
 
 /** Raw-query admission must also retain spellings transformed by this codec. */
-export function claudeContentSearchLinePatterns(matchText: (text: string) => string | null): readonly string[] | null {
+export function claudeContentSearchLinePatterns(query: string, matchText: (text: string) => string | null): readonly string[] | null {
     if (matchText(unsupportedContentMessage('content')) !== null
         || matchText(unsupportedContentMessage('image')) !== null
         || projectClaudeJsonlLineRecord({ fileRelPath: '', lineStartOffsetBytes: 0, lineValue: null,
             projection: 'content_search', matchText }).match !== null) return null;
-    // Adjacent text blocks coalesce, ANSI is removed, XML command/peer wrappers
-    // are projected, and peer origins supply a display prefix. These are
-    // conservative candidates, never a second text matcher.
-    return ['"text"\\s*:[^\\n]*"text"\\s*:',
-        '<(?:command-name|local-command-stdout|cross-session-message)\\b',
-        '"(?:origin|isCompactSummary)"\\s*:'];
+    // Adjacent text blocks coalesce and sanitized output removes ANSI. Admit
+    // the query across those boundaries, rather than every row with two text
+    // properties. JSON escapes remain covered by the shared prefilter.
+    const boundary = String.raw`(?:"[^\n]*?"text"\s*:\s*"|\\u001b\[[0-?]*[ -/]*[@-~])*`;
+    const coalesced = [...query].map(char => JSON.stringify(char).slice(1, -1)
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(boundary);
+    // XML entity decoding and whitespace normalization can change these
+    // characters; peer projection can also add fixed display text. Keep those
+    // conservative rows only for queries they can synthesize. Decoded matching
+    // and the full branch/title/ordinal scan remain authoritative.
+    return [coalesced,
+        ...(/[\s&<>"']/u.test(query) ? ['<(?:command-name|local-command-stdout)\\b', '"isCompactSummary"\\s*:'] : []),
+        ...(/\s/u.test(query) || matchText('From Peer:\n\n') !== null
+            ? ['<cross-session-message\\b', '"origin"\\s*:'] : []),
+        ...(query.includes('!') ? ['<bash-input>'] : []),
+    ];
 }
 
 export function projectClaudeJsonlLineRecord(params: ClaudeJsonlLineRecordParams & Readonly<{

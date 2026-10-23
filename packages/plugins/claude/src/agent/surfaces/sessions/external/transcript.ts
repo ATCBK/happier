@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { BigIntStats } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/sessions/external';
 import { z } from 'zod/mini';
 
 import { defineProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
@@ -279,6 +281,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     prefilterMetadata?: ClaudeContentSearchFileMetadata;
     /** Query-local positions, never decoded match or source identity authority. */
     candidateByteOffsets?: readonly number[];
+    logger?: AgentExternalSessionsInvocation['logger'];
 }>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean; title?: string; cwd?: string; messageCount?: number }>> {
     const sourceSize = params.progress?.sourceSize ?? await readClaudeJsonlFileSize(params.filePath, params.signal);
     const evidence = await readSourceAnchorEvidence(params.filePath, sourceSize, params.signal);
@@ -297,14 +300,26 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     };
     const remoteSessionId = params.fileRelPath.split('/').at(-1)!.slice(0, -'.jsonl'.length);
     let cwd: string | undefined;
+    const startedAt = performance.now();
+    let admissionMode = 'exact';
+    let fallbackReason = params.progress ? 'exact_resume' : 'prefilter_unavailable';
+    let rowsDecoded = 0;
+    let rowsSkipped = 0;
+    let skippedRanges = 0;
+    let bytesScanned = 0;
+    let diagnostics = 0;
+    let unsupportedRows = 0;
+    let yielded = false;
+    const linePatterns = claudeContentSearchLinePatterns(params.query,
+        text => findExternalSessionContentMatchRange(text, params.query) ? text : null);
     // JSONL rows are indivisible continuation units. Cancellation reaches every
     // native read; cooperative time is checked after a decoded row is retained.
     try {
         const result = await searchExternalSessionContent({
-            query: params.query, ...(params.progress || params.prefiltered ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: params.control,
+            query: params.query, ...(params.progress || params.prefiltered || linePatterns === null ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: params.control,
             isScanComplete: () => progress.endOffsetBytes === 0,
             decode: async (matchText) => {
-                const linePatterns = claudeContentSearchLinePatterns(matchText);
+                if (linePatterns === null) fallbackReason = 'generated_text_query';
                 let offsets: readonly number[] | null = params.candidateByteOffsets ?? null;
                 if (offsets !== null && params.prefilterMetadata) {
                     const current = await stat(params.filePath, { bigint: true });
@@ -312,7 +327,10 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                     // rg read falls back to the original exact scan, under the
                     // same captured-prefix identity and final revalidation.
                     if ((['dev', 'ino', 'birthtimeNs', 'size', 'mtimeNs', 'ctimeNs'] as const)
-                        .some(key => current[key] !== params.prefilterMetadata![key])) offsets = null;
+                        .some(key => current[key] !== params.prefilterMetadata![key])) {
+                        offsets = null;
+                        fallbackReason = 'source_changed_after_prefilter';
+                    }
                 }
                 const resumedCandidates = progress.candidateEndOffsetBytes !== undefined;
                 // Capture source identity before asking rg for byte positions.
@@ -320,10 +338,13 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                 if (resumedCandidates && linePatterns !== null && params.ripgrep) {
                     const filtered = await prefilterExternalSessionContentPaths({ query: params.query,
                         paths: [params.filePath], ripgrep: params.ripgrep!, signal: params.signal,
+                        logger: params.logger,
                         lineOffsets: true, additionalLinePatterns: linePatterns });
                     offsets = filtered?.get(params.filePath) ?? (filtered === null ? null : []);
                 }
                 if (linePatterns !== null && offsets !== null && (!params.progress || resumedCandidates)) {
+                    admissionMode = 'line_offsets';
+                    fallbackReason = 'none';
                     const candidateOffsets = offsets;
                     let offsetIndex = candidateOffsets.length - 1;
                     progress = { ...progress, candidateEndOffsetBytes: progress.candidateEndOffsetBytes ?? sourceSize };
@@ -343,16 +364,29 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                         const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: end,
                             maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), signal: params.signal,
                             includeMalformedRecords: true,
+                            candidateByteOffsets: candidateOffsets,
                             shouldParseLine: (start, lineEnd) => {
                                 while (offsetIndex >= 0 && candidateOffsets[offsetIndex]! >= lineEnd) offsetIndex--;
                                 return offsetIndex >= 0 && candidateOffsets[offsetIndex]! >= start;
                             },
-                            onSkippedLine: consumed,
-                            onDiagnostic: () => { progress = { ...progress, partial: true }; },
+                            onSkippedLine: (start, end, tail) => {
+                                rowsSkipped++;
+                                bytesScanned += end - start;
+                                consumed(start, end, tail);
+                            },
+                            onSkippedRange: (start, end, tail) => {
+                                if (end > start) skippedRanges++;
+                                bytesScanned += end - start;
+                                consumed(start, end, tail);
+                            },
+                            onDiagnostic: () => { diagnostics++; progress = { ...progress, partial: true }; },
                             onLine: (line, tail) => {
+                                rowsDecoded++;
+                                bytesScanned += line.endOffsetBytes - line.startOffsetBytes;
                                 const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
                                     lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value,
                                     projection: 'content_search', matchText });
+                                if (projected.disposition === 'unsupported') unsupportedRows++;
                                 // An admitted unsupported row is a coverage gap;
                                 // only decoded text justifies the full branch,
                                 // title and ordinal scan.
@@ -378,6 +412,8 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                     // The original scan remains the single authority for them.
                     const { candidateEndOffsetBytes: _end, candidateMatched: _matched, ...selected } = progress;
                     progress = selected;
+                    admissionMode = 'line_then_exact';
+                    fallbackReason = 'decoded_candidate_match';
                 }
                 await params.control.prepare(async () => {
                     if (progress.endOffsetBytes === 0) return true;
@@ -385,8 +421,10 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                     const initialEndOffsetBytes = progress.endOffsetBytes;
                     const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: progress.endOffsetBytes,
                         maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), signal: params.signal, includeMalformedRecords: true,
-                        onDiagnostic: () => { progress = { ...progress, partial: true }; },
+                        onDiagnostic: () => { diagnostics++; progress = { ...progress, partial: true }; },
                         onLine: (line, tailOffsetBytes) => {
+                            rowsDecoded++;
+                            bytesScanned += line.endOffsetBytes - line.startOffsetBytes;
                             throwIfAborted(params.signal);
                             if (isTranscriptObject(line.value) && typeof line.value.cwd === 'string' && line.value.cwd.trim()) cwd = line.value.cwd;
                             const selected = selectClaudeExternalBranchLine(line.value, progress.branchParentUuid === false ? undefined : progress.branchParentUuid);
@@ -397,6 +435,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                                 const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
                                     lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value,
                                     projection: 'content_search', matchText });
+                                if (projected.disposition === 'unsupported') unsupportedRows++;
                                 partial ||= projected.disposition === 'unsupported';
                                 if (projected.match !== null) match = { startOffsetBytes: line.startOffsetBytes,
                                     endOffsetBytes: line.endOffsetBytes, itemIndex: projected.match.itemIndex,
@@ -459,8 +498,17 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
         return { ...result, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}),
             ...(!result.partial ? { messageCount: progress.count } : {}) };
     } catch (error) {
-        if (error instanceof ExternalSessionContentSearchYield) throw new ClaudeContentSearchYield(progress);
+        if (error instanceof ExternalSessionContentSearchYield) { yielded = true; throw new ClaudeContentSearchYield(progress); }
         throw error;
+    } finally {
+        params.logger?.debug('claude.content_search.file', {
+            file: basename(params.filePath), sourceBytes: sourceSize, admissionMode, fallbackReason,
+            candidateOffsets: params.candidateByteOffsets?.length ?? null,
+            rowsDecoded, rowsSkipped: skippedRanges ? null : rowsSkipped, skippedRanges,
+            bytesScanned, diagnostics, unsupportedRows, partial: progress.partial,
+            unresolvedAncestry: typeof progress.branchParentUuid === 'string', yielded,
+            elapsedMs: Math.round(performance.now() - startedAt),
+        });
     }
 
     async function readSearchRow(row: z.infer<typeof ClaudeContentSearchRowSchema>) {

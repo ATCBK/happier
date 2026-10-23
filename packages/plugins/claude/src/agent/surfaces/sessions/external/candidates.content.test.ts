@@ -46,7 +46,9 @@ async function corpus() {
     const ripgrep = { run: vi.fn(async ({ args, paths }: { args: readonly string[]; paths: readonly string[]; signal?: AbortSignal }) => {
         const launcher = fileURLToPath(new URL('../../../../../../../../apps/cli/scripts/ripgrep_launcher.cjs', import.meta.url));
         try {
-            const result = await promisify(execFile)(process.execPath, [launcher, JSON.stringify([...args, '--', ...paths])]);
+            const pending = promisify(execFile)(process.execPath, [launcher, '--stdin']);
+            pending.child.stdin?.end(JSON.stringify({ args, paths }));
+            const result = await pending;
             return { ...result, exitCode: 0 };
         } catch (error) {
             // rg's no-match exit is a successful prefilter result, not a process failure.
@@ -60,6 +62,65 @@ async function corpus() {
 }
 
 describe('Claude candidate conversation search', () => {
+    it('scans independent prefilter batches concurrently without advancing deadline continuation past unvisited hits', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        await rm(join(directory, 'session.jsonl'));
+        for (let index = 0; index < 4; index++) {
+            const path = join(directory, `session-${index}.jsonl`);
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: `body-${index}`, parentUuid: null,
+                message: { role: 'user', content: index === 3 ? 'Ordinary title' : 'Visible needle' } }) + '\n');
+            await utimes(path, new Date(1000 * (index + 1)), new Date(1000 * (index + 1)));
+        }
+        const run = params.ripgrep.run.getMockImplementation()!;
+        let nowMs = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+        const deadlineAtMs = nowMs + 15000;
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const admittedPaths = new Set<string>();
+        const ripgrep = { run: async (request: Parameters<typeof run>[0]) => {
+            if (request.paths.some(path => path.endsWith('session-3.jsonl'))) return run(request);
+            for (const path of request.paths) admittedPaths.add(path);
+            // Hold real process admission to distinguish concurrent corpus work
+            // from awaiting the first native scan before starting the next.
+            await held;
+            return run(request);
+        } };
+        const first = listClaudeExternalSessionCandidates({ ...params, limit: 1, searchTerm: 'needle', ripgrep, deadlineAtMs });
+        try {
+            await vi.waitFor(() => expect(admittedPaths.size).toBe(3));
+        } finally { nowMs = deadlineAtMs; release(); await first; }
+        const page = await first;
+        // The existing decoder may commit its first indivisible file at EOF
+        // even across the soft deadline; prefilter completion must not skip
+        // either of the other, still-unvisited native hits on continuation.
+        expect(page.candidates.map(candidate => candidate.remoteSessionId)).toEqual(['session-2']);
+        expect(page.contentCoverage).toBe('partial');
+        expect(page.nextCursor).toBeTruthy();
+        const ids = page.candidates.map(candidate => candidate.remoteSessionId);
+        let cursor = page.nextCursor;
+        while (cursor) {
+            const next = await listClaudeExternalSessionCandidates({ ...params, limit: 1, searchTerm: 'needle', cursor });
+            ids.push(...next.candidates.map(candidate => candidate.remoteSessionId));
+            expect(next.nextCursor).not.toBe(cursor);
+            cursor = next.nextCursor;
+            if (!cursor) expect(next.contentCoverage).toBe('complete');
+        }
+        expect(ids).toEqual(['session-2', 'session-1', 'session-0']);
+    });
+    it('excludes unrelated transform-shaped rows from query-local decoding and coverage', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        await writeFile(path, [
+            { type: 'future_record', origin: { kind: 'peer', name: 'Ordinary sender' }, isCompactSummary: false,
+                message: { content: [{ type: 'text', text: 'ordinary ' }, { type: 'text', text: 'conversation' }] } },
+            { type: 'user', uuid: 'command', parentUuid: null, message: { role: 'user',
+                content: '<local-command-stdout>Ordinary command output</local-command-stdout>' } },
+        ].map(row => JSON.stringify(row)).join('\n') + '\n');
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'r283coastalsapphire' }))
+            .resolves.toMatchObject({ candidates: [], contentCoverage: 'complete' });
+    });
     it.each([
         ['malformed JSON', Buffer.from('{"type":"assistant","message":invalid}'), false],
         ['malformed UTF-8', Buffer.from([0xff]), false],
@@ -196,6 +257,10 @@ describe('Claude candidate conversation search', () => {
         for (const [query, type, content] of [
             ['needle', 'assistant', [{ type: 'text', text: 'nee' }, { type: 'text', text: 'dle' }]],
             ['needle', 'user', '<local-command-stdout>nee\u001b[31mdle</local-command-stdout>'],
+            ['a&b', 'user', '<local-command-stdout>a&amp;b</local-command-stdout>'],
+            ['/review main', 'user', '<command-name>/review</command-name><command-args>main</command-args>'],
+            ['needle', 'assistant', [{ text: 'n', type: 'text' }, { text: 'ee', type: 'text' }, { text: 'dle', type: 'text' }]],
+            ['a'.repeat(2000), 'assistant', [{ type: 'text', text: 'a'.repeat(1000) }, { type: 'text', text: 'a'.repeat(1000) }]],
             ['unsupported image', 'assistant', [{ type: 'image', source: { type: 'unknown' } }]],
         ] as const) {
             await writeFile(path, [
@@ -208,6 +273,30 @@ describe('Claude candidate conversation search', () => {
             const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: query });
             expect(page.candidates).toMatchObject([{ match: { messageIndex: 1, snippet: expect.stringContaining(query) } }]);
         }
+    });
+    it('keeps peer labels, compact summaries and shell text searchable after narrowing admission', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        for (const [query, row] of [
+            ['From', { origin: { kind: 'peer' }, message: { role: 'user', content: 'ordinary body' } }],
+            ['Peer', { origin: { kind: 'peer' }, message: { role: 'user', content: 'ordinary body' } }],
+            ['From sender', { origin: { kind: 'peer', name: 'sender' }, message: { role: 'user', content: 'ordinary body' } }],
+            ['needle', { isCompactSummary: true, message: { role: 'user', content: 'nee\u001b[31mdle' } }],
+            ['multiple words', { isCompactSummary: true, message: { role: 'user', content: 'multiple\n\twords' } }],
+            ['!echo', { message: { role: 'user', content: '<bash-input>echo</bash-input>' } }],
+        ] as const) {
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: 'visible', parentUuid: null, ...row }) + '\n');
+            await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: query }))
+                .resolves.toMatchObject({ candidates: [{ match: { messageIndex: 0, snippet: expect.stringContaining(query) } }] });
+        }
+    });
+    it('decodes generated fallback matches even when their text is absent from the native file', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        await writeFile(path, JSON.stringify({ type: 'assistant', uuid: 'image', parentUuid: null,
+            message: { role: 'assistant', content: [{ type: 'image', source: { type: 'unknown' } }] } }) + '\n');
+        await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: 'unsupported image' }))
+            .resolves.toMatchObject({ candidates: [{ match: { snippet: expect.stringContaining('unsupported image') } }] });
     });
     it('keeps native descriptor acquisition independent of decoded chunk count', async () => {
         const params = await corpus();
@@ -915,5 +1004,29 @@ describe('Claude candidate conversation search', () => {
             return { exitCode: 1, stdout: '', stderr: '' };
         });
         await expect(listClaudeExternalSessionCandidates({ ...params, signal: controller.signal, searchTerm: 'Body-only' })).rejects.toThrow();
+    });
+    it('cancels and observes every concurrent prefilter batch before returning the abort', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        for (let index = 0; index < 3; index++) {
+            await writeFile(join(directory, `parallel-${index}.jsonl`), '{"type":"user","uuid":"body","message":{"role":"user","content":"ordinary"}}\n');
+        }
+        const controller = new AbortController();
+        let started = 0;
+        let cancelled = 0;
+        params.ripgrep.run.mockImplementation(async ({ signal }) => {
+            expect(signal).toBe(controller.signal);
+            if (started++ === 0) return { exitCode: 1, stdout: '', stderr: '' };
+            await new Promise<void>((_resolve, reject) => {
+                signal?.addEventListener('abort', () => { cancelled++; reject(signal.reason); }, { once: true });
+            });
+            throw new Error('An aborted native operation must reject');
+        });
+        const pending = listClaudeExternalSessionCandidates({ ...params, limit: 1, signal: controller.signal, searchTerm: 'needle' });
+        const outcome = pending.then(value => ({ value }), error => ({ error }));
+        try { await vi.waitFor(() => expect(started).toBe(4)); }
+        finally { controller.abort(new Error('cancelled parallel scan')); }
+        expect(await outcome).toMatchObject({ error: { message: 'cancelled parallel scan' } });
+        expect(cancelled).toBe(3);
     });
 });

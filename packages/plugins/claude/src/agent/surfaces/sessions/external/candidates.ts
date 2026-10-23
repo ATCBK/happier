@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { deriveExternalSessionActivity } from '@happier-dev/plugin-sdk/sessions/external';
 import {
   createExternalSessionContentSearchControl,
@@ -397,6 +398,7 @@ export async function listClaudeExternalSessionCandidates(
     updatedAfterMs?: number;
     includeTitles?: boolean;
     ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
+    logger?: AgentExternalSessionsInvocation['logger'];
     signal?: AbortSignal;
     deadlineAtMs?: number;
     resultBudget?: ClaudeCandidateResultBudget;
@@ -634,7 +636,19 @@ export async function listClaudeExternalSessionCandidates(
   let prefilteredLineOffsets: ReadonlyMap<string, readonly number[]> | null = null;
   let prefilterMetadata = new Map<string, ClaudeContentSearchFileMetadata>();
   const linePatterns = search.searchTarget === 'content'
-    ? claudeContentSearchLinePatterns(text => findExternalSessionContentMatchRange(text, searchTerm) ? text : null) : null;
+    ? claudeContentSearchLinePatterns(searchTerm, text => findExternalSessionContentMatchRange(text, searchTerm) ? text : null) : null;
+  const prefilterBatch = async (startIndex: number) => {
+    const entries = traversed.entries.slice(startIndex, startIndex + limit);
+    const metadata = new Map(await Promise.all(entries.map(async entry =>
+      [entry.filePath, await stat(entry.filePath, { bigint: true })] as const)));
+    const offsets = linePatterns === null ? null : await prefilterExternalSessionContentPaths({
+      query: searchTerm, paths: entries.map(entry => entry.filePath),
+      ripgrep: params.ripgrep!, signal: params.signal, logger: params.logger,
+      lineOffsets: true, additionalLinePatterns: linePatterns,
+    });
+    return { metadata, offsets };
+  };
+  let remainingPrefilters: Map<number, Awaited<ReturnType<typeof prefilterBatch>>> | undefined;
   let prefilteredThroughIndex = 0;
   let previousScanPosition = scanPosition;
   let previousSourceGeneration = traversed.sourceGeneration;
@@ -712,23 +726,40 @@ export async function listClaudeExternalSessionCandidates(
     previousSourceGeneration = session.sourceGeneration;
     if (search.searchTarget === 'content' && !(traversalIndex === 0 && contentCursor?.contentProgress)) {
       if (traversalIndex >= prefilteredThroughIndex) {
-        // Prefetch using the caller's existing result-page size, only from the
-        // unvisited frontier. Scanning the root rereads every completed file
-        // and delays the first hit behind all later history on every page.
+        // Let an immediately full hit page publish after its first batch. Once
+        // that batch cannot fill the page, scan the remaining admitted frontier
+        // concurrently instead of paying each rg startup/read in sequence.
+        // Keep the existing per-batch output budget and ordered native decoder;
+        // no source cursor advances merely because its prefilter has completed.
+        if (prefilteredThroughIndex > 0 && linePatterns !== null && !remainingPrefilters) {
+          const starts = Array.from({ length: Math.ceil((traversed.entries.length - traversalIndex) / limit) },
+            (_, index) => traversalIndex + index * limit);
+          const outcomes = await Promise.allSettled(starts.map(prefilterBatch));
+          // Observe every batch outcome even on failure/cancellation. Process
+          // teardown remains with the host's shared invocation signal.
+          remainingPrefilters = new Map(outcomes.map((outcome, index) => {
+            if (outcome.status === 'rejected') throw outcome.reason;
+            return [starts[index]!, outcome.value];
+          }));
+        }
+        const prefilter = remainingPrefilters
+          ? remainingPrefilters.get(traversalIndex)! : await prefilterBatch(traversalIndex);
+        remainingPrefilters?.delete(traversalIndex);
         prefilteredThroughIndex = traversalIndex + limit;
-        const entries = traversed.entries.slice(traversalIndex, prefilteredThroughIndex);
-        prefilterMetadata = new Map(await Promise.all(entries.map(async entry =>
-          [entry.filePath, await stat(entry.filePath, { bigint: true })] as const)));
-        const prefilter = {
-          query: searchTerm,
-          paths: entries.map(entry => entry.filePath),
-          ripgrep: params.ripgrep!, signal: params.signal,
-        };
-        prefilteredLineOffsets = linePatterns === null ? null
-          : await prefilterExternalSessionContentPaths({ ...prefilter, lineOffsets: true, additionalLinePatterns: linePatterns });
-        prefilteredPaths = linePatterns === null ? await prefilterExternalSessionContentPaths(prefilter) : prefilteredLineOffsets;
+        prefilterMetadata = prefilter.metadata;
+        prefilteredLineOffsets = prefilter.offsets;
+        // Generated display markers are absent from native bytes. A query
+        // requiring exact decoding cannot be excluded by a raw-file prefilter.
+        prefilteredPaths = prefilteredLineOffsets;
       }
-      if (prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)) continue;
+      if (prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)) {
+        params.logger?.debug('claude.content_search.file', {
+          file: basename(session.filePath), sourceBytes: Number(prefilterMetadata.get(session.filePath)?.size ?? 0),
+          admissionMode: 'file_excluded', fallbackReason: 'none', rowsDecoded: 0, rowsSkipped: 0,
+          bytesScanned: 0, diagnostics: 0, unsupportedRows: 0, partial: false, elapsedMs: 0,
+        });
+        continue;
+      }
     }
     let candidate: ClaudeExternalSessionCandidate;
     let needsSelectedRowTitle = false;
@@ -755,6 +786,7 @@ export async function listClaudeExternalSessionCandidates(
           signal: params.signal,
           ripgrep: params.ripgrep!,
           control: contentFileSystem!,
+          logger: params.logger,
           ...(prefilterMetadata.has(session.filePath) ? { prefilterMetadata: prefilterMetadata.get(session.filePath) } : {}),
           ...(prefilteredLineOffsets ? { candidateByteOffsets: prefilteredLineOffsets.get(session.filePath) ?? [] } : {}),
           ...(traversalIndex === 0 && contentCursor?.contentProgress
