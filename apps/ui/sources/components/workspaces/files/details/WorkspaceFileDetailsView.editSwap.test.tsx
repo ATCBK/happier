@@ -302,6 +302,50 @@ describe('File page View → Edit swap', () => {
         } finally { await screen.unmount(); root.remove(); window.getSelection()?.removeAllRanges(); }
     });
 
+    it('seats the phone selection bar above the Edit key row, so Save stays reachable while lines are selected', async () => {
+        viewport.width = 390;
+        viewport.height = 844;
+        const { SessionCockpitBottomChromeHeightContext } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+        const { PageBottomBarSeatProvider } = await import('@/components/ui/layout/useFloatingChromeClearance');
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { SelectionActionBar } = await import('@/components/ui/selection/SelectionActionBar');
+        const { FilePageHeader } = await import('../file/FilePageHeader');
+        const { FileEditorPanel } = await import('../file/editor/FileEditorPanel');
+        const { StyleSheet } = await import('react-native');
+        const tabBarHeight = 84;
+        const keyRowHeight = 44;
+        const screen = await fixture.render(<ModalProvider><SessionCockpitBottomChromeHeightContext.Provider value={tabBarHeight}>
+            <PageBottomBarSeatProvider><SurfaceStateSizeProvider size="phone">
+                <WorkspaceFileDetailsView scopeId="project:phone-edit-selection" scope={fixture.scope} filePath={filePath}
+                    sessionIdForAugmentation={null} />
+            </SurfaceStateSizeProvider></PageBottomBarSeatProvider>
+        </SessionCockpitBottomChromeHeightContext.Provider></ModalProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            await flushHookEffects({ cycles: 4 });
+            await vi.waitFor(() => expect(screen.findByType(FilePageHeader).props.edit?.kind).toBe('edit'));
+            await act(async () => { screen.findByType(FilePageHeader).props.edit.onPress(); });
+            await flushHookEffects({ cycles: 4 });
+            await vi.waitFor(() => expect(screen.findAllByType(FileEditorPanel)).toHaveLength(1));
+            // The editor engine is the platform boundary: one selected line.
+            const selection = { startLine: 1, endLine: 1, text: 'export const attempts = 3;', rect: { x: 40, y: 60, width: 120, height: 18 } };
+            const panel = screen.findByType(FileEditorPanel);
+            (panel.props.editorRef as { current: unknown }).current = { getValue: () => svg, flushPendingChange: async () => {},
+                getSelection: () => selection, subscribeSelection: () => () => {} };
+            await act(async () => { panel.props.onReady?.(); });
+            await flushHookEffects({ cycles: 2 });
+            // The key row pads by the tab bar, so its box reaches from the page's bottom to its top edge.
+            const keyRow = screen.findHostByTestId('code-editor-accessory');
+            expect(keyRow).not.toBeNull();
+            await act(async () => { keyRow?.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: tabBarHeight + keyRowHeight } } }); });
+            await vi.waitFor(() => expect(screen.findByType(SelectionActionBar).props.visible).toBe(true));
+            await flushHookEffects({ cycles: 2 });
+            // The key row is in flow and cannot step aside; the selection's bar is the one that floats, so it rides above.
+            const bottom = StyleSheet.flatten(screen.findByType(SelectionActionBar).parent?.props.style).bottom as number;
+            expect(bottom).toBeGreaterThan(tabBarHeight + keyRowHeight);
+        } finally { await screen.unmount(); }
+    });
+
     it('keeps the read view up until the editor reports ready, then swaps to the editor', async () => {
         const screen = await fixture.render(<ModalProvider>
             <WorkspaceFileDetailsView scopeId="project:edit-swap" scope={fixture.scope} filePath={filePath}

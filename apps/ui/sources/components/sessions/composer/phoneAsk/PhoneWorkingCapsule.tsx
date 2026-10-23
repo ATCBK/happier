@@ -9,7 +9,7 @@ import {
   useCoreCapsuleColors,
 } from '@/components/ui/status/capsuleHost';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
-import { useFloatingChromeClearance, usePageBottomBarTop } from '@/components/ui/layout/useFloatingChromeClearance';
+import { useFloatingChromeClearance, usePageBottomSeat } from '@/components/ui/layout/useFloatingChromeClearance';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
@@ -20,14 +20,15 @@ import {
 
 import { usePhoneAskSheet } from './phoneAskSheetState';
 
-export type PhoneWorkingCapsuleKind = 'working' | 'needsYou';
+export type PhoneWorkingCapsuleKind = 'working' | 'queued' | 'needsYou';
 
 /** How the canonical Session status reads in the capsule; anything else means the turn has settled. */
 export function resolvePhoneWorkingCapsuleKind(
   state: SessionState,
 ): PhoneWorkingCapsuleKind | null {
-  if (state === 'thinking' || state === 'pending_input' || state === 'resuming')
-    return 'working';
+  if (state === 'thinking' || state === 'resuming') return 'working';
+  // The message waits with no turn running (an inactive Session): it is queued, not being worked on.
+  if (state === 'pending_input') return 'queued';
   if (state === 'permission_required' || state === 'action_required')
     return 'needsYou';
   return null;
@@ -35,7 +36,8 @@ export function resolvePhoneWorkingCapsuleKind(
 
 /**
  * After Send from the phone Ask sheet (lab ask Ap2): one capsule over the File page says the agent is on it,
- * "{agent} is working · View", or amber "Needs you" when the Session waits on the person. View opens the
+ * "{agent} is working · View", "Queued input · View" while the message waits for the Session to run, or
+ * amber "Needs you" when the Session waits on the person. View opens the
  * Session. It reads the Session's canonical status and leaves once that status settles.
  */
 export function PhoneWorkingCapsule(
@@ -93,10 +95,8 @@ export function PhoneWorkingCapsuleView(
   const insets = useChromeSafeAreaInsets();
   // Like the page's other bottom bars: above the floating tab bar when one covers the page.
   const chromeClearance = useFloatingChromeClearance();
-  // A bar the page keeps at its bottom (the Edit key row, the review bar) holds that edge: the capsule rides above it.
-  const keptBarTop = usePageBottomBarTop();
-  const edgeBottom = chromeClearance > 0 ? chromeClearance : insets.bottom + theme.space.s16;
-  const bottom = keptBarTop > 0 ? Math.max(edgeBottom, keptBarTop + theme.space.s8) : edgeBottom;
+  // A bar the page keeps at its bottom (the Edit key row, the review bar, a selection's bar) holds that edge: the capsule rides above it.
+  const bottom = usePageBottomSeat(chromeClearance > 0 ? chromeClearance : insets.bottom + theme.space.s16);
   const needsYou = props.kind === 'needsYou';
   return (
     <View
@@ -105,11 +105,13 @@ export function PhoneWorkingCapsuleView(
     >
       <HappierStatusCapsule
         placement="inline"
-        busy={!needsYou}
+        busy={props.kind === 'working'}
         text={
           needsYou
             ? t('files.track.needsYou')
-            : t('files.track.agentWorking', { agent: props.agent })
+            : props.kind === 'queued'
+              ? t('status.queuedInput')
+              : t('files.track.agentWorking', { agent: props.agent })
         }
         action={{ label: t('files.track.view'), onPress: props.onView }}
         colors={

@@ -14,8 +14,8 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 const { StyleSheet, View } = await import('react-native');
-const { PhoneWorkingCapsuleView } = await import('./PhoneWorkingCapsule');
-const { PageBottomBarSeatProvider } =
+const { PhoneWorkingCapsuleView, resolvePhoneWorkingCapsuleKind } = await import('./PhoneWorkingCapsule');
+const { PageBottomBarSeatProvider, usePageBottomSeat, useReportPageBottomBar } =
   await import('@/components/ui/layout/useFloatingChromeClearance');
 const { SessionCockpitBottomChromeHeightContext } =
   await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
@@ -60,7 +60,32 @@ function Page(props: Readonly<{ children: React.ReactNode }>) {
   );
 }
 
+/** A selection's bar, seated the way `AskSelectionControls` seats it: above the kept bars, stacked. */
+function SelectionBar() {
+  const bottom = usePageBottomSeat(TAB_BAR, 'kept');
+  const onLayout = useReportPageBottomBar(true, bottom, 'stacked');
+  return <View testID="selection-bar" onLayout={onLayout} style={{ position: 'absolute', bottom }} />;
+}
+
 describe('the phone working capsule takes the seat above the page bottom bar', () => {
+  it('keeps one order: the key row, then a selection bar above it, then the capsule above both', async () => {
+    const screen = await renderScreen(
+      <Page>
+        <EditorAccessoryBar testID="key-row" trailing={<View />}>
+          <View />
+        </EditorAccessoryBar>
+        <SelectionBar />
+      </Page>,
+    );
+    await layout(screen, 'key-row', TAB_BAR + 50);
+    await layout(screen, 'selection-bar', 48);
+    const selectionBottom = StyleSheet.flatten(screen.findHostByTestId('selection-bar')?.props.style).bottom as number;
+    expect(selectionBottom).toBeGreaterThan(TAB_BAR + 50);
+    expect(capsuleBottom(screen)).toBeGreaterThan(selectionBottom + 48);
+    await screen.unmount();
+  });
+
+
   it('rides above the Edit key row, which cannot step aside (Save and the keys stay reachable)', async () => {
     const screen = await renderScreen(
       <Page>
@@ -92,5 +117,26 @@ describe('the phone working capsule takes the seat above the page bottom bar', (
     await screen.update(<Page>{null}</Page>);
     expect(capsuleBottom(screen)).toBe(TAB_BAR);
     await screen.unmount();
+  });
+});
+
+describe('the phone working capsule says what the Session is doing', () => {
+  it('reads a send that only queued as queued, not as working', async () => {
+    // The canonical Session status for input waiting with no turn running (an inactive Session).
+    const kind = resolvePhoneWorkingCapsuleKind('pending_input');
+    expect(kind).not.toBe('working');
+    const screen = await renderScreen(
+      <PhoneWorkingCapsuleView kind={kind!} agent="Codex" onView={() => {}} />,
+    );
+    const text = screen.getTextContent();
+    expect(text).toContain('Queued');
+    expect(text).not.toContain('Codex is working');
+    await screen.unmount();
+  });
+
+  it('keeps a running turn as working and a waiting prompt as needing you', () => {
+    expect(resolvePhoneWorkingCapsuleKind('thinking')).toBe('working');
+    expect(resolvePhoneWorkingCapsuleKind('permission_required')).toBe('needsYou');
+    expect(resolvePhoneWorkingCapsuleKind('ready')).toBeNull();
   });
 });
