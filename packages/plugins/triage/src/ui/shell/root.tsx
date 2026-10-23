@@ -85,7 +85,7 @@ import {
   type TriageListGroupIdV1,
   type TriageListItemV1,
 } from '../list/sections.js';
-import { TriageBulkActionBar } from '../list/BulkActionBar.js';
+import { TriageBulkActionBar, TriageBulkActionPicker } from '../list/BulkActionBar.js';
 import { useTriageRetainedComposerOriginV1 } from './retainedComposerOrigin.js';
 import {
   projectTriageBulkSelectedEntriesV1,
@@ -419,6 +419,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   }, [onCreateDraftClose]);
   const [editingSources, setEditingSources] = React.useState(false);
   const [organizing, setOrganizing] = React.useState(false);
+  // Which configured action a bulk press applies; `null` takes the first one the selection is offered.
+  const [bulkActionId, setBulkActionId] = React.useState<string | null>(null);
   /**
    * Whether the location this page OPENED at named a lens of its own.
    *
@@ -2042,7 +2044,17 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           variant="plain"
           onPress={() => setOrganizing(false)}
         />
-      ) : null}
+      ) : (
+        // While rows are selected, which action a bulk press applies is one compact menu beside "Done selecting";
+        // the destinations stay in the floating bar, so the list keeps its space.
+        <TriageBulkActionPicker
+          actions={configuredActions.actions}
+          selectedWorkflowSubjects={selectedBulkWorkflowSubjects}
+          selectedActionId={bulkActionId}
+          disabled={isTriageBulkSessionsPhaseRunningV1(bulkSessions.phase)}
+          onChange={setBulkActionId}
+        />
+      )}
       // Freshness is said, never implied by silence, but quietly while the list is current, so the one thing that
       // stands out is a list that is not. Stale is the only warning-toned state.
       freshness={freshness}
@@ -2605,6 +2617,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
               selectedWorkflowSubjects={selectedBulkWorkflowSubjects}
               destinationUnavailableReason={readBulkDestinationUnavailableReason}
               phase={bulkSessions.phase}
+              selectedActionId={bulkActionId}
               onRun={runBulkAction}
               retryable={bulkSessions.retryable}
               onRetry={bulkSessions.retry}

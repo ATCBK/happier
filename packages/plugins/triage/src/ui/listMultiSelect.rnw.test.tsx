@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cloneElement, createElement, Profiler, type ProfilerOnRenderCallback, type ReactElement } from 'react';
+import { openToolbarMenu, pressToolbarMenuItem } from './shell/toolbarMenus.test-support.js';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
@@ -717,16 +718,18 @@ async function chooseRow(label: string): Promise<void> {
 }
 
 /**
- * The bulk bar's own action picker, read from the shared `Form.Select`'s
- * radiogroup rather than from every radio on the page: the saved-view and sort
- * controls are radios too, and a page-wide query would report their options as
- * bulk actions.
+ * The bulk action picker: one compact menu ("Action · Ask") in the list toolbar beside "Done selecting", so a live
+ * selection never pushes an inline list of buttons into the rows. Read the way a reader does: open the menu, read
+ * its radio rows, close it again.
  */
-function offeredBulkActionLabels(): readonly string[] {
-    const group = document.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Action"]');
-    if (group === null) return [];
-    return Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]'))
-        .map((option) => option.getAttribute('aria-label') ?? '');
+async function offeredBulkActionLabels(shell: PluginUiTestkit): Promise<readonly string[]> {
+    await openToolbarMenu(shell, 'Action');
+    const rows = await shell.getAllByRole('menuitemradio');
+    const labels = rows.map((row) => row.name ?? '');
+    await openToolbarMenu(shell, 'Action');
+    const trigger = (await shell.getAllByRole('button')).find((candidate) => candidate.name?.startsWith('Action:') === true);
+    if (trigger?.state?.expanded === true) await act(async () => { await shell.press(trigger); });
+    return labels;
 }
 
 async function settle(): Promise<void> {
@@ -736,9 +739,7 @@ async function settle(): Promise<void> {
 }
 
 async function chooseBulkAction(shell: PluginUiTestkit, label: string): Promise<void> {
-    await act(async () => {
-        await shell.press(await shell.getByRole('radio', { name: label }));
-    });
+    await pressToolbarMenuItem(shell, 'Action', 'menuitemradio', label);
     await settle();
 }
 
@@ -1045,7 +1046,7 @@ describe('selecting several PRs & Issues rows', () => {
                     repository: 'example/repository',
                 },
             },
-        }));
+        }), { overlays: true });
         const before = locations.length;
 
         expect(document.querySelector('[data-testid="triage-bulk-action-bar"]')).toBeNull();
@@ -1118,30 +1119,32 @@ describe('selecting several PRs & Issues rows', () => {
         // an issue-only set must not be offered it: a control whose every
         // reachable outcome is `actionInapplicable` is a dead end the offer
         // owner already knows about.
-        await mountShell(createHarness({ kindId: 'issue' }));
+        const { shell } = await mountShell(createHarness({ kindId: 'issue' }), { overlays: true });
 
         await chooseRow('Replace the duplicated normalizer');
 
-        const offered = offeredBulkActionLabels();
+        const offered = await offeredBulkActionLabels(shell);
         expect(offered).toEqual(['Ask', 'Fix']);
     });
 
     it('still offers a pull-request-only action to a pull-request set', async () => {
         // The positive twin: the filter above must narrow by subject, not
         // simply stop offering the third action.
-        await mountShell(createHarness());
+        const { shell } = await mountShell(createHarness(), { overlays: true });
 
         await chooseRow('Replace the duplicated normalizer');
 
-        const offered = offeredBulkActionLabels();
+        // The choice is one compact control; the list keeps its space (no inline group of full-width buttons).
+        expect(document.querySelector('[role="radiogroup"][aria-label="Action"]')).toBeNull();
+        const offered = await offeredBulkActionLabels(shell);
         expect(offered).toEqual(['Ask', 'Fix', 'Review', 'Explain this PR in chat']);
     });
 
     it('does not run a bulk action deleted from the authoritative catalog before the press', async () => {
         const harness = createHarness();
-        const { shell } = await mountShell(harness);
+        const { shell } = await mountShell(harness, { overlays: true });
         await chooseRow('Replace the duplicated normalizer');
-        expect(offeredBulkActionLabels()).toContain('Fix');
+        expect(await offeredBulkActionLabels(shell)).toContain('Fix');
         await chooseBulkAction(shell, 'Fix');
 
         // Another device deletes the built-in after this mount rendered the
@@ -1157,7 +1160,7 @@ describe('selecting several PRs & Issues rows', () => {
         expect(harness.lifecycle).toEqual([]);
         expect(harness.spawnInputs).toEqual([]);
         expect(harness.composerTransactions).toEqual([]);
-        expect(offeredBulkActionLabels()).not.toContain('Fix');
+        expect(await offeredBulkActionLabels(shell)).not.toContain('Fix');
     });
 
     it('keeps the count and the clear control when nothing configured applies', async () => {
@@ -1194,7 +1197,7 @@ describe('selecting several PRs & Issues rows', () => {
 
     it.each(['ui', 'agent'])('shows one truthful Stop control and shares cancellation with the %s caller', async (caller) => {
         const harness = createHarness({ deferProjectsRead: true });
-        const { shell, invokeMounted } = await mountShell(harness);
+        const { shell, invokeMounted } = await mountShell(harness, { overlays: true });
         await chooseRow('Replace the duplicated normalizer');
         await chooseBulkAction(shell, 'Fix');
 

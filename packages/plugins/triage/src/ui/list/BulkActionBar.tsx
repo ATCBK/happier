@@ -2,9 +2,9 @@ import * as React from 'react';
 import type { TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
 import {
   Button,
-  Form,
   List,
   Row,
+  Select,
   Stack,
   Progress,
   Status,
@@ -76,6 +76,8 @@ export type TriageBulkActionBarPropsV1 = Readonly<{
     destination: TriageBulkSessionDestinationV1;
     keys: readonly string[];
   }>) => void;
+  /** The reader's pick from the toolbar's Action menu (`TriageBulkActionPicker`); `null` takes the first offered. */
+  selectedActionId: string | null;
   retryable: boolean;
   onRetry: () => void;
   onCancel: () => void;
@@ -114,10 +116,15 @@ function destinationOf(actionId: string): TriageBulkSessionDestinationV1 | null 
 const NO_DESTINATIONS: readonly [] = Object.freeze([]);
 const IGNORE_PRESS = (): void => undefined;
 
-export function TriageBulkActionBar(props: TriageBulkActionBarPropsV1): React.ReactElement | null {
-  const text = usePluginTranslation();
+/**
+ * The configured actions a live selection is offered, in catalog order: the union across the selected subjects,
+ * decided by the ONE offer owner. Both the toolbar's Action menu and the bar read it, so they never disagree.
+ */
+function useTriageBulkOfferedActions(
+  actions: readonly TriageActionV1[],
+  selectedWorkflowSubjects: TriageBulkActionBarPropsV1['selectedWorkflowSubjects'],
+): Readonly<{ offered: readonly TriageActionV1[]; selectedKeys: readonly string[]; isSelectionMode: boolean }> {
   const snapshot = useListMultiSelectionSnapshot();
-  const selectedWorkflowSubjects = props.selectedWorkflowSubjects;
   const selectedKeys = React.useMemo(
     () => [...snapshot.selectedKeys],
     [snapshot.selectedKeys],
@@ -130,23 +137,63 @@ export function TriageBulkActionBar(props: TriageBulkActionBarPropsV1): React.Re
     [selectedKeys, selectedWorkflowSubjects],
   );
   const offered = React.useMemo(() => {
-    const offerable = planTriageOfferableActionsV1(props.actions);
+    const offerable = planTriageOfferableActionsV1(actions);
     if (subjects.length === 0) return offerable;
-    // The union across the selected subjects, decided by the ONE offer owner
-    // and then read back in configured catalog order — the order is a person's
-    // configuration, not something this bar reapplies.
+    // The union across the selected subjects, read back in configured catalog
+    // order — the order is a person's configuration, not something this bar reapplies.
     const applicable = new Set<TriageActionV1>();
     for (const subject of subjects) {
-      for (const action of planTriageOfferedActionsV1(props.actions, subject)) applicable.add(action);
+      for (const action of planTriageOfferedActionsV1(actions, subject)) applicable.add(action);
     }
     return offerable.filter((candidate) => applicable.has(candidate));
-  }, [props.actions, subjects]);
-  const [selectedActionId, setSelectedActionId] = React.useState<string | null>(null);
+  }, [actions, subjects]);
+  return { offered, selectedKeys, isSelectionMode: snapshot.isSelectionMode };
+}
+
+/**
+ * Which configured action a bulk press applies: one compact menu ("Action · Ask") in the list toolbar beside
+ * "Done selecting". The selection keeps the list's space; the destinations stay in the floating bar.
+ */
+export function TriageBulkActionPicker(props: Readonly<{
+  actions: readonly TriageActionV1[];
+  selectedWorkflowSubjects: TriageBulkActionBarPropsV1['selectedWorkflowSubjects'];
+  selectedActionId: string | null;
+  disabled?: boolean;
+  onChange: (actionId: string) => void;
+}>): React.ReactElement | null {
+  const text = usePluginTranslation();
+  const { offered, isSelectionMode } = useTriageBulkOfferedActions(props.actions, props.selectedWorkflowSubjects);
+  if (!isSelectionMode || offered.length < 2) return null;
+  const action = offered.find((candidate) => candidate.actionId === props.selectedActionId) ?? offered[0]!;
+  return (
+    <Select
+      label={text('plugins.triage.surface.bulk.action', 'Action')}
+      presentation="menu"
+      options={offered.map((candidate) => {
+        const titleKey = readTriageActionTitleKeyV1(candidate);
+        return {
+          value: candidate.actionId,
+          label: titleKey === null ? candidate.label : text(titleKey, candidate.label),
+        };
+      })}
+      value={action.actionId}
+      disabled={props.disabled === true}
+      onChange={(value) => {
+        if (typeof value === 'string') props.onChange(value);
+      }}
+    />
+  );
+}
+
+export function TriageBulkActionBar(props: TriageBulkActionBarPropsV1): React.ReactElement | null {
+  const text = usePluginTranslation();
+  const snapshot = useListMultiSelectionSnapshot();
+  const { offered, selectedKeys } = useTriageBulkOfferedActions(props.actions, props.selectedWorkflowSubjects);
   // The reader's own pick when they made one and it still exists; otherwise the
   // first offered action. Reading it this way rather than syncing state in an
   // effect means a catalog that changes under the bar can never leave it
   // pointing at an action that is gone.
-  const action = offered.find((candidate) => candidate.actionId === selectedActionId) ?? offered[0];
+  const action = offered.find((candidate) => candidate.actionId === props.selectedActionId) ?? offered[0];
   const destinations = React.useMemo(() => action === undefined
     ? []
     : DESTINATIONS.map((candidate) => ({
@@ -188,23 +235,6 @@ export function TriageBulkActionBar(props: TriageBulkActionBarPropsV1): React.Re
 
   return (
     <Stack gap="small">
-      {offered.length < 2 ? null : (
-        <Form.Select
-          label={text('plugins.triage.surface.bulk.action', 'Action')}
-          options={offered.map((candidate) => {
-            const titleKey = readTriageActionTitleKeyV1(candidate);
-            return {
-              value: candidate.actionId,
-              label: titleKey === null ? candidate.label : text(titleKey, candidate.label),
-            };
-          })}
-          value={action.actionId}
-          disabled={busy}
-          onChange={(value) => {
-            if (typeof value === 'string') setSelectedActionId(value);
-          }}
-        />
-      )}
       <List.SelectionActionBar
         accessibilityLabel={text('plugins.triage.surface.bulk.label', 'Bulk actions')}
         testID="triage-bulk-action-bar"
