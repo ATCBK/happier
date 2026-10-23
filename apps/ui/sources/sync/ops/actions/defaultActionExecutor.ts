@@ -715,6 +715,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         }>) => void;
     }>;
   }>;
+  /** Captured local file sources for this invocation; approval stores descriptors only. */
+  discussionAttachmentSources?: readonly import('@/sync/domains/attachments/prepareAttachmentPayloads').PreparedAttachmentSource[];
   /** Selected-Machine hook delivery; Action admission and approval stay in this executor. */
   pluginSessionHookManagementAction?: NonNullable<ActionExecutorDeps['pluginSessionHookManagementAction']>;
   /** Trusted per-invocation precondition, evaluated on the metadata CAS candidate. */
@@ -966,7 +968,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   const executePluginPermissionGrantAction = createPluginPermissionGrantHttpActionExecutor(accountContext ? { request: accountContext.request } : undefined);
   const executePluginWebhookAction = createPluginWebhookEndpointHttpActionExecutor(accountContext ? { request: accountContext.request } : undefined);
   const approvalCoordinator = getSharedBlockingApprovalCoordinator();
-  const capturedFamilyPorts = accountContext ? createCapturedScopeFamilyPorts(accountContext) : null;
+  const capturedFamilyPorts = accountContext ? createCapturedScopeFamilyPorts(accountContext, opts?.discussionAttachmentSources) : null;
   const machineAccessAction = opts?.machineAccessAction ?? capturedFamilyPorts?.machineAccessAction;
   const settingsHost = resolveSettingsHost();
   const accountRoleAction = accountContext ? createAccountRoleActionExecutorV1({
@@ -4514,7 +4516,8 @@ function assertExpectedActionAccount(account: Pick<LazyActionAccountContext, 'ac
  * transport owner — its authorization, feature, encryption and freshness
  * checks stay there — and only add the currentness of the captured scope.
  */
-function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Readonly<{
+function createCapturedScopeFamilyPorts(account: LazyActionAccountContext,
+  discussionAttachmentSources?: readonly import('@/sync/domains/attachments/prepareAttachmentPayloads').PreparedAttachmentSource[]): Readonly<{
   sessionAccessAction: NonNullable<ActionExecutorDeps['sessionAccessAction']>;
   machineAccessAction: NonNullable<ActionExecutorDeps['machineAccessAction']>;
   machineWorkSummaryGet: NonNullable<ActionExecutorDeps['machineWorkSummaryGet']>;
@@ -4690,7 +4693,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
       account.assertCurrent();
       const availability = await readCollaborationAvailability();
       const { executeDiscussionActionInAccountContext } = await import('@/sync/api/discussions/discussionActions');
-      const result = await executeDiscussionActionInAccountContext(account, availability, args);
+      const result = await executeDiscussionActionInAccountContext(account, availability, args, discussionAttachmentSources);
       account.assertResultCurrent(getActionSpec(args.actionId).sideEffectClass);
       return result;
     },

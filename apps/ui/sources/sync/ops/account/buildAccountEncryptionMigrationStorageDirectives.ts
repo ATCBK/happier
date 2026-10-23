@@ -47,7 +47,7 @@ import { buildSessionOrganizationAccountEncryptionMigrationDirective } from '@/s
 import { buildAccountEncryptionMigrationAutomations } from './buildAccountEncryptionMigrationAutomations';
 import { decodeAccountStoredJsonContent, encodeAccountStoredJsonContent } from '@/sync/encryption/accountStoredJsonContent';
 import type { DiscussionAccountEncryptionInventoryV1, AccountEncryptionMigrateDiscussionsDirectiveV1 } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
-import { buildAccountEncryptionDiscussionsDirective } from './buildAccountEncryptionDiscussionsDirective';
+import { buildAccountEncryptionDiscussionsDirective, type DiscussionMigrationAttachmentTransport } from './buildAccountEncryptionDiscussionsDirective';
 
 export type AccountEncryptionMigrationMachineRow = Readonly<{
     id: string;
@@ -694,6 +694,8 @@ export async function buildAccountEncryptionMigrationStorageDirectives(
         workspace?: readonly AccountEncryptionMigrationKvRow[];
         artifacts: readonly AccountEncryptionMigrationArtifactRow[];
         discussionsInventory?: DiscussionAccountEncryptionInventoryV1;
+        readDiscussionAttachment?: DiscussionMigrationAttachmentTransport['readAttachment'];
+        stageDiscussionAttachment?: DiscussionMigrationAttachmentTransport['stageAttachment'];
         sessions: readonly AccountEncryptionMigrationSessionRow[];
         reviewCommentsInventory:
             ReviewCommentAccountEncryptionMigrationInventoryResponseV1;
@@ -799,6 +801,7 @@ export async function buildAccountEncryptionMigrationStorageDirectives(
         ...(params.discussionsInventory ? { discussions: await buildAccountEncryptionDiscussionsDirective({
             inventory: params.discussionsInventory, fromMode: params.fromMode, toMode: params.toMode,
             sourceEncryption: params.sourceEncryption, targetEncryption: params.targetEncryption, scope: params.scope,
+            readAttachment: params.readDiscussionAttachment, stageAttachment: params.stageDiscussionAttachment,
         }) } : {}),
         machines,
         todos,

@@ -10,6 +10,15 @@ import type { Encryption } from '@/sync/encryption/encryption';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import type { ServerFetch } from '@/sync/http/client';
 import { assertAccountEncryptionMigrationScopeCurrent, type AccountEncryptionMigrationScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import { DiscussionMessageContentV1StoredSchema, readDiscussionAttachmentReferencesV1 } from '@happier-dev/protocol/discussions/content';
+import { BinaryBlobAccountEncryptionStageV1Schema, type BinaryBlobAccountEncryptionStageV1, type BinaryBlobStoredContentV1 } from '@happier-dev/protocol/storage/binaryBlobV1';
+import { createBinaryContentEncryption, hashBinaryContent, openBinaryContent, sealBinaryContent } from '@/sync/encryption/binaryContent';
+import { decodeBase64 } from '@/encryption/base64';
+
+export type DiscussionMigrationAttachmentTransport = Readonly<{
+    readAttachment?: (discussionId: string, messageId: string, blobId: string) => Promise<Readonly<{ blobId: string; content: BinaryBlobStoredContentV1 }>>;
+    stageAttachment?: (discussionId: string, messageId: string, blobId: string, content: BinaryBlobStoredContentV1) => Promise<BinaryBlobAccountEncryptionStageV1>;
+}>;
 
 export async function fetchAccountEncryptionMigrationDiscussionInventory(input: Readonly<{
     request: ServerFetch; token: string; scope: AccountEncryptionMigrationScope;
@@ -32,7 +41,7 @@ export async function fetchAccountEncryptionMigrationDiscussionInventory(input: 
 export async function buildAccountEncryptionDiscussionsDirective(input: Readonly<{
     inventory: DiscussionAccountEncryptionInventoryV1; fromMode: 'plain' | 'e2ee'; toMode: 'plain' | 'e2ee';
     sourceEncryption: Encryption | null; targetEncryption: Encryption | null; scope: AccountEncryptionMigrationScope;
-}>): Promise<AccountEncryptionMigrateDiscussionsDirectiveV1> {
+}> & DiscussionMigrationAttachmentTransport): Promise<AccountEncryptionMigrateDiscussionsDirectiveV1> {
     const items: AccountEncryptionMigrateDiscussionsDirectiveV1['items'] = [];
     for (const row of input.inventory.items) {
         assertAccountEncryptionMigrationScopeCurrent(input.scope);
@@ -54,7 +63,45 @@ export async function buildAccountEncryptionDiscussionsDirective(input: Readonly
             return sealed.content;
         };
         const messages = [];
-        for (const message of row.messages) messages.push({ id: message.id, expectedContent: message.content, content: await convert(message.content) });
+        for (const message of row.messages) {
+            const opened = await openSessionStoredContent(source, message.content);
+            if (opened.status !== 'ready') throw new Error('Discussion migration content unavailable');
+            const content = DiscussionMessageContentV1StoredSchema.parse(opened.value);
+            const references = readDiscussionAttachmentReferencesV1(content);
+            const byBlobId = new Map(references.map(reference => [reference.blobId, reference]));
+            const bindings = message.attachments ?? [];
+            if (references.some(reference => {
+                const canonical = byBlobId.get(reference.blobId)!;
+                return reference.sizeBytes !== canonical.sizeBytes || reference.sha256 !== canonical.sha256 || reference.mime !== canonical.mime;
+            }) || byBlobId.size !== bindings.length
+                || new Set(bindings.map(binding => binding.blobId)).size !== bindings.length
+                || bindings.some(binding => binding.encryptionMode !== input.fromMode || !byBlobId.has(binding.blobId))) {
+                throw new Error('Discussion migration attachment census changed');
+            }
+            const attachments = [];
+            // Open and stage one leaf at a time; folder directories have no physical bytes.
+            for (const binding of bindings) {
+                assertAccountEncryptionMigrationScopeCurrent(input.scope);
+                if (!input.readAttachment || !input.stageAttachment) throw new Error('Discussion migration attachment transport unavailable');
+                const stored = await input.readAttachment(row.discussionId, message.id, binding.blobId);
+                assertAccountEncryptionMigrationScopeCurrent(input.scope);
+                if (stored.blobId !== binding.blobId) throw new Error('Discussion migration attachment identity changed');
+                const bytes = await openBinaryContent({ reference: byBlobId.get(binding.blobId)!, content: stored.content,
+                    mode: input.fromMode, encryption: sourceKey?.mode === 'e2ee' ? createBinaryContentEncryption(sourceKey.dataKey) : null });
+                const expectedContentSha256 = hashBinaryContent(decodeBase64(stored.content.t === 'plain' ? stored.content.v : stored.content.c));
+                const targetContent = await sealBinaryContent(bytes, input.toMode,
+                    targetKey.mode === 'e2ee' ? createBinaryContentEncryption(targetKey.dataKey) : null);
+                assertAccountEncryptionMigrationScopeCurrent(input.scope);
+                const staged = BinaryBlobAccountEncryptionStageV1Schema.parse(await input.stageAttachment(row.discussionId, message.id, binding.blobId, targetContent));
+                assertAccountEncryptionMigrationScopeCurrent(input.scope);
+                if (staged.t !== targetContent.t || staged.contentSha256 !== hashBinaryContent(decodeBase64(
+                    targetContent.t === 'plain' ? targetContent.v : targetContent.c))) throw new Error('Discussion migration attachment upload integrity changed');
+                attachments.push({ blobId: binding.blobId, expectedContentSha256, content: staged });
+            }
+            const sealed = await sealSessionStoredContent(target, StrictJsonValueSchema.parse(content));
+            if (sealed.status !== 'ready') throw new Error('Discussion migration target key unavailable');
+            messages.push({ id: message.id, expectedContent: message.content, content: sealed.content, attachments });
+        }
         items.push({ discussionId: row.discussionId, expectedDataEncryptionKey: row.dataEncryptionKey,
             dataEncryptionKey: targetKey.dataEncryptionKey ?? ARTIFACT_PLAIN_DATA_KEY_MARKER,
             expectedTitleContent: row.titleContent, titleContent: await convert(row.titleContent), messages,

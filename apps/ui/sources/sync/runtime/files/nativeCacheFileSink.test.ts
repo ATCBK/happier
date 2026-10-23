@@ -113,6 +113,32 @@ describe('native cache sink resource ownership', () => {
     });
     afterEach(() => { vi.resetModules(); vi.restoreAllMocks(); });
 
+    it('stages binary upload chunks through the native file owner and removes custody on request failure', async () => {
+        vi.doMock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
+        const { requestDiscussionAttachmentUpload } = await import('@/sync/api/discussions/discussionAttachmentTransport');
+        const { DiscussionAttachmentUploadRequestV1Schema } = await import('@happier-dev/protocol/discussions/attachmentsUpload');
+        const blobId = 'e8eb80ae-7e18-4bbe-8c0e-c9d762787a86';
+        let reads = 0;
+        async function* bytes() {
+            reads++;
+            expect(files.size).toBe(1);
+            yield new Uint8Array([1]);
+            expect([...files.values()][0]?.at(-1)).toBe(1);
+            reads++;
+            yield new Uint8Array([2]);
+        }
+        const metadata = DiscussionAttachmentUploadRequestV1Schema.parse({ operation: 'encryption-conversion',
+            input: { discussionId: 'discussion', messageId: 'message', blobId },
+            attachments: [{ blobId, t: 'plain', storedSizeBytes: 2 }] });
+        await expect(requestDiscussionAttachmentUpload({ request: async (_path, init) => {
+            expect(init?.body).toHaveProperty('uri');
+            expect([...files.values()][0]?.slice(-2)).toEqual([1, 2]);
+            throw new Error('interrupted upload');
+        } }, metadata, [{ storedSizeBytes: 2, bytes: bytes() }])).rejects.toMatchObject({ code: 'outcome_unknown' });
+        expect(reads).toBe(2);
+        expect(files.size).toBe(0);
+    });
+
     it('isolates repeated destinations without replacing a live cache file', async () => {
         const { createNativeCacheFileSink } = await import('./nativeCacheFileSink');
         const input = { directoryName: 'happier-downloads', fileName: 'recording.mp4' };

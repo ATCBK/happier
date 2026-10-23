@@ -53,6 +53,8 @@ import type { Profile } from '@/sync/domains/profiles/profile';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import type { AuthContextType } from '@/auth/context/AuthContext';
 import { fetchAccountSecurity } from '@/sync/api/auth/accountSecurity';
+import { readDiscussionAttachmentStoredContent, stageDiscussionAttachmentAccountEncryptionConversion,
+    cancelDiscussionAttachmentAccountEncryptionConversion } from '@/sync/api/discussions/discussionAttachmentTransport';
 
 class AccountEncryptionScopeChangedError extends Error {
     constructor() {
@@ -94,6 +96,7 @@ export async function convertAccountEncryptionMode(params: Readonly<{
     const nextMode = params.toMode;
     let capturedRequest: Awaited<ReturnType<typeof captureAccountSettingsRequest>> = null;
     const stagedArtifactUploads: string[] = [];
+    const stagedDiscussionUploads: string[] = [];
     let retainStagedArtifactUploads = false;
     let firstKeyArtifactCustody: Parameters<typeof shouldRetainAccountEncryptionMigrationArtifactUploads>[0]['firstKey'];
     let cancelStagedArtifactUploads: (() => Promise<void>) | null = null;
@@ -119,8 +122,10 @@ export async function convertAccountEncryptionMode(params: Readonly<{
             ...(target.homeCarrier ? { homeCarrier: target.homeCarrier } : {}),
         });
         cancelStagedArtifactUploads = async () => {
-            await Promise.allSettled(stagedArtifactUploads.map(uploadId =>
-                cancelArtifactBlobAccountEncryptionConversion(credentials, uploadId, { request: cleanupRequest })));
+            await Promise.allSettled([
+                ...stagedArtifactUploads.map(uploadId => cancelArtifactBlobAccountEncryptionConversion(credentials, uploadId, { request: cleanupRequest })),
+                ...stagedDiscussionUploads.map(uploadId => cancelDiscussionAttachmentAccountEncryptionConversion({ request: cleanupRequest, uploadId })),
+            ]);
         };
         if (!capturedRequest.isCurrent()) return null;
         if (
@@ -286,6 +291,18 @@ export async function convertAccountEncryptionMode(params: Readonly<{
                 workspace: workspaceRows,
                 artifacts: artifactRows,
                 discussionsInventory,
+                readDiscussionAttachment: (discussionId, messageId, blobId) => readDiscussionAttachmentStoredContent({
+                    request: homeRequest, discussionId, messageId, blobId,
+                }, params.signal),
+                stageDiscussionAttachment: async (discussionId, messageId, blobId, content) => {
+                    requireCurrentScope();
+                    const staged = await stageDiscussionAttachmentAccountEncryptionConversion({
+                        request: homeRequest, discussionId, messageId, blobId, content,
+                    }, params.signal);
+                    stagedDiscussionUploads.push(staged.uploadId);
+                    requireCurrentScope();
+                    return staged;
+                },
                 readArtifactRecipients: createArtifactAccessApi(credentials, { request: homeRequest }).readRecipients,
                 readArtifactBlob: (artifactId, blobId) => fetchArtifactBlob(credentials, artifactId, blobId, currentness.mode, { request: homeRequest }),
                 stageArtifactBlob: async (artifactId, blobId, content) => {

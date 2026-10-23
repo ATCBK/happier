@@ -22,6 +22,7 @@ import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/m
 import type { DiscussionAttentionResultV1 } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionAttentionQueryV1 } from '@happier-dev/protocol/discussions/api';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import type { PreparedAttachmentSource } from '@/sync/domains/attachments/prepareAttachmentPayloads';
 
 export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createDiscussionClient>,
     'participants' | 'setParticipantPolicy' | 'invite' | 'inviteExecutableParticipant' | 'removeParticipant' | 'leave' | 'transferOwner' | 'listGrants' | 'setGrant' | 'removeGrant' | 'getSettings' | 'setSettings'> & {
@@ -29,8 +30,8 @@ export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createD
     list(input?: DiscussionListInputV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionListResultV1>>;
     get(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
     read: ReturnType<typeof createDiscussionClient>['read'];
-    create(input: Readonly<{ creationLocalId: string; messageLocalId: string; title: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; anchor?: DiscussionAnchorV1; participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][]; onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>>;
-    post(input: Readonly<{ discussionId: string; localId: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionPostResultV1>>;
+    create(input: Readonly<{ creationLocalId: string; messageLocalId: string; title: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; anchor?: DiscussionAnchorV1; participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][]; onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void; replyTarget?: DiscussionReplyTargetV1; attachmentSources?: readonly PreparedAttachmentSource[] }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>>;
+    post(input: Readonly<{ discussionId: string; localId: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; replyTarget?: DiscussionReplyTargetV1; attachmentSources?: readonly PreparedAttachmentSource[] }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionPostResultV1>>;
     rename(discussionId: string, title: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
     archive(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
     restore(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
@@ -64,6 +65,8 @@ type CreateIntent = Readonly<{
     participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][];
     replyTarget?: DiscussionReplyTargetV1;
     draftSubmission: DiscussionDraftSubmission;
+    /** Process-local capture only; mutation snapshots persist immutable content descriptors. */
+    attachmentSources?: readonly PreparedAttachmentSource[];
 }>;
 
 type PostIntent = Readonly<{
@@ -75,6 +78,7 @@ type PostIntent = Readonly<{
     mentionedSessionIds?: readonly string[];
     replyTarget?: DiscussionReplyTargetV1;
     draftSubmission: DiscussionDraftSubmission;
+    attachmentSources?: readonly PreparedAttachmentSource[];
 }>;
 
 type MutationIntent = CreateIntent | PostIntent;
@@ -1184,6 +1188,21 @@ export function createDiscussionRepository(options: Readonly<{
         getListSnapshot,
         getDocListSnapshot: (artifactId: string) => getListSnapshot({ anchorDocArtifactId: artifactId }).lists.active,
         subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener); },
+        /** Dependent private reads share the resource's existing currentness and access-loss owner. */
+        captureReadOperation(discussionId: string) {
+            const operation = captureOperation(discussionId);
+            return {
+                isCurrent: () => isCurrentOperation(operation),
+                observeFailure(errorCode: string) {
+                    if (!isCurrentOperation(operation) || !isExplicitAccessLoss(errorCode)) return;
+                    purgeDiscussion(discussionId, errorCode);
+                },
+            };
+        },
+        /** Existing access epochs, not message arrivals, identify an admitted read lifetime. */
+        getReadCurrentnessKey(discussionId: string) {
+            return `${accessLossEpoch}:${resourceEpochs.get(discussionId) ?? 0}`;
+        },
         setClient(nextClient: DiscussionRepositoryClient) { client = nextClient; },
         refreshList,
         refreshDocList: (artifactId: string, signal?: AbortSignal) => refreshList('active', signal, { anchorDocArtifactId: artifactId }, { complete: true }),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, DiscussionListResponseV1Schema, DiscussionPostRequestV1Schema, type DiscussionCreateRequestV1, type DiscussionCreateResponseV1, type DiscussionPostRequestV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionListResultV1Schema, DiscussionPostResultV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
@@ -17,6 +17,11 @@ import { readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/d
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
+import { hashBinaryContent, createBinaryContentEncryption, openBinaryContent } from '@/sync/encryption/binaryContent';
+import { executeDocDiscussionWriteV1 } from '@happier-dev/protocol/actions/executor/docCollaborationActions';
+
+// Browser HTTP is this suite's platform boundary; native URI custody has its own real-sink tests.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Ready?' }] };
@@ -99,6 +104,122 @@ async function adapter(mode: 'plain' | 'e2ee', transport: ReturnType<typeof http
         accountMode: mode, encryption, ownerContentPublicKeyFingerprint, availability: 'available' });
 }
 const context = { surface: 'ui' as const, serverId: scope.serverId };
+
+describe('Discussion attachment byte transport', () => {
+    it.each([false, true])('retains a committed effect as uncertain when its captured Account retires (byte frame: %s)', async binary => {
+        const transport = http('plain');
+        let current = true;
+        const bytes = new Uint8Array([4, 5]);
+        const reference = { blobId: 'e8eb80ae-7e18-4bbe-8c0e-c9d762787a86', mime: 'application/octet-stream', sizeBytes: bytes.length, sha256: hashBinaryContent(bytes) };
+        const content = binary ? { v: 1 as const, parts: [{ t: 'attachment' as const,
+            attachment: { kind: 'file' as const, id: reference.blobId, name: 'data.bin', file: reference } }] } : input.firstMessage.content;
+        const execute = createDiscussionActionAdapter({ scope, accountMode: 'plain', encryption: null, availability: 'available',
+            assertCurrent: () => { if (!current) throw Object.assign(new Error('Account changed'), { code: 'action_account_scope_changed' }); },
+            attachmentSources: binary ? [{ reference, source: { kind: 'memory', name: 'data.bin', bytes } }] : undefined,
+            request: async (path, init) => {
+                if (init?.method !== 'POST') return transport.request(path, init);
+                let result: Response;
+                if (path === '/v1/discussions/upload') {
+                    const frame = new Uint8Array(await new Response(init.body).arrayBuffer());
+                    const metadata = JSON.parse(new TextDecoder().decode(frame.subarray(0, frame.indexOf(10))));
+                    result = await transport.request('/v1/discussions', { ...init, body: JSON.stringify(metadata.input) });
+                } else result = await transport.request(path, init);
+                current = false;
+                return result;
+            } });
+        expect(await execute({ actionId: 'discussion.create', input: { ...input, firstMessage: { ...input.firstMessage, content } }, context }))
+            .toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
+        expect(transport.creates).toHaveLength(1);
+        expect(await execute({ actionId: 'discussion.get', input: { discussionId: 'discussion-a' }, context }))
+            .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+        expect(transport.creates).toHaveLength(1);
+    });
+    it.each([false, true])('keeps cancellation after a dispatched write uncertain (byte frame: %s)', async binary => {
+        const transport = http('plain');
+        const controller = new AbortController();
+        const bytes = new Uint8Array([4, 5]);
+        const reference = { blobId: 'e8eb80ae-7e18-4bbe-8c0e-c9d762787a86', mime: 'application/octet-stream', sizeBytes: bytes.length, sha256: hashBinaryContent(bytes) };
+        const content = binary ? { v: 1 as const, parts: [{ t: 'attachment' as const,
+            attachment: { kind: 'file' as const, id: reference.blobId, name: 'data.bin', file: reference } }] } : input.firstMessage.content;
+        const execute = createDiscussionActionAdapter({ scope, accountMode: 'plain', encryption: null, availability: 'available',
+            attachmentSources: binary ? [{ reference, source: { kind: 'memory', name: 'data.bin', bytes } }] : undefined,
+            request: async (path, init) => {
+                if (init?.method !== 'POST') return transport.request(path, init);
+                if (path === '/v1/discussions/upload') {
+                    const frame = new Uint8Array(await new Response(init.body).arrayBuffer());
+                    const metadata = JSON.parse(new TextDecoder().decode(frame.subarray(0, frame.indexOf(10))));
+                    await transport.request('/v1/discussions', { ...init, body: JSON.stringify(metadata.input) });
+                } else await transport.request(path, init);
+                controller.abort();
+                throw new DOMException('Response canceled after commit', 'AbortError');
+            } });
+        expect(await execute({ actionId: 'discussion.create', input: { ...input, firstMessage: { ...input.firstMessage, content } }, context, signal: controller.signal }))
+            .toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
+        expect(transport.creates).toHaveLength(1);
+        const beforeDispatch = new AbortController();
+        beforeDispatch.abort();
+        expect(await execute({ actionId: 'discussion.create', input, context, signal: beforeDispatch.signal }))
+            .toMatchObject({ ok: false, errorCode: 'canceled' });
+        expect(transport.creates).toHaveLength(1);
+    });
+    it.each([
+        { mode: 'plain', doc: false }, { mode: 'e2ee', doc: false },
+        { mode: 'plain', doc: true }, { mode: 'e2ee', doc: true },
+    ] as const)('commits first-message $mode bytes through the canonical writer (Doc comment: $doc)', async ({ mode, doc }) => {
+        const transport = http(mode);
+        const bytes = new Uint8Array([0, 255, 13, 10]);
+        const reference = { blobId: 'e8eb80ae-7e18-4bbe-8c0e-c9d762787a86', mime: 'image/png', sizeBytes: bytes.length, sha256: hashBinaryContent(bytes) };
+        const textContent = { v: 1 as const, parts: [{ t: 'attachment' as const,
+            attachment: { kind: 'file' as const, id: reference.blobId, name: 'private.png', file: reference } }] };
+        const passage = { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: scope.serverId },
+            revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 1 }, quote: 'x' };
+        const content = doc ? { kind: 'doc_passage_comment' as const, passage, content: textContent } : textContent;
+        const uploads: Uint8Array[] = [];
+        let attachmentReads = 0;
+        let tamper = false;
+        const secret = new Uint8Array(32).fill(7);
+        const encryption = mode === 'e2ee' ? await Encryption.create(secret) : null;
+        const ownerContentPublicKeyFingerprint = mode === 'e2ee' ? createAccountScopedCryptoMaterialSnapshotV1({
+            accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint : undefined;
+        const execute = createDiscussionActionAdapter({ scope, encryption, accountMode: mode, ownerContentPublicKeyFingerprint,
+            availability: 'available', attachmentSources: [{ reference, source: { kind: 'memory', name: 'private.png', bytes } }],
+            request: async (path, init) => {
+                if (path === `/v1/discussions/discussion-a/messages/committed-message/attachments/${reference.blobId}`) {
+                    attachmentReads++;
+                    const body = tamper ? new Uint8Array([1, 2, 3, 4]) : uploads[0]!;
+                    return json({ blobId: reference.blobId, content: mode === 'plain'
+                        ? { t: 'plain', v: encodeBase64(body) } : { t: 'encrypted', c: encodeBase64(body) } });
+                }
+                if (path !== '/v1/discussions/upload') return transport.request(path, init);
+                const frame = new Uint8Array(await new Response(init?.body).arrayBuffer());
+                const newline = frame.indexOf(10);
+                const metadata = JSON.parse(new TextDecoder().decode(frame.subarray(0, newline)));
+                expect(metadata.operation).toBe('create');
+                expect(metadata.attachments).toEqual([{ blobId: reference.blobId, t: mode === 'plain' ? 'plain' : 'encrypted', storedSizeBytes: frame.length - newline - 1 }]);
+                if (mode === 'e2ee') expect(new TextDecoder().decode(frame.subarray(0, newline))).not.toContain('private.png');
+                uploads.push(frame.subarray(newline + 1));
+                return transport.request('/v1/discussions', { ...init, body: JSON.stringify(metadata.input) });
+            } });
+        const result = doc ? await executeDocDiscussionWriteV1('doc.comment.reply', { target: passage, localId: 'doc-root', content: textContent }, context, execute)
+            : await execute({ actionId: 'discussion.create', input: { ...input, firstMessage: { ...input.firstMessage, content } }, context });
+        expect(result).toMatchObject(doc ? { ok: true, result: { message: { content } } } : { firstMessage: { content } });
+        expect(uploads).toHaveLength(1);
+        const stored = transport.readStored()!;
+        const dataKey = mode === 'e2ee' ? await encryption!.decryptEncryptionKey(stored.discussion.dataEncryptionKey!, scope) : null;
+        expect(await openBinaryContent({ reference, mode, encryption: dataKey ? createBinaryContentEncryption(dataKey) : null,
+            content: mode === 'plain' ? { t: 'plain', v: encodeBase64(uploads[0]!) } : { t: 'encrypted', c: encodeBase64(uploads[0]!) } })).toEqual(bytes);
+        expect(attachmentReads).toBe(0);
+        const readInput = { discussionId: 'discussion-a', messageId: 'committed-message', blobId: reference.blobId };
+        expect(await execute({ actionId: 'discussion.attachment.read', input: readInput, context }))
+            .toEqual({ ...reference, bytesBase64: encodeBase64(bytes) });
+        tamper = true;
+        expect(await execute({ actionId: 'discussion.attachment.read', input: readInput, context }))
+            .toMatchObject({ ok: false, errorCode: 'binary_content_unavailable' });
+        expect(await execute({ actionId: 'discussion.attachment.read', input: { ...readInput, blobId: '1aaa2291-6e0b-4547-95b6-5a1238440820' }, context }))
+            .toMatchObject({ ok: false, errorCode: 'discussion_content_unavailable' });
+        expect(attachmentReads).toBe(2);
+    });
+});
 
 describe('Discussion UI Action adapter', () => {
     it.each(['plain', 'e2ee'] as const)('preserves a canonical Task anchor and reply target through the %s resource codec', async mode => {
