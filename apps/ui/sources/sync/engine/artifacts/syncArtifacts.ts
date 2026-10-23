@@ -735,25 +735,41 @@ export async function fetchAndApplyArtifactsList(params: {
             if (!shouldContinue()) return;
             if (frontier.status !== 'ok') throw new Error('Artifact inventory changes are unavailable');
             if (Number(frontier.cursor) < Number(cursor)) cursor = null;
-            let needsHeaderInventory = false;
+            const changedIds = new Set<string>();
             // Private attribution is demanded only by the open Artifact browser;
             // it is deliberately absent from the device header projection.
-            if (params.includeProvenance) needsHeaderInventory = rows.some(row => !params.inventoryReadStartedWith?.[row.id]);
-            while (!needsHeaderInventory && cursor !== null && Number(cursor) < Number(frontier.cursor)) {
+            if (params.includeProvenance) {
+                for (const row of rows) if (!params.inventoryReadStartedWith?.[row.id]) changedIds.add(row.id);
+            }
+            while (cursor !== null && Number(cursor) < Number(frontier.cursor)) {
                 const page = await fetchChanges({ credentials, request: params.request, afterCursor: cursor,
                     limit: params.changesPageLimit ?? loadSyncTuning().changesPageLimit });
                 if (!shouldContinue()) return;
                 if (page.status === 'cursor-gone') { cursor = null; break; }
                 if (page.status !== 'ok') throw new Error('Artifact inventory changes are unavailable');
-                needsHeaderInventory = page.changes.some(change => change.kind === 'artifact');
+                for (const change of page.changes) if (change.kind === 'artifact') changedIds.add(change.entityId);
                 if (Number(page.nextCursor) <= Number(cursor)) throw new Error('Artifact inventory cursor did not reach its frontier');
                 cursor = page.nextCursor;
             }
-            // Changes carry identities, not a demand for document bodies. Refresh
-            // membership through the same paged header inventory as cold startup;
-            // exact reads remain owned by selected approval/notice/open consumers.
-            // Its pre-list cursor also covers changes racing this catch-up.
-            if (cursor !== null && !needsHeaderInventory) decryptedArtifacts = rows;
+            if (cursor !== null && changedIds.size === 0) decryptedArtifacts = rows;
+            if (cursor !== null && changedIds.size > 0) {
+                // A change identity demands only its current header. Body readers
+                // keep their own selected demand; missing identities remove rows.
+                const reads = await fetchArtifactReadBatch(credentials, [...changedIds], {
+                    request: params.request, readTransport: params.readTransport, signal: params.signal, projection: 'headers',
+                });
+                if (!shouldContinue()) return;
+                for (const item of reads) if (!item.ok && item.error !== 'artifact_not_found') {
+                    throw new HappyError(item.error, item.retryable, { code: item.error, status: item.status });
+                }
+                const opened = await decryptArtifactListItems({ artifacts: reads.flatMap(item => item.ok ? [item.artifact] : []),
+                    encryption, artifactDataKeys, includeProvenance: params.includeProvenance === true });
+                if (!shouldContinue()) return;
+                const byId = new Map(rows.map(row => [row.id, row]));
+                for (const item of reads) if (!item.ok) byId.delete(item.artifactId);
+                for (const row of opened) if (row) byId.set(row.id, row);
+                decryptedArtifacts = [...byId.values()];
+            }
         }
         if (decryptedArtifacts === null) {
             // Capture BEFORE listing: changes racing pagination remain replayable on

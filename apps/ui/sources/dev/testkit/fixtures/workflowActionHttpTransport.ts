@@ -24,6 +24,7 @@ import { createPlainProjectAccountRowListFixture } from './projectAccountRows';
 import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { createEmptyAccountBootstrapHttpResponse } from './accountBootstrapHttpBoundary';
+import { createArtifactListHttpResponse, createArtifactReadBatchHttpResponse } from '../harness/artifactStoreBoundary';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 function record(value: unknown): Record<string, unknown> {
@@ -101,8 +102,11 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
         } });
         if (target.pathname === '/v1/artifacts') {
             // Sync's header census reads the fixture's current storage snapshot.
-            // Only the body-inclusive Workflow library read consumes its scripted page.
-            if (target.searchParams.get('includeBody') !== 'true') return json(artifacts);
+            // Workflow selection now reads kind-filtered headers before opening
+            // only its selected bodies (7c4980006c).
+            if (target.searchParams.get('includeBody') !== 'true' && target.searchParams.get('kind') !== 'other') {
+                return createArtifactListHttpResponse(target, artifacts);
+            }
             const page = WorkflowDefinitionListResultV1Schema.parse(await reply('workflow.definition.list', {}));
             if (page.nextCursor || page.pluginWorkflows?.length) throw new Error('HTTP fixture requires real Artifact pagination/plugin transport');
             const seed = createWorkflowDefinitionFixture({ defaults: { agentTarget: {
@@ -114,7 +118,7 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
                     (_, ordinal) => ({ ...seed.blocks[0]!, id: `fixture-step-${ordinal}` }),
                 ) });
                 return {
-                    id: item.definitionId, ownerAccountId: item.ownerAccountId ?? requestAccountId, access: item.access ?? 'owner', encryptionMode: 'plain', publicAudience: 'none',
+                    kind: 'other', id: item.definitionId, ownerAccountId: item.ownerAccountId ?? requestAccountId, access: item.access ?? 'owner', encryptionMode: 'plain', publicAudience: 'none',
                     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                     header: encodePlainArtifactStoredContent('contentUnavailableReason' in item && item.contentUnavailableReason === 'invalid_header'
                         ? { kind: item.kind } : { kind: item.kind, definitionId: item.definitionId,
@@ -132,7 +136,14 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
                 triggers: item.triggers.map((trigger, index) => ({ ...trigger, id: `trigger-${index}`, enabled: true,
                     revision: 0, createdAt: 1, updatedAt: 1, nextRunAt: item.nextRunAt })),
             })), nextCursor: null });
-            return json(artifacts);
+            return createArtifactListHttpResponse(target, artifacts);
+        }
+        if (target.pathname === '/v1/artifacts/read') {
+            return createArtifactReadBatchHttpResponse(JSON.parse(String(init?.body)), artifactId => {
+                const artifact = artifacts.find(row => row.id === artifactId);
+                return artifact ? { artifactId, ok: true, artifact, recipientCensus: null }
+                    : { artifactId, ok: false, error: 'artifact_not_found', status: 404, retryable: false };
+            });
         }
         const artifactId = /^\/v1\/artifacts\/([^/]+)(?:\/revision\/\d+\/\d+)?$/.exec(target.pathname)?.[1];
         if (artifactId) {

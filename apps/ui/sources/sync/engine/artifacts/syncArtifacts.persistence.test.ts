@@ -10,6 +10,10 @@ import { CurrentCursorResponseSchema, ChangesResponseSchema } from '@happier-dev
 import { ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
+// Load the real graph before the shared per-test reachability reset. Cold source
+// transforms belong to collection, outside the hook's finite cleanup budget.
+await vi.importActual('@/sync/domains/machines/reachability/machineReachability');
+
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const currentCursor = (cursor: number) => json(CurrentCursorResponseSchema.parse({ cursor, changesFloor: 0 }));
 const scope = { serverId: 'inventory-home', accountId: 'inventory-person' };
@@ -52,12 +56,48 @@ describe('device-persisted Artifact inventory through the real writer and store'
         vi.resetModules(); // A new app process retains only device storage.
     }
 
-    it('catches up 35000 closed documents through header inventory without body demand or a replay loop', async () => {
-        await seed();
+    it('refreshes one changed header among 35000 retained documents with one exact header set read', async () => {
+        const rows = Array.from({ length: 35000 }, (_, index) => head(`closed-${index}`));
+        let offset = 0;
+        const first = await load(async path => {
+            if (path === '/v2/cursor') return currentCursor(10);
+            const query = new URL(path, 'https://inventory.test').searchParams;
+            const limit = Number(query.get('limit'));
+            const page = rows.slice(offset, offset + limit);
+            offset += page.length;
+            return json(page);
+        });
+        await first.completion;
+        vi.resetModules();
+        const changed = head('closed-173', 2);
+        let inventoryPages = 0;
+        const selections: unknown[] = [];
+        const next = await load(async (path, init) => {
+            if (path === '/v2/cursor') return currentCursor(11);
+            if (path.startsWith('/v2/changes?')) return json(ChangesResponseSchema.parse({ changes: [
+                { kind: 'artifact', entityId: changed.id, cursor: 11, changedAt: 2 },
+            ], nextCursor: 11 }));
+            if (path.startsWith('/v1/artifacts?')) { inventoryPages++; return json(rows); }
+            expect(path).toBe('/v1/artifacts/read');
+            selections.push(JSON.parse(String(init?.body)));
+            return json({ projection: 'headers', items: [{ artifactId: changed.id, ok: true, artifact: changed }] });
+        });
+        await next.completion;
+        expect(inventoryPages).toBe(0);
+        expect(selections).toEqual([{ artifactIds: [changed.id], projection: 'headers' }]);
+        expect(Object.keys(next.store.getState().artifacts)).toHaveLength(rows.length);
+        expect(next.store.getState().artifacts[changed.id]?.headerVersion).toBe(2);
+    });
+
+    it('catches up 35000 closed documents through exact header reads without body demand or a replay loop', async () => {
+        const first = await load(async path => path === '/v2/cursor' ? currentCursor(10) : json([]));
+        await first.completion;
+        vi.resetModules();
         const rows = Array.from({ length: 35000 }, (_, index) => head(`closed-${index}`));
         let bodyRequests = 0;
         let bodyIds = 0;
         let headerPages = 0;
+        let headerSetIds = 0;
         const request = async (path: string, init?: RequestInit) => {
             if (path === '/v2/cursor') return currentCursor(35010);
             if (path.startsWith('/v2/changes?')) {
@@ -69,8 +109,16 @@ describe('device-persisted Artifact inventory through the real writer and store'
                 })), nextCursor: after + changed.length }));
             }
             if (path === '/v1/artifacts/read') {
+                const input = JSON.parse(String(init?.body));
+                if (input.projection === 'headers') {
+                    headerSetIds += input.artifactIds.length;
+                    const byId = new Map(rows.map(row => [row.id, row]));
+                    return json({ projection: 'headers', items: input.artifactIds.map((artifactId: string) => ({
+                        artifactId, ok: true, artifact: byId.get(artifactId),
+                    })) });
+                }
                 bodyRequests += 1;
-                bodyIds += JSON.parse(String(init?.body)).artifactIds.length;
+                bodyIds += input.artifactIds.length;
                 return json({ error: 'artifact_content_unavailable' }, 500);
             }
             expect(path).toMatch(/^\/v1\/artifacts\?/);
@@ -85,6 +133,8 @@ describe('device-persisted Artifact inventory through the real writer and store'
         const failure = await next.completion.then(() => null, error => error);
         expect(bodyIds).toBe(0);
         expect(bodyRequests).toBe(0);
+        expect(headerPages).toBe(0);
+        expect(headerSetIds).toBe(rows.length);
         expect(failure).toBeNull();
         expect(Object.keys(next.store.getState().artifacts)).toHaveLength(rows.length);
         expect(next.store.getState().artifactsLoaded).toBe(true);
@@ -94,6 +144,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         await repeated.completion;
         expect(bodyRequests).toBe(0);
         expect(headerPages).toBe(completedPages);
+        expect(headerSetIds).toBe(rows.length);
         expect(repeated.store.getState().artifactsLoaded).toBe(true);
     });
 
@@ -114,7 +165,11 @@ describe('device-persisted Artifact inventory through the real writer and store'
             ], nextCursor: 11 }));
             if (path.startsWith('/v1/artifacts?')) return json([{ ...artifact, body: undefined }]);
             expect(path).toBe('/v1/artifacts/read');
-            expect(JSON.parse(String(init?.body)).artifactIds).toEqual([artifact.id]);
+            const input = JSON.parse(String(init?.body));
+            expect(input.artifactIds).toEqual([artifact.id]);
+            if (input.projection === 'headers') return json({ projection: 'headers', items: [
+                { artifactId: artifact.id, ok: true, artifact: { ...artifact, body: undefined } },
+            ] });
             return json(ArtifactReadBatchResponseV1Schema.parse({ items: [
                 { artifactId: artifact.id, ok: true, artifact, recipientCensus: null },
             ] }));
@@ -123,7 +178,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(next.store.getState().artifacts[artifact.id]?.header?.kind).toBe('approval_request.v1');
         expect(next.store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify(approval));
         expect(next.store.getState().artifactsLoaded).toBe(true);
-        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(true);
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
     });
 
     it('settles at the captured change frontier while unrelated Account writes continue', async () => {
@@ -206,14 +261,18 @@ describe('device-persisted Artifact inventory through the real writer and store'
         await seed();
         const gate = createDeferred<Response>();
         const paths: string[] = [];
-        const reloaded = await load(async path => {
+        const reloaded = await load(async (path, init) => {
             paths.push(path);
             if (path === '/v2/cursor') return currentCursor(12);
             if (path.startsWith('/v2/changes?after=10&')) return gate.promise;
             if (path.startsWith('/v2/changes?after=12&')) return json({ changes: [], nextCursor: 12 });
             if (path.startsWith('/v1/artifacts?')) return json([head('retained', 2)]);
-            expect(path).not.toBe('/v1/artifacts/read');
-            return json([]);
+            expect(path).toBe('/v1/artifacts/read');
+            expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: ['retained', 'deleted'], projection: 'headers' });
+            return json({ projection: 'headers', items: [
+                { artifactId: 'retained', ok: true, artifact: head('retained', 2) },
+                { artifactId: 'deleted', ok: false, error: 'artifact_not_found', status: 404, retryable: false },
+            ] });
         });
         try {
             await vi.waitFor(() => expect(reloaded.store.getState().artifacts.retained?.title).toBe('retained'));
@@ -228,7 +287,7 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(Object.keys(reloaded.store.getState().artifacts)).toEqual(['retained']);
         expect(reloaded.store.getState().artifacts.retained?.headerVersion).toBe(2);
         expect(reloaded.store.getState().artifactsLoaded).toBe(true);
-        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(true);
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
         vi.resetModules();
         const next = await load(async path => {
             if (path === '/v2/cursor') return currentCursor(12);
@@ -281,6 +340,32 @@ describe('device-persisted Artifact inventory through the real writer and store'
         expect(next.store.getState().artifacts.retained?.title).toBe('retained');
         expect(next.store.getState().artifactsLoaded).toBe(false);
         expect(paths.every(path => path === '/v2/cursor' || path.startsWith('/v2/changes?after=10&'))).toBe(true);
+    });
+
+    it('does not checkpoint a changed header refusal or replace the retained row with absence', async () => {
+        await seed();
+        const afters: string[] = [];
+        const request = async (path: string, init?: RequestInit) => {
+            if (path === '/v2/cursor') return currentCursor(11);
+            if (path.startsWith('/v2/changes?')) {
+                afters.push(new URL(path, 'https://inventory.test').searchParams.get('after')!);
+                return json(ChangesResponseSchema.parse({ changes: [
+                    { kind: 'artifact', entityId: 'retained', cursor: 11, changedAt: 2 },
+                ], nextCursor: 11 }));
+            }
+            expect(path).toBe('/v1/artifacts/read');
+            expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: ['retained'], projection: 'headers' });
+            return json({ projection: 'headers', items: [{ artifactId: 'retained', ok: false,
+                error: 'artifact_content_unavailable', status: 500, retryable: true }] });
+        };
+        const first = await load(request);
+        await expect(first.completion).rejects.toThrow();
+        expect(first.store.getState().artifacts.retained?.headerVersion).toBe(1);
+        expect(first.store.getState().artifactsLoaded).toBe(false);
+        vi.resetModules();
+        const next = await load(request);
+        await expect(next.completion).rejects.toThrow();
+        expect(afters).toEqual(['10', '10']);
     });
 
     it('preserves demanded body and custody identity during an unchanged warm refresh', async () => {

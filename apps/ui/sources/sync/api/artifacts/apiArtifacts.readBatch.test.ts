@@ -6,10 +6,14 @@ import { createArtifact, fetchArtifactReadBatch, prepareArtifactReadBatch } from
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchHttpInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 const runtimeFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
 afterEach(() => runtimeFetch.mockReset());
+
+// The shared setup resets this real owner; load its cold graph outside the hook budget.
+await vi.importActual('@/sync/domains/machines/reachability/machineReachability');
 
 function capturedRead(request: ServerFetch, credentials: AuthCredentials = { token: 'same-authority' }) {
     runtimeFetch.mockImplementation(async (input: unknown, init?: RequestInit) => {
@@ -50,17 +54,37 @@ describe('Artifact read acquisition', () => {
                 : Response.json({ items: [{ artifactId: artifact.id, ok: true,
                     artifact: { ...artifact, body: encodePlainArtifactStoredContent({ body: 'Full' }) }, recipientCensus: null }] });
         });
-        const headers = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
-        const duplicate = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
-        const full = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport });
-        release.resolve();
-        const [headerItems, duplicateItems, fullItems] = await Promise.all([headers, duplicate, full]);
-        expect(issued).toHaveLength(2);
-        expect(issued).toEqual(expect.arrayContaining([{ artifactIds: [artifact.id], projection: 'headers' }, { artifactIds: [artifact.id] }]));
-        expect(headerItems).toEqual(duplicateItems);
-        expect(headerItems[0]).not.toHaveProperty('recipientCensus');
-        expect(headerItems[0]).not.toHaveProperty('artifact.body');
-        expect(fullItems[0]).toHaveProperty('artifact.body');
+        let admittedItems = 0;
+        const observeInput = (value: unknown) => {
+            const values: unknown = value && typeof value === 'object' ? Reflect.get(value, 'artifactIds') : undefined;
+            if (Array.isArray(values)) admittedItems += values.length;
+        };
+        // Count schema visits while keeping every invoked Zod parser real.
+        const parseEntry = ArtifactReadBatchInputV1Schema.parse;
+        const parsePartition = ArtifactReadBatchHttpInputV1Schema.parse;
+        const entry = vi.spyOn(ArtifactReadBatchInputV1Schema, 'parse').mockImplementation((value, options) => {
+            observeInput(value);
+            return parseEntry(value, options);
+        });
+        const partition = vi.spyOn(ArtifactReadBatchHttpInputV1Schema, 'parse').mockImplementation((value, options) => {
+            observeInput(value);
+            return parsePartition(value, options);
+        });
+        try {
+            const headers = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
+            const duplicate = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
+            const full = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport });
+            release.resolve();
+            const [headerItems, duplicateItems, fullItems] = await Promise.all([headers, duplicate, full]);
+            expect(issued).toHaveLength(2);
+            expect(issued).toEqual(expect.arrayContaining([{ artifactIds: [artifact.id], projection: 'headers' }, { artifactIds: [artifact.id] }]));
+            expect(headerItems).toEqual(duplicateItems);
+            expect(headerItems[0]).not.toHaveProperty('recipientCensus');
+            expect(headerItems[0]).not.toHaveProperty('artifact.body');
+            expect(fullItems[0]).toHaveProperty('artifact.body');
+            // Each public caller is admitted; owned partitions do not re-admit IDs.
+            expect(admittedItems).toBe(3);
+        } finally { entry.mockRestore(); partition.mockRestore(); }
     });
 
     it.each([200, 409, 400])('does not lend pre-write or in-write observations after mutation settlement (%s)', async status => {

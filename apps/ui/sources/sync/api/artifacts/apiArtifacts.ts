@@ -14,7 +14,9 @@ import { isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/arti
 import { ArtifactPublicAudienceV1ReadSchema, ArtifactRevisionListResponseV1Schema, ArtifactQuotaExceededV1Schema, ArtifactRevisionV1Schema, ArtifactStorageUsageV1Schema, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactBlobReadResponseV1Schema, ArtifactBlobAccountEncryptionStageV1Schema, type ArtifactBlobStoredContentV1, type ArtifactBlobAccountEncryptionStageV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ArtifactHtmlPreviewResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema, type ArtifactReadBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
+    ArtifactReadHeadersBatchResponseV1Schema, type ArtifactReadBatchResponseV1,
+    type ArtifactReadHeadersBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { createServerHttpRequestBodyItemBudgetV1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -117,7 +119,9 @@ export type ArtifactApiOptions = Readonly<{
     ownerAccountId?: string;
 }>;
 
-type ArtifactReadBatchItem = ArtifactReadBatchResponseV1['items'][number];
+type ArtifactReadBatchItem = ArtifactReadBatchResponseV1['items'][number] | ArtifactReadHeadersBatchResponseV1['items'][number];
+type ArtifactReadBatchOptions = Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'>;
+type PreparedArtifactReadBatch<T> = Readonly<{ release: () => void; read: (artifactIds: readonly string[]) => Promise<T> }>;
 type ArtifactListPage = Readonly<{ items: Artifact[]; hasUnclassified?: boolean }>;
 const artifactDetailReads = createScopedBatchResolutionSingleFlight<ArtifactReadBatchItem>();
 const artifactOpaqueReads = createScopedResolutionSingleFlight<Artifact>();
@@ -172,31 +176,36 @@ async function artifactHttpReadError(response: Response, fallback: string, code?
     return new HappyError(`${fallback}: ${response.status}`, true, { status: response.status, ...(code ? { code } : {}) });
 }
 
-/** Read only the selected details and their current authorized recipient census. */
+/** Selected headers and details share one acquisition owner, with separate projection demand. */
 export function prepareArtifactReadBatch(credentials: AuthCredentials,
-    opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'> = {}) {
+    opts: ArtifactReadBatchOptions & { projection: 'headers' }): PreparedArtifactReadBatch<ArtifactReadHeadersBatchResponseV1['items']>;
+export function prepareArtifactReadBatch(credentials: AuthCredentials,
+    opts?: ArtifactReadBatchOptions): PreparedArtifactReadBatch<ArtifactReadBatchResponseV1['items']>;
+export function prepareArtifactReadBatch(credentials: AuthCredentials,
+    opts: ArtifactReadBatchOptions & { projection?: 'headers' } = {}) {
     throwIfAborted(opts.signal);
     const binding = captureArtifactReadBinding(opts);
-    const reservation = artifactDetailReads.reserve(JSON.stringify(['artifact-detail-census', binding.key, resolveAuthCredentialsScopeKey(credentials)]),
+    const reservation = artifactDetailReads.reserve(JSON.stringify(['artifact-read', opts.projection ?? 'full', binding.key, resolveAuthCredentialsScopeKey(credentials)]),
         { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
     return {
         release: reservation.release,
-        async read(artifactIds: readonly string[]): Promise<ArtifactReadBatchResponseV1['items']> {
+        async read(artifactIds: readonly string[]): Promise<ArtifactReadBatchItem[]> {
             try {
                 throwIfAborted(opts.signal);
                 if (artifactIds.length === 0) return [];
-                ArtifactReadBatchInputV1Schema.parse({ artifactIds });
-                const result = await reservation.run(artifactIds, async (demandedIds, sharedSignal) => {
+                const input = ArtifactReadBatchInputV1Schema.parse({ artifactIds });
+                const inputShell = opts.projection === 'headers' ? { artifactIds: [], projection: 'headers' as const } : { artifactIds: [] };
+                const result = await reservation.run(input.artifactIds, async (demandedIds, sharedSignal) => {
                     const items = new Map<string, ArtifactReadBatchItem>();
                     const batches: string[][] = [];
                     let batch: string[] = [];
-                    let budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+                    let budget = createServerHttpRequestBodyItemBudgetV1(inputShell);
                     for (const id of demandedIds) {
                         if (!budget.tryAdmit(id)) {
                             if (batch.length === 0) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
                             batches.push(batch);
                             batch = [];
-                            budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+                            budget = createServerHttpRequestBodyItemBudgetV1(inputShell);
                             if (!budget.tryAdmit(id)) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
                         }
                         batch.push(id);
@@ -206,7 +215,9 @@ export function prepareArtifactReadBatch(credentials: AuthCredentials,
                         throwIfAborted(sharedSignal);
                         const consume = async (response: Response) => {
                             if (!response.ok) throw await artifactHttpReadError(response, 'Artifact details are unavailable', 'artifact_content_unavailable');
-                            const parsed = ArtifactReadBatchResponseV1Schema.safeParse(await response.json());
+                            const value: unknown = await response.json();
+                            const parsed = opts.projection === 'headers' ? ArtifactReadHeadersBatchResponseV1Schema.safeParse(value)
+                                : ArtifactReadBatchResponseV1Schema.safeParse(value);
                             throwIfAborted(sharedSignal);
                             if (!parsed.success || parsed.data.items.length !== ids.length
                                 || parsed.data.items.some((item, index) => item.artifactId !== ids[index])) {
@@ -216,14 +227,14 @@ export function prepareArtifactReadBatch(credentials: AuthCredentials,
                             return parsed.data.items;
                         };
                         const init = { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-                            body: JSON.stringify(ArtifactReadBatchInputV1Schema.parse({ artifactIds: ids })), signal: sharedSignal };
+                            body: JSON.stringify({ ...inputShell, artifactIds: ids }), signal: sharedSignal };
                         const page = await binding.read('/v1/artifacts/read', init, consume);
                         for (const item of page) items.set(item.artifactId, item);
                     }
                     return items;
                 });
                 throwIfAborted(opts.signal);
-                return artifactIds.map(id => {
+                return input.artifactIds.map(id => {
                     const item = result.get(id);
                     if (!item) throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
                     return item;
@@ -233,8 +244,12 @@ export function prepareArtifactReadBatch(credentials: AuthCredentials,
     };
 }
 
+export function fetchArtifactReadBatch(credentials: AuthCredentials, artifactIds: readonly string[],
+    opts: ArtifactReadBatchOptions & { projection: 'headers' }): Promise<ArtifactReadHeadersBatchResponseV1['items']>;
+export function fetchArtifactReadBatch(credentials: AuthCredentials, artifactIds: readonly string[],
+    opts?: ArtifactReadBatchOptions): Promise<ArtifactReadBatchResponseV1['items']>;
 export async function fetchArtifactReadBatch(credentials: AuthCredentials, artifactIds: readonly string[],
-    opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'> = {}): Promise<ArtifactReadBatchResponseV1['items']> {
+    opts: ArtifactReadBatchOptions & { projection?: 'headers' } = {}): Promise<ArtifactReadBatchItem[]> {
     throwIfAborted(opts.signal);
     if (artifactIds.length === 0) return [];
     return await prepareArtifactReadBatch(credentials, opts).read(artifactIds);

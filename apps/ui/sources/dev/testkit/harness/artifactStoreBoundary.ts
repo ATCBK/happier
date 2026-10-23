@@ -81,6 +81,35 @@ function isVersion(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
+/** The Home's filtered/unfiltered Artifact list framing and structural keyset. */
+export function createArtifactListHttpResponse(url: URL, inventory: readonly Artifact[]): Response {
+    const limit = Number(url.searchParams.get('limit') ?? 500);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) return json({ error: 'Failed to get artifacts' }, 400);
+    let cursor: { updatedAt: number; id: string } | null = null;
+    const encodedCursor = url.searchParams.get('cursor');
+    if (encodedCursor) {
+        try {
+            const decoded: unknown = JSON.parse(Buffer.from(decodeBase64(encodedCursor, 'base64url')).toString('utf8'));
+            if (decoded && typeof decoded === 'object' && 'id' in decoded && typeof decoded.id === 'string' && 'updatedAt' in decoded) {
+                const updatedAt = new Date(Number(decoded.updatedAt)).getTime();
+                if (Number.isFinite(updatedAt)) cursor = { updatedAt, id: decoded.id };
+            }
+        } catch { /* Malformed cursors are rejected just as by the Home route. */ }
+        if (!cursor) return json({ error: 'Failed to get artifacts' }, 400);
+    }
+    const kind = url.searchParams.get('kind');
+    if (kind !== null && !ArtifactCoarseKindV1Schema.safeParse(kind).success) return json({ error: 'Invalid parameters' }, 400);
+    const selected = inventory.filter(row => kind === null || row.kind === kind)
+        .filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
+        .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
+    const items = selected.slice(0, limit).map(row => {
+        if (url.searchParams.get('includeBody') === 'true') return row;
+        const { body: _body, ...header } = row;
+        return header;
+    });
+    return json(kind === null ? items : { items, hasUnclassified: inventory.some(row => row.kind == null) });
+}
+
 export function createArtifactStoreBoundary(params: Readonly<{
     ownerAccountId: () => string | null;
     encryptionMode: 'plain' | 'e2ee';
@@ -252,35 +281,11 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 }));
             }
             if (url.pathname === ARTIFACTS_PATH && method === 'GET') {
-                const limit = Number(url.searchParams.get('limit') ?? 500);
-                if (!Number.isInteger(limit) || limit < 1 || limit > 500) return Promise.resolve(json({ error: 'Failed to get artifacts' }, 400));
-                let cursor: { updatedAt: number; id: string } | null = null;
-                const encodedCursor = url.searchParams.get('cursor');
-                if (encodedCursor) {
-                    try {
-                        const decoded: unknown = JSON.parse(Buffer.from(decodeBase64(encodedCursor, 'base64url')).toString('utf8'));
-                        if (decoded && typeof decoded === 'object' && 'id' in decoded && typeof decoded.id === 'string' && 'updatedAt' in decoded) {
-                            const updatedAt = new Date(Number(decoded.updatedAt)).getTime();
-                            if (Number.isFinite(updatedAt)) cursor = { updatedAt, id: decoded.id };
-                        }
-                    } catch { /* Malformed cursors are rejected just as by the Home route. */ }
-                    if (!cursor) return Promise.resolve(json({ error: 'Failed to get artifacts' }, 400));
-                }
                 const inventory = [...rows.values()].flatMap(row => {
                     const readable = readableRow(row, callerAccountId);
                     return readable ? [readable] : [];
                 });
-                const kind = url.searchParams.get('kind');
-                if (kind !== null && !ArtifactCoarseKindV1Schema.safeParse(kind).success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
-                const selected = inventory.filter(row => kind === null || row.kind === kind)
-                    .filter(row => !cursor || row.updatedAt < cursor.updatedAt || (row.updatedAt === cursor.updatedAt && row.id < cursor.id))
-                    .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0));
-                const items = selected.slice(0, limit).map(row => {
-                    if (url.searchParams.get('includeBody') === 'true') return row;
-                    const { body: _body, ...header } = row;
-                    return header;
-                });
-                return Promise.resolve(json(kind === null ? items : { items, hasUnclassified: inventory.some(row => row.kind == null) }));
+                return Promise.resolve(createArtifactListHttpResponse(url, inventory));
             }
             if (path === ARTIFACTS_PATH) {
                 if (method !== 'POST') return null;
