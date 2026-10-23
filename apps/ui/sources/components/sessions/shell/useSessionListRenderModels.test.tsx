@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Third-party rendering is outside this listing contract; its streaming renderer is unused here.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
 
-import { renderHook, type RenderHookResult } from '@/dev/testkit';
+import { renderHook, createRenderCommitCounter, useRenderCommitCounter, type RenderHookResult } from '@/dev/testkit';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -60,6 +60,50 @@ function accountToken(accountId: string): string {
 }
 
 describe('useSessionListRenderModels', () => {
+    it('ignores Machine receipt updates and retains unrelated row displays on a real Machine rename', async () => {
+        const previousState = storage.getState();
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { buildMachineDisplayRenderableFromMachine } = await import('@/sync/domains/machines/machineDisplayRenderable');
+        const rows = ['a', 'b'].map(id => makeRenderable(id, { machineId: `machine-${id}`, host: `${id}.local`, path: `/repo-${id}` }));
+        const machines = rows.map(row => buildMachineDisplayRenderableFromMachine(createMachineFixture({
+            id: row.metadata!.machineId!, metadata: { ...createMachineFixture().metadata!, host: row.metadata!.host!, displayName: row.id },
+        })));
+        storage.setState({ sessionListRowsByServerId: { 'display-home': Object.fromEntries(rows.map(row => [row.id, row])) },
+            machineDisplayById: Object.fromEntries(machines.map(machine => [machine.id, machine])) });
+        const common = {
+            paneState: { summary: { sessionsReady: true, sessionCount: 2 },
+                visibleSessionListIndex: rows.map(row => ({ type: 'session' as const, serverId: 'display-home', sessionId: row.id })),
+                hasHiddenInactiveSessions: false, folderFocus: null, folderFeatureEnabledServerIds: [], showLoading: false, showEmptyState: false },
+            collapsedGroupKeys: {}, workspaceLabels: {}, workspaceRefs: [], pinnedKeySet: new Set<string>(), sessionTags: {},
+            selectedSessionId: null, showServerBadge: false, showPinnedServerBadge: false,
+            rowViewModelMode: 'deferred' as const, clocksActive: false,
+        };
+        const counter = createRenderCommitCounter();
+        const hook = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            return useSessionListRenderModels(common);
+        });
+        try {
+            const before = hook.getCurrent();
+            counter.reset();
+            for (let update = 1; update <= 5; update += 1) await act(async () => storage.setState(state => ({
+                machineDisplayById: { ...state.machineDisplayById,
+                    [machines[0]!.id]: { ...machines[0]!, updatedAt: update, activeAt: update } },
+            })));
+            expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+            expect(hook.getCurrent()).toBe(before);
+            await act(async () => storage.setState(state => ({ machineDisplayById: { ...state.machineDisplayById,
+                [machines[0]!.id]: { ...machines[0]!, metadata: { ...machines[0]!.metadata, displayName: 'Renamed' } },
+            } })));
+            expect(hook.getCurrent().reachableSessionDisplayById.get('a')?.machineLabel).toBe('Renamed');
+            expect(hook.getCurrent().reachableSessionDisplayById.get('b')).toBe(before.reachableSessionDisplayById.get('b'));
+            expect(counter.read()).toEqual({ renders: 1, commits: 1 });
+        } finally {
+            await hook.unmount();
+            storage.setState(previousState, true);
+        }
+    });
+
     it('does not return retained Account A row data after the same Home binds Account B', async () => {
         const previousState = storage.getState();
         const profile = await upsertServerProfile({
@@ -550,6 +594,18 @@ describe('useSessionListRenderModels', () => {
             await flushHookEffects({ cycles: 1, turns: 2 });
 
             expect(renderCount).toBe(stableRenderCount);
+            expect(hook.getCurrent()).toBe(initial);
+
+            // Titles are row-local too: new metadata must not invalidate the
+            // entire list's Machine/workspace display projection.
+            for (let update = 0; update < 5; update += 1) {
+                act(() => storage.setState(state => ({ sessionListRowsByServerId: {
+                    ...state.sessionListRowsByServerId,
+                    'server-1': { ...state.sessionListRowsByServerId['server-1'],
+                        'session-1': { ...row, metadata: { ...row.metadata!, name: `Renamed ${update}` } } },
+                } })));
+            }
+            expect(renderCount - stableRenderCount).toBe(0);
             expect(hook.getCurrent()).toBe(initial);
 
             // Deferred parents do not read row status or age. A real row can
