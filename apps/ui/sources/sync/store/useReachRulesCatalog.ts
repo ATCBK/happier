@@ -11,6 +11,21 @@ import { getAcknowledgedPromptLibraryCatalogValue } from './settings/promptLibra
 const emptyRules: ReachRulesV1 = Object.freeze([]);
 type SkillRulesValue = ReturnType<typeof usePromptLibraryCatalogValue<'skill-rules'>>['value'];
 
+/** Project the Account row once, rather than filtering it for every sheet row and render. */
+function indexReachRules(rows: SkillRulesValue | McpServerCatalogV1 | null) {
+    const byItem = new Map<string, ReachRulesV1[number][]>();
+    if (rows) {
+        const entries = 'rules' in rows
+            ? rows.rules.map(({ skillId, ...rule }) => [skillId, rule] as const)
+            : rows.bindings.map(({ serverId, ...rule }) => [serverId, rule] as const);
+        for (const [id, rule] of entries) {
+            const rules = byItem.get(id);
+            if (rules) rules.push(rule); else byItem.set(id, [rule]);
+        }
+    }
+    return byItem;
+}
+
 /** One item's rules out of the two Account rows that hold them (skills: `skill-rules`; MCP servers: the catalog's bindings). */
 function selectReachRules(kind: 'skill' | 'mcp_server', itemId: string,
     rows: Readonly<{ skillRules: SkillRulesValue | null | undefined; mcp: McpServerCatalogV1 | null | undefined }>): ReachRulesV1 {
@@ -35,10 +50,13 @@ export function useReachRulesLookup(requestedScope?: ServerAccountScope | null) 
         ? subscribeMcpServerCatalogSnapshots(listener) : () => {}, [scope]);
     const mcp = React.useSyncExternalStore(subscribeMcp, readMcp, readMcp);
     const skills = usePromptLibraryCatalogValue('skill-rules', scope);
+    const skillRulesByItem = React.useMemo(() => indexReachRules(skills.value), [skills.value]);
+    const mcpRulesByItem = React.useMemo(() => indexReachRules(mcp.value), [mcp.value]);
     const rules = React.useCallback((kind: 'skill' | 'mcp_server', itemId: string) =>
         (kind === 'skill' ? skills.value : mcp.value) === null ? null
-            : selectReachRules(kind, itemId, { skillRules: skills.value, mcp: mcp.value }), [skills.value, mcp.value]);
-    return { scope, rules, skillRules: skills.value, mcpCatalog: mcp.value };
+            : (kind === 'skill' ? skillRulesByItem : mcpRulesByItem).get(itemId) ?? emptyRules,
+        [skills.value, mcp.value, skillRulesByItem, mcpRulesByItem]);
+    return React.useMemo(() => ({ scope, rules, skillRules: skills.value, mcpCatalog: mcp.value }), [scope, rules, skills.value, mcp.value]);
 }
 
 /** Select one item's rules from its existing Account row; only the selected catalog is demanded. */
