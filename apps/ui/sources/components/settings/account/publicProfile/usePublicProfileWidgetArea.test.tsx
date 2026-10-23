@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { WidgetDefinitionDraftV1Schema } from '@happier-dev/protocol/widgets';
 
 import { renderHook } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -8,6 +10,8 @@ import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/pane
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { storage } from '@/sync/domains/state/storageStore';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { readUsageWidgetPageContext, readUsageWidgetPageScope, usageWidgetSurfaceContext } from '@/components/settings/usage/usageWidgetPageContext';
+import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -16,6 +20,7 @@ vi.mock('socket.io-client', async importOriginal =>
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 const policy = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
   'widgets.item.add': ['ui'], 'widgets.area.layout.create': ['ui'], 'widgets.item.remove': ['ui'],
+  'widgets.definition.create': ['ui'], 'widgets.definition.update': ['ui'],
 } });
 let failReads = false;
 let readGate: Promise<void> | null = null;
@@ -45,10 +50,10 @@ beforeEach(() => {
     settings: { ...storage.getState().settings, actionsSettingsV1: policy } });
 });
 
-async function openArea() {
+async function openArea(context?: () => WidgetSurfaceContext) {
   return renderHook(() => {
     const execution = useMountedActionExecution({ serverId: runtime.serverId, accountId: 'account-a' });
-    return usePublicProfileWidgetArea(runtime.serverId, execution);
+    return { ...usePublicProfileWidgetArea(runtime.serverId, execution, undefined, context?.()), execution };
   });
 }
 
@@ -79,7 +84,7 @@ it('compiles the acknowledged named area and copied placements, preserving a sav
   } finally { await hook.unmount(); }
 });
 
-it('withdraws Apply while an area observation is pending, unavailable, or its Account retires', async () => {
+it('keeps the reviewed copy through an unchanged pending and settled reread, but withdraws it on failure or Account retirement', async () => {
   const hook = await openArea();
   let release: (() => void) | undefined;
   try {
@@ -88,11 +93,20 @@ it('withdraws Apply while an area observation is pending, unavailable, or its Ac
     readGate = new Promise(resolve => { release = resolve; });
     let pending!: ReturnType<ReturnType<typeof hook.getCurrent>['area']['reload']>;
     await act(async () => { pending = hook.getCurrent().area.reload(); });
-    expect(captured.isCurrent()).toBe(false);
-    failReads = true;
+    const state = hook.getCurrent().area.state;
+    if (state.status !== 'ready') throw new Error('Expected retained admitted layout');
+    expect(state.isReadPending()).toBe(true);
+    expect(state.isCurrent()).toBe(true);
+    expect(captured.isCurrent()).toBe(true);
     await act(async () => { readGate = null; release?.(); await pending; });
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(captured.isCurrent()).toBe(true);
+    expect(hook.getCurrent().candidate?.layout).toEqual(captured.layout);
+    failReads = true;
+    await act(async () => { await hook.getCurrent().area.reload(); });
     await vi.waitFor(() => expect(hook.getCurrent().status).toBe('unavailable'));
     expect(hook.getCurrent().candidate).toBeNull();
+    expect(captured.isCurrent()).toBe(false);
     failReads = false;
     await act(async () => { await hook.getCurrent().area.reload(); });
     await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
@@ -100,4 +114,61 @@ it('withdraws Apply while an area observation is pending, unavailable, or its Ac
     retireActiveServerAccountScopeLifetime();
     expect(current.isCurrent()).toBe(false);
   } finally { readGate = null; release?.(); await hook.unmount(); }
+});
+
+it('invalidates a reviewed copy when its page source changes even if the placed layout is unchanged', async () => {
+  const pageContext = (period: '90days' | '7days') => usageWidgetSurfaceContext(
+    readUsageWidgetPageContext(readUsageWidgetPageScope(normalizeUsageQuery({ period: { relative: period } }))), period);
+  let context = pageContext('90days');
+  const hook = await openArea(() => context);
+  try {
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    const captured = hook.getCurrent().candidate!;
+    context = pageContext('7days');
+    await hook.rerender();
+    expect(captured.isCurrent()).toBe(false);
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().candidate?.layout).toEqual(captured.layout);
+    expect(captured.isCurrent()).toBe(false);
+  } finally { await hook.unmount(); }
+});
+
+it('invalidates a reviewed copy on its actual Artifact definition edit without invalidating it for unrelated definitions', async () => {
+  const hook = await openArea();
+  const account = { serverId: runtime.serverId, accountId: 'account-a' };
+  const definition = WidgetDefinitionDraftV1Schema.parse({ name: 'Shared days',
+    sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+    inputSchema: { type: 'object', additionalProperties: false },
+    body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Private live body' } } },
+    publicPresentation: { kind: 'declarative', document: { version: 1, root: { kind: 'metric', label: 'Active days',
+      data: { kind: 'value', value: { kind: 'public_profile' } }, value: { path: ['snapshot', 'facts', 'activeDays'], type: 'number' } } } },
+  });
+  try {
+    await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+    await act(async () => {
+      await hook.getCurrent().execution.executeValue('widgets.definition.create', { account, artifactId: 'reviewed-days', definition });
+      expect(await hook.getCurrent().binding.port!.execute({ actionId: 'widgets.item.add', size: 'medium',
+        instance: { v: 1, id: 'reviewed-days-copy', definition: { kind: 'artifact', artifactId: 'reviewed-days' }, bindings: {} },
+      })).toMatchObject({ ok: true });
+      await hook.getCurrent().area.reload();
+    });
+    await vi.waitFor(() => expect(hook.getCurrent().candidate?.layout.items).toContainEqual(expect.objectContaining({
+      id: 'reviewed-days-copy', title: 'Shared days',
+    })));
+    const captured = hook.getCurrent().candidate!;
+    await act(async () => {
+      await hook.getCurrent().execution.executeValue('widgets.definition.create', { account, artifactId: 'unrelated-days', definition });
+    });
+    expect(captured.isCurrent()).toBe(true);
+    await act(async () => {
+      await hook.getCurrent().execution.executeValue('widgets.definition.update', {
+        account, artifactId: 'reviewed-days', patch: { name: 'Updated days' },
+      });
+    });
+    expect(captured.isCurrent()).toBe(false);
+    await vi.waitFor(() => expect(hook.getCurrent().candidate?.layout.items).toContainEqual(expect.objectContaining({
+      id: 'reviewed-days-copy', title: 'Updated days',
+    })));
+    expect(captured.isCurrent()).toBe(false);
+  } finally { await hook.unmount(); }
 });

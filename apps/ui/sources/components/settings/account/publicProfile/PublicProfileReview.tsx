@@ -5,6 +5,7 @@ import {
   PUBLIC_PROFILE_FIELDS_V1,
   type PublicProfileField,
 } from '@happier-dev/protocol/account/publicProfile';
+import type { PublicProfilePreparationUnavailableReasonV1 } from '@happier-dev/protocol/account/publicProfileIntents';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
@@ -26,6 +27,7 @@ export type PublicProfileReviewProps = Readonly<{
   sharedFields: readonly PublicProfileField[];
   /** Exactly what visitors would read, as captured for this review. */
   disclosure: unknown;
+  preparationReason?: PublicProfilePreparationUnavailableReasonV1 | null;
   /** The retained picture copy Confirm sends; absent when no picture leaves the device. */
   renderPicture?: () => React.ReactNode;
   endToEndEncrypted: boolean;
@@ -52,6 +54,7 @@ export function PublicProfileReview(
       .join(' · ');
   // Q13: weekly shares are percentages, but with the Tokens total public they reveal weekly amounts.
   const jointInference = shared.has('tokens') && shared.has('weeklyAgentMix');
+  const preparationNotice = props.preparationReason ? t(`publicIdentity.profile.reasons.${props.preparationReason}`) : null;
   const consequences = [
     jointInference
       ? t('publicIdentity.publicData.details.weeklyAgentMix')
@@ -63,8 +66,8 @@ export function PublicProfileReview(
     props.indexable ? null : t('publicIdentity.review.noindex'),
   ].filter((line): line is string => line !== null);
   const json = React.useMemo(
-    () => (showData ? JSON.stringify(props.disclosure, null, 2) : ''),
-    [showData, props.disclosure],
+    () => (showData ? preparationNotice ?? JSON.stringify(props.disclosure, null, 2) : ''),
+    [showData, preparationNotice, props.disclosure],
   );
   return (
     <View style={styles.body} testID="public-profile-review">
@@ -122,7 +125,7 @@ export function PublicProfileReview(
             {...state.headerProps}
             testID="public-profile-review-data"
             title={t('publicIdentity.review.viewData')}
-            subtitle={t('publicIdentity.review.viewDataDetail')}
+            subtitle={preparationNotice ?? t('publicIdentity.review.viewDataDetail')}
             showChevron={false}
             rightElement={<ExpandableItemCaret expanded={state.expanded} />}
           />
@@ -164,7 +167,8 @@ export function PublicProfileReview(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: theme.space.s12 },
+  // The card chrome insets only its title band and footer; the review stands on that same edge.
+  body: { gap: theme.space.s12, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s16 },
   section: { gap: theme.space.s4 },
   secondary: { color: theme.colors.text.secondary },
   picture: {

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { HappierPublicProfileWidget, type HappierPublicProfileLabels, type HappierPublicProfileUsageHost } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, type PublicProfileSnapshotV1 } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfilePreview } from '@happier-dev/protocol/account/projectPublicProfile';
@@ -8,6 +10,7 @@ import { resolveWidgetPublicSnapshotPresentationV1, type WidgetInstanceV1, type 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
 import { publicProfilePageLabels, usePublicProfileUsageHost } from './publicProfilePresentation';
@@ -15,9 +18,14 @@ import { usePublicProfileOwnerRead } from './usePublicProfileOwnerRead';
 import { DEFAULT_PUBLIC_PROFILE_QUERY } from './publicProfileDraft';
 
 type PreviewSource = Omit<Parameters<typeof projectPublicProfilePreview>[0], 'layout'>;
-export const PublicProfileWidgetPreviewContext = React.createContext<Readonly<{
-  source: PreviewSource; labels: HappierPublicProfileLabels; usage?: HappierPublicProfileUsageHost;
-}> | null>(null);
+/**
+ * The page's one preview for every placed block. `unavailable` is the page's own state (its period line
+ * says why), so blocks keep their slots quietly instead of each reading again or naming another cause.
+ */
+export type PublicProfileWidgetPreview =
+  | Readonly<{ kind: 'ready'; source: PreviewSource; labels: HappierPublicProfileLabels; usage?: HappierPublicProfileUsageHost }>
+  | Readonly<{ kind: 'unavailable'; reason: string }>;
+export const PublicProfileWidgetPreviewContext = React.createContext<PublicProfileWidgetPreview | null>(null);
 
 /** A whole area/group shares its existing preview owner; standalone setup reads it once. */
 export function PublicProfileWidgetPreviewBoundary(props: Readonly<{ scope: WidgetSurfaceRefV1; children: React.ReactNode }>) {
@@ -28,11 +36,20 @@ export function PublicProfileWidgetPreviewBoundary(props: Readonly<{ scope: Widg
 
 function ReadPublicProfileWidgetPreview(props: Readonly<{ scope: WidgetSurfaceRefV1; children: React.ReactNode }>) {
   const execution = useMountedActionExecution(props.scope);
+  return <PublicProfileWidgetPreviewRead execution={execution} serverId={props.scope.serverId}>{props.children}</PublicProfileWidgetPreviewRead>;
+}
+
+/** The standalone read for a setup opened outside the page: one owner read and, without a snapshot, one preview. */
+export function PublicProfileWidgetPreviewRead(props: Readonly<{
+  execution: Pick<ReturnType<typeof useMountedActionExecution>, 'ready' | 'executeValue'>;
+  serverId: string; children: React.ReactNode;
+}>) {
+  const { execution } = props;
   const { state } = usePublicProfileOwnerRead(execution);
   const read = state.kind === 'ready' ? state.read : null;
   const record = read?.kind === 'ready' ? read.record : null;
   const [local, setLocal] = React.useState<PublicProfileSnapshotV1 | null>(null);
-  const [failed, setFailed] = React.useState(false);
+  const [reason, setReason] = React.useState<string | null>(null);
   const latest = React.useRef(execution);
   latest.current = execution;
   React.useEffect(() => {
@@ -46,19 +63,20 @@ function ReadPublicProfileWidgetPreview(props: Readonly<{ scope: WidgetSurfaceRe
       if (!current) return;
       const result = PublicProfilePreviewResultV1Schema.parse(value);
       if (result.kind === 'ready') setLocal(result.view.snapshot);
-      else setFailed(true);
-    }).catch(() => { if (current) setFailed(true); });
+      else setReason(t(`publicIdentity.profile.reasons.${result.reason}`));
+    }).catch(() => { if (current) setReason(t('publicIdentity.profile.reasons.preparation_unavailable')); });
     return () => { current = false; };
   }, [read, record]);
   const snapshot = record?.snapshot ?? local;
-  const usage = usePublicProfileUsageHost(props.scope.serverId, snapshot?.period ?? null);
-  const preview = React.useMemo(() => read && snapshot ? {
+  const usage = usePublicProfileUsageHost(props.serverId, snapshot?.period ?? null);
+  const failed = state.kind === 'failed' ? t('publicIdentity.profile.reasons.preparation_unavailable') : reason;
+  // The setup's own controls (size, inputs) never wait for the page: only its preview slot does.
+  const preview = React.useMemo<PublicProfileWidgetPreview>(() => read && snapshot ? {
+    kind: 'ready' as const,
     source: { context: read.context, snapshot, policy: record?.policy ?? DEFAULT_PUBLIC_PROFILE_POLICY_V1,
       metadata: record?.metadata ?? {}, appearance: { atmosphere: { source: 'none' as const }, theme: 'auto' as const } },
     labels: publicProfilePageLabels(read.context, snapshot, null), usage,
-  } : null, [read, snapshot, record, usage]);
-  if (!preview) return <SurfaceStateCard kind={failed || state.kind === 'failed' ? 'unavailable' : 'loading'}
-    title={t('publicIdentity.editor.preparing')} reason={failed ? t('publicIdentity.page.blockUnavailable') : undefined} />;
+  } : { kind: 'unavailable', reason: failed ?? t('publicIdentity.editor.preparing') }, [read, snapshot, record, usage, failed]);
   return <PublicProfileWidgetPreviewContext.Provider value={preview}>{props.children}</PublicProfileWidgetPreviewContext.Provider>;
 }
 
@@ -66,7 +84,10 @@ function ReadPublicProfileWidgetPreview(props: Readonly<{ scope: WidgetSurfaceRe
 export function PublicProfileWidgetSurface(props: Readonly<{
   instance: WidgetInstanceV1; descriptor: WidgetCandidate | null; size?: WidgetSizeV1; testID: string;
 }>) {
-  const preview = React.useContext(PublicProfileWidgetPreviewContext);
+  const shared = React.useContext(PublicProfileWidgetPreviewContext);
+  if (shared?.kind === 'unavailable') return <View testID={`${props.testID}.awaiting`} accessible
+    accessibilityLabel={shared.reason} style={styles.awaiting}><Text variant="meta" style={styles.dash}>—</Text></View>;
+  const preview = shared;
   const presentation = props.descriptor && resolveWidgetPublicSnapshotPresentationV1(props.instance, props.descriptor);
   const size = props.size ?? props.descriptor?.sizeDeclaration.defaultSize;
   const view = preview && presentation && size ? projectPublicProfilePreview({ ...preview.source,
@@ -76,3 +97,8 @@ export function PublicProfileWidgetSurface(props: Readonly<{
   return <CorePluginUiPresentationScope><HappierPublicProfileWidget view={view} widgetId={props.instance.id}
     labels={preview.labels} usage={preview.usage} testID={props.testID} /></CorePluginUiPresentationScope>;
 }
+
+const styles = StyleSheet.create((theme) => ({
+  awaiting: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: theme.space.s24 },
+  dash: { color: theme.colors.text.tertiary },
+}));

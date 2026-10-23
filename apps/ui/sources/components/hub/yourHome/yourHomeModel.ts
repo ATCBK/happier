@@ -81,3 +81,43 @@ export function resolveYourHomeHeaderFact(
     ? { kind: 'needsYou', count: model.needsYou }
     : { kind: 'working', count: model.working };
 }
+
+export const LEGEND_ROW_PX = 40;
+export const LEGEND_ROW_COMPACT_PX = 30;
+export const LEGEND_GAP_PX = 2;
+
+/**
+ * The machines the legend can name in `height` px, and how many it folds into its one "more" row (which
+ * takes the last row of room). The orbit draws exactly the named machines: a moon the legend does not
+ * name is an unlabelled bead, and a fleet of dozens would crowd the outer orbit into a necklace.
+ */
+export function fitYourHomeLegend(
+  machines: readonly YourHomeMachine[],
+  height: number,
+  compact: boolean,
+): Readonly<{ shown: readonly YourHomeMachine[]; more: number }> {
+  const rowPx = compact ? LEGEND_ROW_COMPACT_PX : LEGEND_ROW_PX;
+  const fits = Math.max(1, Math.floor((height + LEGEND_GAP_PX) / (rowPx + LEGEND_GAP_PX)));
+  const shown = machines.length > fits ? machines.slice(0, fits - 1) : machines;
+  return { shown, more: machines.length - shown.length };
+}
+
+export type YourHomeLayout = 'small' | 'medium' | 'wide' | 'full';
+
+/** The lab's Small and Medium compositions are drawn for a card this wide (its A3 half column). */
+const HALF_CARD_PX = 262;
+
+/**
+ * The composition for a saved size in the body width the frame measured. The side-by-side compositions
+ * (wide, full) need room for the machines' names beside the scene: a card narrower than two half cards
+ * (a phone) stacks them under it instead, so the suffix that tells same-named machines apart is never cut.
+ * A half-width size that its row stretched across the card (alone in a group row) takes the side-by-side
+ * composition rather than a lone planet in a band.
+ */
+export function resolveYourHomeLayout(size: string | undefined, width: number): YourHomeLayout {
+  const roomy = width >= HALF_CARD_PX * 2;
+  if (size === 'small') return roomy ? 'wide' : 'small';
+  if (size === 'wide') return roomy ? 'wide' : 'medium';
+  if (size === 'full' || size === 'large') return roomy ? 'full' : 'medium';
+  return roomy ? 'full' : 'medium';
+}

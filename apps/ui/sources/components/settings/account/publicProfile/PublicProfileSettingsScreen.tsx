@@ -68,7 +68,7 @@ export const PublicProfileSettingsScreen = React.memo(
           );
           if (!outcome.ok) {
             if (!isActionApprovalDeclinedErrorCode(outcome.errorCode))
-              setNotice(t('publicIdentity.profile.actionFailed'));
+              setNotice(publicProfileMutationNotice(outcome));
             return;
           }
           const message = publicProfileMutationNotice(outcome.result);

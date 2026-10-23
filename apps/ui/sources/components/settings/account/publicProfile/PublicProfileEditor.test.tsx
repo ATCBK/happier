@@ -83,6 +83,17 @@ const view = (tokens: boolean) =>
       fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens },
     },
   })!;
+const shellView = {
+  v: 1 as const,
+  handle: 'leeroy',
+  indexable: false,
+  state: 'published' as const,
+  identity: context.identity,
+  metadata: {},
+  snapshot: null,
+  layout: { v: 1 as const, items: [] },
+  urls: context.urls,
+};
 const pageLabels = {
   identityLine: '@leeroy',
   periodTitle: 'Last 90 days',
@@ -126,12 +137,28 @@ describe('PublicProfileEditor', () => {
     const edit = await renderScreen(editor({ renderEditBlocks: area }));
     expect(edit.findByTestId('owner-area')).not.toBeNull();
     expect(edit.findByTestId('public-profile-block-days')).toBeNull();
-    const unprepared = await renderScreen(editor({ renderEditBlocks: area, ownerView: null, notice: 'Usage is locked' }));
+    const unprepared = await renderScreen(editor({ renderEditBlocks: area, ownerView: null, visitorView: null, shellView }));
     expect(unprepared.findByTestId('owner-area')).not.toBeNull();
     expect(unprepared.findByTestId('public-profile-editor-preparing')).toBeNull();
     const preview = await renderScreen(editor({ renderEditBlocks: area, mode: 'preview' }));
     expect(preview.findByTestId('owner-area')).toBeNull();
     expect(preview.findByTestId('public-profile-block-days')).not.toBeNull();
+  });
+
+  it('is the profile page itself before any preview exists: header and customizing bar in the page on Edit, none of the owner chrome on Preview', async () => {
+    const area = () => <Text testID="owner-area">area</Text>;
+    const onRetry = vi.fn();
+    const edit = await renderScreen(editor({ renderEditBlocks: area, ownerView: null, visitorView: null, shellView,
+      unavailable: { reason: 'Your usage can’t be read', onRetry } }));
+    expect(edit.findByTestId('public-profile-name')).not.toBeNull();
+    expect(edit.findByTestId('public-profile-editor-banner')).not.toBeNull();
+    expect(edit.getTextContent().split('Your usage can’t be read').length - 1).toBe(1);
+    await edit.pressByTestIdAsync('public-profile-editor-retry');
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    const preview = await renderScreen(editor({ renderEditBlocks: area, mode: 'preview', ownerView: null, visitorView: null, shellView }));
+    expect(preview.findByTestId('public-profile-name')).not.toBeNull();
+    expect(preview.findByTestId('public-profile-editor-banner')).toBeNull();
+    expect(preview.findByTestId('owner-area')).toBeNull();
   });
 
   it('shows the owner every placed block, marking private ones, and visitors only what is shared', async () => {
@@ -259,5 +286,11 @@ describe('PublicProfileReview', () => {
     expect(screen.getTextContent()).not.toContain('87654321');
     await screen.pressByTestIdAsync('public-profile-review-data');
     expect(screen.getTextContent()).toContain('87654321');
+  });
+
+  it('explains the typed preparation cause in review when there is no disclosure to inspect', async () => {
+    const screen = await renderScreen(review({ disclosure: null, preparationReason: 'no_eligible_personal_usage' }));
+    expect(screen.getTextContent()).toContain(t('publicIdentity.profile.reasons.no_eligible_personal_usage'));
+    expect(screen.getTextContent()).not.toContain(t('publicIdentity.profile.reasons.usage_unavailable'));
   });
 });

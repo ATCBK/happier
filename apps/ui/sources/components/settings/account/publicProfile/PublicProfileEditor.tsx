@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
+  HAPPIER_PAGE_METRICS,
   HappierPublicProfile,
   type HappierPublicProfileHeroGeometry,
   type HappierPublicProfileLabels,
@@ -10,7 +11,7 @@ import {
 import type { PublicProfileLocalPreviewViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -20,6 +21,9 @@ export type PublicProfileEditorView = Omit<
   PublicProfileLocalPreviewViewV1,
   'appearance'
 >;
+/** The page before its Usage can be read: who it belongs to, with no snapshot or blocks yet. */
+export type PublicProfileEditorShell = Omit<PublicProfileEditorView, 'snapshot' | 'service'> &
+  Readonly<{ snapshot: null }>;
 export type PublicProfileEditorProps = Readonly<{
   status: 'draft' | 'published' | 'paused';
   mode: 'edit' | 'preview';
@@ -30,11 +34,16 @@ export type PublicProfileEditorProps = Readonly<{
   ownerView: PublicProfileEditorView | null;
   /** Exactly what visitors would read, from the one disclosure projector. */
   visitorView: PublicProfileEditorView | null;
+  /** The same page while no preview exists; its period line says why. */
+  shellView?: PublicProfileEditorShell | null;
   hiddenBlockIds: ReadonlySet<string>;
   pageLabels: HappierPublicProfileLabels;
   usage?: HappierPublicProfileUsageHost;
   renderBand?: (geometry: HappierPublicProfileHeroGeometry) => React.ReactNode;
   singleColumn?: boolean;
+  /** Why the page has no preview of its Usage yet, with the one way to try again. */
+  unavailable?: Readonly<{ reason: string; onRetry: () => void }> | null;
+  /** The outcome of the last Publish, Apply or consent request. */
   notice: string | null;
   submitting: boolean;
   /** A pending or unavailable private-area copy cannot Apply an older local layout. */
@@ -49,14 +58,15 @@ export type PublicProfileEditorProps = Readonly<{
 }>;
 
 /**
- * The owner's own page (lab `ppcomp-E`, `ppflow-F2`): the same placed tree visitors read, with every
- * block present in Edit (private ones quieted and labelled) and only the shared ones in Preview.
- * Nothing here is public until Publish or Apply.
+ * The owner's own page (lab `ppcomp-E`, `ppcomp-V`, `ppflow-F2`): the page header carries the state,
+ * Edit | Preview and the one Publish or Apply; below it is the same placed tree visitors read. Edit
+ * keeps the hero and identity and puts the customizing bar and the owner's widget area into the page;
+ * Preview is exactly the visitor page. Nothing here is public until Publish or Apply.
  */
 export function PublicProfileEditor(
   props: PublicProfileEditorProps,
 ): React.ReactElement {
-  const view = props.mode === 'edit' ? props.ownerView : props.visitorView;
+  const view = (props.mode === 'edit' ? props.ownerView : props.visitorView) ?? props.shellView ?? null;
   const published = props.status !== 'draft';
   const statusLabel =
     props.status === 'draft'
@@ -69,17 +79,49 @@ export function PublicProfileEditor(
     : props.changes > 0
       ? t('publicIdentity.editor.hintChanges', { count: props.changes })
       : t('publicIdentity.editor.hintNone');
+  const unavailable = props.unavailable ? (
+    <SurfaceStateCard
+      testID="public-profile-editor-unavailable"
+      kind="unavailable"
+      layout="inline"
+      size="line"
+      title={props.unavailable.reason}
+      action={{ testID: 'public-profile-editor-retry', label: t('publicIdentity.profile.retry'), onPress: props.unavailable.onRetry }}
+    />
+  ) : null;
+  const notice = props.notice ? (
+    <SurfaceStateCard
+      testID="public-profile-editor-notice"
+      kind="warning"
+      layout="inline"
+      size="line"
+      title={props.notice}
+    />
+  ) : null;
+  const toolbar = (
+    <View style={styles.toolbar}>
+      <View style={[styles.banner, props.singleColumn ? styles.bannerStacked : null]} testID="public-profile-editor-banner">
+        <View style={styles.bannerText}>
+          <Text variant="label" emphasis="semiBold" style={styles.primary}>
+            {t('publicIdentity.editor.customizing')}
+          </Text>
+          <Text variant="meta" style={styles.secondary}>
+            {hint}
+          </Text>
+        </View>
+        <View style={styles.tools}>{props.renderTools()}</View>
+      </View>
+      {unavailable}
+      {notice}
+      {props.consentStatus}
+    </View>
+  );
   return (
     <View style={styles.page} testID="public-profile-editor">
-      <View style={styles.toolbar}>
-        <Text
-          variant="meta"
-          style={styles.status}
-          testID="public-profile-editor-status"
-        >
-          {statusLabel}
-        </Text>
-        <View style={styles.toolbarEnd}>
+      <SettingsPageHeader
+        meta={[{ key: 'status', text: statusLabel, testID: 'public-profile-editor-status' }]}
+        actionsPlacement="page"
+        actions={
           <SegmentedTabBar<'edit' | 'preview'>
             tabs={[
               { id: 'edit', label: t('publicIdentity.editor.edit') },
@@ -90,47 +132,22 @@ export function PublicProfileEditor(
             testIDPrefix="public-profile-editor-mode"
             segmentSizing="content"
           />
-          <RoundButton
-            testID="public-profile-editor-submit"
-            size="small"
-            title={
-              published
-                ? t('publicIdentity.editor.apply')
-                : t('publicIdentity.editor.publish')
-            }
-            disabled={
-              props.submitting ||
-              props.canSubmit === false ||
-              (published && props.changes === 0)
-            }
-            loading={props.submitting}
-            onPress={props.onSubmit}
-          />
-        </View>
-      </View>
-      {props.mode === 'edit' ? (
-        <View style={styles.banner} testID="public-profile-editor-banner">
-          <View style={styles.bannerText}>
-            <Text variant="label" emphasis="semiBold">
-              {t('publicIdentity.editor.customizing')}
-            </Text>
-            <Text variant="meta" style={styles.secondary}>
-              {hint}
-            </Text>
-          </View>
-          <View style={styles.tools}>{props.renderTools()}</View>
+        }
+        primaryAction={{
+          testID: 'public-profile-editor-submit',
+          title: published ? t('publicIdentity.editor.apply') : t('publicIdentity.editor.publish'),
+          disabled: props.submitting || props.canSubmit === false || (published && props.changes === 0),
+          loading: props.submitting,
+          onPress: props.onSubmit,
+        }}
+      />
+      {props.mode === 'preview' && (unavailable || notice || props.consentStatus) ? (
+        <View style={styles.previewNotices}>
+          {unavailable}
+          {notice}
+          {props.consentStatus}
         </View>
       ) : null}
-      {props.notice ? (
-        <SurfaceStateCard
-          testID="public-profile-editor-notice"
-          kind="warning"
-          layout="inline"
-          size="line"
-          title={props.notice}
-        />
-      ) : null}
-      {props.consentStatus}
       {view ? (
         <CorePluginUiPresentationScope>
           <HappierPublicProfile
@@ -144,6 +161,7 @@ export function PublicProfileEditor(
                   owner: {
                     hiddenBlockIds: props.hiddenBlockIds,
                     onlyYou: t('publicIdentity.editor.onlyYou'),
+                    renderToolbar: () => toolbar,
                     ...(props.renderEditBlocks
                       ? { renderBlocks: props.renderEditBlocks }
                       : {}),
@@ -152,20 +170,6 @@ export function PublicProfileEditor(
               : {})}
           />
         </CorePluginUiPresentationScope>
-      ) : props.mode === 'edit' && props.renderEditBlocks ? (
-        // Arranging blocks never waits for the page's preview; the notice above says why it is missing.
-        <>
-          {props.notice ? null : (
-            <SurfaceStateCard
-              testID="public-profile-editor-preparing"
-              kind="loading"
-              layout="inline"
-              size="line"
-              title={t('publicIdentity.editor.preparing')}
-            />
-          )}
-          {props.renderEditBlocks()}
-        </>
       ) : (
         <SurfaceStateCard
           testID="public-profile-editor-preparing"
@@ -179,20 +183,15 @@ export function PublicProfileEditor(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  page: { width: '100%', gap: theme.space.s16 },
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: theme.space.s12,
+  page: { width: '100%' },
+  toolbar: { gap: theme.space.s8 },
+  previewNotices: {
+    width: '100%',
+    maxWidth: HAPPIER_PAGE_METRICS.columnMaxWidthPx.wide,
+    alignSelf: 'center',
+    paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
+    gap: theme.space.s8,
   },
-  toolbarEnd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s12,
-  },
-  status: { color: theme.colors.text.secondary },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -204,7 +203,10 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border.default,
   },
-  bannerText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
+  // A phone keeps the bar's words whole and puts its controls beneath them.
+  bannerStacked: { flexDirection: 'column', alignItems: 'stretch' },
+  bannerText: { flexGrow: 1, flexShrink: 1, minWidth: 0, gap: theme.space.s2 },
+  primary: { color: theme.colors.text.primary },
   secondary: { color: theme.colors.text.secondary },
-  tools: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  tools: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s8 },
 }));

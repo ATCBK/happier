@@ -27,9 +27,15 @@ import { t } from '@/text';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
 
 import {
+  fitYourHomeLegend,
+  LEGEND_GAP_PX,
+  LEGEND_ROW_COMPACT_PX,
+  LEGEND_ROW_PX,
   resolveYourHomeHeaderFact,
   type YourHomeHeaderFact,
   type YourHomeMachine,
+  resolveYourHomeLayout,
+  type YourHomeLayout,
   type YourHomeModel,
 } from './yourHomeModel';
 import {
@@ -40,8 +46,6 @@ import {
 } from '@/components/atmosphere/orbit/homeOrbitScene';
 import { HomeOrbitMap } from '@/components/atmosphere/orbit/HomeOrbitMap';
 import { useYourHomeModel } from './useYourHomeModel';
-
-type Size = 'small' | 'medium' | 'wide' | 'full';
 
 /**
  * The "Your Home" widget's body (atmosphere lab `at-widget.js`): the planet is the Home, its machines
@@ -59,7 +63,6 @@ export function YourHomeWidgetBody(props: Readonly<{ testID: string }>) {
 
 function YourHomeWidget(props: Readonly<{ testID: string }>) {
   const presentation = useWidgetPresentation();
-  const size = readSize(presentation?.size);
   const model = useYourHomeModel();
   const homeName = useActiveHomeName();
   // Full width names the Home beside the title; a half-width card keeps the title and its fact (lab).
@@ -83,6 +86,7 @@ function YourHomeWidget(props: Readonly<{ testID: string }>) {
   useWidgetFrameBodyMeta(meta);
   const geometry = presentation?.geometry;
   if (!geometry) return <View testID={props.testID} />;
+  const size = resolveYourHomeLayout(presentation?.size, geometry.width);
   return (
     <View
       testID={props.testID}
@@ -99,11 +103,6 @@ function YourHomeWidget(props: Readonly<{ testID: string }>) {
   );
 }
 
-function readSize(size: string | undefined): Size {
-  if (size === 'small' || size === 'wide' || size === 'full') return size;
-  return size === 'large' ? 'full' : 'medium';
-}
-
 function useActiveHomeName(): string | null {
   const active = useActiveServerSnapshot();
   useServerProfilesGeneration();
@@ -113,7 +112,7 @@ function useActiveHomeName(): string | null {
 /** The lab's composition per size (`yourHome()`), in the body box the frame measured. */
 function YourHomeComposition(
   props: Readonly<{
-    size: Size;
+    size: YourHomeLayout;
     width: number;
     height: number;
     model: YourHomeModel;
@@ -136,7 +135,7 @@ function YourHomeComposition(
   }
   if (size === 'small') {
     const h = bodyH - 22;
-    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines), { small: true, pr: 18 * fit(sw, h, 262, 96), angles: [-14, 196, 166] });
+    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines.slice(0, SMALL_ORBITS)), { small: true, pr: 18 * fit(sw, h, 262, 96), angles: [-14, 196, 166] });
     return (
       <View style={styles.fill}>
         <HomeOrbitMap scene={scene} small accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
@@ -154,7 +153,7 @@ function YourHomeComposition(
   if (size === 'wide') {
     const w = Math.round(sw * 0.5);
     const pr = 26 * fit(w, bodyH, 282, 118);
-    const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(machines), { small: true, pr, radii: radii([1.55, 1.95, 2.3], pr), angles: [-14, 196, 166] });
+    const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(fitYourHomeLegend(machines, bodyH, true).shown), { small: true, pr, radii: radii([1.55, 1.95, 2.3], pr), angles: [-14, 196, 166] });
     return (
       <View style={[styles.fill, styles.row]}>
         <HomeOrbitMap scene={scene} small accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
@@ -165,7 +164,7 @@ function YourHomeComposition(
   if (size === 'medium') {
     const h = bodyH - MEDIUM_LEGEND_PX;
     const pr = 40 * fit(sw, h, 262, 196);
-    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(machines), { pr, radii: radii([1.55, 1.97, 2.4], pr), angles: [-38, 214, 128] });
+    const scene = layoutHomeOrbitScene(sw, h, orbitBodies(fitYourHomeLegend(machines, MEDIUM_LEGEND_PX, true).shown), { pr, radii: radii([1.55, 1.97, 2.4], pr), angles: [-38, 214, 128] });
     return (
       <View style={styles.fill}>
         <HomeOrbitMap scene={scene} accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
@@ -175,7 +174,7 @@ function YourHomeComposition(
   }
   const w = Math.round(sw * 0.54);
   const pr = 50 * fit(w, bodyH, 305, 298);
-  const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(machines), { pr, radii: radii([1.62, 2.2, 2.78], pr), angles: [-34, 212, 130] });
+  const scene = layoutHomeOrbitScene(w, bodyH, orbitBodies(fitYourHomeLegend(machines, bodyH, false).shown), { pr, radii: radii([1.62, 2.2, 2.78], pr), angles: [-34, 212, 130] });
   return (
     <View style={[styles.fill, styles.row]}>
       <HomeOrbitMap scene={scene} accessibilityLabel={t('homeWidgets.yourHomeOnline', { online: model.online, total: machines.length })} />
@@ -183,6 +182,9 @@ function YourHomeComposition(
     </View>
   );
 }
+
+/** A small card names no machine, so its orbit draws the lab's three bodies, one per orbit. */
+const SMALL_ORBITS = 3;
 
 /** Under the medium scene the lab keeps three compact rows. */
 const MEDIUM_LEGEND_PX = 102;
@@ -224,10 +226,7 @@ function Legend(
     testID: string;
   }>,
 ) {
-  const rowPx = props.compact ? LEGEND_ROW_COMPACT_PX : LEGEND_ROW_PX;
-  const fits = Math.max(1, Math.floor((props.height + LEGEND_GAP_PX) / (rowPx + LEGEND_GAP_PX)));
-  const shown = props.machines.length > fits ? props.machines.slice(0, fits - 1) : props.machines;
-  const more = props.machines.length - shown.length;
+  const { shown, more } = fitYourHomeLegend(props.machines, props.height, props.compact === true);
   return (
     <View style={[styles.legend, props.column ? styles.legendColumn : null]}>
       {shown.map((machine, index) => (
@@ -247,10 +246,6 @@ function Legend(
     </View>
   );
 }
-
-const LEGEND_ROW_PX = 40;
-const LEGEND_ROW_COMPACT_PX = 30;
-const LEGEND_GAP_PX = 2;
 
 function LegendRow(
   props: Readonly<{
@@ -424,7 +419,9 @@ const styles = StyleSheet.create((theme) => ({
     gap: LEGEND_GAP_PX,
     paddingLeft: theme.space.s6,
   },
-  legendColumn: { flex: 0, height: MEDIUM_LEGEND_PX, paddingLeft: 0 },
+  // A fixed-height strip under the scene. `legend`'s `flex` shorthand sets a zero basis, which would also zero this strip's height
+  // and let its rows overflow upward over the orbits, so the basis is put back to the height.
+  legendColumn: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto', height: MEDIUM_LEGEND_PX, paddingLeft: 0 },
   legendRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,7 +10,7 @@ import {
   type PublicProfilePolicyV1,
 } from '@happier-dev/protocol/account/publicProfile';
 import { projectPublicProfilePreview } from '@happier-dev/protocol/account/projectPublicProfile';
-import { PublicProfilePreviewResultV1Schema } from '@happier-dev/protocol/account/publicProfileIntents';
+import { PublicProfilePreviewResultV1Schema, type PublicProfilePreparationUnavailableReasonV1 } from '@happier-dev/protocol/account/publicProfileIntents';
 import type {
   PublicProfileAppearanceV1,
   PublicProfileContextV1,
@@ -63,7 +63,7 @@ import { usePublicProfileWidgetArea } from './usePublicProfileWidgetArea';
 import { PublicProfileWidgetArea, publicProfilePresetNames, usePublicProfileUsageContext } from './PublicProfileWidgetArea';
 import { usePublicProfileConsent } from './usePublicProfileConsent';
 import { publicProfilePageLabels, usePublicProfileUsageHost } from './publicProfilePresentation';
-import { PublicProfileWidgetPreviewContext } from './PublicProfileWidgetSurface';
+import { PublicProfileWidgetPreviewContext, type PublicProfileWidgetPreview } from './PublicProfileWidgetSurface';
 
 /** The owner's own values for every item: computed locally, never uploaded or published. */
 const OWNER_POLICY: PublicProfilePolicyV1 = {
@@ -158,6 +158,8 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
   const [snapshotView, setSnapshotView] =
     React.useState<PublicProfileLocalPreviewViewV1 | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  // Why the page's own Usage preview is missing: said once, on the page's period line.
+  const [previewReason, setPreviewReason] = React.useState<PublicProfilePreparationUnavailableReasonV1 | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [panel, setPanel] = React.useState<'look' | 'publicData' | null>(null);
   const lookAnchor = React.useRef<View>(null);
@@ -200,7 +202,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     const { draft: seed } = latest.current;
     if (!ready || !hasDraft || !seed) return;
     let current = true;
-    setNotice(null);
+    setPreviewReason(null);
     void (async () => {
       try {
         const result = PublicProfilePreviewResultV1Schema.parse(
@@ -215,9 +217,9 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
         );
         if (!current) return;
         if (result.kind === 'ready') setSnapshotView(result.view);
-        else setNotice(t(`publicIdentity.profile.reasons.${result.reason}`));
+        else setPreviewReason(result.reason);
       } catch {
-        if (current) setNotice(t('publicIdentity.profile.loadFailedBody'));
+        if (current) setPreviewReason('preparation_unavailable');
       }
     })();
     return () => {
@@ -272,13 +274,21 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
   const pictureRef = lookPresentation?.source === 'picture' ? lookPresentation.picture.ref : null;
   const creditPicture = pictureRef?.kind === 'builtin' ? pictures.find(picture => picture.id === pictureRef.id) : undefined;
   const credit = creditPicture ? pictureCreditLine(creditPicture) : null;
+  const awaitingReason = previewReason ? t(`publicIdentity.profile.reasons.${previewReason}`) : t('publicIdentity.editor.preparing');
   const labels = React.useMemo(() => context ? publicProfilePageLabels(context, previewSnapshot, credit) : null,
     [context, previewSnapshot, credit]);
-  const widgetPreview = React.useMemo(() => context && previewSnapshot && draft && labels ? {
+  // Until the page has its own preview, it is still this person's page: their name, handle and band.
+  const shellView = React.useMemo(() => context?.handle ? {
+    v: 1 as const, handle: context.handle, indexable: false, state: 'published' as const, identity: context.identity,
+    metadata: {}, snapshot: null, layout: { v: 1 as const, items: [] }, urls: context.urls,
+  } : null, [context]);
+  const widgetPreview = React.useMemo<PublicProfileWidgetPreview | null>(() => !(context && draft && labels) ? null
+    : !previewSnapshot ? { kind: 'unavailable', reason: awaitingReason } : {
+    kind: 'ready',
     source: { context, policy: mode === 'edit' ? OWNER_POLICY : draft.policy, metadata: {}, snapshot: previewSnapshot,
       appearance: previewAppearance(draft, appliedAppearance) },
     labels, usage,
-  } : null, [context, previewSnapshot, draft, labels, mode, appliedAppearance, usage]);
+  }, [context, previewSnapshot, draft, labels, mode, appliedAppearance, usage, awaitingReason]);
 
   const appliedPicture = record?.appearance?.atmosphere.source === 'picture' ? record.appearance.atmosphere.picture : null;
   const appliedPictureData = useAppliedPictureCopy(
@@ -315,81 +325,90 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
         theme: draft.appearance.theme,
       };
     }
-    const shared = PUBLIC_PROFILE_FIELDS_V1.filter(
-      (field) => draft.policy.fields[field],
-    );
-    // The review shows exactly what Confirm sends: this projection and this prepared picture copy.
-    const picture = appearance?.atmosphere.source === 'picture' ? appearance.atmosphere.picture : null;
-    const pictureCopy = picture ? preparedPictureCopy(picture) : null;
     if (!candidate.isCurrent()) return;
-    Modal.show({
-      component: PublicProfileReviewModal,
-      props: {
-        kind: publishing ? 'publish' : 'apply',
-        service: context.service.displayName,
-        pageUrl: context.urls?.page ?? null,
-        period: formatUsageCalendarPeriod(snapshotView?.snapshot.period ?? query.period),
-        sharedFields: shared,
-        disclosure: views?.visitor ?? null,
-        ...(picture && pictureCopy
-          ? { renderPicture: () => <ReviewPictureBand picture={picture} data={pictureCopy.data} copyId={pictureCopy.copyId} /> }
-          : {}),
-        endToEndEncrypted: encryption === 'e2ee',
-        indexable: draft.policy.indexable,
-        confirm: async () => {
-          if (!candidate.isCurrent()) {
-            setNotice(t('publicIdentity.profile.reasons.preparation_unavailable'));
-            return;
-          }
-          setSubmitting(true);
-          setNotice(null);
-          try {
-            const changed = resolvePublicProfileDraftChanges(record, draft);
-            const outcome = publishing
-              ? await execution.execute('account.public_profile.publish', {
-                  intent: 'publish',
-                  policy: draft.policy,
-                  metadataSelection: {},
-                  query,
-                  layout: draft.layout,
-                  appearance:
-                    appearance ?? previewAppearance(draft, appliedAppearance),
-                })
-              : await execution.execute('account.public_profile.update', {
-                  ...(changed.layout ? { layout: draft.layout } : {}),
-                  ...(appearance ? { appearance } : {}),
-                });
-            if (!outcome.ok) {
-              if (!isActionApprovalDeclinedErrorCode(outcome.errorCode))
-                setNotice(t('publicIdentity.profile.actionFailed'));
-              return;
-            }
-            setNotice(
-              publicProfileMutationNotice(outcome.result) ??
-                (publishing
-                  ? t('publicIdentity.editor.published')
-                  : t('publicIdentity.editor.applied')),
-            );
-            seeded.current = false;
-            await reload();
-          } catch {
-            setNotice(t('publicIdentity.profile.actionUncertain'));
-            await reload();
-          } finally {
-            setSubmitting(false);
-          }
-        },
-      },
-      chrome: {
-        kind: 'card',
-        phonePresentation: 'sheet',
-        testID: 'public-profile-review-modal',
-        title: publishing
-          ? t('publicIdentity.review.titlePublish')
-          : t('publicIdentity.review.titleApply'),
-      },
-      closeOnBackdrop: true,
-    });
+    const review = (disclosure: PublicProfileEditorView | null,
+      policy: PublicProfilePolicyV1, prepared: PublicProfilePreparedAppearanceV1,
+      period: string, reviewContext: PublicProfileContextV1 = context): Promise<boolean> => {
+      const service = reviewContext.service;
+      if (!service || !candidate.isCurrent() || !execution.isCurrent()) return Promise.resolve(false);
+      const picture = prepared.atmosphere.source === 'picture' ? prepared.atmosphere.picture : null;
+      const pictureCopy = picture ? preparedPictureCopy(picture) : null;
+      const signal = execution.getSignal();
+      return new Promise(resolve => {
+        let settled = false;
+        let modalId: string;
+        const finish = (confirmed: boolean) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', abort);
+          const current = candidate.isCurrent() && execution.isCurrent();
+          if (confirmed && !current) setNotice(t('publicIdentity.profile.reasons.preparation_unavailable'));
+          resolve(confirmed && current && !signal.aborted);
+        };
+        const abort = () => { finish(false); Modal.hide(modalId); };
+        if (signal.aborted) { resolve(false); return; }
+        modalId = Modal.show({
+          component: PublicProfileReviewModal,
+          props: {
+            kind: publishing ? 'publish' : 'apply', service: service.displayName,
+            pageUrl: reviewContext.urls?.page ?? null, period,
+            sharedFields: PUBLIC_PROFILE_FIELDS_V1.filter(field => policy.fields[field]),
+            disclosure, preparationReason: !disclosure ? previewReason : null,
+            ...(picture && pictureCopy
+              ? { renderPicture: () => <ReviewPictureBand picture={picture} data={pictureCopy.data} copyId={pictureCopy.copyId} /> }
+              : {}),
+            endToEndEncrypted: encryption === 'e2ee', indexable: policy.indexable,
+            confirm: async () => { finish(true); }, cancel: () => finish(false),
+          },
+          onRequestClose: () => finish(false), onHostUnmount: () => finish(false),
+          chrome: { kind: 'card', phonePresentation: 'sheet', testID: 'public-profile-review-modal',
+            title: publishing ? t('publicIdentity.review.titlePublish') : t('publicIdentity.review.titleApply') },
+          closeOnBackdrop: true,
+        });
+        signal.addEventListener('abort', abort, { once: true });
+      });
+    };
+    setSubmitting(true);
+    setNotice(null);
+    try {
+      const changed = resolvePublicProfileDraftChanges(record, draft);
+      const preparedAppearance = appearance ?? previewAppearance(draft, appliedAppearance);
+      const outcome = publishing
+        ? await execution.execute('account.public_profile.publish', {
+            intent: 'publish', policy: draft.policy, metadataSelection: {}, query,
+            layout: draft.layout, appearance: preparedAppearance,
+          }, {
+            // Canonical preparation happens once before F2. Ask and dispatch retain
+            // that exact effect; neither may silently reread different Usage facts.
+            reviewPublicProfilePreparedAction: async effect => {
+              if (effect.request.operation !== 'publish') return false;
+              const body = effect.request.body;
+              const view = projectPublicProfilePreview({ context: effect.publicationContext, policy: body.policy,
+                metadata: body.metadata, snapshot: body.snapshot, layout: body.layout, appearance: body.appearance });
+              return view ? review(withoutAppearance(view), body.policy, body.appearance,
+                formatUsageCalendarPeriod(body.snapshot.period), effect.publicationContext) : false;
+            },
+          })
+        : await review(views?.visitor ?? null, draft.policy, preparedAppearance,
+            formatUsageCalendarPeriod(snapshotView?.snapshot.period ?? query.period))
+          ? await execution.execute('account.public_profile.update', {
+              ...(changed.layout ? { layout: draft.layout } : {}), ...(appearance ? { appearance } : {}),
+            }) : null;
+      if (!outcome) return;
+      if (!outcome.ok) {
+        if (!isActionApprovalDeclinedErrorCode(outcome.errorCode)) setNotice(publicProfileMutationNotice(outcome));
+        return;
+      }
+      setNotice(publicProfileMutationNotice(outcome.result) ??
+        (publishing ? t('publicIdentity.editor.published') : t('publicIdentity.editor.applied')));
+      seeded.current = false;
+      await reload();
+    } catch {
+      setNotice(t('publicIdentity.profile.actionUncertain'));
+      await reload();
+    } finally {
+      setSubmitting(false);
+    }
   }, [
     widgetArea.candidate,
     draft,
@@ -406,16 +425,10 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     views,
   ]);
 
-  const header = (
-    <SettingsPageHeader
-      title={t('publicIdentity.editor.title')}
-      description={t('publicIdentity.profile.purposeIntro')}
-    />
-  );
   if (state.kind === 'failed') {
     return (
       <ItemList style={{ paddingTop: 0 }}>
-        {header}
+        <SettingsPageHeader title={t('publicIdentity.editor.title')} />
         <SurfaceStateCard
           kind="error"
           title={t('publicIdentity.profile.loadFailedTitle')}
@@ -438,8 +451,7 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
     />
   );
   return (
-    <ItemList style={{ paddingTop: 0 }}>
-      {header}
+    <ItemList style={{ paddingTop: 0 }} pageColumn="wide">
       {draft && labels ? (
         <PublicProfileWidgetPreviewContext.Provider value={widgetPreview}>
         <PublicProfileEditor
@@ -450,6 +462,9 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
           changes={changeCount}
           ownerView={views?.owner ?? null}
           visitorView={views?.visitor ?? null}
+          shellView={shellView}
+          unavailable={!previewSnapshot && previewReason
+            ? { reason: awaitingReason, onRetry: () => setAttempt(value => value + 1) } : null}
           hiddenBlockIds={views?.hidden ?? new Set()}
           pageLabels={labels}
           usage={usage}
@@ -527,23 +542,16 @@ function CapturedPublicProfileEditorScreen({ scope }: Readonly<{ scope: ReturnTy
           )}
         />
         </PublicProfileWidgetPreviewContext.Provider>
-      ) : draft && notice ? (
-        // The page cannot be prepared on this device right now: say why, keep the draft, offer a retry.
-        <SurfaceStateCard
-          testID="public-profile-editor-unavailable"
-          kind="unavailable"
-          title={t('publicIdentity.profile.unavailableTitle')}
-          reason={notice}
-          action={{ label: t('publicIdentity.profile.retry'), onPress: () => setAttempt(value => value + 1) }}
-          replacesContent
-        />
       ) : (
-        <SurfaceStateCard
-          testID="public-profile-editor-loading"
-          kind="loading"
-          title={t('publicIdentity.editor.preparing')}
-          replacesContent
-        />
+        <>
+          <SettingsPageHeader title={t('publicIdentity.editor.title')} />
+          <SurfaceStateCard
+            testID="public-profile-editor-loading"
+            kind="loading"
+            title={t('publicIdentity.editor.preparing')}
+            replacesContent
+          />
+        </>
       )}
     </ItemList>
   );
@@ -578,10 +586,12 @@ function PublicProfileReviewModal(
       period: string;
       sharedFields: readonly (typeof PUBLIC_PROFILE_FIELDS_V1)[number][];
       disclosure: unknown;
+      preparationReason: PublicProfilePreparationUnavailableReasonV1 | null;
       renderPicture?: () => React.ReactNode;
       endToEndEncrypted: boolean;
       indexable: boolean;
       confirm: () => Promise<void>;
+      cancel: () => void;
     }>,
 ) {
   const [confirming, setConfirming] = React.useState(false);
@@ -593,11 +603,12 @@ function PublicProfileReviewModal(
       period={props.period}
       sharedFields={props.sharedFields}
       disclosure={props.disclosure}
+      preparationReason={props.preparationReason}
       renderPicture={props.renderPicture}
       endToEndEncrypted={props.endToEndEncrypted}
       indexable={props.indexable}
       confirming={confirming}
-      onCancel={props.onClose}
+      onCancel={() => { props.cancel(); props.onClose(); }}
       onConfirm={() => {
         setConfirming(true);
         void props.confirm().finally(props.onClose);

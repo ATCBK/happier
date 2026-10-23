@@ -20,7 +20,7 @@ export function publicProfilePageLabels(context: PublicProfileContextV1, snapsho
       since ? t('publicIdentity.page.since', { date: since }) : null].filter(Boolean).join(' · '),
     periodTitle: formatUsageCalendarPeriod({ relative: '90days' }),
     periodDetail: snapshot && period ? t('publicIdentity.page.periodDetail', { range: formatUsageCalendarPeriod(period),
-      synced: formatRelativeTime(snapshot.computedAtMs) }) : t('publicIdentity.profile.reasons.usage_unavailable'),
+      synced: formatRelativeTime(snapshot.computedAtMs) }) : '',
     emptyLayout: t('publicIdentity.page.empty'), footerNote: t('publicIdentity.page.footerNote'), report: t('publicIdentity.page.report'),
     madeWith: t('publicIdentity.page.madeWith'), inert: { success: t('publicIdentity.page.success'), warning: t('publicIdentity.page.warning'),
       error: t('publicIdentity.page.error'), incomplete: t('publicIdentity.page.incomplete') },

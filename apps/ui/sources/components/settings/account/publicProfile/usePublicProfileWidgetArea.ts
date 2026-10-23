@@ -41,20 +41,29 @@ export function usePublicProfileWidgetArea(serverId: string,
       ? [item.instance.definition.artifactId] : []))] : [], [state.status === 'ready' ? state.items : null]);
   // Definition edits invalidate only copies using those definitions, never every Account Artifact.
   const artifacts = storage(useShallow(store => artifactIds.map(id => store.artifacts[id] ?? null)));
-  const source = React.useMemo(() => ({ state, surface: binding.surface, declarations, artifacts }), [state, binding.surface, declarations, artifacts]);
+  const source = React.useMemo(() => ({ state, surface: binding.surface, context, declarations, artifacts }), [state, binding.surface, context, declarations, artifacts]);
   const liveSource = React.useRef(source);
   liveSource.current = source;
   const execute = React.useRef(execution);
   execute.current = execution;
-  const [compiled, setCompiled] = React.useState<Readonly<{ source: typeof source; layout: PublicProfileLayoutV1 }> | null>(null);
+  const [compiled, setCompiled] = React.useState<Readonly<{ layout: PublicProfileLayoutV1; isCurrent(): boolean }> | null>(null);
   const [failure, setFailure] = React.useState<typeof source | null>(null);
 
-  const isCurrent = React.useCallback(() => liveSource.current === source && execute.current.isCurrent()
-    && state.status === 'ready' && state.isCurrent() && !state.isReadPending() && !state.readFailure
-    && binding.surface !== null && sameStrictJsonValue(state.surface.owner, binding.surface.owner), [source, state, binding.surface]);
+  const isCurrent = React.useCallback(() => {
+    const current = liveSource.current;
+    // A new observation is not a new reviewed layout. Compare its admitted
+    // inputs, while authority and Artifact publications remain live guards.
+    return execute.current.isCurrent() && source.state.status === 'ready' && current.state.status === 'ready'
+      && current.state.isCurrent() && !current.state.readFailure && current.surface !== null
+      && sameStrictJsonValue(current.state.surface.owner, current.surface.owner)
+      && sameStrictJsonValue(current.surface, source.surface) && sameStrictJsonValue(current.context, source.context)
+      && sameStrictJsonValue(current.state.surface, source.state.surface) && current.state.items === source.state.items
+      && current.declarations === source.declarations && current.artifacts === source.artifacts
+      && artifactIds.every((id, index) => (storage.getState().artifacts[id] ?? null) === artifacts[index]);
+  }, [source, artifactIds, artifacts]);
 
   React.useEffect(() => {
-    if (state.status !== 'ready' || !isCurrent()) return;
+    if (state.status !== 'ready' || !isCurrent() || compiled?.isCurrent()) return;
     let active = true;
     const controller = new AbortController();
     void compileWidgetAreaPublicProfileLayoutV1({ v: 1, surface: state.surface, items: state.items }, {
@@ -68,12 +77,12 @@ export function usePublicProfileWidgetArea(serverId: string,
       resolveInstalledView: surface => declarations.accountLifetime?.isCurrent()
         ? readWidgetDescriptor(declarations.projection, surface) : null,
     }).then(layout => {
-      if (active && isCurrent()) setCompiled({ source, layout });
+      if (active && isCurrent()) setCompiled({ layout, isCurrent });
     }).catch(() => { if (active && isCurrent()) setFailure(source); });
     return () => { active = false; controller.abort(); };
-  }, [source, isCurrent, state, declarations]);
+  }, [source, isCurrent, state, declarations, compiled]);
 
-  const candidate = compiled?.source === source && isCurrent() ? { layout: compiled.layout, isCurrent } : null;
+  const candidate = compiled?.isCurrent() ? { layout: compiled.layout, isCurrent: compiled.isCurrent } : null;
   const unavailable = state.status === 'unavailable' || state.status === 'ready' && Boolean(state.readFailure) || failure === source;
   return { binding, area, candidate, status: candidate ? 'ready' as const : unavailable ? 'unavailable' as const : 'loading' as const };
 }

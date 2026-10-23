@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildYourHomeModel,
+  fitYourHomeLegend,
+  resolveYourHomeLayout,
   resolveYourHomeHeaderFact,
   type YourHomeMachineInput,
 } from './yourHomeModel';
@@ -77,4 +79,48 @@ describe('Your Home past the lab’s three machines', () => {
         expect(model.machines.map(entry => entry.id)).toEqual(['need', 'work', 'idle', 'off']);
     });
 
+});
+
+describe('Your Home legend fit', () => {
+  const fleet = (count: number) =>
+    buildYourHomeModel(
+      Array.from({ length: count }, (_, index) =>
+        machine({ id: `m${index}`, online: index < 2, sessions: index < 2 ? ['need'] : [] }),
+      ),
+    ).machines;
+
+  it('names every machine when the rows fit', () => {
+    const machines = fleet(3);
+    expect(fitYourHomeLegend(machines, 120, true)).toEqual({ shown: machines, more: 0 });
+  });
+
+  it('folds the rest into one "more" row that takes the last row of room, so the orbit draws only named machines', () => {
+    const machines = fleet(57);
+    // 102 px of compact rows: three rows, one of them the "more" row.
+    const fit = fitYourHomeLegend(machines, 102, true);
+    expect(fit.shown.map((entry) => entry.id)).toEqual(['m0', 'm1']);
+    expect(fit.more).toBe(55);
+  });
+});
+
+describe('Your Home layout', () => {
+  it('keeps each size\'s own composition at its card width', () => {
+    expect(resolveYourHomeLayout('small', 262)).toBe('small');
+    expect(resolveYourHomeLayout('medium', 430)).toBe('medium');
+    expect(resolveYourHomeLayout('wide', 900)).toBe('wide');
+    expect(resolveYourHomeLayout('full', 900)).toBe('full');
+    expect(resolveYourHomeLayout('large', 900)).toBe('full');
+    expect(resolveYourHomeLayout(undefined, 262)).toBe('medium');
+  });
+
+  it('stacks the machines under the scene on a card too narrow for names beside it', () => {
+    expect(resolveYourHomeLayout('full', 336)).toBe('medium');
+    expect(resolveYourHomeLayout('wide', 336)).toBe('medium');
+    expect(resolveYourHomeLayout('small', 336)).toBe('small');
+  });
+
+  it('composes a half-width size that its row stretched across the card as the wide size does', () => {
+    expect(resolveYourHomeLayout('medium', 884)).toBe('full');
+    expect(resolveYourHomeLayout('small', 884)).toBe('wide');
+  });
 });
