@@ -7492,6 +7492,9 @@ export function useSessionComposerController({
                                             if (shouldSendReviewComments) clearSentReviewCommentDrafts();
                                         });
                                     }
+                                    const callerSurface = shouldSendReviewComments
+                                        ? 'session_attachment_review_comment_composer' as const
+                                        : 'session_attachment_composer' as const;
                                     const result = await submitAppSessionComposerMessage(sessionSubmitPort, {
                                         sessionId,
                                         session: sessionForSubmit,
@@ -7539,9 +7542,7 @@ export function useSessionComposerController({
                                         serverId: sessionRouteServerId,
                                         accountLifetime: outboundAccountLifetime,
                                         requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(sessionForSubmit, cliAuthState),
-                                        callerSurface: shouldSendReviewComments
-                                            ? 'session_attachment_review_comment_composer'
-                                            : 'session_attachment_composer',
+                                        callerSurface,
                                         onOutboundHandoff: (handoff) => {
                                             outboundHandoffLocalId = handoff.localId ?? outboundHandoffLocalId;
                                             clearAttachmentsAfterProjectionHandoff();
@@ -7565,7 +7566,16 @@ export function useSessionComposerController({
                                             restoreAfterFailedOutboundHandoff(attachmentDraftsForRestore);
                                         }
                                         Modal.alert(t('common.error'), result.errorMessage ?? t('errors.failedToSendMessage'));
-                                        return { status: 'rejected' };
+                                        return {
+                                            status: 'rejected',
+                                            reason: {
+                                                type: result.type,
+                                                ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
+                                                ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
+                                                callerSurface,
+                                                destination: attachmentSendDestination.kind,
+                                            },
+                                        };
                                     }
                                     if (shouldSendReviewComments) {
                                         clearSentReviewCommentDrafts();
@@ -7748,6 +7758,9 @@ export function useSessionComposerController({
                                         if (shouldSendReviewComments) clearSentReviewCommentDrafts();
                                     });
                                 }
+                                const callerSurface = shouldSendReviewComments
+                                    ? 'session_review_comment_composer' as const
+                                    : 'session_composer' as const;
                                 const result = await submitAppSessionComposerMessage(sessionSubmitPort, {
                                     sessionId,
                                     session: sessionForSubmit,
@@ -7794,9 +7807,7 @@ export function useSessionComposerController({
                                     serverId: sessionRouteServerId,
                                     accountLifetime: outboundAccountLifetime,
                                     requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(sessionForSubmit, cliAuthState),
-                                    callerSurface: shouldSendReviewComments
-                                        ? 'session_review_comment_composer'
-                                        : 'session_composer',
+                                    callerSurface,
                                     onOutboundHandoff: (handoff) => {
                                         outboundHandoffLocalId = handoff.localId ?? outboundHandoffLocalId;
                                         admissionHandoff.accept();
@@ -7820,7 +7831,16 @@ export function useSessionComposerController({
                                         restoreAfterFailedOutboundHandoff();
                                     }
                                     Modal.alert(t('common.error'), result.errorMessage ?? t('errors.failedToSendMessage'));
-                                    return { status: 'rejected' };
+                                    return {
+                                        status: 'rejected',
+                                        reason: {
+                                            type: result.type,
+                                            ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
+                                            ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
+                                            callerSurface,
+                                            destination: sendDestination?.kind ?? 'executionRun',
+                                        },
+                                    };
                                 }
 
                                 recordOutboundAccepted();

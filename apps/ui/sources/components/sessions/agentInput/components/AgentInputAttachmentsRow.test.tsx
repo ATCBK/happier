@@ -244,6 +244,43 @@ describe('AgentInputAttachmentsRow', () => {
     expect(number('trace')).toBeUndefined();
   });
 
+  it('puts a transparent picture on the transparency board the Media stage uses, and an opaque one on its plain tile', async () => {
+    const screen = await renderScreen(
+      <AgentInputAttachmentsRow
+        items={
+          [
+            {
+              kind: 'media',
+              key: 'logo',
+              label: 'logo.png',
+              media: 'image',
+              preview: { kind: 'image', uri: 'https://example.test/logo.png', mimeType: 'image/png' },
+            },
+            {
+              kind: 'media',
+              key: 'staged',
+              label: 'icon.webp',
+              media: 'image',
+              renderedPreview: <View />,
+              onPress: () => {},
+            },
+            {
+              kind: 'media',
+              key: 'photo',
+              label: 'photo.jpg',
+              media: 'image',
+              preview: { kind: 'image', uri: 'https://example.test/photo.jpg', mimeType: 'image/jpeg' },
+            },
+          ] satisfies readonly AgentInputAttachmentsRowItem[]
+        }
+      />,
+    );
+    const board = (key: string) => screen.findAllByTestId(`agent-input-attachment-checkerboard:${key}`);
+    expect(board('logo').length).toBeGreaterThan(0);
+    expect(board('staged').length).toBeGreaterThan(0);
+    expect(board('photo')).toHaveLength(0);
+  });
+
   it('renders a host-projected staged-media thumbnail without requiring a direct image URI', async () => {
     const onPreview = vi.fn();
 

@@ -110,6 +110,8 @@ type AgentInputAttachmentRowItemBase = Readonly<{
 export type AgentInputAttachmentRowBadge = AgentInputAttachmentRowItemBase & Readonly<{
     kind: 'badge';
     icon?: (tint: string) => React.ReactNode;
+    /** A quieter fact after the label ("19–24" after "SettingsModal.tsx"); spoken with it. */
+    detail?: string;
 }>;
 
 /**
@@ -126,6 +128,8 @@ export type AgentInputAttachmentRowMedia = AgentInputAttachmentRowItemBase & Rea
     renderedPreview?: React.ReactNode;
     /** Incumbent transfer-domain image preview, retained for existing uploads. */
     preview?: AgentInputAttachmentPreview;
+    /** The picture can hold transparency (the file classifier's `alphaCapable`); else read from label and preview type. */
+    alphaCapable?: boolean;
 }>;
 
 /**
@@ -394,6 +398,7 @@ export type ComposerAttachmentRowSurfacePresentation = Readonly<{
 export type ComposerAttachmentRowMediaPresentation = Readonly<{
     media: 'image' | 'video';
     renderedPreview: React.ReactNode;
+    alphaCapable?: boolean;
     onPress?: () => void;
 }>;
 
@@ -486,6 +491,7 @@ export function projectComposerAttachmentRowItem(input: Readonly<{
             label: input.attachment.presentation.label,
             media: media.media,
             renderedPreview: media.renderedPreview,
+            ...(media.alphaCapable === undefined ? {} : { alphaCapable: media.alphaCapable }),
             availability: 'ready',
             ...rowInteraction,
             ...(input.onRemove === undefined ? {} : { onRemove: input.onRemove }),

@@ -13,6 +13,7 @@ import {
     buildReviewCommentsDisplayText,
     filterReviewCommentDraftsIncludedInPrompt,
 } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
+import { getReviewCommentAnchorLine } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
@@ -86,6 +87,20 @@ function openReviewCommentsDraftsModal(params: Readonly<{
     });
 }
 
+/**
+ * What one selection riding with the message is called (lab Ap: "SettingsModal.tsx 19–24"): the file's
+ * name and its lines, so the person sees what goes with the question. Several stay a count.
+ */
+function describeSingleReviewCommentDraft(draft: ReviewCommentDraft): Readonly<{ name: string; lines: string | null }> {
+    const name = draft.filePath.split(/[\\/]/).filter(Boolean).pop() ?? draft.filePath;
+    const anchor = draft.anchor;
+    if (anchor.kind === 'range') {
+        return { name, lines: anchor.endLine > anchor.startLine ? `${anchor.startLine}–${anchor.endLine}` : `${anchor.startLine}` };
+    }
+    const line = getReviewCommentAnchorLine(draft);
+    return { name, lines: line == null ? null : `${line}` };
+}
+
 export function createReviewCommentsActionChip(params: Readonly<{
     sessionId?: string;
     openFile?: WorkspaceFileOpen;
@@ -100,7 +115,10 @@ export function createReviewCommentsActionChip(params: Readonly<{
     if (reviewCommentDraftCount <= 0) return undefined;
 
     const includedReviewCommentDrafts = filterReviewCommentDraftsIncludedInPrompt(params.reviewCommentDrafts);
-    const label = t('files.reviewComments.draftsChipLabel', { count: includedReviewCommentDrafts.length });
+    const single = includedReviewCommentDrafts.length === 1 ? describeSingleReviewCommentDraft(includedReviewCommentDrafts[0]!) : null;
+    const label = single
+        ? (single.lines ? `${single.name} ${single.lines}` : single.name)
+        : t('files.reviewComments.draftsChipLabel', { count: includedReviewCommentDrafts.length });
     const openDraftsModal = () => {
         openReviewCommentsDraftsModal({
             sessionId: params.sessionId,
@@ -115,7 +133,8 @@ export function createReviewCommentsActionChip(params: Readonly<{
     const attachmentRowItem = includedReviewCommentDrafts.length > 0 ? {
         kind: 'badge' as const,
         key: 'review-comments',
-        label,
+        label: single ? single.name : label,
+        ...(single?.lines ? { detail: single.lines } : {}),
         testID: 'agent-input-review-comments-attachment-badge',
         accessibilityLabel: label,
         icon: (tint: string) => <Icon name="chat-dots" size={AGENT_INPUT_CHIP_OPTION_ICON_SIZE_PX} color={tint} />,

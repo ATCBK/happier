@@ -15,6 +15,10 @@ import type {
 
 const FILL = { width: '100%', height: '100%' } as const;
 
+function resolveStagedMediaAlphaCapable(handle: ComposerContentHandleV1): boolean {
+    return resolveFileViewerKind({ path: handle.name, mimeType: handle.mimeType }).alphaCapable;
+}
+
 function createHostPreviewAction(input: Readonly<{
     attachment: ComposerAttachmentViewV1;
     catalog: ComposerAttachmentCatalogRowDescriptor;
@@ -28,7 +32,7 @@ function createHostPreviewAction(input: Readonly<{
         openMediaStage([{
             kind: input.handle.mediaKind === 'video' ? 'video' : 'image',
             title: input.attachment.presentation.label,
-            alphaCapable: resolveFileViewerKind({ path: input.handle.name, mimeType: input.handle.mimeType }).alphaCapable,
+            alphaCapable: resolveStagedMediaAlphaCapable(input.handle),
             source: {
                 source: { kind: 'composerStage', handle: input.handle },
                 enabled: true,
@@ -56,6 +60,8 @@ export function createComposerStagedMediaAttachmentPresentation(input: Readonly<
     const onPress = createHostPreviewAction({ ...input, originRef });
     return {
         media: input.handle.mediaKind,
+        // The tray tile and the stage put the same picture on the same transparency board.
+        alphaCapable: resolveStagedMediaAlphaCapable(input.handle),
         renderedPreview: React.createElement(View, { ref: originRef, collapsable: false, style: FILL },
             React.createElement(ComposerStagedMediaPreview, {
                 handle: input.handle,

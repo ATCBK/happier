@@ -20,6 +20,7 @@ import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
+import { ImageWellCheckerboard, useImageBacking } from '@/components/ui/media/ImageWell';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -121,6 +122,22 @@ const ATTACHMENT_CORNER_REMOVE_ICON_SIZE = 11;
  * On touch it stays beside the picture, always shown, so the two press targets never overlap. Either
  * way the control's own frame is the platform's target size: no hit slop.
  */
+/** What sits behind a tray picture: the same paper or transparency board as the Media stage and image wells. */
+function TrayPictureBacking(props: Readonly<{ alphaCapable: boolean; checkerboardTestID: string }>) {
+    const { theme } = useUnistyles();
+    const backing = useImageBacking('image', props.alphaCapable);
+    return (
+        <>
+            {backing.paper ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: backing.paper }]} /> : null}
+            {backing.checkerboard ? <ImageWellCheckerboard color={theme.colors.text.primary} testID={props.checkerboardTestID} /> : null}
+        </>
+    );
+}
+
+function resolveTrayPictureAlphaCapable(item: Extract<AgentInputAttachmentsRowItem, Readonly<{ kind: 'media' }>>): boolean {
+    return item.alphaCapable ?? resolveFileViewerKind({ path: item.label, mimeType: item.preview?.mimeType }).alphaCapable;
+}
+
 function TrayPictureTile(props: Readonly<{
     children: React.ReactNode;
     onRemove: (() => void) | undefined;
@@ -259,6 +276,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         ...Typography.variant('meta'),
         maxWidth: 180,
+    },
+    attachmentChipDetail: {
+        color: theme.colors.text.secondary,
+        ...Typography.variant('meta'),
+        ...Typography.tabular(),
     },
     attachmentChipMeta: {
         color: theme.colors.text.secondary,
@@ -789,6 +811,9 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     >
                         {badge.label}
                     </Text>
+                    {badge.detail ? (
+                        <Text numberOfLines={1} style={styles.attachmentChipDetail}>{badge.detail}</Text>
+                    ) : null}
                     {renderAttachmentErrorFeedback(badge)}
                 </>
             );
@@ -870,6 +895,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
                                     testID={`agent-input-attachment-media:${att.key}`}
                                 >
+                                    {att.media === 'image' ? <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} /> : null}
                                     {att.renderedPreview}
                                 </Pressable>
                             ) : (
@@ -879,6 +905,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
                                     testID={`agent-input-attachment-media:${att.key}`}
                                 >
+                                    {att.media === 'image' ? <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} /> : null}
                                     {att.renderedPreview}
                                 </View>
                             )}
@@ -923,6 +950,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                 style={[styles.attachmentImageSurface, attachmentImagePreviewStyle]}
                                 testID={`agent-input-attachment-image:${att.key}`}
                             >
+                                <TrayPictureBacking alphaCapable={resolveTrayPictureAlphaCapable(att)} checkerboardTestID={`agent-input-attachment-checkerboard:${att.key}`} />
                                 <Image
                                     source={{ uri: imagePreviewUri }}
                                     style={[{ width: '100%', height: '100%' }, styles.attachmentImage]}

@@ -225,6 +225,68 @@ describe('AgentInput review comment composer badge', () => {
         expect(modalConfig?.chrome?.kind).toBe('card');
     });
 
+    it('names the file and its lines when one selection rides with the message, and counts several', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const { createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip');
+
+        const rangeDraft = {
+            id: 'draft-range',
+            filePath: 'apps/ui/settings/SettingsModal.tsx',
+            source: 'diff',
+            anchor: { kind: 'range', filePath: 'apps/ui/settings/SettingsModal.tsx', startLine: 19, endLine: 24, side: 'after' },
+            snapshot: { selectedLines: ['export function SettingsModal() {'], beforeContext: [], afterContext: [] },
+            body: '',
+            createdAt: 1,
+        } satisfies ReviewCommentDraft;
+        const lineDraft = {
+            id: 'draft-line',
+            filePath: 'src/retry.ts',
+            source: 'file',
+            anchor: { kind: 'fileLine', startLine: 8 },
+            snapshot: { selectedLines: ['function delayFor() {'], beforeContext: [], afterContext: [] },
+            body: '',
+            createdAt: 2,
+        } satisfies ReviewCommentDraft;
+        const render = async (drafts: readonly ReviewCommentDraft[]) => {
+            const presentation = createReviewCommentsActionChip({
+                reviewCommentDrafts: drafts,
+                onSetDraftIncluded: setDraftIncludedSpy,
+                onClearDrafts: clearDraftsSpy,
+                onDeleteDraft: deleteDraftSpy,
+                onUpdateDraft: updateDraftSpy,
+            });
+            if (!presentation) throw new Error('Expected review comments chip');
+            return renderScreen(
+                <AgentInput
+                    value=""
+                    placeholder="placeholder"
+                    onChangeText={() => {}}
+                    onSend={() => {}}
+                    autocompleteKinds={[]}
+                    autocompleteSuggestions={async () => []}
+                    attachmentRowItems={presentation.attachmentRowItem ? [presentation.attachmentRowItem] : []}
+                />,
+            );
+        };
+
+        const one = await render([rangeDraft]);
+        const oneBadge = one.findByTestId('agent-input-review-comments-attachment-badge-preview');
+        expect(oneBadge?.props.accessibilityLabel).toBe('SettingsModal.tsx 19–24');
+        expect(one.getTextContent()).toContain('SettingsModal.tsx');
+        expect(one.getTextContent()).toContain('19–24');
+        expect(one.getTextContent()).not.toContain('files.reviewComments.draftsChipLabel');
+
+        const single = await render([lineDraft]);
+        expect(single.findByTestId('agent-input-review-comments-attachment-badge-preview')?.props.accessibilityLabel).toBe('retry.ts 8');
+
+        // A detached selection does not ride with the message, so the chip names the one that does.
+        const detachedAndOne = await render([{ ...lineDraft, includeInPrompt: false }, rangeDraft]);
+        expect(detachedAndOne.findByTestId('agent-input-review-comments-attachment-badge-preview')?.props.accessibilityLabel).toBe('SettingsModal.tsx 19–24');
+
+        const several = await render([rangeDraft, lineDraft]);
+        expect(several.findByTestId('agent-input-review-comments-attachment-badge-preview')?.props.accessibilityLabel).toBe('files.reviewComments.draftsChipLabel');
+    });
+
     it('lets the user detach or discard review comments from the composer badge remove button', async () => {
         const { AgentInput } = await import('./AgentInput');
         const { createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip');
