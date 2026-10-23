@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod/mini';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import {
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION,
@@ -638,6 +641,35 @@ describe('active Account Collection direct client', () => {
         await expect(collection.mutate([{ kind: 'put', expectedRevision: 1,
             value: { id: 'channel-1', status: 'enabled', title: 'Ops channel', retired: true },
         }])).resolves.toMatchObject({ status: 'rejected' });
+    });
+
+    it('decodes a Collection page with one logical schema admission per row', async () => {
+        const harness = await loadClient();
+        let logicalAdmissions = 0;
+        const compiled = compilePluginJsonSchema(contract.schema);
+        // Instrument the real compiler/parser without replacing either rule.
+        const validate = (value: unknown) => { logicalAdmissions++; return compiled(value); };
+        const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(contract.schema))
+            .check(z.superRefine(() => { logicalAdmissions++; }));
+        const rows = Array.from({ length: 50 }, (_, index) => ({
+            rowId: `channel-${index}`, revision: 1,
+            projection: { status: 'enabled', title: 'Ops channel' },
+            content: { t: 'plain' as const, v: { privateNote: 'kept', retired: { nested: true } } },
+        }));
+        for (const row of rows) {
+            const input = { contract, validate, storedReadSchema, row,
+                encryptionMode: 'plain' as const, material: null };
+            const decoded = harness.mergeLogicalRow(input);
+            expect(decoded).toMatchObject({ rowId: row.rowId, revision: 1, value: {
+                id: row.rowId, status: 'enabled', title: 'Ops channel', privateNote: 'kept',
+            } });
+            expect(decoded?.value).not.toHaveProperty('retired');
+        }
+        expect(logicalAdmissions).toBe(rows.length);
+        const invalid = { contract, validate, storedReadSchema,
+            row: { ...rows[0]!, projection: { status: 'invalid', title: 'Ops channel' } },
+            encryptionMode: 'plain' as const, material: null };
+        expect(harness.mergeLogicalRow(invalid)).toBeNull();
     });
 
     it('queries and CAS-mutates one admitted collection through the scoped Account authority', async () => {
