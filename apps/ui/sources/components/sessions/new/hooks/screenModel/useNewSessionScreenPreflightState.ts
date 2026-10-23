@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ConnectedServiceBindingsV2, PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 
 import {
     resolveNewSessionCapabilityProbeContext,
@@ -37,6 +38,7 @@ export function useNewSessionScreenPreflightState(params: Readonly<{
     capabilityServerId: string;
     cwd: string | null;
     connectedServicesBindingsPayload?: ConnectedServiceBindingsV2 | null;
+    selectedTeamCredentialModel?: TeamCredentialProviderModelSelectionV1 | null;
     connectedServicesModelProbeCacheIdentity?: string | null;
     /** Inherited authentication cannot be probed as Native while its catalog is unread. */
     connectedAccountDefaultsReady?: boolean;
@@ -99,6 +101,7 @@ export function useNewSessionScreenPreflightState(params: Readonly<{
         capabilityServerId: params.capabilityServerId,
         cwd: params.cwd,
         probeContext: modelCapabilityProbeContext,
+        selectedTeamCredentialModel: params.selectedTeamCredentialModel,
         enabled: machineProbesEnabled,
     });
     const { preflightModes: preflightSessionModes, modeOptions: acpSessionModeOptions, probe: acpSessionModeProbe } =

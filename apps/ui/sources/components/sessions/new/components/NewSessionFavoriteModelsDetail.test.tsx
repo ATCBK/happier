@@ -226,6 +226,7 @@ describe('NewSessionFavoriteModelsDetail', () => {
     });
 
     it('renders all available favorite models in one shared favorites group', async () => {
+        const refreshSharedCatalogs = vi.fn();
         agentCoreById.claude = { dynamicProbe: 'static-only' };
         preflightModelsByTargetKey['agent:claude'] = {
             modelOptions: [
@@ -268,12 +269,16 @@ describe('NewSessionFavoriteModelsDetail', () => {
             projectionCurrent
             cwd="/repo"
             settings={settings}
+            refreshProbe={{ phase: 'idle', onRefresh: refreshSharedCatalogs }}
             onSelectFavoriteModel={vi.fn()}
             onToggleFavoriteModel={vi.fn()}
             onRemoveFavoriteModelSelection={vi.fn()}
         />);
 
         const latestPickerProps = optionPickerOverlayProps.at(-1);
+        expect(refreshSharedCatalogs).not.toHaveBeenCalled();
+        await act(async () => { latestPickerProps?.probe?.onRefresh?.(); });
+        expect(refreshSharedCatalogs).toHaveBeenCalledTimes(1);
         expect(latestPickerProps?.title).toBe('profiles.groups.favorites');
         expect(latestPickerProps?.options.map((option) => ({
             label: option.label,

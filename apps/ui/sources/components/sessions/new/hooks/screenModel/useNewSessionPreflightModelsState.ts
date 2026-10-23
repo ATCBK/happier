@@ -27,6 +27,7 @@ import {
 import { NEW_SESSION_MODEL_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
 import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 import type { ProbedResourceFailure } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 
 export function useNewSessionPreflightModelsState(params: Readonly<{
     backendTarget: BackendTargetRefV2 | null | undefined;
@@ -36,6 +37,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
     capabilityServerId: string;
     cwd?: string | null;
     probeContext?: NewSessionCapabilityProbeContext | null;
+    selectedTeamCredentialModel?: TeamCredentialProviderModelSelectionV1 | null;
     enabled?: boolean;
 }>): Readonly<{
     preflightModels: PreflightModelList | null;
@@ -77,6 +79,13 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         return resolveBackendTargetKeyV2(backendTarget);
     }, [backendTarget]);
 
+    // Team catalog rows are already provided by the recipient-safe catalog.
+    // Native operation probes have no Session authority for either Team delivery
+    // mode, and a previous native observation must not become the Team's list.
+    const teamCatalogSelected = params.selectedTeamCredentialModel?.agentTargetKey === backendTargetKey
+        || Object.values(params.probeContext?.capabilityParams?.connectedServices?.bindingsByServiceId ?? {})
+            .some(selection => selection.source === 'team_resource');
+
     const backendTargetForProbe = React.useMemo(() => {
         if (!backendTarget) return null;
         // Stabilize by semantic identity (backendTargetKey) so effects don't thrash on object identity churn.
@@ -84,7 +93,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
     }, [backendTargetKey]);
 
     const agentType = React.useMemo<string | null>(() => {
-        if (!backendTarget) return null;
+        if (!backendTarget || teamCatalogSelected) return null;
         if (backendTarget.configuredBackendId) {
             return params.runtimeCarrierAgentId ?? null;
         }
@@ -94,7 +103,7 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
         // For built-in backends the backend id is already a canonical agent id.
         // For plugin-contributed backends the provider may still override it.
         return resolveCatalogAgentIdForBackendTarget(backendTarget) ?? backendTarget.backendId;
-    }, [backendTarget, params.runtimeCarrierAgentId]);
+    }, [backendTarget, params.runtimeCarrierAgentId, teamCatalogSelected]);
 
     const dynamicProbeEnabled = React.useMemo(() => {
         if (!agentType) return false;
@@ -265,12 +274,12 @@ export function useNewSessionPreflightModelsState(params: Readonly<{
     );
 
     const probe = React.useMemo(() => ({
-        phase: probePhase,
+        phase: teamCatalogSelected ? 'idle' : probePhase,
         failed: hasCurrentIdentity && modelDiscoveryFailed,
         refreshedAt: hasCurrentIdentity ? refreshedAt : null,
         spawnFailure: hasCurrentIdentity ? spawnFailure : null,
         ...(hasCurrentIdentity ? failure : {}),
         ...(dynamicProbeEnabled && preflightModelsKey && enabled ? { onRefresh } : {}),
-    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, failure, dynamicProbeEnabled, preflightModelsKey, enabled, onRefresh]);
+    }), [hasCurrentIdentity, probePhase, modelDiscoveryFailed, refreshedAt, spawnFailure, failure, dynamicProbeEnabled, preflightModelsKey, enabled, onRefresh, teamCatalogSelected]);
     return { preflightModels: currentModels, preflightModelsTargetKey: currentModels ? currentModelsTargetKey : null, modelOptions, probe };
 }

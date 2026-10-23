@@ -219,7 +219,6 @@ function FavoriteBackendModelsCollector(props: Readonly<{
     projectionCurrent: boolean;
     cwd?: string | null;
     settings: Settings;
-    refreshProbe?: OptionPickerProbeState | null;
     onSnapshot: (targetKey: string, snapshot: FavoriteModelSnapshot) => void;
 }>) {
     const backendIdentity = React.useMemo(() => buildFavoriteBackendIdentity(props.entry), [props.entry]);
@@ -542,12 +541,11 @@ function FavoriteBackendModelsCollector(props: Readonly<{
         selectedModelSelection?.ref.modelId,
     ]);
     const unifiedProbe = React.useMemo(() => mergeOptionPickerProbes([
-        props.refreshProbe ?? null,
         modelProbe ?? null,
         providerProjection.loading
             ? { phase: 'loading' as const }
             : { phase: 'idle' as const, onRefresh: () => { void providerProjection.refresh(); } },
-    ]), [modelProbe, props.refreshProbe, providerProjection.loading, providerProjection.refresh]);
+    ]), [modelProbe, providerProjection.loading, providerProjection.refresh]);
 
     React.useEffect(() => {
         props.onSnapshot(props.entry.backendTargetKey, {
@@ -696,7 +694,6 @@ export function NewSessionFavoriteModelsDetail(props: NewSessionFavoriteModelsDe
                     projectionCurrent={props.projectionCurrent}
                     cwd={props.cwd}
                     settings={props.settings}
-                    refreshProbe={props.refreshProbe}
                     onSnapshot={handleSnapshot}
                 />
             ))}

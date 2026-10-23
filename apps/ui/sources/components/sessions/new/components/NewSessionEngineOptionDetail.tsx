@@ -163,6 +163,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         capabilityServerId: props.capabilityServerId,
         cwd: props.cwd ?? null,
         probeContext: props.capabilityProbeContext ?? null,
+        selectedTeamCredentialModel: props.teamModels?.selectedTeamCredentialModel,
     });
     const { configOptions, unavailable: configOptionsUnavailable, probe: configProbe } = useNewSessionPreflightConfigOptionsState({
         backendTarget: operationalBackendTarget,

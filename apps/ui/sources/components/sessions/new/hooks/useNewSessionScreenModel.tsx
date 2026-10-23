@@ -89,6 +89,7 @@ import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection
 
 import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
+import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { normalizeOptionalParam } from '@/profileRouteParams';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useMachineEnvPresence } from '@/hooks/machine/useMachineEnvPresence';
@@ -2013,6 +2014,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         cwd: selectedPath,
         connectedServicesBindingsPayload,
         connectedServicesModelProbeCacheIdentity,
+        selectedTeamCredentialModel,
         machineProbesEnabled: hostDemanded,
         connectedAccountDefaultsReady: connectedAccountDefaultsStatus === 'ready',
     });
@@ -2761,6 +2763,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
     });
 
     const clearTeamCredentialModel = React.useCallback(() => setSelectedTeamCredentialModel(null), [setSelectedTeamCredentialModel]);
+    const modelCatalogRefreshProbe = React.useMemo(() => mergeOptionPickerProbes([
+        cliAvailabilityProbe,
+        credentialResourcesEnabled ? { phase: 'idle', onRefresh: teamCredentialCatalog.reload } : null,
+    ]), [cliAvailabilityProbe, credentialResourcesEnabled, teamCredentialCatalog.reload]);
     const teamModels = React.useMemo<NonNullable<React.ComponentProps<typeof NewSessionEngineOptionDetail>['teamModels']>>(() => ({
         teamCredentialResources: teamCredentialCatalog.resources,
         teamNameById: teamCredentialCatalog.teamNameById,
@@ -2817,7 +2823,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         rememberedEngineSelectionServerId: capabilityServerId,
         onRememberEngineSelection: rememberEngineSelection,
         onExplicitBackendTargetSelection: clearBackendTargetRouteParamsAfterExplicitSelection,
-        refreshProbe: cliAvailabilityProbe ?? null,
+        refreshProbe: modelCatalogRefreshProbe ?? null,
         providerProjection: providerModelProjection,
         selectedNativeSourceLabel: connectedServicesNativeSourceLabel,
         teamModels,

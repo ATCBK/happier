@@ -16,7 +16,7 @@ import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 export type NewSessionCapabilityProbeContext = Readonly<{
     cacheKeySuffixParts?: readonly string[] | null;
-    capabilityParams?: Readonly<Record<string, unknown>> | null;
+    capabilityParams?: Readonly<Record<string, unknown> & { connectedServices?: ConnectedServiceBindingsV2 }> | null;
     modelSuccessCacheMaxAgeMs?: number | null;
 }>;
 
@@ -26,7 +26,7 @@ const probeContextByKey = new Map<string, NewSessionCapabilityProbeContext>();
 function getOrCreateProbeContext(params: Readonly<{
     key: string;
     cacheKeySuffixParts: readonly string[];
-    capabilityParams: Readonly<Record<string, unknown>>;
+    capabilityParams: NonNullable<NewSessionCapabilityProbeContext['capabilityParams']>;
     modelSuccessCacheMaxAgeMs?: number | null;
 }>): NewSessionCapabilityProbeContext {
     const key = params.key.trim();
@@ -170,8 +170,8 @@ export function resolveNewSessionModelCapabilityProbeContext(params: Readonly<{
 }>): NewSessionCapabilityProbeContext | null {
     const bindings = ConnectedServiceBindingsV2IngressSchema.safeParse(params.connectedServices);
     if (bindings.success && Object.values(bindings.data.bindingsByServiceId).some((selection) => selection.source === 'team_resource')) {
-        // A Team operation probe must reach the canonical preflight refusal with
-        // its exact requested identity, rather than reuse the Native catalog.
+        // Preserve exact Team identity so the model-source owner can use the
+        // Team catalog without probing or reusing a Native observation.
         return resolveNewSessionCapabilityProbeContext({ ...params, connectedServices: bindings.data });
     }
     const shared = resolveNewSessionCapabilityProbeContext({ ...params, connectedServices: null });

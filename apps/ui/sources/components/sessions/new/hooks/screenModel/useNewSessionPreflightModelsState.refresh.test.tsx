@@ -636,10 +636,8 @@ describe('useNewSessionPreflightModelsState (refresh)', () => {
         await hook.unmount();
     });
 
-    it('does not enter a render loop when probeContext identity churns but cached values are stable by content', async () => {
+    it('revalidates once without adding demand when probeContext identity churns but cached values are stable by content', async () => {
         capabilityRpc.mockReset();
-
-        capabilityRpc.mockRejectedValue(new Error('unexpected probe call'));
 
         const cache = await import('@/sync/domains/models/dynamicModelProbeCache');
         const { buildDynamicModelProbeCacheKey } = await import('@/sync/domains/models/dynamicModelProbeCacheKey');
@@ -649,6 +647,7 @@ describe('useNewSessionPreflightModelsState (refresh)', () => {
             availableModels: [{ id: 'm1', name: 'Model 1' }],
             supportsFreeform: false,
         };
+        capabilityRpc.mockResolvedValue({ ok: true, result: cachedValue });
         cache.writeDynamicModelProbeCacheSuccess(buildDynamicModelProbeCacheKey({
             machineId: 'machine-1', targetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
             providerConnectionId: null, serverId: preflight.serverId, cwd: '/repo', extraKeySuffixParts: ['appServer'],
@@ -666,10 +665,18 @@ describe('useNewSessionPreflightModelsState (refresh)', () => {
         }));
 
         expect(hook.getCurrent().modelOptions.some((o) => o.value === 'm1')).toBe(true);
-        expect(capabilityRpc).not.toHaveBeenCalled();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+            expect(hook.getCurrent().probe.phase).toBe('idle');
+            expect(hook.getCurrent().probe.failed).toBe(false);
+        });
 
         await hook.rerender();
-        expect(capabilityRpc).not.toHaveBeenCalled();
+        await hook.rerender();
+        await flushHookEffects();
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent().modelOptions.some((o) => o.value === 'm1')).toBe(true);
         await hook.unmount();
     });
 });
