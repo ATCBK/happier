@@ -260,8 +260,11 @@ message-text or chunk-count ceiling, five-attempt delivery budget, or five-secon
 debounce cap. Storage and transport envelopes and each provider's native limits
 still apply. Known-no-effect delivery failures remain visible while retrying
 with increasing backoff (positive provider Retry-After first; a zero wait uses
-the growing fallback); accepted, partial, and unknown effects never resend
-automatically.
+the growing fallback). Newly scheduled local retries grow from one second to
+at most one minute, the same window as a healthy poll's maximum receive wait.
+This shared fallback covers polling, ingress admission, outward delivery and
+Automation result handoff. A longer provider Retry-After remains authoritative;
+accepted, partial, and unknown effects never resend automatically.
 
 If Happier temporarily cannot read the current Account or route authority before
 calling the provider, it retains the message for that same backoff and checks
