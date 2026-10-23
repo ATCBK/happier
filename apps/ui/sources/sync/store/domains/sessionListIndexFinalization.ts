@@ -42,11 +42,20 @@ export type SessionListRenderableDelta = Readonly<{
     changedSessionIds: readonly string[];
     removedSessionIds: readonly string[];
     rebuiltSessionListIndex: boolean;
+    /** Ephemeral exact-Home membership facts from the writer; absent means a full read is required. */
+    ordinaryMembershipChanges?: readonly OrdinarySessionMembershipChange[];
+}>;
+
+export type OrdinarySessionMembershipChange = Readonly<{
+    serverId: string;
+    addedSessionIds: readonly string[];
+    removedSessionIds: readonly string[];
 }>;
 
 type SessionListRenderableDeltaPublication = Readonly<{
     changedSessionIds: readonly string[];
     removedSessionIds: readonly string[];
+    ordinaryMembershipChanges?: readonly OrdinarySessionMembershipChange[];
 }>;
 
 function measureSessionListIndexFinalizationPhase<T>(
@@ -122,12 +131,14 @@ function buildNextSessionListRenderableDelta(input: Readonly<{
     changedSessionIds: readonly string[];
     removedSessionIds: readonly string[];
     rebuiltSessionListIndex: boolean;
+    ordinaryMembershipChanges?: readonly OrdinarySessionMembershipChange[];
 }>): SessionListRenderableDelta {
     return {
         revision: (input.previous?.revision ?? 0) + 1,
         changedSessionIds: input.changedSessionIds,
         removedSessionIds: input.removedSessionIds,
         rebuiltSessionListIndex: input.rebuiltSessionListIndex,
+        ...(input.ordinaryMembershipChanges ? { ordinaryMembershipChanges: input.ordinaryMembershipChanges } : {}),
     };
 }
 
@@ -213,6 +224,8 @@ export function finalizeSessionListRenderablePublication<S extends SessionListIn
                 changedSessionIds: renderableDelta.changedSessionIds,
                 removedSessionIds: renderableDelta.removedSessionIds,
                 rebuiltSessionListIndex: didSessionListIndexChange,
+                ordinaryMembershipChanges: renderableDelta.ordinaryMembershipChanges
+                    ?? (state.ordinarySessionListMembershipByServerId === nextStateBase.ordinarySessionListMembershipByServerId ? [] : undefined),
             }),
         } : {}),
     };
