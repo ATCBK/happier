@@ -193,7 +193,8 @@ it('settles steady source-any eligibility across three Agents without replaying 
     await vi.waitFor(() => expect(withdrawals).toHaveBeenCalledTimes(2));
     await poll();
     expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
-    expect(sourceReads).toBe(2);
+    // A current destination change reopens its row, not the retained Settings source.
+    expect(sourceReads).toBe(1);
     retireOnLease = true;
     await expect(services.resolveTeamCredentialBrokerEligibility(request))
       .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });

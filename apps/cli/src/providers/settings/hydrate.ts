@@ -47,8 +47,13 @@ function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reobserve:
     const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
     if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
     if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
-    const refreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };
     const readSnapshot = () => input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    const catalog = readSnapshot()?.providerConnectionsCatalog;
+    // A ready destination has already admitted any required source-preference
+    // handoff. Current reobservation needs the row, not optional source/history
+    // maintenance; inactive destinations retain the existing activation path.
+    const refreshInput: RefreshInput = { credentials, operationContext: input.operationContext, signal: input.signal,
+      ...(catalog?.status === 'ready' && typeof catalog.revision === 'number' ? { maintainSource: false } : {}) };
     let resolveReadable!: (catalog: ProviderConnectionsCatalogSnapshotV1) => void;
     const readable = new Promise<ProviderConnectionsCatalogSnapshotV1>(resolve => { resolveReadable = resolve; });
     const observeReadable = () => {

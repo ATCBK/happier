@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -22,8 +24,92 @@ import { createProjectSessionRuntimeFixture } from '@/daemon/testkit/projectSess
 import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it.each([
+  { revision: 4, custody: 'daemon' }, { revision: 'absent', custody: 'daemon' },
+  { revision: 4, custody: 'requester' }, { revision: 'absent', custody: 'requester' },
+] as const)('reobserves only current Provider authority and preserves activation ($revision, $custody)', async ({ revision, custody }) => {
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: `provider-current-${revision}-${custody}` })).toString('base64url')}.signature`, encryption: null };
+  const requests: string[] = [];
+  const mutations: ReturnType<typeof ProviderConnectionsRowMutationV1Schema.parse>[] = [];
+  let activated = revision !== 'absent';
+  let revokeAfterRow = false;
+  let revoked = false;
+  let boundaryError: unknown;
+  const server = createServer(async (request, response) => {
+    const path = request.url;
+    requests.push(`${request.method} ${path}`);
+    response.setHeader('Content-Type', 'application/json');
+    try {
+      if (path === '/v1/account/encryption/currentness') {
+        response.statusCode = revoked ? 401 : 200;
+        response.end(JSON.stringify(revoked ? { error: 'unauthorized' } : { mode: 'plain', version: 1,
+          settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      } else if (path === '/v1/account/entity-rows/provider-connections' && request.method === 'GET') {
+        if (revokeAfterRow) revoked = true;
+        response.end(JSON.stringify(activated ? { status: 'present', revision: 5,
+          content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } : { status: 'absent' }));
+      } else if (path === '/v1/account/entity-rows/provider-connections' && request.method === 'POST') {
+        let body = '';
+        for await (const chunk of request) body += String(chunk);
+        mutations.push(ProviderConnectionsRowMutationV1Schema.parse(JSON.parse(body)));
+        activated = true;
+        response.end(JSON.stringify({ status: 'updated', revision: 5, cursor: 1 }));
+      } else if (path === '/v2/account/settings' && request.method === 'GET') {
+        response.end(JSON.stringify({ version: 7, content: { t: 'plain', v: {} } }));
+      } else if (path === '/v2/account/settings/history') {
+        response.end(JSON.stringify({ snapshots: [] }));
+      } else {
+        const capture = emptyAccountSettingsHistoryCaptureResponse(path ?? '');
+        response.statusCode = capture?.status ?? 404;
+        response.end(JSON.stringify(capture?.data ?? { error: 'unsupported' }));
+      }
+    } catch (error) {
+      boundaryError = error;
+      response.statusCode = 500;
+      response.end(JSON.stringify({ error: 'invalid-fixture-request' }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    await runWithServerHttpBaseUrl(base, async () => {
+      const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+        loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+        providerConnectionsCatalog: { status: 'ready' as const, revision, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } };
+      // Custody admission is the requester boundary; Account-mode/currentness
+      // before disclosure still goes through real HTTP after the row response.
+      const operationContext = custody === 'requester' ? createInvocationSavedSecretOperationContextV1({
+        credentials, snapshot, serverHttpBaseUrl: base, isCurrent: async () => true,
+      }) : undefined;
+      setActiveAccountSettingsSnapshot(operationContext ? { ...snapshot, scopeKey: 'foreign-daemon',
+        providerConnectionsCatalog: { ...snapshot.providerConnectionsCatalog, revision: revision === 'absent' ? 4 : 'absent' } } : snapshot);
+      const daemonSnapshot = getActiveAccountSettingsSnapshot();
+      const input = { expectedScopeKey: snapshot.scopeKey, credentials, operationContext };
+      expect(await refreshProviderConnectionsCatalogForCli(input)).toMatchObject({ status: 'ready', revision: 5 });
+      expect(boundaryError).toBeUndefined();
+      if (revision === 'absent') {
+        expect(mutations).toMatchObject([{ expectedRevision: 'absent', sourceSettingsVersion: 7 }]);
+      } else {
+        expect(mutations).toEqual([]);
+        expect(requests.filter(path => path !== 'GET /v1/account/entity-rows/provider-connections'
+          && path !== 'GET /v1/account/encryption/currentness')).toEqual([]);
+        revokeAfterRow = true;
+        expect(await refreshProviderConnectionsCatalogForCli(input)).not.toMatchObject({ status: 'ready' });
+        expect(revoked).toBe(true);
+        expect((operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.providerConnectionsCatalog)
+          .not.toMatchObject({ status: 'ready' });
+      }
+      if (operationContext) expect(getActiveAccountSettingsSnapshot()).toBe(daemonSnapshot);
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
 
 it.each([4, 'absent'] as const)('refreshes demanded Provider authority while preserving absent-destination activation (revision=%s)', async revision => {
   const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: `provider-demand-${revision}` })).toString('base64url')}.signature`, encryption: null };
@@ -268,7 +354,9 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     throw new Error(`Unexpected cold Provider HTTP boundary: ${path}`);
   });
   let admitted: Awaited<ReturnType<typeof prepareProviderConnectionsCatalogForCli>> | undefined;
-  const firstRefresh = mode === 'joined-equal' || mode === 'joined-reobserve'
+  // Existing active current readers no longer own optional maintenance. Start
+  // that explicit work separately to retain its first-ready/joining contract.
+  const firstRefresh = mode !== 'cold'
     ? refreshActiveProviderConnectionsCatalog({ credentials }) : undefined;
   if (firstRefresh) await rowEntered;
   const read = mode === 'reobserve' || mode === 'joined-reobserve' || mode === 'repeated-reobserve' || mode === 'late-reobserve'
@@ -308,7 +396,8 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
   }
   // One catalog read plus the history owner's two destination-authority checks.
   // Cancelled history stops before the last authority check.
-  expect(rowReads).toBe(mode === 'late-reobserve' ? 6 : cancelCleanup ? 2 : 3);
+  // A later current-only read adds one row read, not another history census.
+  expect(rowReads).toBe(mode === 'late-reobserve' ? 4 : cancelCleanup ? 2 : 3);
 });
 
 it('refuses a model list from a credential retired after declaration admission without refreshing projections', async () => {
