@@ -525,7 +525,7 @@ export function saveFoundWarmCacheEntry(serverId: string | null | undefined, acc
     value: FoundCacheEntryV1): void {
     const parsed = FoundCacheEntryV1Schema.parse(value), key = foundCacheKey(serverId, accountId, parsed.kind, parsed.machineId);
     const previous = loadScopedRecord(key, FoundCacheEntryV1Schema);
-    if (JSON.stringify(previous) === JSON.stringify(parsed)) return;
+    if (sameStrictJsonValue(previous, parsed)) return;
     saveScopedRecord(key, parsed);
     for (const subscription of foundCacheListeners) if (subscription.key === key) subscription.listener();
 }
@@ -752,7 +752,10 @@ function persistScopedRecord<T extends Record<string, unknown>>(key: string | nu
         return;
     }
     const cachedValue = warmCacheSavedValueByKey.get(key);
-    if (cachedValue?.value === value && cachedValue.raw !== null) {
+    // This producer owns the durable scope snapshot. A newly decoded/assembled equal
+    // value is not a new persistent fact; retain its already-admitted value and bytes.
+    // raw=null still retries a failed write, even when the latest value is unchanged.
+    if (cachedValue && cachedValue.raw !== null && sameStrictJsonValue(cachedValue.value, value)) {
         return;
     }
     warmCacheSavedValueByKey.set(key, { raw: null, value });

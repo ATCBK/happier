@@ -1,5 +1,6 @@
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { MachineKindFromLegacyProjectionSchema } from '@happier-dev/protocol/machines/machineKind';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import type { MachineDisplayCacheEntryV1 } from './warmCachePersistence';
 
@@ -93,7 +94,7 @@ function areMachineDisplayCacheEntriesEqual(
         && nextEntry.homeDir === previousEntry.homeDir
         && (nextEntry.platform ?? null) === (previousEntry.platform ?? null)
         && (nextEntry.arch ?? null) === (previousEntry.arch ?? null)
-        && JSON.stringify(nextEntry.agentInventory ?? null) === JSON.stringify(previousEntry.agentInventory ?? null)
+        && sameStrictJsonValue(nextEntry.agentInventory ?? null, previousEntry.agentInventory ?? null)
     );
 }
 

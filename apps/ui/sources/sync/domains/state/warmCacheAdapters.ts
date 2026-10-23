@@ -15,6 +15,7 @@ import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessio
 import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import type {
     SessionListCacheEntryV1,
@@ -75,7 +76,7 @@ function readCompleteRuntimeActivityProjection(
 function areCacheJsonValuesEqual(next: unknown, previous: unknown): boolean {
     if (next === previous) return true;
     if ((next ?? null) === null || (previous ?? null) === null) return (next ?? null) === (previous ?? null);
-    return JSON.stringify(next) === JSON.stringify(previous);
+    return sameStrictJsonValue(next, previous);
 }
 
 function hasNonEmptyString(value: string | null | undefined): boolean {

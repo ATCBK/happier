@@ -34,6 +34,32 @@ function makeWindowRenderable(id: string, meaningfulActivityAt: number): Session
 }
 
 describe('warmCacheAdapters', () => {
+    it('compares admitted nested hydration fields without serializing unchanged rows', () => {
+        const row = createSessionListRenderableSessionFixture({ rollbackEligibleTurnStarts: [1, 2] });
+        const previous = buildSessionListCacheEntryFromRenderable(row);
+        const machine = { id: 'build', updatedAt: 20, active: false, activeAt: 10,
+            metadataVersion: 3, metadata: { agentInventory: { checkedAt: 12, installedAgentIds: ['codex'] } } };
+        const previousMachine = buildMachineDisplayCacheEntryFromRenderable(machine);
+        const stringify = vi.spyOn(JSON, 'stringify');
+        try {
+            for (let arrival = 0; arrival < 20; arrival++) {
+                expect(buildSessionListCacheEntryFromRenderable({ ...row, rollbackEligibleTurnStarts: [1, 2] }, previous))
+                    .toBe(previous);
+                expect(buildMachineDisplayCacheEntryFromRenderable({ ...machine,
+                    metadata: { agentInventory: { checkedAt: 12, installedAgentIds: ['codex'] } },
+                }, previousMachine)).toBe(previousMachine);
+            }
+            expect(stringify).not.toHaveBeenCalled();
+            expect(buildSessionListCacheEntryFromRenderable({ ...row, rollbackEligibleTurnStarts: [1, 3] }, previous))
+                .not.toBe(previous);
+            expect(buildMachineDisplayCacheEntryFromRenderable({ ...machine,
+                metadata: { agentInventory: { checkedAt: 13, installedAgentIds: ['codex'] } },
+            }, previousMachine)).not.toBe(previousMachine);
+        } finally {
+            stringify.mockRestore();
+        }
+    });
+
     it('roundtrips current access authority and its fail-closed null sentinel', () => {
         const access = {
             role: 'recipient' as const,
