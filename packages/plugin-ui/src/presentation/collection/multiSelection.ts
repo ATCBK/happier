@@ -15,6 +15,10 @@ import type { HappierRovingEntry } from './semantics.js';
  * - `anchorKey` is where a range extension measures from;
  * - `focusedKey` is where the reader is.
  *
+ * Lists with mirrored rows provide `entityKeysByOccurrenceKey`: visible order,
+ * anchor and focus address occurrences, while selected/eligible keys address
+ * entities. Without that projection each row key is its own entity key.
+ *
  * Only the collection owner may drive `setVisibleOrder`/`resetScope`, because
  * only it can see the rows a virtualizer has not mounted. `eligibleKeys` is the
  * larger set a selection may SURVIVE in while `visibleOrderedKeys` is the
@@ -29,6 +33,8 @@ export type HappierListMultiSelectionState = Readonly<{
   anchorKey: HappierListMultiSelectionKey | null;
   focusedKey: HappierListMultiSelectionKey | null;
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[];
+  /** Optional rendered-copy identity; selection membership remains entity-keyed. */
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
   eligibleKeys: ReadonlySet<HappierListMultiSelectionKey>;
   scopeKey: string;
   version: number;
@@ -42,6 +48,7 @@ export type HappierListMultiSelectionSnapshot = HappierListMultiSelectionState &
 export type CreateHappierListMultiSelectionStateInput = Readonly<{
   scopeKey: string;
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[];
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
   eligibleKeys?: readonly HappierListMultiSelectionKey[] | ReadonlySet<HappierListMultiSelectionKey> | null;
 }>;
 
@@ -58,12 +65,14 @@ export type HappierListMultiSelectionAction =
   | Readonly<{
       type: 'setVisibleOrder';
       visibleOrderedKeys: readonly HappierListMultiSelectionKey[];
+      entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
       eligibleKeys?: readonly HappierListMultiSelectionKey[] | ReadonlySet<HappierListMultiSelectionKey> | null;
     }>
   | Readonly<{
       type: 'resetScope';
       scopeKey: string;
       visibleOrderedKeys: readonly HappierListMultiSelectionKey[];
+      entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
       eligibleKeys?: readonly HappierListMultiSelectionKey[] | ReadonlySet<HappierListMultiSelectionKey> | null;
     }>;
 
@@ -76,9 +85,22 @@ function readKeys(
 function createEligibleKeys(
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[],
   eligibleKeys: readonly HappierListMultiSelectionKey[] | ReadonlySet<HappierListMultiSelectionKey> | null | undefined,
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>,
 ): ReadonlySet<HappierListMultiSelectionKey> {
-  if (!eligibleKeys) return new Set(readKeys(visibleOrderedKeys));
+  if (!eligibleKeys) return new Set(visibleOrderedKeys.map((key) => readEntityKey(key, entityKeysByOccurrenceKey)));
   return new Set(readKeys(eligibleKeys));
+}
+
+function readEntityKey(
+  key: HappierListMultiSelectionKey,
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>,
+): HappierListMultiSelectionKey {
+  return entityKeysByOccurrenceKey?.get(key) ?? key;
+}
+
+function resolveOccurrenceKey(state: HappierListMultiSelectionState, key: HappierListMultiSelectionKey): HappierListMultiSelectionKey {
+  if (!state.entityKeysByOccurrenceKey || state.entityKeysByOccurrenceKey.has(key)) return key;
+  return state.visibleOrderedKeys.find((candidate) => readEntityKey(candidate, state.entityKeysByOccurrenceKey) === key) ?? key;
 }
 
 function setsEqual(
@@ -106,15 +128,16 @@ function isEligible(
   state: HappierListMultiSelectionState,
   key: HappierListMultiSelectionKey | null,
 ): key is HappierListMultiSelectionKey {
-  return typeof key === 'string' && state.eligibleKeys.has(key);
+  return typeof key === 'string' && state.eligibleKeys.has(readEntityKey(key, state.entityKeysByOccurrenceKey));
 }
 
 function firstSelectedVisibleKey(
   selectedKeys: ReadonlySet<HappierListMultiSelectionKey>,
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[],
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>,
 ): HappierListMultiSelectionKey | null {
   for (const key of visibleOrderedKeys) {
-    if (selectedKeys.has(key)) return key;
+    if (selectedKeys.has(readEntityKey(key, entityKeysByOccurrenceKey))) return key;
   }
   return null;
 }
@@ -123,18 +146,19 @@ function pruneState(
   state: HappierListMultiSelectionState,
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[],
   eligibleKeys: ReadonlySet<HappierListMultiSelectionKey>,
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>,
 ): Pick<HappierListMultiSelectionState, 'selectedKeys' | 'anchorKey' | 'focusedKey'> {
   const visible = new Set(visibleOrderedKeys);
   const selectedKeys = new Set<HappierListMultiSelectionKey>();
   for (const key of state.selectedKeys) {
     if (eligibleKeys.has(key)) selectedKeys.add(key);
   }
-  const anchorKey = state.anchorKey && selectedKeys.has(state.anchorKey) && eligibleKeys.has(state.anchorKey)
+  const anchorKey = state.anchorKey && selectedKeys.has(readEntityKey(state.anchorKey, entityKeysByOccurrenceKey))
     ? state.anchorKey
-    : firstSelectedVisibleKey(selectedKeys, visibleOrderedKeys);
-  const focusedKey = state.focusedKey && visible.has(state.focusedKey) && eligibleKeys.has(state.focusedKey)
+    : firstSelectedVisibleKey(selectedKeys, visibleOrderedKeys, entityKeysByOccurrenceKey);
+  const focusedKey = state.focusedKey && visible.has(state.focusedKey) && eligibleKeys.has(readEntityKey(state.focusedKey, entityKeysByOccurrenceKey))
     ? state.focusedKey
-    : firstSelectedVisibleKey(selectedKeys, visibleOrderedKeys);
+    : firstSelectedVisibleKey(selectedKeys, visibleOrderedKeys, entityKeysByOccurrenceKey);
   return { selectedKeys, anchorKey, focusedKey };
 }
 
@@ -147,6 +171,8 @@ function commit(
     && state.anchorKey === next.anchorKey
     && state.focusedKey === next.focusedKey
     && arraysEqual(state.visibleOrderedKeys, next.visibleOrderedKeys)
+    && (state.entityKeysByOccurrenceKey === next.entityKeysByOccurrenceKey
+      || next.visibleOrderedKeys.every((key) => readEntityKey(key, state.entityKeysByOccurrenceKey) === readEntityKey(key, next.entityKeysByOccurrenceKey)))
     && setsEqual(state.eligibleKeys, next.eligibleKeys)
     && setsEqual(state.selectedKeys, next.selectedKeys);
   if (same) return state;
@@ -166,7 +192,8 @@ export function createInitialHappierListMultiSelectionState(
     anchorKey: null,
     focusedKey: null,
     visibleOrderedKeys,
-    eligibleKeys: createEligibleKeys(visibleOrderedKeys, input.eligibleKeys),
+    entityKeysByOccurrenceKey: input.entityKeysByOccurrenceKey,
+    eligibleKeys: createEligibleKeys(visibleOrderedKeys, input.eligibleKeys, input.entityKeysByOccurrenceKey),
     scopeKey: input.scopeKey,
     version: 0,
   };
@@ -178,9 +205,9 @@ export function reduceHappierListMultiSelection(
 ): HappierListMultiSelectionState {
   switch (action.type) {
     case 'enter': {
-      const key = action.key ?? null;
+      const key = action.key == null ? null : resolveOccurrenceKey(state, action.key);
       const selectedKeys = isEligible(state, key)
-        ? new Set<HappierListMultiSelectionKey>([key])
+        ? new Set<HappierListMultiSelectionKey>([readEntityKey(key, state.entityKeysByOccurrenceKey)])
         : new Set<HappierListMultiSelectionKey>();
       const anchorKey = selectedKeys.size > 0 ? key : null;
       return commit(state, {
@@ -202,24 +229,27 @@ export function reduceHappierListMultiSelection(
       });
     case 'replace': {
       if (!isEligible(state, action.key)) return state;
+      const occurrenceKey = resolveOccurrenceKey(state, action.key);
       return commit(state, {
         ...state,
         isSelectionMode: true,
-        selectedKeys: new Set([action.key]),
-        anchorKey: action.key,
-        focusedKey: action.key,
+        selectedKeys: new Set([readEntityKey(occurrenceKey, state.entityKeysByOccurrenceKey)]),
+        anchorKey: occurrenceKey,
+        focusedKey: occurrenceKey,
       });
     }
     case 'toggle': {
       if (!isEligible(state, action.key)) return state;
+      const occurrenceKey = resolveOccurrenceKey(state, action.key);
+      const entityKey = readEntityKey(occurrenceKey, state.entityKeysByOccurrenceKey);
       const selectedKeys = new Set(state.selectedKeys);
-      const removed = selectedKeys.delete(action.key);
-      if (!removed) selectedKeys.add(action.key);
+      const removed = selectedKeys.delete(entityKey);
+      if (!removed) selectedKeys.add(entityKey);
       const nextAnchorKey = selectedKeys.size === 0
         ? null
         : removed
-          ? firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys)
-          : action.key;
+          ? firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys, state.entityKeysByOccurrenceKey)
+          : occurrenceKey;
       return commit(state, {
         ...state,
         isSelectionMode: selectedKeys.size > 0,
@@ -227,20 +257,22 @@ export function reduceHappierListMultiSelection(
         anchorKey: nextAnchorKey,
         // The row the reader toggled remains the current cursor even when it is
         // no longer selected. Anchor and focus are deliberately separate facts.
-        focusedKey: selectedKeys.size > 0 ? action.key : null,
+        focusedKey: selectedKeys.size > 0 ? occurrenceKey : null,
       });
     }
     case 'selectRange': {
+      const targetKey = resolveOccurrenceKey(state, action.targetKey);
       const anchorKey = state.anchorKey
-        && state.eligibleKeys.has(state.anchorKey)
+        && isEligible(state, state.anchorKey)
         && state.visibleOrderedKeys.includes(state.anchorKey)
         ? state.anchorKey
         : null;
       const range = resolveHappierListMultiSelectionRange({
         visibleOrderedKeys: state.visibleOrderedKeys,
         anchorKey,
-        targetKey: action.targetKey,
+        targetKey,
         eligibleKeys: state.eligibleKeys,
+        entityKeysByOccurrenceKey: state.entityKeysByOccurrenceKey,
       });
       if (range.length === 0) return state;
       const selectedKeys = action.add === true
@@ -251,16 +283,17 @@ export function reduceHappierListMultiSelection(
         ...state,
         isSelectionMode: true,
         selectedKeys,
-        anchorKey: anchorKey ?? action.targetKey,
-        focusedKey: action.targetKey,
+        anchorKey: anchorKey ?? targetKey,
+        focusedKey: targetKey,
       });
     }
     case 'selectAllVisible': {
       const selectedKeys = new Set<HappierListMultiSelectionKey>();
       for (const key of state.visibleOrderedKeys) {
-        if (state.eligibleKeys.has(key)) selectedKeys.add(key);
+        const entityKey = readEntityKey(key, state.entityKeysByOccurrenceKey);
+        if (state.eligibleKeys.has(entityKey)) selectedKeys.add(entityKey);
       }
-      const firstKey = firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys);
+      const firstKey = firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys, state.entityKeysByOccurrenceKey);
       return commit(state, {
         ...state,
         isSelectionMode: selectedKeys.size > 0,
@@ -275,7 +308,7 @@ export function reduceHappierListMultiSelection(
       for (const key of requested) {
         if (state.eligibleKeys.has(key)) selectedKeys.add(key);
       }
-      const firstKey = firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys);
+      const firstKey = firstSelectedVisibleKey(selectedKeys, state.visibleOrderedKeys, state.entityKeysByOccurrenceKey);
       return commit(state, {
         ...state,
         isSelectionMode: selectedKeys.size > 0,
@@ -285,7 +318,7 @@ export function reduceHappierListMultiSelection(
       });
     }
     case 'setFocusedKey': {
-      const focusedKey = isEligible(state, action.key) ? action.key : null;
+      const focusedKey = isEligible(state, action.key) ? resolveOccurrenceKey(state, action.key) : null;
       return commit(state, {
         ...state,
         focusedKey,
@@ -293,12 +326,13 @@ export function reduceHappierListMultiSelection(
     }
     case 'setVisibleOrder': {
       const visibleOrderedKeys = readKeys(action.visibleOrderedKeys);
-      const eligibleKeys = createEligibleKeys(visibleOrderedKeys, action.eligibleKeys);
-      const pruned = pruneState(state, visibleOrderedKeys, eligibleKeys);
+      const eligibleKeys = createEligibleKeys(visibleOrderedKeys, action.eligibleKeys, action.entityKeysByOccurrenceKey);
+      const pruned = pruneState(state, visibleOrderedKeys, eligibleKeys, action.entityKeysByOccurrenceKey);
       return commit(state, {
         ...state,
         isSelectionMode: pruned.selectedKeys.size > 0,
         visibleOrderedKeys,
+        entityKeysByOccurrenceKey: action.entityKeysByOccurrenceKey,
         eligibleKeys,
         ...pruned,
       });
@@ -309,16 +343,18 @@ export function reduceHappierListMultiSelection(
           type: 'setVisibleOrder',
           visibleOrderedKeys: action.visibleOrderedKeys,
           eligibleKeys: action.eligibleKeys,
+          entityKeysByOccurrenceKey: action.entityKeysByOccurrenceKey,
         });
       }
       const visibleOrderedKeys = readKeys(action.visibleOrderedKeys);
-      const eligibleKeys = createEligibleKeys(visibleOrderedKeys, action.eligibleKeys);
+      const eligibleKeys = createEligibleKeys(visibleOrderedKeys, action.eligibleKeys, action.entityKeysByOccurrenceKey);
       return commit(state, {
         isSelectionMode: false,
         selectedKeys: new Set(),
         anchorKey: null,
         focusedKey: null,
         visibleOrderedKeys,
+        entityKeysByOccurrenceKey: action.entityKeysByOccurrenceKey,
         eligibleKeys,
         scopeKey: action.scopeKey,
       });
@@ -333,6 +369,7 @@ export type HappierListMultiSelectionRangeInput = Readonly<{
   anchorKey: HappierListMultiSelectionKey | null;
   targetKey: HappierListMultiSelectionKey;
   eligibleKeys?: ReadonlySet<HappierListMultiSelectionKey> | null;
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
 }>;
 
 function isRangeKeyEligible(
@@ -347,23 +384,26 @@ function isRangeKeyEligible(
  * dropped. With no anchor the target alone is the range, which is what makes a
  * Shift extension before any anchor exists behave like an ordinary pick rather
  * than selecting from the top of the list.
+ * A mirrored span returns each eligible entity once.
  */
 export function resolveHappierListMultiSelectionRange(
   input: HappierListMultiSelectionRangeInput,
 ): HappierListMultiSelectionKey[] {
   if (!input.visibleOrderedKeys.includes(input.targetKey)) return [];
-  if (!isRangeKeyEligible(input.targetKey, input.eligibleKeys)) return [];
+  const entityKey = (key: string) => readEntityKey(key, input.entityKeysByOccurrenceKey);
+  if (!isRangeKeyEligible(entityKey(input.targetKey), input.eligibleKeys)) return [];
 
   const anchorIndex = input.anchorKey ? input.visibleOrderedKeys.indexOf(input.anchorKey) : -1;
   const targetIndex = input.visibleOrderedKeys.indexOf(input.targetKey);
   if (targetIndex < 0) return [];
-  if (anchorIndex < 0) return [input.targetKey];
+  if (anchorIndex < 0) return [entityKey(input.targetKey)];
 
   const start = Math.min(anchorIndex, targetIndex);
   const end = Math.max(anchorIndex, targetIndex);
-  return input.visibleOrderedKeys
+  return [...new Set(input.visibleOrderedKeys
     .slice(start, end + 1)
-    .filter((key) => isRangeKeyEligible(key, input.eligibleKeys));
+    .map(entityKey)
+    .filter((key) => isRangeKeyEligible(key, input.eligibleKeys)))];
 }
 
 /**
@@ -566,6 +606,7 @@ export type HappierListMultiSelectionActions = Readonly<{
 
 export type HappierListMultiSelectionRowsInput = Readonly<{
   visibleOrderedKeys: readonly HappierListMultiSelectionKey[];
+  entityKeysByOccurrenceKey?: ReadonlyMap<HappierListMultiSelectionKey, HappierListMultiSelectionKey>;
   eligibleKeys?: readonly HappierListMultiSelectionKey[] | ReadonlySet<HappierListMultiSelectionKey> | null;
 }>;
 
@@ -666,7 +707,7 @@ export function createHappierListMultiSelectionStore(
     getSnapshot: () => snapshot,
     getRowSnapshot: (key) => [
       state.isSelectionMode ? '1' : '0',
-      state.selectedKeys.has(key) ? '1' : '0',
+      state.selectedKeys.has(readEntityKey(key, state.entityKeysByOccurrenceKey)) ? '1' : '0',
       state.focusedKey === key ? '1' : '0',
     ].join(':'),
     subscribe: (listener) => {
@@ -679,12 +720,14 @@ export function createHappierListMultiSelectionStore(
       type: 'setVisibleOrder',
       visibleOrderedKeys: params.visibleOrderedKeys,
       eligibleKeys: params.eligibleKeys,
+      entityKeysByOccurrenceKey: params.entityKeysByOccurrenceKey,
     }),
     updateScope: (params) => dispatch({
       type: 'resetScope',
       scopeKey: params.scopeKey,
       visibleOrderedKeys: params.visibleOrderedKeys,
       eligibleKeys: params.eligibleKeys,
+      entityKeysByOccurrenceKey: params.entityKeysByOccurrenceKey,
     }),
     enter: (preselectKey) => dispatch({ type: 'enter', key: preselectKey }),
     exit: () => dispatch({ type: 'exit' }),
@@ -696,6 +739,6 @@ export function createHappierListMultiSelectionStore(
     selectAllVisible: () => dispatch({ type: 'selectAllVisible' }),
     setSelectedKeys: (keys) => dispatch({ type: 'setSelectedKeys', keys }),
     setFocusedKey: (key) => dispatch({ type: 'setFocusedKey', key }),
-    isSelected: (key) => state.selectedKeys.has(key),
+    isSelected: (key) => state.selectedKeys.has(readEntityKey(key, state.entityKeysByOccurrenceKey)),
   };
 }

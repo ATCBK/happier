@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createInitialHappierListMultiSelectionState,
+  createHappierListMultiSelectionStore,
   reduceHappierListMultiSelection,
   resolveHappierListMultiSelectionKeyboardIntent,
   resolveHappierListMultiSelectionPointerAction,
@@ -19,6 +20,52 @@ function selectedKeys(state: HappierListMultiSelectionState): string[] {
 }
 
 describe('reduceHappierListMultiSelection', () => {
+  it('ranges across occurrences and selects each entity once while focusing only the target copy', () => {
+    const store = createHappierListMultiSelectionStore({
+      scopeKey: 'mirrors',
+      visibleOrderedKeys: ['attention:a', 'base:b', 'base:a', 'base:c'],
+      entityKeysByOccurrenceKey: new Map([['attention:a', 'a'], ['base:b', 'b'], ['base:a', 'a'], ['base:c', 'c']]),
+    });
+    store.replaceWith('base:a');
+    store.selectRange('base:c');
+    expect([...store.getSnapshot().selectedKeys]).toEqual(['a', 'c']);
+    expect(store.getSnapshot().anchorKey).toBe('base:a');
+    expect(store.getSnapshot().focusedKey).toBe('base:c');
+    expect(store.getRowSnapshot('attention:a')).toBe('1:1:0');
+    expect(store.getRowSnapshot('base:a')).toBe('1:1:0');
+    expect(store.getRowSnapshot('base:c')).toBe('1:1:1');
+    store.selectRange('attention:a');
+    expect([...store.getSnapshot().selectedKeys]).toEqual(['a', 'b']);
+    store.toggle('base:a');
+    expect([...store.getSnapshot().selectedKeys]).toEqual(['b']);
+    expect(store.getRowSnapshot('attention:a')).toBe('1:0:0');
+    expect(store.getRowSnapshot('base:a')).toBe('1:0:1');
+    store.selectAllVisible();
+    expect(store.getSnapshot().count).toBe(3);
+  });
+
+  it('preserves entity selection when a mirror disappears and keeps equivalent row publications silent', () => {
+    const entities = new Map([['attention:a', 'a'], ['base:a', 'a'], ['base:b', 'b']]);
+    const store = createHappierListMultiSelectionStore({
+      scopeKey: 'mirrors', visibleOrderedKeys: ['attention:a', 'base:a', 'base:b'], entityKeysByOccurrenceKey: entities,
+    });
+    store.replaceWith('attention:a');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.updateScope({
+      scopeKey: 'mirrors', visibleOrderedKeys: ['attention:a', 'base:a', 'base:b'], entityKeysByOccurrenceKey: new Map(entities),
+    });
+    expect(listener).not.toHaveBeenCalled();
+    store.updateScope({
+      scopeKey: 'mirrors', visibleOrderedKeys: ['base:a', 'base:b'],
+      entityKeysByOccurrenceKey: new Map([['base:a', 'a'], ['base:b', 'b']]),
+    });
+    expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
+    expect(store.getSnapshot().focusedKey).toBe('base:a');
+    store.toggle('a');
+    expect(store.getSnapshot().count).toBe(0);
+  });
+
   it('preserves opaque selection keys exactly, including whitespace and empty strings', () => {
     let state = createInitialHappierListMultiSelectionState({
       scopeKey: 'scope-a',
