@@ -18046,6 +18046,8 @@ settingsSession: {
         alwaysRemembered: 'Zawsze zapamiętane:',
         searchable: 'Możliwe do wyszukania:',
         countsUnavailable: 'Nie udało się wczytać liczby',
+        countsNeedMachine: 'Liczby pochodzą z indeksu pamięci maszyny.',
+        searchNeedMachine: 'Wyszukiwanie działa na indeksie pamięci maszyny.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fakt' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'fakty' : 'faktów'}`,
         topicsLabel: 'Tematy:',
         showAll: ({ count }: { count: number }) => `Pokaż wszystkie (${count})`,

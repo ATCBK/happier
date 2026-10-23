@@ -18131,6 +18131,8 @@ settingsSession: {
         alwaysRemembered: '常に記憶:',
         searchable: '検索可能:',
         countsUnavailable: '件数を読み込めませんでした',
+        countsNeedMachine: '件数はマシンのメモリインデックスから取得されます。',
+        searchNeedMachine: '検索はマシンのメモリインデックスで実行されます。',
         factCount: ({ count }: { count: number }) => `${count} 件`,
         topicsLabel: 'トピック:',
         showAll: ({ count }: { count: number }) => `${count} 件すべて表示`,

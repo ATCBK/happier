@@ -18221,6 +18221,8 @@ settingsSession: {
         alwaysRemembered: 'Siempre en memoria:',
         searchable: 'Buscable:',
         countsUnavailable: 'No se pudo cargar el recuento',
+        countsNeedMachine: 'Los recuentos salen del índice de memoria de una máquina.',
+        searchNeedMachine: 'La búsqueda se ejecuta en el índice de memoria de una máquina.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'dato' : 'datos'}`,
         topicsLabel: 'Temas:',
         showAll: ({ count }: { count: number }) => `Mostrar los ${count}`,

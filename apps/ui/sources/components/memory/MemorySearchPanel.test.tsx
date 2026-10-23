@@ -110,6 +110,19 @@ afterEach(async () => {
     webLocks.restore();
 });
 
+/** Two usable machines and no choice: a sole machine would be initialised as the selection by its owner, which is not "none chosen". */
+async function clearMemoryMachineChoice(serverId: string) {
+    const first = storage.getState().machines[administration.targets[0]!.machineId]!;
+    const second = { ...first, id: 'machine-extra', metadata: { ...first.metadata!, displayName: 'Desktop', host: 'desktop.local' } };
+    homes.answer(serverId, '/v1/machines', { body: [first.id, second.id].map(id => createPlainMachineRowFixture({ id, accountId: 'account-a' })) });
+    storage.setState(state => ({
+        machines: { ...state.machines, [second.id]: second },
+        machineListByServerId: { ...state.machineListByServerId, [serverId]: [first, second] },
+        settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} },
+    }));
+    await sync.refreshMachines();
+}
+
 async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: readonly MemorySearchResultHitV1[], query = 'fact') {
     machineRpc.mockImplementation(async (request: Readonly<{ method: string }>) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
         ? { ...status, ...(coverage ? { documentSearchSupported: true } : {}) }
@@ -376,6 +389,49 @@ describe('MemorySearchPanel corpus coverage', () => {
                 expect(hook.getCurrent().summary).toEqual({ state: 'ready', indexedFactCount: 5, loadedFactCount: 1 });
             });
         } finally { await hook.unmount(); clock.mockRestore(); }
+    });
+    it('says no Memory Machine is chosen, never reads one implicitly, and loads the counts once the person chooses', async () => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Keep the saved fact readable.', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const ref = { kind: 'doc' as const, serverId, artifactId };
+        await clearMemoryMachineChoice(serverId);
+        machineRpc.mockResolvedValue({ ...status, documents: { state: 'ready', facts: [{
+            ref, revision: { headerVersion: 1, bodyVersion: 1 }, indexedFactCount: 2, loadedFactCount: 1,
+        }] } });
+        const hook = await renderHook(() => {
+            const source = useMemoryDocument({ ref, serverId });
+            return { source, summary: useMemoryDocumentSummary({ source, serverId }) };
+        }, { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+        try {
+            await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().source.status).toBe('ready'); });
+            expect(hook.getCurrent().summary).toEqual({ state: 'unavailable', cause: { reason: 'machine_not_chosen' } });
+            expect(machineRpc).not.toHaveBeenCalled();
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: { 'memory.settings': administration.targets[0]! } } })));
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().summary).toEqual({ state: 'ready', indexedFactCount: 2, loadedFactCount: 1 });
+            });
+        } finally { await hook.unmount(); }
+    });
+    it('offers the Memory Machine choice in search when none is chosen, and never queries', async () => {
+        await clearMemoryMachineChoice(administration.serverIds[0]!);
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <MemorySearchPanel testID="unchosen-search" serverId={administration.serverIds[0]!} />
+        </InjectedAuthProvider>);
+        await waitForHomeGovernance(async () => {
+            caseSignal.throwIfAborted();
+            await flushHookEffects();
+            expect(screen.findByTestId('unchosen-search.machine.state')).toBeTruthy();
+        });
+        expect(screen.getTextContent()).toContain('memoryContext.memory.searchNeedMachine');
+        expect(screen.findByTestId('unchosen-search.input')?.props.editable).toBe(false);
+        expect(screen.findByTestId('unchosen-search.unavailable')).toBeNull();
+        expect(machineRpc).not.toHaveBeenCalled();
+        await act(async () => screen.unmount());
     });
     it.each(['session', 'project'] as const)('keeps a fresh summary narrow to %s and refuses late scoped status after its context changes', async scopeType => {
         const serverId = administration.serverIds[0]!;

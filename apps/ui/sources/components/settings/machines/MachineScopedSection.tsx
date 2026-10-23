@@ -17,6 +17,76 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
+/** One machine sentence in the secondary ink with its one small control; it wraps, never cut (lab PD3). */
+function MachineScopedLine(props: Readonly<{ testID: string; title: string; control: React.ReactNode }>) {
+    const { theme } = useUnistyles();
+    // A sentence, not a row title: body weight in the secondary ink.
+    const titleStyle = React.useMemo(() => ({ ...Typography.default(), color: theme.colors.text.secondary }), [theme.colors.text.secondary]);
+    return (
+        <Item
+            testID={props.testID}
+            title={props.title}
+            titleStyle={titleStyle}
+            titleLines={0}
+            mode="info"
+            showChevron={false}
+            rightElement={props.control}
+            rightElementOutsidePressable
+            accessoryLayout="adaptive"
+        />
+    );
+}
+
+/**
+ * The line a surface shows when it needs a machine and none is chosen: what the machine is for, and the
+ * one control that fixes it — the machine chooser itself, or, with no machine to choose, the way to set
+ * one up. Choosing persists through the selection's own owner, so the surface reads the choice and moves on.
+ */
+export const MachineChoiceLine = React.memo(function MachineChoiceLine(props: Readonly<{
+    selection: MachineAdministrationTargetSelectorProps['selection'];
+    /** What a computer is needed for here. */
+    invitation: string;
+    testIDPrefix: string;
+    resolveCandidateAvailability?: MachineAdministrationTargetSelectorProps['resolveCandidateAvailability'];
+}>) {
+    const router = useRouter();
+    const setUpComputer = React.useCallback(() => {
+        const result = runGuardedNavigation(() => router.push('/(app)/settings/machines' as never));
+        if (result !== true) fireAndForget(result, { tag: 'MachineChoiceLine.setUpComputer' });
+    }, [router]);
+    const filter = useMachineAdministrationTargetFilter({
+        selection: props.selection,
+        resolveCandidateAvailability: props.resolveCandidateAvailability,
+        testIDPrefix: props.testIDPrefix,
+    });
+    return (
+        <MachineScopedLine
+            testID={`${props.testIDPrefix}.state`}
+            title={props.invitation}
+            control={props.selection.candidates.length > 0 ? (
+                <SelectionListFilterChip
+                    filter={{
+                        ...filter,
+                        // The selector's own unselected label, so the chip reads the same everywhere it appears.
+                        valueLabel: t('newSession.selectMachineTitle'),
+                        icon: undefined,
+                        muted: false,
+                        testID: `${props.testIDPrefix}.choose`,
+                    }}
+                />
+            ) : (
+                <RoundButton
+                    testID={`${props.testIDPrefix}.setUp`}
+                    size="small"
+                    display="secondary"
+                    title={t('settingsMachines.scopeSetUpComputer')}
+                    onPress={setUpComputer}
+                />
+            )}
+        />
+    );
+});
+
 /**
  * The part of an Account page that runs on one computer ("On this computer", "Setup and status"):
  * a section whose header carries the machine chip, so the page around it never waits for a machine.
@@ -46,15 +116,9 @@ export const MachineScopedSection = React.memo(function MachineScopedSection(pro
     testIDPrefix: string;
     children?: React.ReactNode;
 }>) {
-    const router = useRouter();
-    const { theme } = useUnistyles();
     const [chipOpen, setChipOpen] = React.useState(false);
     const openChip = React.useCallback(() => setChipOpen(true), []);
-    const setUpComputer = React.useCallback(() => {
-        const result = runGuardedNavigation(() => router.push('/(app)/settings/machines' as never));
-        if (result !== true) fireAndForget(result, { tag: 'MachineScopedSection.setUpComputer' });
-    }, [router]);
-    // One machine filter: the header chip, or, with no machine chosen, the line's own chooser.
+    // One machine filter: the header chip, which also recovers an offline or unusable machine.
     const filter = useMachineAdministrationTargetFilter({
         selection: props.selection,
         resolveCandidateAvailability: props.resolveCandidateAvailability,
@@ -64,22 +128,6 @@ export const MachineScopedSection = React.memo(function MachineScopedSection(pro
     });
     const state = props.selection.state;
     const lineTestID = `${props.testIDPrefix}.state`;
-    // A sentence, not a row title: body weight in the secondary ink (lab PD3).
-    const lineTitleStyle = React.useMemo(() => ({ ...Typography.default(), color: theme.colors.text.secondary }), [theme.colors.text.secondary]);
-    const line = (title: string, control: React.ReactNode) => (
-        <Item
-            testID={lineTestID}
-            title={title}
-            titleStyle={lineTitleStyle}
-            // The sentence says why the section is empty and what to do; it wraps, never cut.
-            titleLines={0}
-            mode="info"
-            showChevron={false}
-            rightElement={control}
-            rightElementOutsidePressable
-            accessoryLayout="adaptive"
-        />
-    );
 
     const untitled = props.title === undefined;
     let body: React.ReactNode;
@@ -87,26 +135,14 @@ export const MachineScopedSection = React.memo(function MachineScopedSection(pro
         if (props.children == null || props.children === false) return null;
         body = props.children;
     } else if (state.kind === 'unselected') {
-        body = line(props.unselectedInvitation, state.candidates.length > 0 ? (
-            <SelectionListFilterChip
-                filter={{
-                    ...filter,
-                    // The selector's own unselected label, so the chip reads the same everywhere it appears.
-                    valueLabel: t('newSession.selectMachineTitle'),
-                    icon: undefined,
-                    muted: false,
-                    testID: `${props.testIDPrefix}.choose`,
-                }}
+        body = (
+            <MachineChoiceLine
+                selection={props.selection}
+                invitation={props.unselectedInvitation}
+                testIDPrefix={props.testIDPrefix}
+                resolveCandidateAvailability={props.resolveCandidateAvailability}
             />
-        ) : (
-            <RoundButton
-                testID={`${props.testIDPrefix}.setUp`}
-                size="small"
-                display="secondary"
-                title={t('settingsMachines.scopeSetUpComputer')}
-                onPress={setUpComputer}
-            />
-        ));
+        );
     } else if (state.kind === 'missing' && state.inventoryKnown === false && (state.inventoryStatus ?? 'loading') === 'loading') {
         // The machine's Home has not listed its machines yet: not known to be gone.
         body = <SurfaceStateCard testID={lineTestID} size="line" kind="loading" title={t('common.loading')} />;
@@ -119,7 +155,7 @@ export const MachineScopedSection = React.memo(function MachineScopedSection(pro
             : [presentation.title, state.kind === 'locked' ? props.lockedReason : null, presentation.detail]
                 .filter(Boolean)
                 .join(' · ');
-        body = line(title, untitled ? (
+        body = <MachineScopedLine testID={lineTestID} title={title} control={untitled ? (
             <SelectionListFilterChip
                 filter={{
                     ...filter,
@@ -137,7 +173,7 @@ export const MachineScopedSection = React.memo(function MachineScopedSection(pro
                 title={t('settingsPlugins.targetSelection.chooseAnother')}
                 onPress={openChip}
             />
-        ));
+        )} />;
     }
 
     return (

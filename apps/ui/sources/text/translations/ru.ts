@@ -18170,6 +18170,8 @@ settingsSession: {
         alwaysRemembered: 'Всегда в памяти:',
         searchable: 'Доступно для поиска:',
         countsUnavailable: 'Не удалось загрузить счётчики',
+        countsNeedMachine: 'Счётчики берутся из индекса памяти машины.',
+        searchNeedMachine: 'Поиск работает по индексу памяти машины.',
         factCount: ({ count }: { count: number }) => `${count} ${count % 10 === 1 && count % 100 !== 11 ? 'факт' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'факта' : 'фактов'}`,
         topicsLabel: 'Темы:',
         showAll: ({ count }: { count: number }) => `Показать все (${count})`,

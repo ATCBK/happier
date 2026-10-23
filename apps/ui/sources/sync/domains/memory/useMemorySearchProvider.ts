@@ -64,6 +64,11 @@ export type MemorySearchProvider = Readonly<{
     selectedDaemonTarget?: DaemonMemorySearchTargetV1;
     /** The only authorization to issue a transcript request for this context. */
     queryAvailable: boolean;
+    /**
+     * Documents were requested, memory search is on, and no Memory Machine is chosen for this Home: the
+     * person's next step is choosing one. It is absent when a chosen Machine merely cannot answer now.
+     */
+    machineChoiceNeeded?: true;
     unavailableReason: MemorySearchUnavailableReason | null;
 }>;
 
@@ -173,7 +178,11 @@ export function useMemorySearchProvider(
     const daemonServerId = daemonTarget?.serverId ?? null;
     const daemonMachineId = daemonTarget?.machineId ?? null;
 
-    return React.useMemo(() => {
+    const selectionServesRequestedHome = selectedDaemonServerId !== null
+        && (!requestedServerId || areServerProfileIdentifiersEquivalent(selectedDaemonServerId, requestedServerId));
+    const machineChoiceNeeded = enabled && !isExplicitNone && documentsRequested && daemonMemorySearchEnabled
+        && daemonTarget === null && !selectionServesRequestedHome;
+    const decision = React.useMemo(() => {
         if (!enabled || isExplicitNone) return NO_MEMORY_SEARCH_PROVIDER;
         const effectiveFeaturesSnapshot = requestedServerId ? scopedFeaturesSnapshot : featuresSnapshot;
         const capability = effectiveFeaturesSnapshot.status === 'ready'
@@ -282,4 +291,8 @@ export function useMemorySearchProvider(
         requestedServerId,
         scopedFeaturesSnapshot,
     ]);
+    return React.useMemo(
+        () => machineChoiceNeeded ? { ...decision, machineChoiceNeeded: true as const } : decision,
+        [decision, machineChoiceNeeded],
+    );
 }

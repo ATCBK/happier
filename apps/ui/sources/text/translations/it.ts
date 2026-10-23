@@ -18223,6 +18223,8 @@ settingsSession: {
         alwaysRemembered: 'Sempre in memoria:',
         searchable: 'Ricercabile:',
         countsUnavailable: 'Impossibile caricare i conteggi',
+        countsNeedMachine: 'I conteggi arrivano dall’indice di memoria di una macchina.',
+        searchNeedMachine: 'La ricerca usa l’indice di memoria di una macchina.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fatto' : 'fatti'}`,
         topicsLabel: 'Argomenti:',
         showAll: ({ count }: { count: number }) => `Mostra tutti (${count})`,

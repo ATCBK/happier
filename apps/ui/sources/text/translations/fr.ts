@@ -18095,6 +18095,8 @@ settingsSession: {
         alwaysRemembered: 'Toujours en mémoire :',
         searchable: 'Recherchable :',
         countsUnavailable: 'Impossible de charger les totaux',
+        countsNeedMachine: 'Les totaux viennent de l’index de mémoire d’une machine.',
+        searchNeedMachine: 'La recherche s’exécute sur l’index de mémoire d’une machine.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fait' : 'faits'}`,
         topicsLabel: 'Sujets :',
         showAll: ({ count }: { count: number }) => `Tout afficher (${count})`,

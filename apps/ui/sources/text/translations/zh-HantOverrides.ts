@@ -13859,6 +13859,8 @@ settingsSession: {
         alwaysRemembered: '一律記住:',
         searchable: '可搜尋:',
         countsUnavailable: '無法載入數量',
+        countsNeedMachine: '數量來自機器的記憶索引。',
+        searchNeedMachine: '搜尋會在機器的記憶索引上執行。',
         factCount: ({ count }: { count: number }) => `${count} 則事實`,
         topicsLabel: '主題:',
         showAll: ({ count }: { count: number }) => `顯示全部 ${count} 則`,

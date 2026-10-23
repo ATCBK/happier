@@ -10,6 +10,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import type { MemoryDocumentSource } from './useMemoryDocument';
 
 const UNAVAILABLE: MemoryDocumentSummary = { state: 'unavailable' };
+const NO_MACHINE_CHOSEN: MemoryDocumentSummary = { state: 'unavailable', cause: { reason: 'machine_not_chosen' } };
 const DOCUMENTS = ['documents'] as const;
 const GLOBAL_SCOPE = { type: 'global' } as const;
 
@@ -38,10 +39,13 @@ export function useMemoryDocumentSummary(params: Readonly<{
     { enabled, corpora: DOCUMENTS, scope: stableScope });
   const target = provider.daemonTarget;
   const selectedTarget = provider.selectedDaemonTarget;
-  const unavailableMachine = React.useMemo<MemoryDocumentSummary>(() => selectedTarget && account
-    && areServerProfileIdentifiersEquivalent(selectedTarget.serverId, account.serverId)
-    ? { state: 'unavailable', cause: { reason: 'machine_unavailable', target: selectedTarget } }
-    : UNAVAILABLE, [account, selectedTarget]);
+  // A chosen Machine that cannot answer is reported as itself; no choice for this Home is a different state.
+  const machineChoiceNeeded = provider.machineChoiceNeeded === true;
+  const unavailableMachine = React.useMemo<MemoryDocumentSummary>(() => machineChoiceNeeded
+    ? NO_MACHINE_CHOSEN
+    : selectedTarget && account && areServerProfileIdentifiersEquivalent(selectedTarget.serverId, account.serverId)
+      ? { state: 'unavailable', cause: { reason: 'machine_unavailable', target: selectedTarget } }
+      : UNAVAILABLE, [account, machineChoiceNeeded, selectedTarget]);
   // An admitted status operation follows its caller's lifetime and may not answer.
   // Unknown counts are unavailable now, not a promise that a loading row will finish.
   // Keep that same read alive so a late answer can still supply the counts.

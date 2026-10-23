@@ -54,6 +54,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
 import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
+import { MemoryMachineChoice } from './MemoryMachineChoice';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
 import { readMemoryFactSource } from './useMemoryFactSource';
 import { formatMemoryDate, useMemoryFactAttribution } from './useMemoryFactAttribution';
@@ -682,7 +683,9 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       {/* A stale view keeps its facts; it has no counts to reserve a line for, so the line steps aside. */}
       {/* An open duplicate comparison is the one thing in progress; the count line steps aside until it closes. */}
       {view && (fresh || topic || summary.state === 'ready') && !(review && !topic) ? (
-        summary.state === 'unavailable' && fresh && !topic ? (
+        summary.state === 'unavailable' && fresh && !topic && summary.cause?.reason === 'machine_not_chosen' ? (
+          <MemoryMachineChoice testID={`${testID}.machine`} invitation={t('memoryContext.memory.countsNeedMachine')} />
+        ) : summary.state === 'unavailable' && fresh && !topic ? (
           <SurfaceStateCard
             testID={`${testID}.summaryUnavailable`}
             size="line"

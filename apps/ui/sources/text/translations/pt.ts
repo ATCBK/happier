@@ -18328,6 +18328,8 @@ settingsSession: {
         alwaysRemembered: 'Sempre lembrado:',
         searchable: 'Pesquisável:',
         countsUnavailable: 'Não foi possível carregar a contagem',
+        countsNeedMachine: 'A contagem vem do índice de memória de uma máquina.',
+        searchNeedMachine: 'A busca roda no índice de memória de uma máquina.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fato' : 'fatos'}`,
         topicsLabel: 'Tópicos:',
         showAll: ({ count }: { count: number }) => `Mostrar todos (${count})`,

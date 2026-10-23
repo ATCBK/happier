@@ -1694,6 +1694,8 @@ const enMemoryContext = {
     alwaysRemembered: 'Always remembered:',
     searchable: 'Searchable:',
     countsUnavailable: 'Couldn’t load the counts',
+    countsNeedMachine: 'Counts come from a machine’s memory index.',
+    searchNeedMachine: 'Search runs on a machine’s memory index.',
     factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fact' : 'facts'}`,
     topicsLabel: 'Topics:',
     showAll: ({ count }: { count: number }) => `Show all ${count}`,

@@ -17828,6 +17828,8 @@ settingsSession: {
         alwaysRemembered: '始终记住:',
         searchable: '可搜索:',
         countsUnavailable: '无法加载数量',
+        countsNeedMachine: '数量来自某台机器的记忆索引。',
+        searchNeedMachine: '搜索会在某台机器的记忆索引上运行。',
         factCount: ({ count }: { count: number }) => `${count} 条事实`,
         topicsLabel: '主题:',
         showAll: ({ count }: { count: number }) => `显示全部 ${count} 条`,

@@ -10,6 +10,7 @@ const daemonTargetState = vi.hoisted(() => ({
         serverId: string;
         machineId: string;
     }> | null,
+    selected: null as Readonly<{ serverIdentityId: string; machineId: string }> | null,
 }));
 const featureRuntimeState = vi.hoisted(() => ({ snapshot: { status: 'loading' } as unknown }));
 const featureRuntimeOptionsSpy = vi.hoisted(() => vi.fn());
@@ -30,7 +31,7 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 }));
 
 vi.mock('./resolveDaemonMemorySearchTarget', () => ({
-    useDaemonMemorySearchTargetSelection: () => ({ resolveExecutionTarget: () => null }),
+    useDaemonMemorySearchTargetSelection: () => ({ resolveExecutionTarget: () => null, selectedTarget: daemonTargetState.selected }),
     resolveDaemonMemorySearchTarget: () => daemonTargetState.target,
 }));
 
@@ -45,6 +46,7 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
 afterEach(() => {
     activeServerState.serverId = 'srv_home';
     daemonTargetState.target = { serverId: 'srv_daemon', machineId: 'machine_1' };
+    daemonTargetState.selected = null;
     featureRuntimeState.snapshot = { status: 'loading' };
     featureRuntimeOptionsSpy.mockReset();
     featureEnabledState.enabled = { search: true, 'memory.search': true };
@@ -115,16 +117,33 @@ describe('useMemorySearchProvider', () => {
         });
     });
 
-    it('reports document search unavailable when only Home can serve the target', async () => {
+    it('asks for a Memory Machine choice for documents when none is chosen for this Home, even if Home could serve transcripts', async () => {
         setReadyHomeCapability({ enabled: true });
         daemonTargetState.target = null;
         const { useMemorySearchProvider } = await import('./useMemorySearchProvider');
-        const hook = await renderHook(() => useMemorySearchProvider({ kind: 'ambient' }, {
+        const hook = await renderHook(() => useMemorySearchProvider({ kind: 'exact', serverId: 'srv_home' }, {
             corpora: ['documents'],
         }));
         expect(hook.getCurrent()).toMatchObject({
-            provider: null, queryAvailable: false, unavailableReason: 'documents_unavailable',
+            provider: null, queryAvailable: false, unavailableReason: 'documents_unavailable', machineChoiceNeeded: true,
         });
+        daemonTargetState.selected = { serverIdentityId: 'srv_other_home', machineId: 'machine_elsewhere' };
+        await hook.rerender();
+        expect(hook.getCurrent().machineChoiceNeeded).toBe(true);
+    });
+    it('does not ask for a choice when a chosen Machine on this Home cannot answer, or memory search is off', async () => {
+        daemonTargetState.target = null;
+        daemonTargetState.selected = { serverIdentityId: 'srv_home', machineId: 'machine_offline' };
+        const { useMemorySearchProvider } = await import('./useMemorySearchProvider');
+        const hook = await renderHook(() => useMemorySearchProvider({ kind: 'exact', serverId: 'srv_home' }, {
+            corpora: ['documents'],
+        }));
+        expect(hook.getCurrent().machineChoiceNeeded).toBeUndefined();
+        expect(hook.getCurrent().selectedDaemonTarget).toEqual({ serverId: 'srv_home', machineId: 'machine_offline' });
+        daemonTargetState.selected = null;
+        featureEnabledState.enabled = { search: true, 'memory.search': false };
+        await hook.rerender();
+        expect(hook.getCurrent().machineChoiceNeeded).toBeUndefined();
     });
     it('falls back to daemon when the active Home capability is missing', async () => {
         const hook = await renderProviderHook();

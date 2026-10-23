@@ -18284,6 +18284,8 @@ settingsSession: {
         alwaysRemembered: 'Immer gemerkt:',
         searchable: 'Durchsuchbar:',
         countsUnavailable: 'Die Anzahl konnte nicht geladen werden',
+        countsNeedMachine: 'Die Anzahl stammt aus dem Gedächtnisindex einer Maschine.',
+        searchNeedMachine: 'Die Suche läuft über den Gedächtnisindex einer Maschine.',
         factCount: ({ count }: { count: number }) => `${count} ${count === 1 ? 'Fakt' : 'Fakten'}`,
         topicsLabel: 'Themen:',
         showAll: ({ count }: { count: number }) => `Alle ${count} anzeigen`,

@@ -389,14 +389,31 @@ it('reads document content through memory.read admission instead of bypassing a 
     await hook.unmount();
 });
 
-it('shows unavailable preparation rather than fabricating counts from the open index or topic list', async () => {
+it('asks for a Memory Machine instead of failing the counts when none is chosen, without fabricating counts', async () => {
     const ref = await seedDocument({ v: 1, index: [fact('one', 'One'), fact('two', 'Two')],
         topics: [{ title: 'detail', summary: 'More facts', facts: [fact('three', 'Three')] }] });
     const screen = await renderDocument(ref);
     const rendered = screen.getTextContent();
-    expect(rendered).toContain('memoryContext.memory.countsUnavailable');
+    expect(rendered).toContain('memoryContext.memory.countsNeedMachine');
+    expect(screen.findByTestId('memory.machine.state')).toBeTruthy();
+    expect(screen.findByTestId('memory.summaryUnavailable')).toBeNull();
+    expect(rendered).not.toContain('memoryContext.memory.countsUnavailable');
     expect(rendered).not.toContain('common.unavailable');
     expect(rendered).not.toContain('2 facts');
+    expect(machineRpc).not.toHaveBeenCalled();
+    await screen.unmount();
+});
+
+it('keeps an honest error with Retry when the chosen Memory Machine fails to answer the counts', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One')], topics: [] });
+    await setServerProfileIdentityForUrl('https://memory-body.test', 'srv_memory_body');
+    selectSummaryDaemon(serverId, 'srv_memory_body');
+    await sync.refreshMachines();
+    machineRpc.mockRejectedValue(new Error('daemon failed'));
+    const screen = await renderDocument(ref);
+    await settled(() => expect(screen.findByTestId('memory.summaryUnavailable')).toBeTruthy());
+    expect(screen.getTextContent()).toContain('memoryContext.memory.countsUnavailable');
+    expect(screen.findByTestId('memory.machine.state')).toBeNull();
     await screen.unmount();
 });
 

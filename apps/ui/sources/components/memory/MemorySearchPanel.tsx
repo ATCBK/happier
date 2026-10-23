@@ -28,6 +28,7 @@ import { Typography } from '@/constants/Typography';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { searchDaemonMemory } from '@/sync/domains/memory/searchDaemonMemory';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
+import { MemoryMachineChoice } from './MemoryMachineChoice';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useMachine, useSession } from '@/sync/store/hooks';
 import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
@@ -76,6 +77,8 @@ export function useMemorySearchPanelModel(props: Readonly<{
     target: ReturnType<typeof useMemorySearchProvider>['daemonTarget'];
     /** The Machine the person chose to search, kept while it cannot answer; it never authorizes a request. */
     selectedMachineId: string | null;
+    /** No Memory Machine is chosen for this Home: choosing one is what search needs. */
+    machineChoiceNeeded: boolean;
     normalized: string;
 }> {
     const { serverId } = props;
@@ -159,7 +162,8 @@ export function useMemorySearchPanelModel(props: Readonly<{
         };
     }, [accountId, attempt, machineId, normalized, targetServerId, stableScope, contextKey]);
 
-    return { query, setQuery, retry, results, target, selectedMachineId: provider.selectedDaemonTarget?.machineId ?? null, normalized };
+    return { query, setQuery, retry, results, target, selectedMachineId: provider.selectedDaemonTarget?.machineId ?? null,
+        machineChoiceNeeded: provider.machineChoiceNeeded === true, normalized };
 }
 
 export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Readonly<{
@@ -184,7 +188,7 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
     // Searching wider than the Project is the person's explicit choice, never a silent fallback.
     const [widened, setWidened] = React.useState(false);
     const projectScoped = props.scope?.type === 'project';
-    const { query, setQuery, retry, results, target, selectedMachineId, normalized } = useMemorySearchPanelModel({
+    const { query, setQuery, retry, results, target, selectedMachineId, machineChoiceNeeded, normalized } = useMemorySearchPanelModel({
         serverId, scope: widened ? GLOBAL_SCOPE : props.scope,
     });
     const unsupported = results?.failure?.error.errorCode === 'memory_project_scope_unsupported' ? results.failure.target : null;
@@ -216,7 +220,9 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
                     ) : undefined}
                 />
             </View>
-            {target === null ? (
+            {target === null && machineChoiceNeeded ? (
+                <MemoryMachineChoice testID={`${testID}.machine`} invitation={t('memoryContext.memory.searchNeedMachine')} />
+            ) : target === null ? (
                 <SearchUnavailableNotice testID={`${testID}.unavailable`} machineId={selectedMachineId}
                     onTurnOn={() => router.push(SETTINGS_ROUTES.search as never)} />
             ) : null}
