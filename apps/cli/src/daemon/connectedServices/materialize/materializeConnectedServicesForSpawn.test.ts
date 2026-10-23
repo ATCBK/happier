@@ -1,11 +1,18 @@
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// Observe directory reads at the OS boundary; all home/materializer logic stays real.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: vi.fn(actual.readdir) };
+});
 
 import { AccountSettingsSchema, buildConnectedServiceCredentialRecord, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
 import * as nativeFilesystem from '@happier-dev/plugin-sdk/fs';
@@ -327,6 +334,17 @@ describe('materializeConnectedServicesForSpawn', () => {
           for (const suffix of ['', '-wal', '-shm']) expect(existsSync(join(home, `${database}${suffix}`))).toBe(false);
         }
       }
+      // Native Codex installs local plugins beside its shared history links. A home
+      // refresh must import declared state without inspecting that unrelated tree.
+      const pluginsRoot = join(first.env.CODEX_HOME!, 'plugins');
+      await mkdir(join(pluginsRoot, 'installed'), { recursive: true });
+      await writeFile(join(pluginsRoot, 'installed', 'plugin.json'), '{}');
+      const directoryReads = vi.mocked(filesystem.readdir);
+      directoryReads.mockClear();
+      try {
+        await launch('pool-a', 'shared');
+        expect(directoryReads.mock.calls.filter(([path]) => String(path).startsWith(pluginsRoot))).toHaveLength(0);
+      } finally { directoryReads.mockClear(); }
       const isolated = await launch('pool-isolated', 'isolated');
       const probe = await launch('pool-probe', 'shared', 'probe');
       for (const result of [isolated, probe]) {

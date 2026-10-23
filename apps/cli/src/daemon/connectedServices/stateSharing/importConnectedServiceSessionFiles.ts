@@ -14,6 +14,8 @@ export type ConnectedServiceSessionFileImportDetail = Readonly<{
 export type ConnectedServiceSessionFileImportRoot = Readonly<{
   sourceRoot: string;
   destinationRoot: string;
+  /** Home-relative files or subtrees to discover; links are never followed. */
+  includePaths?: Iterable<string>;
   includeFile?: (relativePath: string) => boolean;
   mergeSharedStateFile?: AgentConnectedAccountSharedStateFileMergeV1;
 }>;
@@ -43,7 +45,7 @@ export async function importConnectedServiceSessionFiles(params: Readonly<{
       resolvePhysicalRoot(destinationRoot),
     ]);
     if (physicalSourceRoot === physicalDestinationRoot) continue;
-    for (const sourcePath of await listImportableFiles(sourceRoot)) {
+    for (const sourcePath of await listImportableFiles(sourceRoot, root.includePaths)) {
       const relativePath = normalizeRelativePath(relative(sourceRoot, sourcePath));
       if (!isSafeRelativePath(relativePath)) continue;
       if (root.includeFile && !root.includeFile(relativePath)) continue;
@@ -66,18 +68,51 @@ export async function importConnectedServiceSessionFiles(params: Readonly<{
   };
 }
 
-async function listImportableFiles(root: string): Promise<readonly string[]> {
+async function listImportableFiles(root: string, includePaths?: Iterable<string>): Promise<readonly string[]> {
   let rootStat;
   try {
     rootStat = await lstat(root);
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err?.code === 'ENOENT') return [];
+    if (isEnoentError(error)) return [];
     throw error;
   }
   if (!rootStat.isDirectory()) return [];
   const files: string[] = [];
-  const queue = [root];
+  const queue: string[] = [];
+  const selected = includePaths === undefined ? null
+    : new Set([...includePaths].map(normalizeRelativePath).filter(isSafeRelativePath));
+  // A selected subtree already includes its selected descendants. Discover it once,
+  // and never enumerate unrelated home trees just to reject their files afterwards.
+  const roots = selected ? [...selected].filter(path => {
+    for (let slash = path.lastIndexOf('/'); slash >= 0; slash = path.lastIndexOf('/', slash - 1)) {
+      if (selected.has(path.slice(0, slash))) return false;
+    }
+    return true;
+  }) : null;
+  if (!roots) queue.push(root);
+  for (const selectedPath of roots ?? []) {
+    const segments = selectedPath.split('/');
+    let path = root;
+    // Selecting a deep file must retain enumeration's refusal to follow a
+    // symlinked root or ancestor into another store.
+    for (let index = 0; index < segments.length; index++) {
+      path = join(path, segments[index]!);
+      let entryStat;
+      try {
+        entryStat = await lstat(path);
+      } catch (error) {
+        if (isEnoentError(error)) break;
+        throw error;
+      }
+      if (index < segments.length - 1) {
+        if (!entryStat.isDirectory()) break;
+      } else if (entryStat.isDirectory()) {
+        queue.push(path);
+      } else if (entryStat.isFile()) {
+        files.push(path);
+      }
+    }
+  }
   while (queue.length > 0) {
     const dir = queue.shift();
     if (!dir) break;
@@ -125,7 +160,7 @@ function normalizeRelativePath(path: string): string {
 
 function isSafeRelativePath(path: string): boolean {
   if (!path || path.startsWith('/') || path.startsWith('\\')) return false;
-  return !path.split('/').includes('..');
+  return path.split('/').every(segment => segment.length > 0 && segment !== '.' && segment !== '..');
 }
 
 function isEnoentError(error: unknown): error is NodeJS.ErrnoException {

@@ -1,14 +1,110 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Count OS directory reads while retaining the real importer and filesystem.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: vi.fn(actual.readdir) };
+});
 
 import { importConnectedServiceSessionFiles } from './importConnectedServiceSessionFiles';
 import { reconcileCodexSharedJsonlState } from '../../../../../../packages/plugins/codex/src/agent/auth/services/home/sync/fixedJsonlState';
 
 describe('importConnectedServiceSessionFiles', () => {
+  it('imports declared state without traversing ten thousand unrelated native plugin files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-selected-state-import-'));
+    const sourceRoot = join(root, 'source');
+    const destinationRoot = join(root, 'destination');
+    const pluginsRoot = join(sourceRoot, 'plugins');
+    try {
+      await mkdir(join(sourceRoot, 'sessions'), { recursive: true });
+      await writeFile(join(sourceRoot, 'sessions', 'rollout.jsonl'), 'private rollout\n');
+      await writeFile(join(sourceRoot, 'history.jsonl'), 'private history\n');
+      await writeFile(join(sourceRoot, 'auth.json'), 'fixture-only-auth');
+      for (let directory = 0; directory < 100; directory++) {
+        const path = join(pluginsRoot, String(directory));
+        await mkdir(path, { recursive: true });
+        await Promise.all(Array.from({ length: 100 }, (_, i) => writeFile(join(path, `${i}.json`), '{}')));
+      }
+      const reads = vi.mocked(filesystem.readdir);
+      reads.mockClear();
+      try {
+        const result = await importConnectedServiceSessionFiles({ roots: [{
+          sourceRoot, destinationRoot, includePaths: ['sessions', 'sessions/rollout.jsonl', 'history.jsonl'],
+          includeFile: path => path === 'history.jsonl' || path.startsWith('sessions/'),
+        }] });
+        const unrelatedDirectoryReads = reads.mock.calls.filter(([path]) => String(path).startsWith(pluginsRoot)).length;
+        expect(result).toMatchObject({ imported: 2, skippedIdentical: 0, conflicted: 0 });
+        expect(await readFile(join(destinationRoot, 'sessions', 'rollout.jsonl'), 'utf8')).toBe('private rollout\n');
+        expect(await readFile(join(destinationRoot, 'history.jsonl'), 'utf8')).toBe('private history\n');
+        expect(await readdir(destinationRoot)).toEqual(['history.jsonl', 'sessions']);
+        expect(unrelatedDirectoryReads).toBe(0);
+      } finally { reads.mockClear(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('imports only exact selected resume files and observes later private writes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-exact-state-import-'));
+    const sourceRoot = join(root, 'source');
+    const destinationRoot = join(root, 'destination');
+    const selected = new Set(['sessions/nested/selected.jsonl']);
+    try {
+      await mkdir(join(sourceRoot, 'sessions', 'nested'), { recursive: true });
+      await writeFile(join(sourceRoot, 'sessions', 'nested', 'selected.jsonl'), 'first');
+      await writeFile(join(sourceRoot, 'sessions', 'nested', 'unselected.jsonl'), 'unselected');
+      const roots = [{ sourceRoot, destinationRoot, includePaths: selected }];
+      expect(await importConnectedServiceSessionFiles({ roots })).toMatchObject({ imported: 1, conflicted: 0 });
+      expect(await readdir(join(destinationRoot, 'sessions', 'nested'))).toEqual(['selected.jsonl']);
+      await writeFile(join(sourceRoot, 'sessions', 'nested', 'selected.jsonl'), 'later write');
+      expect(await importConnectedServiceSessionFiles({ roots })).toMatchObject({ imported: 0, conflicted: 1 });
+      expect(await readFile(join(destinationRoot, 'sessions', 'nested', 'selected.jsonl'), 'utf8')).toBe('first');
+      const conflict = (await readdir(join(destinationRoot, 'sessions', 'nested'))).find(path => path.includes('.happier-import-'));
+      expect(conflict).toBeDefined();
+      expect(await readFile(join(destinationRoot, 'sessions', 'nested', conflict!), 'utf8')).toBe('later write');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['root', 'ancestor'] as const)('does not follow a selected file through a linked %s', async linkedPart => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-selected-state-link-'));
+    const sourceRoot = join(root, 'source');
+    const destinationRoot = join(root, 'destination');
+    const foreign = join(root, 'foreign');
+    try {
+      await mkdir(foreign);
+      await writeFile(join(foreign, 'rollout.jsonl'), 'foreign rollout');
+      if (linkedPart === 'root') {
+        await symlink(foreign, sourceRoot, process.platform === 'win32' ? 'junction' : 'dir');
+      } else {
+        await mkdir(sourceRoot);
+        await symlink(foreign, join(sourceRoot, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      const includePaths = [linkedPart === 'root' ? 'rollout.jsonl' : 'linked/rollout.jsonl'];
+      expect(await importConnectedServiceSessionFiles({ roots: [{ sourceRoot, destinationRoot, includePaths }] }))
+        .toMatchObject({ imported: 0, conflicted: 0, details: [] });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('does not expand an invalid state selection to the entire home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-invalid-state-selection-'));
+    const sourceRoot = join(root, 'source');
+    try {
+      await mkdir(sourceRoot);
+      await writeFile(join(sourceRoot, 'auth.json'), 'fixture-only-auth');
+      expect(await importConnectedServiceSessionFiles({ roots: [{
+        sourceRoot, destinationRoot: join(root, 'destination'), includePaths: [],
+      }] })).toMatchObject({ imported: 0, conflicted: 0, details: [] });
+      const result = await importConnectedServiceSessionFiles({ roots: [{
+        sourceRoot, destinationRoot: join(root, 'destination'), includePaths: ['.', '../', '/'],
+      }] });
+      expect(result).toMatchObject({ imported: 0, conflicted: 0, details: [] });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('preserves valid session imports beyond one hundred occupied conflict names', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-session-many-conflicts-'));
     const sourceRoot = join(root, 'source');

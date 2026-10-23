@@ -460,8 +460,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           nativeHome, sourceEnvironment, homeDir: homedir(),
         }) : params.previousMaterializedRoot!;
         const effectiveStateMode = allowNativeState && params.probePurpose !== 'probe' ? policy.stateMode : 'isolated';
-        const includePrivateStateFile = (path: string) => stateSharingDescriptor.state.entries.some(entry =>
-          path === entry.path || path.startsWith(`${entry.path}/`));
+        const privateStatePaths = stateSharingDescriptor.state.entries.map(entry => entry.path);
         const isolatedImportRoots: ConnectedServiceSessionFileImportRoot[] | null =
           durableNativeHome && effectiveStateMode !== 'shared' ? [] : null;
         if (isolatedImportRoots) {
@@ -534,7 +533,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
                   selectedFilesByRoot.set(rootKey, files);
                   isolatedImportRoots.push({
                     sourceRoot: declaredRoot, destinationRoot: join(nativeRoot, entry.path),
-                    includeFile: path => files.has(path),
+                    includePaths: files,
                     ...(mergeSharedStateFile ? { mergeSharedStateFile: file => mergeSharedStateFile({
                       ...file, entryPath: `${entry.path}/${file.entryPath}`,
                     }) } : {}),
@@ -544,7 +543,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
               }
             } else {
               // A legacy Run home belongs to this session, so retain its declared private state.
-              isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: includePrivateStateFile,
+              isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includePaths: privateStatePaths,
                 mergeSharedStateFile });
             }
           }
@@ -576,7 +575,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
             effectiveStateMode,
             sessionImportRoots: durableNativeHome && effectiveStateMode === 'shared'
               ? [...sourceRoots].map(sourceRoot => ({
-                  sourceRoot, destinationRoot: nativeSourceRoot, includeFile: includePrivateStateFile,
+                  sourceRoot, destinationRoot: nativeSourceRoot, includePaths: privateStatePaths,
                 })) : undefined,
             mergeSharedStateFile,
             cwd: params.sessionDirectory ?? process.cwd(),
