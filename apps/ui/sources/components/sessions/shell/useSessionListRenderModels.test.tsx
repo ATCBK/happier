@@ -265,6 +265,7 @@ describe('useSessionListRenderModels', () => {
                 coverageComplete: phase === 'ready',
                 loadNext: async () => {},
                 refresh: async () => {},
+                retry: async () => {},
             },
         });
         storage.setState((state) => ({

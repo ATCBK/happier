@@ -302,7 +302,7 @@ describe('ordinary session route layout', () => {
                     active: true,
                     statesByServerId: { 'home-a': queryState('home-a'), 'home-b': queryState('home-b') },
                     byServerId: {}, source: [], coverageComplete: true,
-                    loadNext: async () => {}, refresh: async () => {},
+                    loadNext: async () => {}, refresh: async () => {}, retry: async () => {},
                 },
             },
         });
@@ -333,7 +333,7 @@ describe('ordinary session route layout', () => {
                         },
                     },
                     byServerId: {}, source: [], coverageComplete: true,
-                    loadNext: async () => {}, refresh: async () => {},
+                    loadNext: async () => {}, refresh: async () => {}, retry: async () => {},
                 },
             },
         });
