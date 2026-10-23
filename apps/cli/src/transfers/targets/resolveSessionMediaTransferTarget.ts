@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { normalizeAttachmentRelativePathV1 } from '@happier-dev/protocol/transfers/attachments/attachmentPathV1';
 
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
@@ -41,14 +42,7 @@ export const DEFAULT_SESSION_MEDIA_TRANSFER_CONFIG: SessionMediaTransferConfig =
 };
 
 export function normalizeSessionMediaWorkspaceRelativeDir(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
-  if (/^[a-zA-Z]:/.test(trimmed)) return null;
-  const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
-  if (parts.some((part) => part === '.' || part === '..')) return null;
-  return parts.join('/');
+  return normalizeAttachmentRelativePathV1(value);
 }
 
 export function persistedSessionMediaCategoryToTransferCategory(

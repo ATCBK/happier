@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { join } from 'path';
+import { normalizeAttachmentRelativePathV1, sanitizeAttachmentFileName } from '@happier-dev/protocol/transfers/attachments/attachmentPathV1';
 
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
@@ -52,17 +53,6 @@ export function normalizeAttachmentVcsIgnoreStrategy(value: unknown): Attachment
   return null;
 }
 
-export function normalizeAttachmentWorkspaceRelativeDir(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
-  if (trimmed.includes('\0') || /^[A-Za-z]:/.test(trimmed)) return null;
-  const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
-  if (parts.some((part) => part === '.' || part === '..')) return null;
-  return parts.join('/');
-}
-
 export function resolveAttachmentTransferTarget(
   config: AttachmentTransferConfig,
   tempUploadRoot: string,
@@ -72,16 +62,6 @@ export function resolveAttachmentTransferTarget(
     tempUploadRoot,
     category: 'messages',
   });
-}
-
-export function sanitizeAttachmentFileName(value: string): string {
-  const raw = String(value ?? '');
-  const base = raw.split(/[/\\]/g).pop() ?? '';
-  const trimmed = base.trim() || 'file';
-  const safe = trimmed.replace(/[^\w.\- ()]/g, '_');
-  const collapsed = safe.replace(/_+/g, '_');
-  const finalName = collapsed === '.' || collapsed === '..' ? 'file' : collapsed;
-  return finalName.length > 200 ? finalName.slice(-200) : finalName;
 }
 
 export function normalizeMessageLocalIdSegment(value: unknown): string | null {
@@ -111,7 +91,7 @@ export function buildAttachmentUploadPath(input: Readonly<{
   relativePath?: string;
 }>): string {
   if (input.relativePath !== undefined) {
-    const path = normalizeAttachmentWorkspaceRelativeDir(input.relativePath);
+    const path = normalizeAttachmentRelativePathV1(input.relativePath);
     if (!path) throw new Error('Invalid attachment relativePath');
     return join(input.uploadBasePath, input.messageLocalId, path).replace(/[\\]+/g, '/');
   }
@@ -132,7 +112,7 @@ export function resolveAttachmentTransferConfigFromRequest(request: Readonly<{
   const uploadLocation = normalizeAttachmentUploadLocation(request?.uploadLocation) ?? DEFAULT_ATTACHMENT_TRANSFER_CONFIG.uploadLocation;
   const workspaceRelativeDir = request?.workspaceRelativeDir == null
     ? DEFAULT_ATTACHMENT_TRANSFER_CONFIG.workspaceRelativeDir
-    : normalizeAttachmentWorkspaceRelativeDir(request.workspaceRelativeDir);
+    : normalizeAttachmentRelativePathV1(request.workspaceRelativeDir);
   if (workspaceRelativeDir === null) {
     return null;
   }

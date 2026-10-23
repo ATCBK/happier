@@ -5,7 +5,7 @@ import { join, basename } from 'path';
 import type { RpcHandlerInvoker, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
-import { sanitizeAttachmentFileName } from '../targets/resolveAttachmentTransferTarget';
+import { sanitizeAttachmentFileName } from '@happier-dev/protocol/transfers/attachments/attachmentPathV1';
 
 import { TransferSessionStore } from '@happier-dev/transfers/node';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';

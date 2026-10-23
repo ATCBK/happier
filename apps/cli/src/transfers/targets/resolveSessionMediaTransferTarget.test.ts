@@ -2,10 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveConfiguredSessionMediaTransferTarget,
+  normalizeSessionMediaWorkspaceRelativeDir,
   resolveSessionMediaTransferTarget,
 } from './resolveSessionMediaTransferTarget';
 
 describe('resolveSessionMediaTransferTarget', () => {
+  it('uses the canonical attachment path boundary for mixed separators and invalid paths', () => {
+    expect(normalizeSessionMediaWorkspaceRelativeDir('media\\nested/files')).toBe('media/nested/files');
+    for (const value of ['media\0files', 'C:\\media', '\\\\host\\share', 'media/../files']) {
+      expect(normalizeSessionMediaWorkspaceRelativeDir(value)).toBeNull();
+    }
+  });
   it('maps persisted media categories to workspace upload roots', () => {
     const config = {
       uploadLocation: 'workspace',

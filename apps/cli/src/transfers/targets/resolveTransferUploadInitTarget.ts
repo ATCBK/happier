@@ -25,7 +25,7 @@ import { filesystemPathComparisonKey } from '@/rpc/handlers/fileSystem/accessPol
 import type { TransferLifecycleDiagnosticContext } from '../rpc/transferLifecycleDiagnostics';
 import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { normalizeAttachmentWorkspaceRelativeDir } from './resolveAttachmentTransferTarget';
+import { normalizeAttachmentRelativePathV1 } from '@happier-dev/protocol/transfers/attachments/attachmentPathV1';
 
 type WorkspaceLikeTransferUploadTarget = Extract<
   ReturnType<typeof resolveWorkspaceFileUploadTarget>,
@@ -170,7 +170,7 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
       if (request.sizeBytes !== 0 || !request.relativePath) return { success: false, error: 'Invalid directory upload' };
       directoryPaths = [target.target.destPath];
       for (const entry of request.directoryEntries) {
-        const normalized = normalizeAttachmentWorkspaceRelativeDir(entry);
+        const normalized = normalizeAttachmentRelativePathV1(entry);
         if (!normalized) {
           return { success: false, error: 'Invalid attachment directory path' };
         }
