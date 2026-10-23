@@ -5,7 +5,8 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { requiresPresentUserDecisionForActionInputV1 } from '@happier-dev/protocol/actions/decisionAuthority';
 import type { DiscussionAgentPublisherRequestV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionDetailsResponseV1Schema } from '@happier-dev/protocol/discussions/api';
-import { DiscussionCreateInputV1Schema, DiscussionPostInputV1Schema, DiscussionDetailsResultV1Schema, DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { DiscussionCreateInputV1Schema, DiscussionPostInputV1Schema, DiscussionDetailsResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { readCommittedDiscussionMessage } from '@happier-dev/protocol/actions/executor/docCollaborationActions';
 import { DiscussionMessageContentV1Schema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { bindDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
@@ -208,26 +209,15 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
           || opened.data.discussion.creationLocalId !== root.data.retry.creationLocalId
           || opened.data.discussion.ownerAccountId !== origin.accountId
           || !sameStrictJsonValue(opened.data.discussion.anchor, expectedCreate.anchor ?? null)) return null;
-        let beforeSeq: number | undefined;
-        let quoteMessageId: string | undefined;
-        for (;;) {
-          const page = DiscussionReadResultV1Schema.safeParse(await reader({ actionId: 'discussion.read',
-            input: { discussionId, ...(beforeSeq === undefined ? {} : { beforeSeq }) }, context: sourceContext,
-            ...(params.signal ? { signal: params.signal } : {}) }));
-          if (!page.success) return null;
-          const first = page.data.messages.find(message => message.localId === root.data.retry.quoteLocalId);
-          if (first) {
-            if (first.seq !== 1 || first.authorAccountId !== origin.accountId
-              || first.producerV1?.kind !== 'agent' || first.producerV1.sessionId !== params.sessionId || !first.content
-              || serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...messageIntent({ ...first, content: first.content }) })
-                !== serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...messageIntent(expectedCreate.firstMessage) })) return null;
-            quoteMessageId = first.id;
-            break;
-          }
-          const next = page.data.messages.at(0)?.seq;
-          if (!page.data.hasMoreOlder || next === undefined || next === beforeSeq) return null;
-          beforeSeq = next;
-        }
+        const quoteRead = await readCommittedDiscussionMessage({ kind: 'discussion',
+          discussion: { serverId: params.serverId, discussionId }, localId: root.data.retry.quoteLocalId }, sourceContext, reader);
+        if (!quoteRead.ok) return null;
+        const first = quoteRead.message;
+        if (first.seq !== 1 || first.authorAccountId !== origin.accountId
+          || first.producerV1?.kind !== 'agent' || first.producerV1.sessionId !== params.sessionId || !first.content
+          || serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...messageIntent({ ...first, content: first.content }) })
+            !== serializeDiscussionMutationEqualityIntentV1({ kind: 'post', ...messageIntent(expectedCreate.firstMessage) })) return null;
+        const quoteMessageId = first.id;
         const selected = root.data.reviewers[0]!;
         let reviewerSessionId: string;
         if (selected.selection.kind === 'session') reviewerSessionId = selected.selection.session.sessionId;

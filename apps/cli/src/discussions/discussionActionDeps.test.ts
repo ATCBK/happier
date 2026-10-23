@@ -707,11 +707,12 @@ describe('Home Discussion resource transport', () => {
   it('clamps an Agent read to its protected question cutoff while ordinary user reads stay current', async () => {
     const reader = action();
     const discussionAddressing = { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 2, participantSessionId: 'receiver' };
-    await reader({ actionId: 'discussion.read', input: { discussionId: 'discussion-1', throughSeq: 99 },
+    await reader({ actionId: 'discussion.read', input: { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 99 },
       context: { ...context, surface: 'agent', defaultSessionId: 'receiver',
         sessionInputSource: { sourceSessionId: 'receiver', sourceTurnId: 'turn', sourceInputId: 'input', via: 'action', discussionAddressing } } });
     const agentRead = axiosRequest.mock.calls.find(([request]) => new URL(request.url).pathname.endsWith('/messages'))![0];
     expect(new URL(agentRead.url).searchParams.get('throughSeq')).toBe('2');
+    expect(new URL(agentRead.url).searchParams.get('messageId')).toBe('message-1');
     axiosRequest.mockClear();
     await reader({ actionId: 'discussion.read', input: { discussionId: 'discussion-1' }, context });
     const humanRead = axiosRequest.mock.calls.find(([request]) => new URL(request.url).pathname.endsWith('/messages'))![0];

@@ -15,6 +15,8 @@ import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessio
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { projectWorkflowDiscussionProducerV1, projectWorkflowDiscussionResultContentV1 } from '@happier-dev/protocol/workflows/workflowDiscussionPublicationV1';
+import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
+import type { DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only the HTTP and authenticated Machine socket are replaced; resource opening,
@@ -77,6 +79,50 @@ beforeEach(() => {
     } } };
     throw new Error(`Unexpected Session HTTP request: ${url}`);
   });
+});
+
+it('measures HTTP work for one Follow input with three old ancestors among 210 messages', async () => {
+  const throughSeq = 210;
+  const original = { ...addressing, throughSeq };
+  const rows = Array.from({ length: throughSeq }, (_, index) => {
+    const seq = index + 1;
+    const parent = seq === throughSeq ? 3 : seq === 3 ? 2 : seq === 2 ? 1 : null;
+    return { ...message, id: seq === throughSeq ? message.id : `history-${seq}`, localId: `history-${seq}`, seq,
+      addressingV1: { ...message.addressingV1, throughSeq: seq },
+      ...(parent === null ? {} : { replyTarget: { kind: 'message', messageId: `history-${parent}` } satisfies DiscussionReplyTargetV1 }) };
+  });
+  const resourceTransport = http.request.getMockImplementation()!;
+  let messageRows = 0;
+  http.request.mockImplementation(async (request: { url: string }) => {
+    const url = new URL(request.url);
+    const response = await resourceTransport(request);
+    if (url.pathname === '/v1/discussions/discussion') return { ...response, data: { discussion: {
+      ...response.data.discussion, messageSeq: throughSeq,
+    } } };
+    if (!url.pathname.endsWith('/messages')) return response;
+    const before = Number(url.searchParams.get('beforeSeq') ?? throughSeq + 1);
+    const after = Number(url.searchParams.get('afterSeq') ?? 0);
+    const cutoff = Number(url.searchParams.get('throughSeq') ?? throughSeq);
+    const limit = Number(url.searchParams.get('limit') ?? DISCUSSION_DEFAULT_PAGE_SIZE_V1);
+    const messageId = url.searchParams.get('messageId');
+    const candidates = rows.filter(row => row.seq < before && row.seq > after && row.seq <= cutoff
+      && (messageId === null || row.id === messageId));
+    const messages = candidates.slice(-limit);
+    messageRows += messages.length;
+    return { status: 200, data: { messages, hasMoreOlder: candidates.length > messages.length, messageSeq: cutoff } };
+  });
+  const localId = deriveDiscussionFollowInputLocalIdV1(original);
+  const admission = vi.fn<CliActionMachineAdmissionTransport>(async () => ({ status: 'accepted', localId }));
+  const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
+    getServerFeaturesSnapshot: () => features, getMachineAdmissionTransport: () => admission,
+    runSessionFollowSourceRequest: ({ request }) => request(),
+  } });
+  const intake = createDiscussionFollowInputIntake({ session, credentials: { token: 'token', encryption: null } });
+  expect(await intake({ observation: { source: { kind: 'discussion', discussionId: original.discussionId },
+    destinationSessionId: sessionId, addressing: original, ...route }, signal: new AbortController().signal })).toBe(true);
+  expect(admission).toHaveBeenCalledOnce();
+  expect({ requests: http.request.mock.calls.length + http.get.mock.calls.length + http.post.mock.calls.length,
+    messageRows }).toEqual({ requests: 12, messageRows: 4 });
 });
 
 it.each([
@@ -436,9 +482,8 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
         anchor: { kind: 'doc', doc: { ref, revision } }, firstMessage: root }], nextCursor: null } };
     }
     if (url.pathname === '/v1/discussions/discussion/messages') return { status: 200, data: {
-      messages: !url.searchParams.has('beforeSeq') ? [question]
-        : kind === 'inherited' && Number(url.searchParams.get('beforeSeq')) > middle.seq ? [middle] : [root],
-      hasMoreOlder: !url.searchParams.has('beforeSeq') || kind === 'inherited' && Number(url.searchParams.get('beforeSeq')) > middle.seq,
+      messages: [question, middle, root].filter(row => row.id === url.searchParams.get('messageId')),
+      hasMoreOlder: false,
       messageSeq: observedAddressing.throughSeq,
     } };
     return resourceTransport(request);
@@ -500,7 +545,10 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   expect(text).toContain('context_read_action="doc.read"');
   expect(text).toContain(kind === 'proposal' ? reason : 'What changed?');
   expect(pending).not.toHaveProperty('reply.sourceSession');
-  expect(http.get.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/doc')).toBe(false);
+  // The Artifact header owner now selects the exact resource rather than paging
+  // inventory. Its body envelope stays unopened; none enters Pending above.
+  expect(http.get.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/doc')).toHaveLength(1);
+  expect(http.get.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts')).toBe(false);
   expect(countQueries).toEqual(['?state=active&anchorDocArtifactId=doc']);
   // Explicit doc.read keeps the existing Action, grant/mode and Artifact codec path;
   // only HTTP and the authenticated Pending transport are replaced above.

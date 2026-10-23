@@ -48,7 +48,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
     return input.session.runSessionFollowSourceRequest({ credentials: input.credentials, request: async () => {
       const { addressing } = observation;
       const opened = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
-        input: { discussionId: addressing.discussionId, afterSeq: addressing.throughSeq - 1, throughSeq: addressing.throughSeq },
+        input: { discussionId: addressing.discussionId, messageId: addressing.messageId, throughSeq: addressing.throughSeq },
         context: { surface: 'cli', authority: 'account_automation', serverId: binding.serverId }, signal }));
       if (!opened.success || opened.data.incomplete || opened.data.serverId !== binding.serverId
         || opened.data.discussionId !== addressing.discussionId) return false;

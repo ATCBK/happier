@@ -48,6 +48,13 @@ async function fixture(mode: 'plain' | 'e2ee') {
       reads.push(url);
       const frontier = Math.min(Number(url.searchParams.get('throughSeq') ?? latest), latest);
       const before = Number(url.searchParams.get('beforeSeq') ?? frontier + 1);
+      const messageId = url.searchParams.get('messageId');
+      const localId = url.searchParams.get('localId');
+      if (messageId !== null || localId !== null) {
+        const row = messages.find(message => message.seq <= frontier
+          && (messageId !== null ? message.id === messageId : message.localId === localId));
+        return { status: 200, data: { messages: row ? [row] : [], messageSeq: frontier, hasMoreOlder: false } };
+      }
       const row = messages[Math.min(frontier, before - 1) - 1]!;
       latest = 4; // New peer reply arrives between pages.
       if (revokeAfterFirstPage) revoked = true;
