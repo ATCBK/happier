@@ -1,5 +1,5 @@
 import type { LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createLocalServicePublicRuntime } from "./runtime";
 
@@ -24,6 +24,52 @@ const preview: LocalServicePreviewResourceV1 = {
 };
 
 describe("local service public exposure runtime", () => {
+    it('uses the exposure deadline beyond the platform timer range and releases the retained timer', () => {
+        vi.useFakeTimers();
+        try {
+            const timerRangeMs = 2_147_483_647;
+            const ttlMs = timerRangeMs + 100;
+            const closed: string[] = [];
+            let closedBeforeAudit = false;
+            const runtime = createLocalServicePublicRuntime({
+                publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'preview.example.test',
+                policy: { enabled: true, allowedModes: ['authenticated'], maxTtlMs: ttlMs,
+                    dnsTlsRequired: false, auditRequired: true, rateLimitProfileIds: ['default'] },
+                allowTestDevAuditSink: true, checkRateLimit: () => true,
+                recordAuditEvent(event) {
+                    if (event.action === 'expire') {
+                        closedBeforeAudit = closed.includes('http') && closed.includes('ws');
+                        throw new Error('audit boundary unavailable');
+                    }
+                },
+            });
+            const created = runtime.createExposure({ preview, requestedMode: 'authenticated', requestedTtlMs: ttlMs,
+                actorId: 'owner', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' });
+            if (!created.ok) throw new Error(created.reasonCode);
+            const id = created.exposure.exposureId;
+            const release = runtime.retainConnection(id, () => { closed.push('released'); });
+            expect(vi.getTimerCount()).toBe(1);
+            release();
+            expect(vi.getTimerCount()).toBe(0);
+            runtime.retainConnection(id, () => { closed.push('http'); });
+            runtime.retainConnection(id, () => { closed.push('ws'); });
+            expect(vi.getTimerCount()).toBe(1);
+            vi.advanceTimersByTime(timerRangeMs);
+            expect(closed).toEqual([]);
+            expect(runtime.resolveExposure(id)?.state).toBe('active');
+            vi.advanceTimersByTime(100);
+            expect(closed).toEqual(['http', 'ws']);
+            expect(closedBeforeAudit).toBe(true);
+            expect(runtime.resolveExposure(id)?.state).toBe('expired');
+            expect(runtime.getSnapshot({ machineId: preview.machineId }).diagnostics).toEqual([
+                expect.objectContaining({ details: { reasonCode: 'audit_sink_unavailable' } }),
+            ]);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('scopes registered-preview status to the exact source-qualified service occurrence', () => {
         const serviceTarget = { kind: 'managed_service' as const, machineId: preview.machineId, managedServiceId: 'actual-instance', cwd: '/workspace/app',
             declaration: { workspaceRefId: 'workspace_1', selection: { kind: 'manifest' as const, name: 'web' } } };

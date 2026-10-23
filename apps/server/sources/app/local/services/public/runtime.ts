@@ -233,6 +233,7 @@ export function createLocalServicePublicRuntime(
 ): LocalServicePublicRuntime {
     const entries = new Map<string, ExposureEntry>();
     const exposureIdByHostname = new Map<string, string>();
+    const connectionExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const nowMs = input.nowMs ?? Date.now;
     const generateExposureId = input.generateExposureId ?? randomUUID;
     const generateSecretToken = input.generateSecretToken ?? defaultSecretToken;
@@ -283,6 +284,7 @@ export function createLocalServicePublicRuntime(
         const updated = { ...entry, exposure };
         entries.set(exposure.exposureId, updated);
         if (exposure.state !== "active") {
+            clearConnectionExpiryTimer(exposure.exposureId);
             for (const connection of entry.connections) connection.close();
             entry.connections.clear();
         }
@@ -639,7 +641,35 @@ export function createLocalServicePublicRuntime(
         }
         const connection = { close, ...(actorAccountId ? { actorAccountId } : {}) };
         entry.connections.add(connection);
-        return () => { entry.connections.delete(connection); };
+        scheduleConnectionExpiry(exposureId);
+        return () => {
+            entry.connections.delete(connection);
+            if (entry.connections.size === 0) clearConnectionExpiryTimer(exposureId);
+        };
+    }
+
+    function clearConnectionExpiryTimer(exposureId: string): void {
+        const timer = connectionExpiryTimers.get(exposureId);
+        if (timer !== undefined) clearTimeout(timer);
+        connectionExpiryTimers.delete(exposureId);
+    }
+
+    function scheduleConnectionExpiry(exposureId: string): void {
+        if (connectionExpiryTimers.has(exposureId)) return;
+        const entry = entries.get(exposureId);
+        if (!entry || entry.exposure.state !== 'active' || entry.connections.size === 0) return;
+        const remaining = entry.exposure.expiresAt - nowMs();
+        if (remaining <= 0) {
+            expireExposureIfNeeded(entry, nowMs());
+            return;
+        }
+        const timer = setTimeout(() => {
+            connectionExpiryTimers.delete(exposureId);
+            // Re-read the owner entry: audit updates replace its snapshot while streams live.
+            scheduleConnectionExpiry(exposureId);
+        }, Math.min(remaining, 2_147_483_647)); // Node's timer range is not an exposure TTL limit.
+        timer.unref();
+        connectionExpiryTimers.set(exposureId, timer);
     }
 
     function retireMachineAccess({ machineId, accountId }: Readonly<{ machineId: string; accountId: string }>): void {
@@ -656,6 +686,7 @@ export function createLocalServicePublicRuntime(
                 entry.connections.delete(connection);
                 connection.close();
             }
+            if (entry.connections.size === 0) clearConnectionExpiryTimer(entry.exposure.exposureId);
         }
     }
 
