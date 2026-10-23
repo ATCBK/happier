@@ -67,8 +67,11 @@ export type HappierDocEditProposalState =
   | Readonly<{
       state: 'open';
       title: string;
-      /** Caller-worded base version ("Based on v14"). */
-      basedOn: string;
+      /**
+       * Caller-worded base version ("Based on v14"), beside the title. Omit it when the footer already
+       * states the version, so one card says it once.
+       */
+      basedOn?: string;
       reason?: string;
       footer: HappierDocEditProposalFooter;
     }>
@@ -141,6 +144,14 @@ export function HappierDocEditProposal(
     alignItems: 'center',
     gap: space.s6,
   } as const;
+  // In a narrow margin the base version drops under the title rather than breaking the title's words.
+  const head = {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    columnGap: space.s8,
+  } as const;
   const foot = {
     flexDirection: 'row',
     alignItems: 'center',
@@ -183,12 +194,14 @@ export function HappierDocEditProposal(
   const reason = decision.reason?.trim();
   return (
     <View testID={props.testID} style={card}>
-      <View style={row}>
-        <Mark mark="proposal" tone="neutral" />
-        <View style={{ flex: 1 }}>
-          <Text role="title">{decision.title}</Text>
+      <View style={head}>
+        <View style={{ ...row, flexShrink: 1, minWidth: 0 }}>
+          <Mark mark="proposal" tone="neutral" />
+          <View style={{ flexShrink: 1, minWidth: 0 }}>
+            <Text role="title">{decision.title}</Text>
+          </View>
         </View>
-        <Text role="meta">{decision.basedOn}</Text>
+        {decision.basedOn ? <Text role="meta">{decision.basedOn}</Text> : null}
       </View>
       <Diff
         testID={id('diff')}
