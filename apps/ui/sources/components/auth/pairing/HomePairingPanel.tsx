@@ -5,7 +5,6 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import {
-    formatPairingCountdown,
     resolveHomeEnrollmentPresentation,
     type HomeEnrollmentPresentationModel,
 } from '@/auth/pairing/pairingPresentation';
@@ -39,6 +38,7 @@ import { useSetupBlockPanelWidth } from '@/components/ui/setupBlocks/SetupBlockG
 import { SetupSteps, type SetupStep } from '@/components/ui/setupBlocks/SetupSteps';
 
 import { PairingQrCode } from './PairingQrCode';
+import { PairingCountdown } from './PairingCountdown';
 import { PairingQrMomentCanvas } from './PairingQrMoment';
 import { usePairingQrMoment, type PairingQrMomentSource } from './usePairingQrMoment';
 import { PAIRING_QR_PALETTE } from './pairingQrPalette';
@@ -475,7 +475,7 @@ function PairingStatusLine(props: Readonly<{
                         {t(props.purpose === 'phone' ? 'homeSetup.waitingForPhone' : 'homeSetup.waitingForComputer')}
                     </Text>
                     {props.centred ? <Text style={styles.statusText}>·</Text> : <View style={styles.grow} />}
-                    <PairingCountdown testID={`${prefix}-countdown`} expiresAtMs={state.expiresAtMs} />
+                    <PairingCountdown testID={`${prefix}-countdown`} expiresAtMs={state.expiresAtMs} style={styles.countdown} />
                 </View>
             );
         case 'making':
@@ -555,21 +555,6 @@ function PairingStatusLine(props: Readonly<{
                 </View>
             );
     }
-}
-
-/** "New code in 4:32": the one ticking leaf, so the panel around it does not re-render every second. */
-function PairingCountdown(props: Readonly<{ testID: string; expiresAtMs: number }>) {
-    const [now, setNow] = React.useState(() => Date.now());
-    React.useEffect(() => {
-        setNow(Date.now());
-        const timer = setInterval(() => setNow(Date.now()), 1000);
-        return () => clearInterval(timer);
-    }, [props.expiresAtMs]);
-    return (
-        <Text testID={props.testID} style={styles.countdown}>
-            {t('homeSetup.newCodeIn', { time: formatPairingCountdown(props.expiresAtMs, now) })}
-        </Text>
-    );
 }
 
 const styles = StyleSheet.create((theme) => ({

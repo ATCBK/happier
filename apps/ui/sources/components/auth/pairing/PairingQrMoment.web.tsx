@@ -6,6 +6,8 @@ import {
   prepareMomentCanvas,
 } from '@/components/atmosphere/momentPaint.web';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import {
   selectQrMomentFrame,
   type QrMomentFrameRequest,
@@ -78,8 +80,12 @@ export const PairingQrMomentCanvas = React.memo(function PairingQrMomentCanvas(
   const shown = React.useRef<QrMomentFrameRequest | null>(null);
   const paintedFor = React.useRef('');
   const { scene, size, theme, reducedMotion, pairing } = props;
+  const activelyViewed = useHostActivelyViewed();
+  const presented = useLayoutPresentationActive();
+  const visible = activelyViewed && presented;
 
   React.useEffect(() => {
+    if (!visible) return;
     const canvas = live.current;
     if (!canvas) return;
     const dpr =
@@ -122,7 +128,7 @@ export const PairingQrMomentCanvas = React.memo(function PairingQrMomentCanvas(
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [scene, size, theme, reducedMotion, pairing, props.machines]);
+  }, [scene, size, theme, reducedMotion, pairing, props.machines, visible]);
 
   return (
     <View pointerEvents="none" style={{ width: size, height: size }}>
