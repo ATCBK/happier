@@ -470,7 +470,7 @@ describe('CLI Session target composition', () => {
     });
     get.mockClear();
     const result = await createActionExecutor(deps).execute('session.targets.resolve', {
-      actionId: 'session.goal.get', target: { selector: 'workers' },
+      actionId: 'session.status.get', target: { selector: 'workers' },
     }, { ...context, defaultSessionId: sessionId });
     expect(result).toMatchObject({ ok: true, result: { coverage: 'complete',
       addresses: rows.slice(0, 50).map(row => ({ serverId: context.serverId, sessionId: row.id })) } });
