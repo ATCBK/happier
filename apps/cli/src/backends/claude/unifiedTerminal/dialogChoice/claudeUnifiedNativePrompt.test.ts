@@ -2,9 +2,13 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PUBLIC_RPC_HANDLER_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
-import { createPermissionHandlerSessionStub } from '../../utils/permissionHandler.testkit';
+import type { SessionClientPort } from '@/api/session/sessionClientPort';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { FakePermissionClient } from '../../utils/permissionHandler.testkit';
+import { Session } from '../../session';
+import type { EnhancedMode } from '../../loop';
 import { parseClaudeScreenState } from '../tuiControls/screenState';
 import { getClaudeUnifiedDialogIdentity } from '../tuiControls/dialogRegistry';
 import { ClaudeUnifiedDialogChoiceBroker } from './claudeUnifiedDialogChoiceBroker';
@@ -24,12 +28,27 @@ const SCREEN = [
   'Enter to select · ↑/↓ to navigate · Esc to cancel',
 ].join('\n');
 
+const sessions = new Set<Session>();
+afterEach(() => {
+  for (const session of sessions) session.cleanup();
+  sessions.clear();
+});
+
 function createHarness() {
-  const { session, client } = createPermissionHandlerSessionStub('native-prompt');
+  const client = new FakePermissionClient('native-prompt');
+  const session = new Session({
+    // The canonical transport fake implements the client methods exercised by these flows.
+    client: client as unknown as SessionClientPort,
+    path: '/tmp', logPath: '/tmp/native-prompt-test.log', sessionId: null,
+    messageQueue: new MessageQueue2<EnhancedMode>(() => 'mode'), onModeChange: () => {},
+    hookSettingsPath: '/tmp/native-prompt-hooks.json',
+  });
+  sessions.add(session);
   let sequence = 0;
   const broker = new ClaudeUnifiedDialogChoiceBroker(session, { createRequestId: () => `native-${++sequence}` });
   broker.activate();
-  const observe = (id: string, location = 'app_and_terminal') => broker.observeSessionHook({
+  session.addClaudeSessionHookCallback((data) => broker.observeSessionHook(data));
+  const observe = (id: string, location = 'app_and_terminal') => session.onClaudeSessionHook({
     hook_event_name: 'ClaudeNativePrompt', session_id: 'claude-native-session',
     tool_use_id: id, tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS },
     happierResponseLocation: location,
@@ -42,7 +61,6 @@ describe('native prompts through the existing terminal dialog owner', () => {
     const dir = await mkdtemp(join(tmpdir(), 'claude-live-permission-id-'));
     const { session, broker, client } = createHarness();
     session.sessionId = 'claude-native-session';
-    session.onClaudeSessionHook = (data) => broker.observeSessionHook(data);
     const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: null });
     bridge.activate();
     const toolName = source === 'headless sidechain' ? 'Write' : 'ExitPlanMode';
@@ -110,7 +128,6 @@ describe('native prompts through the existing terminal dialog owner', () => {
 
   it.each(['Write', 'ExitPlanMode'] as const)('keeps the app-only %s native form with its original bridge request', async (toolName) => {
     const { session, broker, client } = createHarness();
-    session.onClaudeSessionHook = (data) => broker.observeSessionHook(data);
     const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: null });
     bridge.activate();
     const toolInput = toolName === 'Write'
@@ -150,13 +167,13 @@ describe('native prompts through the existing terminal dialog owner', () => {
   };
 
   it.each(['PostToolUse', 'transcript'] as const)('clears plan mode aliases after observed terminal plan acceptance (%s)', async (producer) => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     client.metadata = { ...planMetadata };
     const tool = { session_id: 'claude-native-session', tool_name: 'ExitPlanMode', tool_input: { plan: '# Harmless plan' }, tool_use_id: 'toolu-plan-accepted' };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
     if (producer === 'PostToolUse') {
-      broker.observeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_response: { plan: '# Harmless plan' } });
+      session.onClaudeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_response: { plan: '# Harmless plan' } });
     } else {
       await broker.observeTranscript({ sessionId: tool.session_id, type: 'user',
         permissionDecision: { decision: 'accept', source: 'user_temporary', grantScope: 'session' },
@@ -168,13 +185,13 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it.each(['PostToolUseFailure', 'feedback', 'sidechain', 'other-session', 'no-decision', 'other-tool'] as const)('keeps plan mode without a successful matching approval (%s)', async (producer) => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     client.metadata = { ...planMetadata };
     const tool = { session_id: 'claude-native-session', tool_name: producer === 'other-tool' ? 'Bash' : 'ExitPlanMode', tool_input: { plan: '# Harmless plan' }, tool_use_id: 'toolu-plan-not-accepted' };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
     if (producer === 'PostToolUseFailure') {
-      broker.observeSessionHook({ ...tool, hook_event_name: 'PostToolUseFailure' });
+      session.onClaudeSessionHook({ ...tool, hook_event_name: 'PostToolUseFailure' });
     } else {
       await broker.observeTranscript({ sessionId: producer === 'other-session' ? 'different-session' : tool.session_id,
         ...(producer === 'sidechain' ? { parent_tool_use_id: 'subagent-parent-tool' } : {}), type: 'user',
@@ -188,11 +205,11 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it.each(['PostToolUse', 'transcript'] as const)('clears plan mode from the exact provider result arriving after app acknowledgment (%s)', async (producer) => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     client.metadata = { ...planMetadata };
     const tool = { session_id: 'claude-native-session', tool_name: 'ExitPlanMode', tool_input: { plan: '# Harmless plan' }, tool_use_id: 'toolu-plan-app-accepted' };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt' });
     const initial = readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.304-plan-exit.txt', import.meta.url), 'utf8');
     const port = createFakeControlPort({ captures: [initial, initial, initial, '──────────────────\n❯ \n──────────────────'] });
     const probe = createClaudeUnifiedDialogChoiceScreenProbe({ broker, port, wait: async () => {}, graceMs: 0, settleMs: 1,
@@ -206,7 +223,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
     expect(broker.hasNativePrompt()).toBe(false);
     expect(client.metadata).toEqual(planMetadata);
     if (producer === 'PostToolUse') {
-      broker.observeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_response: { plan: '# Harmless plan' } });
+      session.onClaudeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_response: { plan: '# Harmless plan' } });
     } else {
       await broker.observeTranscript({ sessionId: tool.session_id, type: 'user',
         permissionDecision: { decision: 'accept', source: 'user_temporary', grantScope: 'session' },
@@ -219,10 +236,10 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('records native permission acceptance even when the approved tool execution fails', async () => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     const tool = { session_id: 'claude-native-session', tool_name: 'Bash', tool_input: { command: 'ruby -e "puts 671"' } };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-failed-execution' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-failed-execution' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
     const screen = ['Bash command', 'ruby -e "puts 671"', 'Do you want to proceed?',
       '❯ 1. Yes', '  2. No', 'Esc to cancel · Tab to amend'].join('\n');
     const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(screen));
@@ -240,10 +257,10 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('applies the exact native permission scope through the shared dialog control path', async () => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     const tool = { session_id: 'claude-native-session', tool_name: 'Bash', tool_input: { command: 'python3 -c "print(671)"' } };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-permission' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal',
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-permission' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal',
       permission_suggestions: [{ rules: [{ ruleContent: 'python3 -c "print(671)"' }] }],
     });
     const screen = [
@@ -273,15 +290,15 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('retires an observed native permission when the app state acknowledgment fails after execution', async () => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     const tool = { session_id: 'claude-native-session', tool_name: 'Bash', tool_input: { command: 'python3 -c "print(671)"' } };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-ack-failure' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-ack-failure' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
     const screen = ['Bash command', 'python3 -c "print(671)"', 'Do you want to proceed?',
       '❯ 1. Yes', '  2. No', 'Esc to cancel · Tab to amend'].join('\n');
     const port = createFakeControlPort({ captures: [screen, screen, screen, '──────────────────\n❯ \n──────────────────'],
       onSendSpecialKey: (key) => {
-        if (key === 'Enter') broker.observeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_use_id: 'toolu-ack-failure' });
+        if (key === 'Enter') session.onClaudeSessionHook({ ...tool, hook_event_name: 'PostToolUse', tool_use_id: 'toolu-ack-failure' });
       },
     });
     const probe = createClaudeUnifiedDialogChoiceScreenProbe({ broker, port, wait: async () => {}, graceMs: 0, settleMs: 1,
@@ -301,10 +318,10 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('routes plan change feedback through the same native permission choice and preserves its text', async () => {
-    const { broker, client } = createHarness();
+    const { session, broker, client } = createHarness();
     const tool = { session_id: 'claude-native-session', tool_name: 'ExitPlanMode', tool_input: { plan: '# Harmless probe plan' } };
-    broker.observeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-plan' });
-    broker.observeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'PreToolUse', tool_use_id: 'toolu-plan' });
+    session.onClaudeSessionHook({ ...tool, hook_event_name: 'ClaudeNativePrompt', happierResponseLocation: 'app_and_terminal' });
     const filled = readFileSync(new URL('../tuiControls/__fixtures__/claude-2.1.304-plan-feedback.txt', import.meta.url), 'utf8');
     const feedback = 'Keep this harmless probe; do not execute the plan.';
     const focused = filled.replace(feedback, 'Tell Claude what to change');
@@ -331,7 +348,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('applies an app answer to the exact native form and verifies the producer result before acknowledgment', async () => {
-    const { broker, client, observe } = createHarness();
+    const { session, broker, client, observe } = createHarness();
     observe('toolu-native-1');
     const blueFocused = SCREEN.replace('❯ 1. Amber', '  1. Amber').replace('  2. Blue', '❯ 2. Blue');
     const port = createFakeControlPort({
@@ -339,7 +356,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
       onSendSpecialKey: (key) => {
         if (key !== 'Enter') return;
         expect(client.agentState.requests['toolu-native-1']).toBeDefined();
-        broker.observeSessionHook({
+        session.onClaudeSessionHook({
           hook_event_name: 'PostToolUse', session_id: 'claude-native-session',
           tool_use_id: 'toolu-native-1', tool_name: 'AskUserQuestion',
           tool_response: { questions: QUESTIONS, answers: { 'Which probe color?': 'Blue' } },
@@ -365,13 +382,13 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it.each([false, true])('records the actual native answer without a stale waiter (next occurrence: %s)', async (nextOccurrence) => {
-    const { broker, client, observe } = createHarness();
+    const { session, broker, client, observe } = createHarness();
     observe('toolu-native-1');
     const port = createFakeControlPort({
       captures: [SCREEN, SCREEN, SCREEN],
       onSendSpecialKey: (key) => {
         if (key !== 'Enter') return;
-        broker.observeSessionHook({
+        session.onClaudeSessionHook({
           hook_event_name: 'PostToolUse', session_id: 'claude-native-session',
           tool_use_id: 'toolu-native-1', tool_name: 'AskUserQuestion',
           tool_response: { answers: { 'Which probe color?': 'Blue' } },
@@ -398,7 +415,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('publishes the full structured question and retires a terminal cancellation by exact tool result', async () => {
-    const { broker, client, observe } = createHarness();
+    const { session, broker, client, observe } = createHarness();
     observe('toolu-native-1');
     const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(SCREEN));
     expect(dialog?.kind).toBe('native');
@@ -425,7 +442,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('records a successful terminal answer without leaving an actionable app waiter', async () => {
-    const { broker, client, observe } = createHarness();
+    const { session, broker, client, observe } = createHarness();
     observe('toolu-native-local');
     const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(SCREEN));
     if (!dialog) throw new Error('expected native question');
@@ -448,7 +465,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('distinguishes identical repeated questions while allowing tabs to remain one request', () => {
-    const { broker, observe } = createHarness();
+    const { session, broker, observe } = createHarness();
     observe('toolu-native-1');
     const first = broker.resolveVisibleDialog(parseClaudeScreenState(SCREEN));
     expect(first?.kind).toBe('native');
@@ -460,7 +477,7 @@ describe('native prompts through the existing terminal dialog owner', () => {
   });
 
   it('recognizes terminal-only questions without exposing a competing generic app dialog', () => {
-    const { broker, observe } = createHarness();
+    const { session, broker, observe } = createHarness();
     observe('toolu-native-local', 'terminal_only');
     const dialog = broker.resolveVisibleDialog(parseClaudeScreenState(SCREEN));
     expect(dialog?.kind).toBe('native');

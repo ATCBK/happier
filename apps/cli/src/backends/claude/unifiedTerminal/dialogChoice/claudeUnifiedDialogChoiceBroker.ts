@@ -216,7 +216,6 @@ export class ClaudeUnifiedDialogChoiceBroker {
     if (this.disposed || isSidechainSessionHook(data)) return;
     const event = data.hook_event_name ?? data.hookEventName;
     const id = typeof data.tool_use_id === 'string' ? data.tool_use_id : null;
-    this.session.claudeToolHookCorrelation.observePreToolUse(data);
     if (event === 'ClaudeNativePrompt') {
       const toolName = data.tool_name ?? data.toolName;
       const sessionId = data.session_id ?? data.sessionId;
@@ -270,6 +269,7 @@ export class ClaudeUnifiedDialogChoiceBroker {
         const approved = readClaudeToolResultPermissionApproval(row);
         if (approved === true) this.clearAcceptedNativePlanMetadata(block.tool_use_id, row.sessionId);
         await this.retireNativeTool(block.tool_use_id, approved ?? block.is_error !== true);
+        this.session.claudeToolHookCorrelation.delete(block.tool_use_id);
       }
     }
   }
@@ -300,7 +300,6 @@ export class ClaudeUnifiedDialogChoiceBroker {
   }
 
   private async retireNativeTool(toolUseId: string, approved: boolean): Promise<void> {
-    this.session.claudeToolHookCorrelation.delete(toolUseId);
     const prompt = this.nativePromptForTool(toolUseId);
     if (!prompt) return;
     prompt.observedApproval = approved;

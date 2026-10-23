@@ -15,6 +15,7 @@ import { createClaudeUnifiedRuntimeControlBridge } from './unifiedTerminal/runti
 import { createClaudeUnifiedTuiControlController } from './unifiedTerminal/tuiControls/controller';
 import { createFakeControlPort } from './unifiedTerminal/tuiControls/fakeControlPort';
 import { createClaudeSettingsGuard } from './unifiedTerminal/tuiControls/settingsGuard';
+import { ClaudeUnifiedDialogChoiceBroker } from './unifiedTerminal/dialogChoice/claudeUnifiedDialogChoiceBroker';
 import { DEFAULT_CLAUDE_TUI_CONTROL_TIMINGS } from './unifiedTerminal/tuiControls/types';
 import { claudeRemoteAgentSdk } from './remote/claudeRemoteAgentSdk';
 import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
@@ -26,8 +27,10 @@ import type {
 
 type SessionFoundHookData = NonNullable<Parameters<Session['onSessionFound']>[1]>;
 
-it('preserves primary tool identity across sidechain completion and lets post-tool consumers read it before retirement', () => {
+it('preserves primary tool identity for consumers registered after the native broker until Session retires it', async () => {
   const session = createSession(createSessionClientStub());
+  const broker = new ClaudeUnifiedDialogChoiceBroker(session);
+  session.addClaudeSessionHookCallback((data) => broker.observeSessionHook(data));
   const facts = { sessionId: 'native-session', toolName: 'ExitPlanMode', toolInput: { plan: '# Harmless plan' } };
   try {
     session.onClaudeSessionHook({ hook_event_name: 'PreToolUse', session_id: facts.sessionId,
@@ -42,6 +45,7 @@ it('preserves primary tool identity across sidechain completion and lets post-to
     expect(observedToolId).toBe('primary-tool-id');
     expect(session.claudeToolHookCorrelation.get('primary-tool-id')).toBeUndefined();
   } finally {
+    await broker.dispose();
     session.cleanup();
   }
 });
