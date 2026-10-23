@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 const capabilityState = vi.hoisted(() => ({
     value: { status: 'idle' } as Record<string, unknown>,
@@ -13,11 +14,6 @@ vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
     useDaemonMergedProjectionInputs: () => ({ phase: 'loading' }),
 }));
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => false }));
-vi.mock('@/sync/domains/state/storage', () => ({
-    useAllMachines: () => [{ id: 'machine-1', metadata: { platform: 'win32', name: 'Windows' } }],
-    useSettings: () => ({}),
-    useSetting: () => null,
-}));
 // The Account's profile read is the network boundary: a cold open waits on it.
 vi.mock('@/sync/api/account/apiProfileCatalog', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/sync/api/account/apiProfileCatalog')>()),
@@ -26,6 +22,24 @@ vi.mock('@/sync/api/account/apiProfileCatalog', async (importOriginal) => ({
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return { ...createTextModuleMock({ translate: (key) => key }), getPreferredLanguage: () => 'en' };
+});
+
+let previous = getStorage().getState();
+beforeEach(() => {
+    previous = getStorage().getState();
+    capabilityState.value = { status: 'idle' };
+    const windows = createMachineFixture({ id: 'machine-1' });
+    const selected = { ...windows, metadata: { ...windows.metadata!, platform: 'win32', host: 'windows.test' } };
+    const otherHome = { ...selected, metadata: { ...selected.metadata, platform: 'linux', host: 'linux.test' } };
+    // The exact Home owns this Machine. The focused map deliberately has a
+    // same-id row from another Home, so an unscoped fallback cannot pass.
+    getStorage().setState({ settingsScope: null, machines: { [otherHome.id]: otherHome },
+        machineListByServerId: { 'server-1': [selected], 'server-2': [otherHome] },
+        machineListStatusByServerId: { 'server-1': 'idle', 'server-2': 'idle' } });
+});
+afterEach(async () => {
+    await standardCleanup();
+    getStorage().setState(previous);
 });
 
 describe('useSessionAuthoringControlFacts', () => {
@@ -38,6 +52,8 @@ describe('useSessionAuthoringControlFacts', () => {
         }));
 
         expect(hook.getCurrent().windowsTerminalAvailable).toBe(false);
+        expect(hook.getCurrent().machineName).toBe('windows.test');
+        expect(hook.getCurrent().targetIsWindows).toBe(true);
 
         capabilityState.value = {
             status: 'loaded',
