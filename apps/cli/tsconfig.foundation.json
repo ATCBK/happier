@@ -486,7 +486,6 @@
     "src/mcp/runtime/mcpRequestAuth.ts",
     "src/mcp/runtime/pluginMcpPort.ts",
     "src/mcp/runtime/resolveMcpToolIdentity.ts",
-    "src/mcp/runtime/withMcpTimeout.ts",
     "src/mcp/runtime/writeSecureMcpRuntimeConfigFile.ts",
     "src/mcp/runtimeTypes.ts",
     "src/mcp/server/projectMcpToolInputJsonSchema.ts",
