@@ -1,5 +1,5 @@
 import type { OpenedSessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/actions';
-import type { SessionCoordinatorEnableInputV1 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorActionsV1';
+import type { SessionCoordinatorEffectV1, SessionCoordinatorEnableInputV1 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorActionsV1';
 import {
     prepareSessionCoordinatorSetupV1,
     type SessionCoordinatorCreationDefaultsV1,
@@ -140,6 +140,27 @@ export function buildMakeCoordinatorEnableInput(
                     },
                 }
             : {}),
+    };
+}
+
+export type MakeCoordinatorOutcome = Readonly<{
+    done: boolean;
+    approvalPending: boolean;
+    /** The typed code of a refused Role step, so the dialog can explain it and keep the rest as done. */
+    roleRefusalCode: string | null;
+    /** Unfinished steps other than the refused Role. */
+    otherUnfinished: number;
+}>;
+
+/** What one `session.coordinator.enable` result leaves for the person: finished, waiting on approval, or a held Role. */
+export function readMakeCoordinatorOutcome(effects: readonly SessionCoordinatorEffectV1[]): MakeCoordinatorOutcome {
+    const unfinished = effects.filter((effect) => effect.status !== 'accepted');
+    const roleRefusal = unfinished.find((effect) => effect.operation === 'role' && effect.status === 'failed');
+    return {
+        done: unfinished.length === 0,
+        approvalPending: unfinished.some((effect) => effect.status === 'approval_required'),
+        roleRefusalCode: roleRefusal?.status === 'failed' ? roleRefusal.errorCode : null,
+        otherUnfinished: unfinished.length - (roleRefusal ? 1 : 0),
     };
 }
 

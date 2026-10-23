@@ -6,6 +6,7 @@ import {
     buildMakeCoordinatorDraft,
     buildMakeCoordinatorEnableInput,
     describeMakeCoordinatorOverlap,
+    readMakeCoordinatorOutcome,
 } from './makeCoordinatorModel';
 
 const SERVER = 'home-1';
@@ -183,5 +184,32 @@ describe('Make coordinator overlap', () => {
         expect(overlap).toEqual([
             { rule: census.rules[0], receiverSessionId: 's-daily', count: 3 },
         ]);
+    });
+});
+
+describe('Make coordinator partial outcome', () => {
+    const accepted = (operation: 'bot' | 'manager' | 'rule') => ({ operation, status: 'accepted' as const });
+
+    it('tells a refused Role apart from the other unfinished steps, keeping the done ones out of both', () => {
+        const outcome = readMakeCoordinatorOutcome([
+            { operation: 'role', status: 'failed', errorCode: 'role_policy_restart_required' },
+            accepted('bot'),
+            { operation: 'rule', ruleId: 'r1', status: 'not_attempted', errorCode: 'role_failed' },
+        ]);
+
+        expect(outcome).toEqual({ done: false, approvalPending: false, roleRefusalCode: 'role_policy_restart_required', otherUnfinished: 1 });
+    });
+
+    it('counts a Role refusal alone as no other unfinished step, and a clean apply as done', () => {
+        expect(readMakeCoordinatorOutcome([{ operation: 'role', status: 'failed', errorCode: 'role_policy_restart_required' }, accepted('bot')]))
+            .toMatchObject({ done: false, roleRefusalCode: 'role_policy_restart_required', otherUnfinished: 0 });
+        expect(readMakeCoordinatorOutcome([accepted('bot'), accepted('rule')])).toEqual({ done: true, approvalPending: false, roleRefusalCode: null, otherUnfinished: 0 });
+    });
+
+    it('keeps a step waiting for approval distinct from a failure', () => {
+        const approval = { ok: true as const, status: 'approval_required' as const, approvalRequestId: 'a1' };
+        const outcome = readMakeCoordinatorOutcome([{ operation: 'manager', status: 'approval_required', approval } as never, accepted('bot')]);
+
+        expect(outcome).toMatchObject({ done: false, approvalPending: true, roleRefusalCode: null });
     });
 });

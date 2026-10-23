@@ -639,7 +639,14 @@ describe('composerSubmissionCoordinator', () => {
     });
 
     it('retains the exact draft when canonical admission rejects it', async () => {
-        const admit = vi.fn(async () => ({ status: 'rejected' as const }));
+        const reason = {
+            type: 'rejected' as const,
+            errorCode: 'session_input_target_update_required',
+            errorMessage: 'The target does not support queued input',
+            callerSurface: 'session_attachment_composer' as const,
+            destination: 'executionRun' as const,
+        };
+        const admit = vi.fn(async () => ({ status: 'rejected' as const, reason }));
         const clearAcceptedSnapshot = vi.fn(() => true);
 
         const result = await submitComposerSnapshot({
@@ -648,7 +655,7 @@ describe('composerSubmissionCoordinator', () => {
             clearAcceptedSnapshot,
         });
 
-        expect(result).toMatchObject({ status: 'rejected' });
+        expect(result).toMatchObject({ status: 'rejected', reason });
         expect(clearAcceptedSnapshot).not.toHaveBeenCalled();
     });
 

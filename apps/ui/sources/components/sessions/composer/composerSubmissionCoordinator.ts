@@ -14,6 +14,8 @@ import { SessionExecutionTargetV1Schema } from '@happier-dev/protocol/sessions/c
 
 import { sameComposerAttachmentViews } from '@/components/sessions/composer/composerDocumentOwner';
 import { getComposerMediaContentAvailability } from '@/sync/domains/transfers/runtime/transferRuntime';
+import type { SessionComposerSendDestination } from '@/sync/domains/session/input/resolveSessionComposerSendDestination';
+import type { SessionMessageCallerSurface, SubmitSessionUserMessageResult } from '@/sync/domains/session/input/types';
 
 type ComposerMentionRef = ComposerSnapshotV1['references'][number];
 
@@ -27,7 +29,14 @@ export type ComposerSubmissionSnapshot = Readonly<{
 
 export type ComposerSubmissionAdmissionOutcome =
     | Readonly<{ status: 'accepted' }>
-    | Readonly<{ status: 'rejected' }>;
+    | Readonly<{
+        status: 'rejected';
+        /** Preserve the submit owner's reason, not a second error classification or presentation. */
+        reason?: Readonly<Pick<SubmitSessionUserMessageResult, 'type' | 'errorCode' | 'errorMessage'> & {
+            callerSurface: SessionMessageCallerSurface;
+            destination: SessionComposerSendDestination['kind'];
+        }>;
+    }>;
 
 /**
  * The incumbent admission owner invokes this exactly when its Message/Pending
@@ -70,7 +79,9 @@ export type ComposerSubmissionResult =
         reason: 'attachmentUnavailable' | 'mediaContentUnavailable' | 'scopeMismatch';
         snapshot: ComposerSubmissionSnapshot;
     }>
-    | Readonly<{ status: 'rejected'; snapshot: ComposerSubmissionSnapshot }>
+    | Readonly<Extract<ComposerSubmissionAdmissionOutcome, { status: 'rejected' }> & {
+        snapshot: ComposerSubmissionSnapshot;
+    }>
     | Readonly<{ status: 'accepted'; snapshot: ComposerSubmissionSnapshot; cleared: boolean }>;
 
 export type ComposerSubmissionFieldCurrentness = Readonly<{
@@ -381,7 +392,7 @@ export async function submitComposerSnapshot(input: Readonly<{
     }
 
     if (admission.status !== 'accepted') {
-        return { status: 'rejected', snapshot };
+        return { ...admission, snapshot };
     }
 
     return {

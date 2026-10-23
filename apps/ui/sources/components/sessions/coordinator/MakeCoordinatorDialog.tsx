@@ -9,6 +9,7 @@ import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/wor
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { resolveCoordinatorKeepDefault } from '@happier-dev/protocol/account/settings/accountSettings';
 
+import { describeSessionRoleRefusal } from '@/components/roles/session/sessionRole';
 import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleMark } from '@/components/roles/catalog/useRoleMark';
 import { CoordinatorKeepListPreview, CoordinatorKeepRailPreview } from '@/components/settings/coordination/CoordinatorKeepPreviews';
@@ -16,6 +17,7 @@ import { useSessionMachineName } from '@/components/sessions/agents/presentation
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useInboxSessionHandoff } from '@/hooks/inbox/useInboxSessionHandoff';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { createFrontDoorActionExecute, requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
@@ -38,13 +40,16 @@ import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projec
 import { sessionCoordinatorActions } from '@/sync/ops/sessions/sessionCoordinatorActions';
 import { t } from '@/text';
 import { inferProjectTitleFromPath } from '@/utils/path/browseSegments';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, useSessionStatus } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+
+import { MakeCoordinatorRoleHeld } from './MakeCoordinatorRoleHeld';
 
 import {
     buildMakeCoordinatorDraft,
     buildMakeCoordinatorEnableInput,
     describeMakeCoordinatorOverlap,
+    readMakeCoordinatorOutcome,
     toggleMakeCoordinatorRule,
     type MakeCoordinatorDraft,
     type MakeCoordinatorKeep,
@@ -132,6 +137,8 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
     const counts = useRulePreviews(serverId, sessionId, draft.rules);
     const [submitting, setSubmitting] = React.useState(false);
     const [footnote, setFootnote] = React.useState<string | null>(null);
+    // The Role step was held back: the committed steps and the draft stay, Retry is the primary action.
+    const [roleHeld, setRoleHeld] = React.useState<RoleHeld | null>(null);
 
     const submit = async () => {
         setSubmitting(true);
@@ -146,11 +153,17 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
         const parsed = SessionCoordinatorEnableResultV1Schema.safeParse(result.result);
         if (!parsed.success) { setFootnote(t('sessionCoordinator.make.failed')); return; }
         // A partial result keeps the dialog open: what didn't land is said, and Make coordinator again finishes it.
-        const unfinished = parsed.data.effects.filter((effect) => effect.status !== 'accepted');
-        if (unfinished.length > 0) {
-            setFootnote(unfinished.some((effect) => effect.status === 'approval_required')
+        const outcome = readMakeCoordinatorOutcome(parsed.data.effects);
+        const refusal = outcome.roleRefusalCode
+            ? describeSessionRoleRefusal({ ok: false, errorCode: outcome.roleRefusalCode })
+            : null;
+        setRoleHeld(refusal && outcome.roleRefusalCode ? { ...refusal, endingTurnClearsIt: outcome.roleRefusalCode === 'role_policy_restart_required' } : null);
+        if (!outcome.done) {
+            setFootnote(outcome.approvalPending
                 ? t('sessionCoordinator.make.partialApproval')
-                : t('sessionCoordinator.make.partial', { count: unfinished.length }));
+                : outcome.otherUnfinished > 0
+                    ? t('sessionCoordinator.make.partial', { count: outcome.otherUnfinished })
+                    : t('sessionCoordinator.make.roleHeldNote'));
             return;
         }
         publishPresentationNotice({
@@ -177,11 +190,11 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
             <View style={styles.footer}>
                 <SectionButtonRow
                     footnote={footnote ?? (noRules ? t('sessionCoordinator.make.noRulesHint') : null)}
-                    footnoteTone={footnote ? 'danger' : 'secondary'}
+                    footnoteTone={footnote && !roleHeld ? 'danger' : 'secondary'}
                     trailing={<RoundButton
                         testID="make-coordinator-submit"
                         size="small"
-                        title={t('sessionCoordinator.make.submit')}
+                        title={roleHeld ? t('common.retry') : t('sessionCoordinator.make.submit')}
                         disabled={submitting}
                         loading={submitting}
                         onPress={() => { void submitRef.current(); }}
@@ -191,13 +204,14 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
                 </SectionButtonRow>
             </View>
         ),
-    }), [footnote, noRules, onClose, project, projectLabel, submitting]));
+    }), [footnote, noRules, onClose, project, projectLabel, roleHeld, submitting]));
 
     const ruleTitle = (scope: RuleScope) => scope === 'project'
         ? t('sessionCoordinator.make.ruleProject', { project: projectLabel })
         : t('sessionCoordinator.make.ruleHome');
     return (
         <ItemList presentation="grouped" style={styles.list} keyboardShouldPersistTaps="handled" testID="make-coordinator">
+            {roleHeld ? <RoleHeldNotice sessionId={sessionId} serverId={serverId} held={roleHeld} /> : null}
             <ItemGroup>
                 <RoleField roleId={draft.roleId} onChange={(roleId) => setDraft({ ...draft, roleId })} />
                 <ManagedByField
@@ -252,6 +266,31 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
             <MachineNote sessionId={sessionId} serverId={serverId} />
         </ItemList>
     );
+}
+
+type RoleHeld = Readonly<{ title: string; message: string; endingTurnClearsIt: boolean }>;
+
+/** The turn is read live, so the stop control goes away on its own when the turn ends. */
+function RoleHeldNotice(props: Readonly<{ sessionId: string; serverId: string; held: RoleHeld }>) {
+    const session = useSession(props.sessionId, props.serverId);
+    const status = useSessionStatus(session ?? null, { subscribeToTranscript: false });
+    const turnRunning = status?.state === 'thinking' || status?.state === 'permission_required' || status?.state === 'action_required';
+    const [stopping, setStopping] = React.useState(false);
+    const stopTurn = () => {
+        setStopping(true);
+        fireAndForget((async () => {
+            try {
+                requireActionSuccess(await createFrontDoorActionExecute()('session.turn.cancel', { sessionId: props.sessionId },
+                    { surface: 'ui', defaultSessionId: props.sessionId, serverId: props.serverId }));
+            } catch {
+                publishPresentationNotice({ key: `session-coordinator-stop:${props.sessionId}`, severity: 'error', message: t('errors.operationFailed') });
+            } finally {
+                setStopping(false);
+            }
+        })(), { tag: 'MakeCoordinatorDialog.stopTurn' });
+    };
+    return <MakeCoordinatorRoleHeld title={props.held.title} message={props.held.message} turnRunning={turnRunning}
+        onStopTurn={props.held.endingTurnClearsIt ? stopTurn : null} stopping={stopping} />;
 }
 
 function describeRuleCount(count: RuleCount | undefined): string {
