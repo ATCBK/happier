@@ -79,6 +79,22 @@ async function settleWithin<T>(
 }
 
 describe('DaemonVoiceAgentClient', () => {
+  it('preserves a configured ACP Session target and exact model identity at daemon admission', async () => {
+    daemonRpc.mockResolvedValueOnce({ ok: true, runId: 'run_acp', created: true });
+    const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');
+    await expect(new DaemonVoiceAgentClient({ serverId: home.id, accountId: 'account-a' }).start({
+      sessionId: 's1', agentSource: 'session', backendTarget: { kind: 'backend', backendId: 'qa-c-exact-args',
+        configuredBackendId: 'qa-c-exact-args', sourceKind: 'configured' }, chatModelId: 'acp-chat', commitModelId: 'acp-commit',
+      permissionIntent: 'read-only', idleTtlSeconds: 300, initialContext: 'ctx',
+    })).resolves.toEqual({ voiceAgentId: 'run_acp' });
+    expect(ExecutionRunEnsureOrStartRequestSchema.parse(daemonRpc.mock.calls[0]?.[0].payload).start).toMatchObject({
+      backendTarget: { kind: 'backend', backendId: 'qa-c-exact-args', configuredBackendId: 'qa-c-exact-args', sourceKind: 'configured' },
+      modelSelection: { agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:qa-c-exact-args',
+        providerConnectionId: null, modelId: 'acp-chat' },
+      intentInput: { commitModelSelection: { agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:qa-c-exact-args',
+        providerConnectionId: null, modelId: 'acp-commit' } },
+    });
+  });
   it('admits an Account Launch Profile without claiming plugin execution Profile custody', async () => {
     daemonRpc.mockResolvedValueOnce({ ok: true, runId: 'run_persona', created: true });
     const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');
@@ -238,7 +254,7 @@ describe('DaemonVoiceAgentClient', () => {
           resume: true,
           start: expect.objectContaining({
             intent: 'voice_agent',
-            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+              backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
             retentionPolicy: 'resumable',
             ioMode: 'streaming',
             commitIsolation: true,

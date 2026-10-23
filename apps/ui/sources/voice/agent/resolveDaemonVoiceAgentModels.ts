@@ -1,4 +1,5 @@
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
+import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import {
     describeEffectiveModelMode,
 } from '@/sync/domains/models/describeEffectiveModelMode';
@@ -30,7 +31,12 @@ export function resolveDaemonVoiceAgentModelIds(params: {
     };
 }): DaemonVoiceAgentModelIds | null {
     const metadata = params.metadata;
-    const agentId = resolveAgentIdFromSessionMetadata(metadata);
+    const sessionBackend = resolveSessionActionDefaultBackend({ session: { metadata } });
+    const target = resolveSessionActionDefaultTarget(sessionBackend);
+    const agentId = target ? resolveOperationalBackendTargetForAgentSelection({
+        backendTarget: target,
+        selectedEntry: sessionBackend?.defaultAgentId ? { agentId: sessionBackend.defaultAgentId } : null,
+    })?.backendId : null;
     if (!agentId) return null;
 
     const chatSelected =

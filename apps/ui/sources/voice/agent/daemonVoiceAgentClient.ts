@@ -12,8 +12,8 @@ import type { VoiceAgentClient, VoiceAgentStartParams, VoiceAgentStartResult, Vo
 import { streamVoiceAgentTurn } from './streamVoiceAgentTurn';
 import { requiresProviderSafeModelSelectionRpc } from '@/sync/ops/providerDaemonSessionCompatibility';
 import { requiresProviderSafeExecutionRunStartRpc } from '@happier-dev/protocol/execution/runs/startRequest';
-import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 const VOICE_AGENT_LIFECYCLE_RPC_TIMEOUT_MS = null;
 
@@ -87,19 +87,21 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
 
   async start(params: VoiceAgentStartParams): Promise<VoiceAgentStartResult> {
     const backendId = String(params.agentId ?? '').trim();
-    if (!backendId) {
+    if (!params.backendTarget && !backendId) {
       throw Object.assign(new Error('voice_agent_selection_unavailable'), {
         code: 'VOICE_AGENT_SELECTION_UNAVAILABLE',
       });
     }
+    const backendTarget = params.backendTarget ?? readBackendTargetRefV2({ kind: 'builtInAgent', agentId: backendId });
+    const agentTargetKey = buildBackendTargetKeyV2(backendTarget);
     const chatModelId = normalizeVoiceAgentModelId(params.chatModelId);
     const commitModelId = normalizeVoiceAgentModelId(params.commitModelId, true);
     const launchProfileId = normalizeVoiceAgentLaunchProfileId(params.launchProfileId);
     const chatModelSelection = params.chatModelSelection ?? (chatModelId
-      ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: chatModelId }
+      ? { agentTargetKey, providerConnectionId: null, modelId: chatModelId }
       : params.chatModelId?.trim() === 'default' ? null : undefined);
     const commitModelSelection = params.commitModelSelection ?? (commitModelId && commitModelId !== 'default'
-      ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: commitModelId }
+      ? { agentTargetKey, providerConnectionId: null, modelId: commitModelId }
       : undefined);
     const ensureOrStartMethod = requiresProviderSafeExecutionRunStartRpc({ modelSelection: chatModelSelection }, true)
       || requiresProviderSafeModelSelectionRpc(chatModelSelection, commitModelSelection)
@@ -107,7 +109,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       : SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START;
     const startPayload = {
       intent: 'voice_agent',
-      backendTarget: { kind: 'builtInAgent', agentId: backendId },
+      backendTarget,
       permissionMode: params.permissionIntent,
       retentionPolicy: params.retentionPolicy ?? 'ephemeral',
       runClass: 'long_lived',

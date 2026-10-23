@@ -510,6 +510,48 @@ describe('initializeVoiceAgentHandle', () => {
         }
     });
 
+    it.each([false, true])('starts R40 with its configured ACP Session Agent despite a saved Codex tuple (bound=%s)', async bound => {
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+        const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+        const previousSettings = storage.getState().settings;
+        const carrierId = 'r40-global-configured-acp';
+        const local = readLocalConversationSettingsFromAccountSettings(previousSettings);
+        storage.setState({ sessions: { ...storage.getState().sessions,
+            [carrierId]: createSessionFixture({ id: carrierId, serverId: connection.home.id, active: true,
+                presence: 'online', encryptionMode: 'plain', metadataLayoutVersion: 1,
+                metadata: { path: '/voice', host: 'voice.test' },
+                ownerMetadataView: { path: '/voice', host: 'voice.test', flavor: 'custom-acp',
+                    acpConfiguredBackendV1: { v: 1, backendId: 'qa-c-exact-args', title: 'QA configured ACP', updatedAt: 1 } },
+            }),
+        }, settings: { ...previousSettings, voice: voiceSettingsParse({ ...previousSettings.voice,
+            providers: { ...previousSettings.voice.providers, local_conversation: { schemaVersion: 1, config: {
+                ...local, agent: { ...local.agent, agentSource: 'session', agentId: 'codex',
+                    agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null, agentProjectionGeneration: null,
+                    chatModelSource: 'custom', chatModelId: 'gpt-6-luna' },
+            } } },
+        }) } });
+        voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation', controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+            conversationSessionId: carrierId, conversationSessionAddress: { serverId: connection.home.id, sessionId: carrierId },
+            lifetime: 'runtime_attempt', transcriptMode: 'synthetic',
+            targetSessionAddress: bound ? { serverId: connection.home.id, sessionId: carrierId } : null, updatedAt: 1 });
+        try {
+            await expect(initializeVoiceAgentHandle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+                setDeferredTargetSessionContext: vi.fn() })).resolves.toMatchObject({ rpcSessionId: carrierId });
+            expect(admittedStart()).toMatchObject({ backendTarget: { kind: 'backend', backendId: 'qa-c-exact-args',
+                configuredBackendId: 'qa-c-exact-args', sourceKind: 'configured' },
+                modelSelection: { agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:qa-c-exact-args',
+                    providerConnectionId: null, modelId: 'gpt-6-luna' } });
+        } finally {
+            voiceSessionBindingStore.getState().unbind(carrierId);
+            const sessions = { ...storage.getState().sessions };
+            delete sessions[carrierId];
+            storage.setState({ sessions, settings: previousSettings });
+            state = storage.getState();
+        }
+    });
+
     it.each([true, false])('keeps hidden history separate from the bound/global persona (bound=%s)', async bound => {
         const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
         const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');

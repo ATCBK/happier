@@ -1,5 +1,4 @@
 import {
-    resolveAgentIdFromSessionMetadata,
     type PermissionIntent,
 } from '@happier-dev/agents';
 import {
@@ -65,6 +64,9 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { resolveSelectedVoiceWelcomeText } from '@/voice/agent/voiceWelcomeText';
 import { readSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { resolveVoiceSessionModelSelection } from '@/voice/agent/resolveVoiceSessionModelSelection';
+import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTarget } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
+import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { resolveOperationalBackendTargetForAgentSelection } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 
 type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
@@ -145,7 +147,7 @@ function resolveVoiceSessionConnectedServices(
     metadata: ReturnType<typeof readVoiceSessionOwnerMetadataFromState>,
     agentId: string,
 ): VoiceAgentStartParams['connectedServices'] {
-    if (!metadata || resolveAgentIdFromSessionMetadata(metadata) !== agentId) return undefined;
+    if (!metadata || resolveSessionActionDefaultBackend({ session: { metadata } })?.defaultAgentId !== agentId) return undefined;
     const connectedServices = metadata.connectedServices;
     return connectedServices === null || connectedServices === undefined
         ? undefined
@@ -321,10 +323,10 @@ export async function initializeVoiceAgentHandle({
             { forceRefresh: true },
         );
         if (agentSource === 'session') {
-            const targetAgentId = resolveAgentIdFromSessionMetadata(
+            const targetBackend = resolveSessionActionDefaultBackend({ session: { metadata:
                 readVoiceSessionOwnerMetadataFromState(storage.getState(), boundTargetSessionAddress ?? daemonTargetSessionId),
-            );
-            if (!targetAgentId) throwVoiceAgentSelectionUnavailable();
+            } });
+            if (!targetBackend) throwVoiceAgentSelectionUnavailable();
         }
         // Keep the bound target's Home: capability is answered by that Home's daemon projection.
         await assertActiveDaemonTargetSession(
@@ -423,24 +425,24 @@ export async function initializeVoiceAgentHandle({
             ? (isGlobalVoiceAgent ? (daemonConversationSessionId ?? sessionId) : sessionId)
             : sessionId;
 
-    /**
-     * The Agent this voice run targets, or `null` when no Agent fact exists.
-     *
-     * A configured voice Agent is a settings default; an unreadable Session Agent
-     * identity is not. Substituting the default Agent there would start the run on
-     * a different Agent than the Session actually runs, so the unknown case stays
-     * unknown and the callers below skip Agent-keyed work instead.
-     */
-    const resolveDaemonAgentId = (
+    // Session inheritance consumes the canonical Session backend reader, including
+    // configured ACP definitions. Only the explicit fixed source reads the saved Agent.
+    const resolveDaemonBackendTarget = (
         daemonSessionId: string,
         targetAddress?: SessionAddress | null,
-    ): string | null => {
+    ): BackendTargetRefV1 | null => {
         if (agentSource === 'agent') {
-            return String(agentId ?? '').trim() || DEFAULT_AGENT_ID;
+            return { kind: 'builtInAgent', agentId: String(agentId ?? '').trim() || DEFAULT_AGENT_ID };
         }
-        return resolveAgentIdFromSessionMetadata(
+        const selected = resolveSessionActionDefaultBackend({ session: { metadata:
             readVoiceSessionOwnerMetadataFromState(storage.getState(), targetAddress ?? daemonSessionId),
-        );
+        } });
+        const target = resolveSessionActionDefaultTarget(selected);
+        const operational = target ? resolveOperationalBackendTargetForAgentSelection({
+            backendTarget: target,
+            selectedEntry: selected?.defaultAgentId ? { agentId: selected.defaultAgentId } : null,
+        }) : null;
+        return operational ? convertBackendTargetRefV2ToV1(operational) : null;
     };
     let chatModelId: string | undefined;
     let commitModelId: string | undefined;
@@ -523,7 +525,8 @@ export async function initializeVoiceAgentHandle({
             storage.getState(),
             targetAddress ?? nextRpcSessionId,
         );
-        resolvedAgentId = resolveDaemonAgentId(nextRpcSessionId, targetAddress);
+        resolvedBackendTarget = resolveDaemonBackendTarget(nextRpcSessionId, targetAddress);
+        resolvedAgentId = resolvedBackendTarget?.kind === 'builtInAgent' ? resolvedBackendTarget.agentId : null;
         // Only session-sourced starts inherit the current binding from the exact
         // Session Agent. Fixed Agent starts leave selection to the canonical
         // Account-default resolver on the daemon.
@@ -551,14 +554,13 @@ export async function initializeVoiceAgentHandle({
                 commitModelId = selection.modelId;
             }
         }
-        resolvedBackendTarget = resolvedAgentId ? { kind: 'builtInAgent', agentId: resolvedAgentId } : null;
         runMetadataSessionId =
             resolveVoiceRunMetadataSessionId(sessionId, nextBackend, daemonConversationSessionId);
         refreshPersistedRunState(runMetadataSessionId);
     };
     await refreshStartState(backend, rpcSessionId);
     assertAccountCurrent();
-    if (backend === 'daemon' && agentSource === 'session' && !resolvedAgentId) {
+    if (backend === 'daemon' && agentSource === 'session' && !resolvedBackendTarget) {
         throwVoiceAgentSelectionUnavailable();
     }
     const ensureInstallablesForCurrentStartState = async () => {
@@ -641,7 +643,7 @@ export async function initializeVoiceAgentHandle({
         };
 
         const reconcileExistingDaemonRuns = async () => {
-            if (backend !== 'daemon' || !runMetadataSessionId || !resolvedAgentId) return;
+            if (backend !== 'daemon' || !runMetadataSessionId || !resolvedBackendTarget) return;
             const listed = await sessionExecutionRunList(rpcSessionId, {}, runOptions);
             if (!('runs' in listed)) return;
 
@@ -714,6 +716,7 @@ export async function initializeVoiceAgentHandle({
                 initialContext: effectiveInitialContext,
                 ...(backend === 'daemon' ? { replay: resolveReplaySeedRequest() } : {}),
                 ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+                ...(resolvedBackendTarget ? { backendTarget: readBackendTargetRefV2(resolvedBackendTarget) } : {}),
                 chatModelId,
                 commitModelId,
                 ...(chatModelSelection ? { chatModelSelection } : {}),
@@ -794,7 +797,7 @@ export async function initializeVoiceAgentHandle({
                     daemonConversationSessionId = await ensureVoiceConversationSessionId(signal);
                     await refreshStartState('daemon', daemonConversationSessionId ?? sessionId);
                     assertAccountCurrent();
-                    if (agentSource === 'session' && !resolvedAgentId) {
+                    if (agentSource === 'session' && !resolvedBackendTarget) {
                         throwVoiceAgentSelectionUnavailable();
                     }
                     await ensureInstallablesForCurrentStartState();

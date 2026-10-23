@@ -9,6 +9,7 @@ import type {
   VoiceAgentOutputEffectV1,
   VoiceAgentOutputEventV1,
   VoiceAssistantAction,
+  BackendTargetRefV2,
 } from '@happier-dev/protocol';
 import type { PermissionIntent } from '@happier-dev/agents';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -36,6 +37,8 @@ export type VoiceAgentStartParams = Readonly<{
   launchProfileId?: string | null;
   agentSource?: VoiceAgentAgentSource;
   agentId?: string;
+  /** Exact Session target, including configured ACP definitions; never substitute the saved Agent. */
+  backendTarget?: BackendTargetRefV2;
   verbosity?: VoiceAgentVerbosity;
   /** Omitted attached choices are resolved from the applied Session by the host. */
   chatModelId?: string;

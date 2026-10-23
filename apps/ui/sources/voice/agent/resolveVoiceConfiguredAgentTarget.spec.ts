@@ -168,6 +168,31 @@ afterEach(async () => {
 });
 
 describe('resolveVoiceConfiguredAgentTarget', () => {
+  it('restores the original R40 bundled OpenCode selection through the real Account catalog binding', async () => {
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const { createVoiceAgentSettingsCatalogReader } = await import('@/sync/ops/actions/voiceAgentSettingsCatalog');
+    const { voiceAgentSelectionBinding } = await import('@/voice/settings/voiceSettingBinding');
+    const captured = await captureLazyActionAccountContext(account!.home.id);
+    try {
+      const settings = settingsParse({ voice: writeLocalConversationVoiceSettings(voiceSettingsDefaults, {
+        ...readLocalConversationVoiceSettings(voiceSettingsDefaults), conversationMode: 'agent',
+        agent: { ...readLocalConversationVoiceSettings(voiceSettingsDefaults).agent, agentSource: 'session', agentId: 'codex',
+          agentTargetKey: 'agent:happier.agent.codex/codex', agentIdentity: null, agentProjectionGeneration: null,
+          chatModelSource: 'custom', chatModelId: 'gpt-6-luna' },
+      }) });
+      if (voiceAgentSelectionBinding.kind !== 'owner') throw new Error('Expected the canonical Voice selection owner');
+      const prepared = await voiceAgentSelectionBinding.prepare!(settings, 'agent:happier.agent.opencode/opencode', {
+        readAgentCatalog: createVoiceAgentSettingsCatalogReader(captured),
+      });
+      expect(prepared).not.toBeNull();
+      const restored = prepared!(settings);
+      expect(restored).not.toBeNull();
+      expect(readLocalConversationVoiceSettings(restored!.voice).agent).toMatchObject({ agentSource: 'session', agentId: 'opencode',
+        agentTargetKey: 'agent:happier.agent.opencode/opencode', agentIdentity: null, agentProjectionGeneration: null,
+        chatModelId: 'gpt-6-luna' });
+    } finally { captured.dispose(); }
+  });
+
   it('loads the exact configured Voice target from destination rows without the raw Settings root', async () => {
     const definition = AcpBackendDefinitionV1Schema.parse({ id: 'row-review', name: 'row-review', title: 'Row review',
       launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 });
