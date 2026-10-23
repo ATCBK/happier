@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { SessionAccessEncryptionPrepareInputV1Schema, SessionAccessEncryptionReprepareInputV1Schema, SessionAccessEncryptionPrepareResultV1Schema, SessionAccessLayoutUpdateResultV1Schema } from '../sessions/access/sessionAccessActionsV1.js';
 import { resolveMachineRpcGovernance } from '../machines/peer/mediation/rpc/governanceV1.js';
 import { EXECUTION_RUN_INTENT_OPTIONS } from '../execution/runs/intentPolicyMatrix.js';
 import { CODE_INTELLIGENCE_ACTION_SPECS } from './codeIntelligenceActionFamily.js';
@@ -10342,6 +10343,36 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
     inputSchema: RemoveSessionAccessGrantRequestV1Schema,
     outputSchema: RemoveSessionAccessGrantResponseV1Schema,
     serverTransport: { method: 'POST', path: '/v2/sessions/access-grants/remove' },
+  },
+  {
+    id: 'session.access.encryption.prepare', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    title: 'Prepare encrypted Session access',
+    safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
+    cli: { commands: [{ path: ['session', 'access', 'encryption', 'prepare'], visibility: 'canonical' }] },
+    placements: [], bindings: { mcpToolName: 'session_access_encryption_prepare' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { description: 'Prepare this Session’s existing encrypted audience on the answering client. This does not grant access.', fields: [] },
+    inputSchema: SessionAccessEncryptionPrepareInputV1Schema, outputSchema: SessionAccessEncryptionPrepareResultV1Schema,
+  },
+  {
+    id: 'session.access.encryption.reprepare', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    title: 'Re-prepare encrypted Session access for a person',
+    safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
+    cli: { commands: [{ path: ['session', 'access', 'encryption', 'reprepare'], visibility: 'canonical' }] },
+    placements: [], bindings: { mcpToolName: 'session_access_encryption_reprepare' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { description: 'Re-seal this Session’s current key for one existing recipient on the answering client.', fields: [] },
+    inputSchema: SessionAccessEncryptionReprepareInputV1Schema, outputSchema: SessionAccessEncryptionPrepareResultV1Schema,
+  },
+  {
+    id: 'session.access.layout.update', approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'optional', flow: 'deferred' },
+    title: 'Update historical Session sharing layout',
+    safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
+    cli: { commands: [{ path: ['session', 'access', 'layout', 'update'], visibility: 'canonical' }] },
+    placements: [], bindings: { mcpToolName: 'session_access_layout_update' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { description: 'Move an owned historical Session to the current owner/shared layout without changing its content. Requires the answering client’s keys.', fields: [] },
+    inputSchema: SessionAccessEncryptionPrepareInputV1Schema, outputSchema: SessionAccessLayoutUpdateResultV1Schema,
   },
   {
     id: 'session.access.context.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},

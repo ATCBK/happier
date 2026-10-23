@@ -9,6 +9,26 @@ import { projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateA
 import { bindSessionAccessActionHttpRequestV1 } from './sessionAccessActionFamily.js';
 
 describe('Session access Action contracts', () => {
+  it('routes manual crypto and layout intents to the connected client with strict non-secret operands and the shared Ask-first floor', () => {
+    for (const [name, input] of [
+      ['session.access.encryption.prepare', { sessionId: 's' }],
+      ['session.access.encryption.reprepare', { sessionId: 's', recipientAccountId: 'recipient' }],
+      ['session.access.layout.update', { sessionId: 's' }],
+    ] as const) {
+      const id = ActionIdSchema.parse(name);
+      const spec = getActionSpec(id);
+      expect(isSessionAccessActionId(id)).toBe(true);
+      expect(PluginInvocableActionIdSchema.safeParse(id).success).toBe(true);
+      expect(spec.executionPlacement).toBe('client');
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+      expect(spec.inputSchema.safeParse(input).success).toBe(true);
+      expect(spec.inputSchema.safeParse({ ...input, encryptedDataKey: 'caller-owned' }).success).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, input,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, input,
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(name === 'session.access.layout.update');
+    }
+  });
   it('exposes sharing discovery reads to agents and plugins through the existing server contracts', () => {
     const reads = [
       { id: 'session.access.candidates.inspect', input: { v: 1, sessionId: 'session-1', subjects: [{ kind: 'account', accountId: 'recipient' }] },
