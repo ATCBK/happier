@@ -75,18 +75,13 @@ const HEAVYWEIGHT_MEMORY_KIB = Object.freeze({
   'source-bundle': 10 * 1024 * 1024,
   'dependency-install': 6291456,
   'package-dist': 6291456,
-  // Microsoft 7.1.0-beta, 85 declaration projects in one serialized batch:
-  // max child RSS 4,022,016 KiB (2026-10-23). Reuse the existing measured
-  // 1,608,848 KiB coordinator/headroom allowance. Unchanged readers emit
-  // nothing and never request this envelope.
-  'declaration-emit': 4_022_016 + 1_608_848,
   'runtime-build': 18874368,
   compilation: 20 * 1024 * 1024,
   'compilation-ui': 20 * 1024 * 1024,
   'compilation-cli': 15 * 1024 * 1024,
   'compilation-server': 16 * 1024 * 1024,
 });
-const HEAVYWEIGHT_COMPILE_CLASSES = ['compilation', 'compilation-ui', 'compilation-cli', 'compilation-server', 'package-dist', 'runtime-build', 'declaration-emit'];
+const HEAVYWEIGHT_COMPILE_CLASSES = ['compilation', 'compilation-ui', 'compilation-cli', 'compilation-server', 'package-dist', 'runtime-build'];
 
 // The primary VM's browser/agent workloads pause below 8 GiB MemAvailable
 // (2026-10-06 observation). Worker envelopes remain class-owned; only local

@@ -49,14 +49,6 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
-test('declaration emission uses its measured worker envelope instead of a package-dist reservation', { skip: process.platform === 'win32' }, () => {
-  const expected = 4_022_016 + 1_608_848;
-  assert.equal(commandPolicy.resolveHeavyweightMemoryFloorKiB('declaration-emit'), expected);
-  const result = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nheavyweight_memory_floor_kib declaration-emit worker`], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(Number(result.stdout), expected);
-});
-
 test('managed pnpm remains visible to remote commands without dependency bootstrap', {
   skip: process.platform === 'win32' ? 'Exercises the POSIX worker executable boundary' : false,
 }, async t => {
