@@ -325,7 +325,10 @@ it('refreshes the admitted Memory audience after a grant-only Account change', a
     await hook.unmount();
 });
 
-it('does not adopt a successor read across replacement credentials for the same Account', async () => {
+it.each([
+    { title: 'does not adopt a successor read across replacement credentials for the same Account', replaceCredentials: true },
+    { title: 'adopts a successor Memory read when the admitted credentials are unchanged', replaceCredentials: false },
+])('$title', async ({ replaceCredentials }) => {
     if (!connection) throw new Error('Expected the admitted Memory Account fixture');
     const ref = await seedDocument({ v: 1, index: [fact('one', 'Keep the original custody.')], topics: [] });
     const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
@@ -348,17 +351,30 @@ it('does not adopt a successor read across replacement credentials for the same 
         const afterFirst = reads();
         await React.act(async () => { successor = hook.getCurrent().refresh(); });
         await settled(() => expect(reads()).toBeGreaterThan(afterFirst));
-        await React.act(async () => {
+        if (replaceCredentials) await React.act(async () => {
             expect(await TokenStorage.setCredentialsForServerUrl('https://memory-body.test', { serverId }, {
                 ...connection!.credentials, token: `${connection!.credentials.token}-replacement`,
             })).toBe(true);
         });
-    } finally { release(); }
-    expect(await first).toBeNull();
-    expect(await successor).toBeNull();
-    expect(originalTarget?.isCurrent()).toBe(false);
+    } finally {
+        await React.act(async () => {
+            release();
+            await Promise.all([first, successor]);
+        });
+    }
+    if (replaceCredentials) {
+        expect(await first).toBeNull();
+        expect(await successor).toBeNull();
+    } else {
+        const target = await successor;
+        expect(target?.accountId).toBe('account-a');
+        expect(await first).toBe(target);
+        expect(reads() - before).toBe(2);
+    }
+    expect(originalTarget?.isCurrent()).toBe(!replaceCredentials);
     await settled(() => expect(hook.getCurrent().status).toBe('ready'));
     expect(hook.getCurrent().target?.accountId).toBe('account-a');
+    expect(hook.getCurrent().target?.isCurrent()).toBe(true);
     await hook.unmount();
 });
 

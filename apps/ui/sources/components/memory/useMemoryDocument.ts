@@ -16,7 +16,8 @@ import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountC
 import { createArtifactAccessApi } from '@/sync/api/artifacts/apiArtifacts';
 import { useArtifact, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeCurrentness, captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export type MemoryDocumentStatus =
@@ -117,6 +118,7 @@ export function useMemoryDocument(
   const enabled = params.enabled !== false && ref !== null && serverId !== null;
   const artifactId = ref?.artifactId ?? '';
   const homeId = ref?.serverId ?? serverId ?? '';
+  const { binding: credentialLifetime, resolution: credentialResolution } = useServerCredentialAccountScopeBinding(enabled ? homeId : null);
   const accountScope = useActiveServerAccountScope();
   const activeLifetime = captureActiveServerAccountScopeLifetime();
   const identity = JSON.stringify([homeId, accountScope?.serverId, accountScope?.accountId, artifactId, topic ?? null]);
@@ -143,25 +145,26 @@ export function useMemoryDocument(
   }> | null>(null);
 
   const refresh = React.useCallback((): Promise<MemoryDocumentTarget | null> => {
-    if (!enabled || !artifactId) return Promise.resolve(null);
+    if (!enabled || !artifactId || !credentialLifetime?.isCurrent()) return Promise.resolve(null);
     pending.current?.controller.abort();
     const controller = new AbortController();
     const currentness = captureActiveServerAccountScopeCurrentness();
+    // Memory's reviewed read belongs to the exact credential, not just the
+    // principal retained by general Action contexts across bearer renewal.
+    const isReadCurrent = () => currentness.isCurrent() && credentialLifetime.isCurrent();
     const retainedAccount = displayedAccount.current;
     const successorRead = async (): Promise<MemoryDocumentTarget | null> => {
       const successor = pending.current;
       // An Artifact wake may supersede the post-write read while its caller is
       // awaiting the refreshed target. Follow that same-document read, never a
       // replacement Account or a different document's target.
-      if (!currentness.isCurrent() || !retainedAccount || !successor
+      if (!isReadCurrent() || !retainedAccount || !successor
         || successor.controller === controller || successor.identity !== identity) return null;
       try {
-        // This is the existing retained-Account boundary: it watches and rechecks
-        // the exact credential before and after awaiting, even for the same Account id.
-        return await retainedAccount.runPrepared(async () => {
-          const target = await successor.promise;
-          return currentness.isCurrent() ? target : null;
-        });
+        // Retain the Action owner's fresh credential-store check as well as
+        // Memory's stricter exact-credential retirement fence.
+        const target = await retainedAccount.runPrepared(() => successor.promise);
+        return isReadCurrent() ? target : null;
       } catch { return null; }
     };
     setLoaded((previous) => {
@@ -170,7 +173,7 @@ export function useMemoryDocument(
         key,
         identity,
         accountId: view ? previous?.accountId ?? null : null,
-        isCurrent: view && previous ? previous.isCurrent : currentness.isCurrent,
+        isCurrent: view && previous ? previous.isCurrent : isReadCurrent,
         status: view ? 'refreshing' : 'loading',
         view,
         stale: false,
@@ -207,7 +210,7 @@ export function useMemoryDocument(
           readGrants: () => accessGrants.list({ artifactId }, controller.signal),
         }).catch(() => null);
         const shared = audience?.shared ?? null;
-        if (!currentness.isCurrent()) return null;
+        if (!isReadCurrent()) return null;
         if (controller.signal.aborted) return await successorRead();
         const view: MemoryDocumentView =
           'topic' in read
@@ -236,7 +239,7 @@ export function useMemoryDocument(
                 topic: null,
               };
         const capturedLifetime = account.accountOnlyLifetime;
-        const isCurrent = () => currentness.isCurrent() && capturedLifetime.isCurrent();
+        const isCurrent = () => isReadCurrent() && capturedLifetime.isCurrent();
         displayedAccount.current?.dispose();
         displayedAccount.current = account;
         setLoaded({ key, identity, accountId: account.accountId,
@@ -244,10 +247,10 @@ export function useMemoryDocument(
           status: 'ready', view, stale: false });
         return isCurrent() ? reviewedWriteTarget(view, homeId, { accountId: account.accountId, isCurrent }, topic) : null;
       } catch (error) {
-        if (!currentness.isCurrent()) return null;
+        if (!isReadCurrent()) return null;
         if (controller.signal.aborted) return await successorRead();
         const failure = (status: MemoryDocumentStatus): Loaded => ({ key, identity, accountId: null,
-          isCurrent: currentness.isCurrent, status, view: null, stale: false });
+          isCurrent: isReadCurrent, status, view: null, stale: false });
         const code: unknown =
           error && typeof error === 'object'
               ? Reflect.get(error, 'code')
@@ -267,7 +270,7 @@ export function useMemoryDocument(
             const view = previous?.identity === identity && previous.isCurrent() ? previous.view : null;
             return { ...failure('unavailable'), view, stale: Boolean(view),
               accountId: view ? previous?.accountId ?? null : null,
-              isCurrent: view && previous ? previous.isCurrent : currentness.isCurrent };
+              isCurrent: view && previous ? previous.isCurrent : isReadCurrent };
           });
         }
         return null;
@@ -278,7 +281,7 @@ export function useMemoryDocument(
     })();
     pending.current = { key, identity, controller, promise };
     return promise;
-  }, [activeLifetime, artifactId, enabled, homeId, identity, key, topic]);
+  }, [activeLifetime, artifactId, credentialLifetime, enabled, homeId, identity, key, topic]);
 
   React.useEffect(() => {
     const retirement = activeLifetime?.onRetire(() => {
@@ -288,14 +291,15 @@ export function useMemoryDocument(
     return () => retirement?.dispose();
   }, [activeLifetime]);
 
-  React.useEffect(() => subscribeHomeCredentialChange((event) => {
-    if (!areServerProfileIdentifiersEquivalent(event.serverId, homeId)) return;
-    pending.current?.controller.abort();
-    displayedAccount.current?.dispose();
-    displayedAccount.current = null;
-    setLoaded(null);
-    if (enabled) void refresh();
-  }), [enabled, homeId, refresh]);
+  React.useEffect(() => {
+    const retirement = credentialLifetime?.onRetire(() => {
+      pending.current?.controller.abort();
+      displayedAccount.current?.dispose();
+      displayedAccount.current = null;
+      setLoaded(null);
+    });
+    return () => retirement?.dispose();
+  }, [credentialLifetime]);
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -337,7 +341,8 @@ export function useMemoryDocument(
       };
     const current = loaded?.identity === identity && loaded.isCurrent() ? loaded : {
       key,
-      status: 'loading' as const,
+      status: credentialResolution.kind === 'resolving' || credentialResolution.kind === 'bound'
+        ? 'loading' as const : 'unavailable' as const,
       view: null,
       stale: false,
     };
@@ -357,5 +362,5 @@ export function useMemoryDocument(
           : null,
       refresh,
     };
-  }, [activeLifetime, enabled, homeId, identity, key, loaded, params.attachmentStatus, ref, refresh, serverId, topic]);
+  }, [activeLifetime, credentialResolution.kind, enabled, homeId, identity, key, loaded, params.attachmentStatus, ref, refresh, serverId, topic]);
 }
