@@ -76,6 +76,7 @@ export async function createXaiVoiceRuntimeEnvironment(options: Readonly<{
     const { answerVoiceRealtimePreparationHttpRequest } = await import('@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary');
     const { createConnectedPurposeCatalogHttpBoundary } = await import('@/dev/testkit/harness/connectedAccountCatalogBoundary');
     const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
+    const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
     const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
     const { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
     const { createLiveMicSession } = await import('@/voice/runtime/mic/createLiveMicSession.web');
@@ -404,7 +405,7 @@ export async function createXaiVoiceRuntimeEnvironment(options: Readonly<{
     vi.stubGlobal('WebSocket', XaiVoiceWebSocket);
     installXaiFetchBoundary();
     let nextTranscriptSeq = 0;
-    const accountRequest = async (input: URL | RequestInfo, init?: RequestInit) => {
+    const accountRequest = createSessionReadBatchFetchBoundary(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
         if (new URL(url).pathname === '/v1/machines') {
             return machineInventoryRequest ? await machineInventoryRequest() : Response.json([]);
@@ -469,7 +470,7 @@ export async function createXaiVoiceRuntimeEnvironment(options: Readonly<{
             status: 200,
             headers: { 'content-type': 'application/json' },
         });
-    };
+    });
     xaiAccountConnection = await restoreServerAccountForTest({ serverUrl: 'https://xai-composed.example.test', accountId: 'xai-composed-account', credentialScope: 'restored-home', request: accountRequest });
     await xaiPurposes.hydrate({ serverId: xaiAccountConnection.home.id, accountId: 'xai-composed-account' });
     return {
