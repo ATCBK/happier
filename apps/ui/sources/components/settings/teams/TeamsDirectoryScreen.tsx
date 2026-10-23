@@ -16,7 +16,7 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
-import { teamAddressKey } from '@/sync/domains/teams/teamAddress';
+import { teamAddressKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { t } from '@/text';
 
 import { TeamRow } from './TeamRow';
@@ -203,8 +203,7 @@ const TeamsDirectoryPage = React.memo(function TeamsDirectoryPage(props: Readonl
     const collection = useTeamsCollection({ sourceHint, query });
 
     const openTeam = React.useCallback(
-        (serverId: string, teamId: string) => {
-            const address = { serverId, teamId };
+        (address: TeamAddress) => {
             router.push((sourceHint
                 ? teamCredentialCreatePath(address, sourceHint)
                 : teamDetailPath(address)) as never);
@@ -270,7 +269,7 @@ const TeamsDirectoryPage = React.memo(function TeamsDirectoryPage(props: Readonl
 function useTeamsDirectoryRows(input: Readonly<{
     collection: TeamsCollection;
     sourceHint: TeamCredentialSourceHint | null;
-    openTeam: (serverId: string, teamId: string) => void;
+    openTeam: (address: TeamAddress) => void;
     createTeam: () => void;
 }>): readonly TeamsDirectoryVirtualizedRow[] {
     const { collection, sourceHint, openTeam, createTeam } = input;
@@ -300,7 +299,7 @@ function useTeamsDirectoryRows(input: Readonly<{
                                 key={`${keyPrefix}:${teamAddressKey(row.address)}`}
                                 row={row}
                                 showHome={active.multiHome}
-                                onPress={() => openTeam(row.address.serverId, row.address.teamId)}
+                                onPress={openTeam}
                             />
                         ))}
                     </ItemGroup>

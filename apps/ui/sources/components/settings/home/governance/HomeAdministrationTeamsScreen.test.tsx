@@ -62,6 +62,12 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+// Transform the real owners after transport installation, before timed test lifecycle work.
+const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
+const { HomeAdministrationTeamsScreen } = await import('./HomeAdministrationTeamsScreen');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const TEAMS_LIST_PATH = '/v1/teams/list';
@@ -96,18 +102,11 @@ function teamSummary(teamId: string, name: string, archivedAt: number | null = n
 }
 
 async function renderHomeTeams(serverId: string) {
-    const { HomeAdministrationTeamsScreen } = await import('./HomeAdministrationTeamsScreen');
-    const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
     resetHomeGovernanceEngineForTests();
     return renderScreen(<HomeAdministrationTeamsScreen serverId={serverId} />);
 }
 
 beforeEach(async () => {
-    const { resetHomeGovernanceSnapshotsForTests } = await import(
-        '@/sync/store/home/governance/homeGovernanceSnapshots'
-    );
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
     resetHomeGovernanceSnapshotsForTests();
     // The Teams directory keeps its rows across mounts by design, so each case
     // starts from a Home that has answered nothing yet.

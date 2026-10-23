@@ -9,7 +9,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 let pathname = '/settings/teams';
 const router = createExpoRouterMock({ pathname: () => pathname, navigation: { setOptions: vi.fn() } });
-installSettingsViewCommonModuleMocks({ router: () => router.module });
+installSettingsViewCommonModuleMocks({ router: () => router.module, storage: 'real' });
 
 // The third-party recycler is the viewport boundary. Internal list, row, search,
 // paging, scope and snapshot owners stay real.
@@ -24,13 +24,18 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+// Cold module transformation belongs to collection, outside the lifecycle/count contract.
+const { resetTeamsSnapshotsForTests, applyTeamsDirectoryPage, getTeamsDirectorySnapshot } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetHomeGovernanceEligibilitySnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceEligibilitySnapshots');
+const { resetHomeGovernanceEligibilityEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEligibilityEngine');
+const { TeamsCollectionRail } = await import('./TeamsCollectionRail');
+const { TeamRow } = await import('../TeamRow');
+const { teamDirectoryQueryKeyV1 } = await import('@happier-dev/protocol/teams');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const LIST_PATH = '/v1/teams/list';
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetHomeGovernanceEligibilitySnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceEligibilitySnapshots');
-    const { resetHomeGovernanceEligibilityEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEligibilityEngine');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetHomeGovernanceEligibilitySnapshotsForTests();
@@ -49,6 +54,28 @@ async function addHome(name: string) {
 }
 
 describe('Team collection loaded-page search', () => {
+    it('updates only the changed mounted Team row on a 400-Team page arrival', async () => {
+        const home = await addHome('row-cost-home');
+        await harness.selectHomes([home]);
+        const items = Array.from({ length: 400 }, (_, i) => teamSummaryFixture({ id: `team-${i}` }));
+        harness.answer(home, LIST_PATH, { body: { items, nextCursor: null } });
+        const screen = await renderScreen(<TeamsCollectionRail />);
+        const mountedRows = () => screen.tree.findAllByType(TeamRow);
+        await vi.waitFor(() => expect(mountedRows().length).toBeGreaterThan(3));
+        const baseline = new Map(mountedRows().map((node) => [node.props.row.team.id, node.props] as const));
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'row-cost-home' };
+        const queryKey = teamDirectoryQueryKeyV1({ v: 1, scope: 'member', archived: 'active' });
+        const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
+        if (!snapshot) throw new Error('Expected loaded directory');
+        await act(async () => applyTeamsDirectoryPage({ scope, queryKey,
+            items: items.map((row, i) => i === 0 ? { ...row, name: 'Renamed' } : row),
+            observedAt: snapshot.lastObservedAt ?? 0,
+        }));
+        expect(mountedRows().filter((node) => node.props !== baseline.get(node.props.row.team.id))).toHaveLength(1);
+        await screen.pressByTestIdAsync(`teams-row:${home}:team-1`);
+        expect(router.spies.replace).toHaveBeenCalledWith(expect.stringContaining('team-1'));
+    });
+
     it('retains the selected archived Team in the rail without opening all archived Teams', async () => {
         const home = await addHome('archived-home');
         await harness.selectHomes([home]);

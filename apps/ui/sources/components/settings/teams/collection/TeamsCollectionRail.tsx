@@ -110,7 +110,7 @@ export const TeamsCollectionRail = React.memo(function TeamsCollectionRail() {
         for (const row of teams) {
             add(`${prefix}:${teamAddressKey(row.address)}`, () => (
                 <TeamRow row={row} variant="rail" selected={selectedKey === teamAddressKey(row.address)}
-                    showHome={collection.multiHome} onPress={() => openTeam(row.address)} />
+                    showHome={collection.multiHome} onPress={openTeam} />
             ));
         }
     };

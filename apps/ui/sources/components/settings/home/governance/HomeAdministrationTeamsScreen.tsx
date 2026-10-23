@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -47,6 +48,7 @@ const HomeTeams = React.memo(function HomeTeams(
 ) {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const openTeam = React.useCallback((address: TeamAddress) => router.push(teamDetailPath(address)), [router]);
     const { context } = props;
     const serverId = context.scope.serverId;
     const [showArchived, setShowArchived] = React.useState(false);
@@ -187,7 +189,7 @@ const HomeTeams = React.memo(function HomeTeams(
                                 key={row.address.teamId}
                                 row={row}
                                 showHome={false}
-                                onPress={() => router.push(teamDetailPath(row.address))}
+                                onPress={openTeam}
                             />
                         ))}
                     </ItemGroup>
@@ -234,7 +236,7 @@ const HomeTeams = React.memo(function HomeTeams(
                                 key={`archived:${row.address.teamId}`}
                                 row={row}
                                 showHome={false}
-                                onPress={() => router.push(teamDetailPath(row.address))}
+                                onPress={openTeam}
                             />
                         ))}
                     </ItemGroup>
@@ -279,7 +281,7 @@ const HomeTeams = React.memo(function HomeTeams(
             ));
         }
         return result;
-    }, [archived, archivedLoading, archivedRetryable, context, directory, mayGovern, offerArchived, router, serverId, showArchived, teamsEnabled, theme.colors.text.secondary]);
+    }, [archived, archivedLoading, archivedRetryable, context, directory, mayGovern, offerArchived, openTeam, router, serverId, showArchived, teamsEnabled, theme.colors.text.secondary]);
 
     const renderRow = React.useCallback(({ item }: Readonly<{ item: HomeTeamsVirtualizedRow }>) => item.render(), []);
 

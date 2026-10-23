@@ -6,6 +6,7 @@ import { t } from '@/text';
 
 import { teamViewerStandingLabel } from './teamLabels';
 import type { TeamsDirectoryRow } from './teamsDirectoryViewState';
+import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
@@ -25,12 +26,13 @@ const TEAM_RAIL_AVATAR_SIZE = 28;
 export const TeamRow = React.memo(function TeamRow(props: Readonly<{
     row: TeamsDirectoryRow;
     showHome: boolean;
-    onPress: () => void;
+    onPress: (address: TeamAddress) => void;
     /** `rail`: the compact row of the Teams collection rail, selected while its Team is open. */
     variant?: 'page' | 'rail';
     selected?: boolean;
 }>) {
     const { row } = props;
+    const onPress = React.useCallback(() => props.onPress(row.address), [props.onPress, row.address]);
     const rail = props.variant === 'rail';
     const roleLabel = teamViewerStandingLabel(row.team) ?? '';
     // Active members, when the Home shares the count (a Home administrator gets totals without a
@@ -84,7 +86,7 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
             })}
             // An archived Team is listed under the collection's "Archived" heading, rail and page alike,
             // so the row repeats nothing: a pill beside the name only squeezed it.
-            onPress={props.onPress}
+            onPress={onPress}
         />
     );
 });
