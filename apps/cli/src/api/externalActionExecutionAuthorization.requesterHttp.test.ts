@@ -18,6 +18,7 @@ import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActio
 import { prepareExternalActionRequesterAccountAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from './externalActionExecutionAuthorization';
 import { MachineInstallationProofV1Schema, verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { SessionActionRpcOriginV1Schema, SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { logger } from '@/ui/logger';
 
 const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(18));
 // Only the Home HTTP boundary is mocked; exercise the real local provenance reader.
@@ -85,10 +86,18 @@ describe('requester HTTP authority on the existing external Action carrier', () 
   });
 
   it.each([401, 403])('keeps a definitive Home refusal (%s) closed', async status => {
+    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+    const nativeAuthorization = ExternalActionExecutionAuthorizationV1Schema.parse({ ...authorization,
+      binding: { ...authorization.binding, actionId: 'session.message.send', requestId } });
     vi.spyOn(axios, 'post').mockResolvedValue({ status, data: { error: 'invalid_token' } });
-    await expect(verifyExternalActionExecutionAuthorizationCurrent({ authorization, effectActionId: authorization.binding.actionId,
+    await expect(verifyExternalActionExecutionAuthorizationCurrent({ authorization: nativeAuthorization, effectActionId: nativeAuthorization.binding.actionId,
       target, privateKey: keys.secretKey, installationId: authorization.binding.installationId,
       serverHttpBaseUrl: 'https://home.test' })).resolves.toBe(false);
+    expect(log).toHaveBeenCalledWith('[external-action-phase]', expect.objectContaining({
+      phase: 'signed_root_http_status', httpStatus: status, requestId, actionId: 'session.message.send',
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain(authorization.token);
   });
 
   it('preserves an authenticated authorization scope refusal instead of reporting an invalid token', async () => {
@@ -97,6 +106,21 @@ describe('requester HTTP authority on the existing external Action carrier', () 
       actionId: 'approval.request.decide', machineId: target.machineId, envelope,
       pat: 'terminal-credential', serverHttpBaseUrl: 'https://home.test',
     })).resolves.toEqual({ ok: false, code: 'credential_scope_denied' });
+  });
+
+  it.each([401, 403])('correlates a native Home mint refusal (%s) without disclosing its proof or response', async status => {
+    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const requestId = '45ee9e08-acd9-4df7-a899-426badc7e635';
+    vi.spyOn(axios, 'post').mockResolvedValue({ status, data: { error: 'invalid_token', privateDetail: 'private-refusal-body' } });
+    expect(await executionAuthorizationOwner.mintExternalActionExecutionAuthorization({
+      actionId: 'session.message.send', machineId: target.machineId, envelope: { ...envelope, requestId },
+      pat: 'private-original-credential', serverHttpBaseUrl: 'https://home.test',
+    })).toEqual({ ok: false, code: 'invalid_token' });
+    expect(log).toHaveBeenCalledWith('[external-action-phase]', expect.objectContaining({
+      phase: 'authorization_mint_http_status', httpStatus: status, requestId, actionId: 'session.message.send',
+    }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-original-credential');
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-refusal-body');
   });
 
   it.each(['plain', 'e2ee'] as const)('prepares signed fresh-reset admission from exactly the %s input', async mode => {

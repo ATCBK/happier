@@ -65,6 +65,37 @@ export const LocalServicePublicPolicyV1Schema = lazyZodSchema(() => z.strictObje
   }));
 export type LocalServicePublicPolicyV1 = z.infer<typeof LocalServicePublicPolicyV1Schema>;
 
+// Existing public-control refusal vocabulary, shared by the HTTP producer and Action consumer.
+export const LocalServicePublicPreviewCreateFailureReasonV1Schema = lazyZodSchema(() => z.enum([
+  'public_preview_disabled', 'preview_not_eligible', 'session_not_authorized', 'mode_not_allowed',
+  'dns_tls_unavailable', 'rate_limit_profile_not_allowed', 'too_many_public_exposures', 'invalid_policy',
+  'invalid_public_base_url', 'public_origin_unavailable', 'public_token_secret_missing',
+  'audit_sink_unavailable', 'rate_limit_checker_unavailable', 'confirmation_required', 'preview_binding_mismatch',
+]));
+export type LocalServicePublicPreviewCreateFailureReasonV1 = z.infer<typeof LocalServicePublicPreviewCreateFailureReasonV1Schema>;
+
+export const LocalServicePublicPreviewCreateFailureV1Schema = lazyZodSchema(() => z.strictObject({
+  error: z.enum(['public_preview_denied', 'public_preview_unavailable']),
+  reasonCode: LocalServicePublicPreviewCreateFailureReasonV1Schema,
+}));
+
+export function resolveLocalServicePublicPreviewCreateFailureV1(
+  reasonCode: LocalServicePublicPreviewCreateFailureReasonV1,
+): Readonly<{ statusCode: 403 | 503; error: 'public_preview_denied' | 'public_preview_unavailable'; reasonCode: LocalServicePublicPreviewCreateFailureReasonV1 }> {
+  switch (reasonCode) {
+    case 'dns_tls_unavailable':
+    case 'invalid_policy':
+    case 'invalid_public_base_url':
+    case 'public_origin_unavailable':
+    case 'public_token_secret_missing':
+    case 'audit_sink_unavailable':
+    case 'rate_limit_checker_unavailable':
+      return { statusCode: 503, error: 'public_preview_unavailable', reasonCode };
+    default:
+      return { statusCode: 403, error: 'public_preview_denied', reasonCode };
+  }
+}
+
 const LocalServicePublicUrlV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.url(), z.refine(hasHttpProtocol, {
   message: 'Public local service exposure URLs must use http or https.',
 })));

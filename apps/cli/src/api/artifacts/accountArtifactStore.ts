@@ -3,6 +3,7 @@ import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { type UsageNoticeArtifactHeaderV1,
   ACCOUNT_NOTICE_ARTIFACT_KIND_V1, AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema,
@@ -354,16 +355,28 @@ export function createAccountArtifactStore(params: Readonly<{
   // Axios chooses the media type from actual request data. Bodyless GET/DELETE
   // requests must not advertise JSON; binary uploads set their own media type.
   const headers = () => ({ Authorization: `Bearer ${params.credentials.token}` });
-  const fetchStored = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders): Promise<StoredArtifact | null> => {
+  const fetchStoredResponse = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders): Promise<Readonly<{ data: unknown }> | null> => {
+    signal?.throwIfAborted();
     const path = `/v1/artifacts/${encodeURIComponent(artifactId)}`;
-    const response = await axios.get(`${resolveServerHttpBaseUrl()}${path}`, {
+    const response = await axios.get<unknown>(`${resolveServerHttpBaseUrl()}${path}`, {
       headers: authorizationHeaders ? await authorizationHeaders({ method: 'GET', path }) : headers(), ...(signal ? { signal } : {}), validateStatus: () => true,
     });
+    signal?.throwIfAborted();
     if (response.status === 404) return null;
-    if (response.data?.error === 'artifact_content_unavailable') throw new ArtifactEncryptionMaterialUnavailableError();
+    if (response.data && typeof response.data === 'object' && Reflect.get(response.data, 'error') === 'artifact_content_unavailable') {
+      throw new ArtifactEncryptionMaterialUnavailableError();
+    }
     if (response.status < 200 || response.status >= 300) throw Object.assign(new HttpStatusError(response.status, 'artifact_read_unavailable'), {
       code: 'artifact_read_unavailable', status: response.status,
     });
+    if (!response.data || typeof response.data !== 'object' || Reflect.get(response.data, 'id') !== artifactId) {
+      throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
+    }
+    return { data: response.data };
+  };
+  const fetchStored = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders): Promise<StoredArtifact | null> => {
+    const response = await fetchStoredResponse(artifactId, signal, authorizationHeaders);
+    if (!response) return null;
     const stored = parseStoredArtifact(response.data);
     if (!stored) throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
     return stored;
@@ -607,42 +620,20 @@ export function createAccountArtifactStore(params: Readonly<{
     return { rows: rows as readonly unknown[], nextCursor,
       ...(typeof hasUnclassified === 'boolean' ? { hasUnclassified } : {}) };
   };
-  /** Retain raw, body-free inventory only for the caller's finite preparation. */
+  /** Selected headers are fresh exact reads; their body envelopes remain unopened. */
   const createHeaderReader = (options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => {
-    let inventory: Promise<ReadonlyMap<string, unknown>> | undefined;
     return async (artifactId: string): Promise<AccountArtifactHeader | null> => {
-      options?.signal?.throwIfAborted();
-      inventory ??= (async () => {
-        const rows = new Map<string, unknown>();
-        let cursor: string | undefined;
-        do {
-          // Reuse the existing transport page boundary, without opening unrelated envelopes.
-          const page = await fetchHeaderPage({ limit: 500, cursor, signal: options?.signal });
-          for (const raw of page.rows) {
-            if (raw && typeof raw === 'object' && typeof Reflect.get(raw, 'id') === 'string') rows.set(Reflect.get(raw, 'id'), raw);
-          }
-          cursor = page.nextCursor;
-        } while (cursor);
-        return rows;
-      })().catch((error: unknown) => {
-        if (error && typeof error === 'object' && ['list_failed', 'invalid_cursor'].includes(Reflect.get(error, 'code'))) {
-          const status: unknown = Reflect.get(error, 'status');
-          const code = typeof status === 'number' && status >= 200 && status < 300 ? 'artifact_read_invalid' : 'artifact_read_unavailable';
-          throw Object.assign(typeof status === 'number' ? new HttpStatusError(status, code) : new Error(code), { code, status });
-        }
-        throw error;
-      });
-      const raw = (await inventory).get(artifactId);
-      options?.signal?.throwIfAborted();
-      if (raw === undefined) return null;
-      const stored = parseStoredArtifactHeader(raw);
+      const response = await fetchStoredResponse(artifactId, options?.signal);
+      if (!response) return null;
+      const stored = parseStoredArtifactHeader(response.data);
       if (!stored) throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
-      const codec = await openStored(stored);
+      const codec = await openStored(stored, undefined, options);
       const header = decode(codec, stored.header);
       if (!header || typeof header !== 'object' || Array.isArray(header) || Object.keys(header).length === 0) {
         throw new ArtifactEncryptionMaterialUnavailableError();
       }
       if (options?.prepareRecipients !== false) await prepare(stored, codec, options?.signal);
+      await assertOwnerAccountMode(stored, undefined, { usage: 'fresh-authority', signal: options?.signal });
       options?.signal?.throwIfAborted();
       return { artifactId: stored.id, header: header as Readonly<Record<string, unknown>>,
         ownerAccountId: stored.ownerAccountId, access: stored.access, publicAudience: stored.publicAudience,
@@ -656,6 +647,9 @@ export function createAccountArtifactStore(params: Readonly<{
     readAccountMode?: () => Promise<ConnectedServiceAccountEncryptionMode>): Promise<AccountArtifactHeader[]> => {
     const items: AccountArtifactHeader[] = [];
     for (const raw of rows) {
+      // Resolved codec promises only yield microtasks. Let publisher-proof
+      // filesystem reads, lease HTTP and cancellation run between row decodes.
+      await yieldToEventLoop();
       options.signal?.throwIfAborted();
       if (!raw || typeof raw !== 'object') continue;
       const value = raw as Record<string, unknown>;
@@ -857,7 +851,7 @@ export function createAccountArtifactStore(params: Readonly<{
         principal: { kind: 'account', accountId: subject.requesterAccountId }, accessLevel: 'view' }, input.signal);
     },
     createHeaderReader,
-    /** Standalone reads are fresh; finite callers share createHeaderReader instead. */
+    /** Header reads share the exact transport and header-only projection. */
     readHeader: (artifactId: string, options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => createHeaderReader(options)(artifactId),
     /** Exposure admission reads existing grants/publications without opening content or repairing keys. */
     readExposure: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal; authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {

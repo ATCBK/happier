@@ -29,21 +29,24 @@ export async function readStorageWorktrees(input: Readonly<{
     registry?: ScmBackendRegistry;
     trashRoots?: readonly string[];
 }>): Promise<readonly StorageWorktree[]> {
-    const candidates = new Set<string>();
-    for (const requested of new Set(input.candidatePaths)) {
+    // Indexed siblings are independent filesystem observations. Walk each
+    // ancestry in parallel so scan ingestion cannot delay an entire page once
+    // per candidate. Promise.all preserves candidate order for SCM discovery.
+    const markers = await Promise.all([...new Set(input.candidatePaths)].map(async requested => {
         let path = requested;
         for (;;) {
-            if (path !== requested && input.knownRoots?.some(root => canonicalAbsolutePathsEqual(root, path))) break;
+            if (path !== requested && input.knownRoots?.some(root => canonicalAbsolutePathsEqual(root, path))) return;
             // Markers only locate the SCM consultation; they confer no cleanup authority.
-            try { await lstat(join(path, '.git')); candidates.add(path); break; }
+            try { await lstat(join(path, '.git')); return path; }
             catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && (error as NodeJS.ErrnoException).code !== 'ENOTDIR') throw error;
             }
             const parent = dirname(path);
-            if (parent === path) break;
+            if (parent === path) return;
             path = parent;
         }
-    }
+    }));
+    const candidates = new Set(markers.filter((path): path is string => path !== undefined));
     if (!input.cwds.length && !candidates.size) return [];
     return runWithScmBackendRegistryLease(input.registry, async registry => {
         // One inspection's consumers share the same worktree evidence. A later

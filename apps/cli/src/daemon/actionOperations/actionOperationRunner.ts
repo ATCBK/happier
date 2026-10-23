@@ -325,7 +325,14 @@ export function createActionOperationRunner(deps: Readonly<{
           active.delete(operationId);
         }
       });
-      const response = Promise.race([result, acceptance]);
+      // Session creation publishes an accepted/pending receipt once the row and
+      // native launch are admitted, but its keyed caller still owns the same
+      // lifecycle through native open or refusal. Keep that caller attached to
+      // the terminal execution result; genuine uncertain outcomes returned by
+      // the executor remain typed `pending` results.
+      const response = action.actionId === 'session.spawn_new'
+        ? result
+        : Promise.race([result, acceptance]);
       active.set(operationId, { actionId: action.actionId, scope: request.scope, controller, cancellation, result, response,
         ...(action.actionId === 'projects.service.relocate' ? { serviceMoveStart: { claimed: false } } : {}),
         resumeSetupReview: retainedReview.resume,

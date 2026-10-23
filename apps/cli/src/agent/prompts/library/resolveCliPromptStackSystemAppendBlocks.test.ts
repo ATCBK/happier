@@ -492,8 +492,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     try {
       expect(await resolve({ surface: 'coding', memoryEnabled: false, accountEntries: [entry('doc', a.id)] }))
         .toMatchObject({ blocks: ['Admitted route instructions'], admittedEntries: [{ outcome: 'ready' }] });
-      expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(1);
-      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(1);
+      expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(2);
     } finally { release(); }
   });
   it('ignores the retired settings-root stack while composing explicit canonical entries', async () => {
@@ -700,8 +700,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
       a.set('doc', 'second');
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
       expect(await resolve(args)).toEqual({ blocks: ['second'], admittedEntries: [admitted('doc', 2, 'ready'), admitted('empty', 1, 'valid-empty')] });
-      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(3);
-      expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(3);
+      expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toHaveLength(6);
+      expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
     });
   });
   it('reads current edited content on every preparation and shares repeated references only within that preparation', async () => {
@@ -874,11 +874,15 @@ describe('CLI qualified current Artifact prompt preparation', () => {
         memoryEnabled: false,
       }),
     ).toEqual({ blocks: [], admittedEntries: [] });
-    expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(2);
-    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual([]);
+    expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
+    expect(a.requests.filter(path => path.startsWith('/v1/artifacts/'))).toEqual(['/v1/artifacts/memory']);
+    const priorRequests = a.requests.length;
     a.set('memory', 'Current instructions');
     expect((await resolve({ surface: 'coding', accountEntries: [entry('memory')], memoryEnabled: false })).blocks)
       .toEqual(['Current instructions']);
+    expect(a.requests.slice(priorRequests).filter(path => path === '/v1/artifacts')).toEqual([]);
+    expect(a.requests.slice(priorRequests).filter(path => path.startsWith('/v1/artifacts/')))
+      .toEqual(['/v1/artifacts/memory', '/v1/artifacts/memory']);
   });
   it('skips disabled inherited selections before Account HTTP', async () => {
     const a = await home('alpha', 'active-token');
@@ -901,7 +905,7 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
     await expect(resolve({ surface: 'coding', accountEntries: [entry('doc')], memoryEnabled: false }))
       .rejects.toMatchObject({ status: 'attachment_unavailable', reason: 'locked' });
-    expect(a.requests.filter(path => path === '/v1/artifacts')).toHaveLength(1);
-    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual([]);
+    expect(a.requests.filter(path => path === '/v1/artifacts')).toEqual([]);
+    expect(a.requests.filter(path => path === '/v1/artifacts/doc')).toEqual(['/v1/artifacts/doc']);
   });
 });

@@ -53,7 +53,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
 import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
-import { withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
+import { timeWebLatencyPhase, withStorageReadTrace, withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 
 type OwnedHandlerRegistrationContext = {
     ownerId: string;
@@ -295,7 +295,11 @@ export class RpcHandlerManager {
         };
         const registeredMethod = this.handlers.has(method) ? this.readUnprefixedMethod(method) : null;
         try {
-            const response = await dispatch(diagnostic);
+            const storageRead = registeredMethod === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET
+                || registeredMethod === RPC_METHODS.DAEMON_STORAGE_SCAN_GET
+                || registeredMethod === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST;
+            const response = await (storageRead ? withStorageReadTrace(diagnostic.requestId,
+                () => timeWebLatencyPhase('storage.dispatch', () => dispatch(diagnostic))) : dispatch(diagnostic));
             if (local) {
                 diagnostic.outcomeCode = readOutcomeCode(response);
                 const failure = SessionGoalControlFailureV1Schema.safeParse(

@@ -83,6 +83,7 @@ export type AttachedRunCompositionTestState = {
 function createSessionHostServiceOwners(): NativeAgentSessionHostServiceOwners {
     return Object.freeze({
         features: Object.freeze({ isEnabled: () => false }),
+        happierTools: Object.freeze({ readPluginToolCatalog: async () => Object.freeze([]) }),
         sessionHooks: Object.freeze({
             startServer: async () => Object.freeze({ port: 4312, stop: () => undefined, dispose: async () => undefined }),
             resolveForwarderAssets: async () => Object.freeze({

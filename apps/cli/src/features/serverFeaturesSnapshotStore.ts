@@ -12,7 +12,7 @@ import {
  * family fails closed on a cold daemon even when the server enables it. This store is the single
  * owner of that source: it fetches/caches the `/v1/features` snapshot the daemon already uses and
  * exposes a pure synchronous read for the gate plus an async `refresh()` the daemon primes at
- * startup and re-runs on an interval.
+ * startup, on connection changes, and at the existing active Home-indexing deadline.
  *
  * Freshness/availability semantics:
  * - `getSnapshot()` is pure (no side effects) so the gate read path stays deterministic.

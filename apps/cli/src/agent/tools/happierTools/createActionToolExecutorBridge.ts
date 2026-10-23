@@ -7,6 +7,7 @@ import {
 } from '@happier-dev/protocol';
 import { createActionToolNameToIdMap, listPluginActionBackedTools, resolveActionToolCatalogAvailability, resolveDiscoveredPluginActionAvailability } from './actionToolCatalog';
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { isAgentStartActionInvocationV1, requiresActionAgentStartDepthV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { normalizeExecutionRunToolResult } from './executionRunToolResult';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
@@ -124,6 +125,8 @@ function normalizeActionToolResult(
 }
 
 async function buildActionExecutorContext(params: Readonly<{
+  actionId: string;
+  input: unknown;
   defaultSessionId: string;
   defaultSessionMachineId?: string | null;
   surface: 'mcp' | 'cli' | 'agent';
@@ -132,7 +135,7 @@ async function buildActionExecutorContext(params: Readonly<{
   resolveActiveTurnPermissionWitness?: (() => Promise<unknown> | unknown) | null;
   sessionInputVia?: 'action' | 'mcp';
   sessionAgentSpawnPolicyV1?: unknown;
-  getSessionAgentSpawnPolicyV1?: (() => unknown) | null;
+  getSessionAgentSpawnPolicyV1?: ((signal?: AbortSignal) => unknown) | null;
   resolveRuntimeRunId?: () => string | undefined;
   actionsSettings?: ActionsSettingsV1 | null;
   expectedContributorOccurrenceId?: string;
@@ -184,8 +187,9 @@ async function buildActionExecutorContext(params: Readonly<{
     }
   }
   const sessionAgentSpawnPolicyV1 =
-    params.getSessionAgentSpawnPolicyV1
-      ? params.getSessionAgentSpawnPolicyV1()
+    params.getSessionAgentSpawnPolicyV1 && (requiresActionAgentStartDepthV1(params.actionId)
+      || isAgentStartActionInvocationV1(params.actionId, isInputRecord(params.input) ? params.input : {}))
+      ? await params.getSessionAgentSpawnPolicyV1(params.options?.signal)
       : params.sessionAgentSpawnPolicyV1;
   const origin = params.options?.approvalOrigin;
   const runtimeRunId = params.surface === 'agent' ? params.resolveRuntimeRunId?.() : undefined;
@@ -308,7 +312,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
   resolveReviewCommentActor?: (() => Extract<ReviewCommentPrincipalHeaderV1['actor'], { kind: 'agent' }> | null) | null;
   sessionInputVia?: 'action' | 'mcp';
   sessionAgentSpawnPolicyV1?: unknown;
-  getSessionAgentSpawnPolicyV1?: (() => unknown) | null;
+  getSessionAgentSpawnPolicyV1?: ((signal?: AbortSignal) => unknown) | null;
   resolveRuntimeRunId?: () => string | undefined;
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
@@ -357,6 +361,8 @@ export function createActionToolExecutorBridge(params: Readonly<{
           return { ok: false, errorCode: 'invalid_action_input', error: 'Missing actionId' };
         }
         const executorContext = await buildActionExecutorContext({
+          actionId,
+          input: argsRecord?.input,
           defaultSessionId,
           defaultSessionMachineId: params.defaultSessionMachineId,
           surface,
@@ -432,9 +438,10 @@ export function createActionToolExecutorBridge(params: Readonly<{
           // Capture the compiler's error bag before awaiting discovery, which
           // can itself compile/validate another schema in the same realm.
           const issues = projectActionInputJsonSchemaIssues(prepared.validate, prepared.jsonSchema, toolArgs);
-          const context = await buildActionExecutorContext({ defaultSessionId, surface, options,
-            actionsSettings: readActionsSettings() });
-          const discovery = await params.executor.execute('action.spec.get', { id: actionId }, context);
+          const discoveryInput = { id: actionId };
+          const context = await buildActionExecutorContext({ actionId: 'action.spec.get', input: discoveryInput,
+            defaultSessionId, surface, options, actionsSettings: readActionsSettings() });
+          const discovery = await params.executor.execute('action.spec.get', discoveryInput, context);
           if (!discovery.ok) return normalizeActionExecutorResult(discovery);
           const definition = ActionDefinitionV1Schema.safeParse(isInputRecord(discovery.result) ? discovery.result.actionSpec : null);
           if (!definition.success || definition.data.id !== actionId) {
@@ -470,6 +477,8 @@ export function createActionToolExecutorBridge(params: Readonly<{
         actionId as ActionId,
         actionInput,
         await buildActionExecutorContext({
+          actionId,
+          input: actionInput,
           defaultSessionId,
           defaultSessionMachineId: params.defaultSessionMachineId,
           surface,

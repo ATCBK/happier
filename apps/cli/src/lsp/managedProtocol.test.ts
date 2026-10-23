@@ -68,9 +68,12 @@ describe('managed language server protocol', () => {
                         const next = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, pluginIds: [pluginId] });
                         await controller.adoptPreparedRuntimeRegistry({ registry: next, changedPluginIds: [pluginId], runningSessionDisposition: 'retainRunningSessions' });
                     } else await registry.retirePluginConsumers?.([pluginId]);
+                    // Retirement must initiate the stop itself; only after root
+                    // exit do we join the supervisor's native subtree cleanup.
+                    await handles[0].wait();
+                    await handles[0].dispose();
                     await vi.waitFor(async () => expect(await host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [] }));
                     expect(await pending).not.toMatchObject({ status: 'ok' });
-                    await handles[0].wait();
                     expect(await host.watch({ rootPath })).toMatchObject({ status: 'ok', diagnostics: { 'a.ts': { [definition.id]: { items: [] } } } });
                     if (scenario === 'host-replacement') {
                         expect(await host.query({ rootPath, path: 'a.ts', languageId: 'fixture', kind: 'diagnostics', text: 'disk' }))
@@ -99,7 +102,10 @@ describe('managed language server protocol', () => {
                     await handle.client.request('echo', { barrier: true });
                     await registry.retirePluginConsumers?.([pluginId]);
                     await expect(handle.client.request('echo', { after: true })).rejects.toBeDefined();
-                    await vi.waitFor(() => expect(isPidAlive(pid)).toBe(false));
+                    // Fencing rejects new requests before native cleanup reaches
+                    // the root. Observe its exit rather than timing the census.
+                    await handle.wait();
+                    expect(isPidAlive(pid)).toBe(false);
                     expect(await pending).toBe('retired');
                 } else {
                     await expect(handle.client.request('largeReply', { characters: DEFAULT_JSON_RPC_MAX_FRAME_BYTES + 1 }))

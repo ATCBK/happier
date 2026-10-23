@@ -7,7 +7,7 @@ describe('startServerFeaturesSnapshotRefreshLoop', () => {
     vi.useRealTimers();
   });
 
-  it('uses the transition cadence only while Home indexing remains active', async () => {
+  it('parks after Home indexing settles and refreshes on the next connection change', async () => {
     vi.useFakeTimers();
     let transitionActive = true;
     const refresh = vi.fn(async () => {
@@ -17,7 +17,6 @@ describe('startServerFeaturesSnapshotRefreshLoop', () => {
       refresh,
       isTransitionActive: () => transitionActive,
       transitionIntervalMs: 30_000,
-      stableIntervalMs: 120_000,
     });
 
     await vi.runAllTicks();
@@ -29,8 +28,40 @@ describe('startServerFeaturesSnapshotRefreshLoop', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(refresh).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(90_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    transitionActive = true;
+    await loop.refresh();
     expect(refresh).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(1);
+    transitionActive = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
     loop.stop();
+  });
+
+  it('joins a connection refresh and never rearms after stopping an in-flight refresh', async () => {
+    vi.useFakeTimers();
+    let finishRefresh!: () => void;
+    const heldRefresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    const refresh = vi.fn(async () => { await heldRefresh; });
+    const loop = startServerFeaturesSnapshotRefreshLoop({
+      refresh,
+      isTransitionActive: () => true,
+      transitionIntervalMs: 30_000,
+    });
+    const first = loop.refresh();
+    const second = loop.refresh();
+    expect(first).toBe(second);
+    await Promise.resolve();
+    expect(refresh).toHaveBeenCalledOnce();
+    loop.stop();
+    finishRefresh();
+    await first;
+    expect(vi.getTimerCount()).toBe(0);
+    await loop.refresh();
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it('cancels the pending one-shot refresh when stopped', async () => {
@@ -40,7 +71,6 @@ describe('startServerFeaturesSnapshotRefreshLoop', () => {
       refresh,
       isTransitionActive: () => true,
       transitionIntervalMs: 30_000,
-      stableIntervalMs: 120_000,
     });
 
     await vi.runAllTicks();

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_p
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import type { Readable } from 'node:stream';
+import { TextDecoder } from 'node:util';
 
 import { isBundledAgentId } from '@happier-dev/agents';
 import type {

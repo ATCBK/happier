@@ -79,6 +79,7 @@ import {
 
 import { reattachTrackedSessionsFromMarkers } from './sessions/reattachFromMarkers';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { createSkillUsageRecorder } from '@/prompts/skills/store/skillUsage';
 import { readSkillLibraryDigests } from '@/prompts/skills/library/readSkillLibraryContent';
 import { listSessionMarkers } from './sessionRegistry';
@@ -272,7 +273,6 @@ import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { prepareProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1, ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol';
-import { readSessionTeamCredentialProviderModels } from '@/session/services/sessionTeamCredentialLaunch';
 import type { TeamCredentialResourceSummaryV1 } from '@happier-dev/protocol/teams';
 import {
   daemonExternalProviderRequestPolicyAcceptsResource,
@@ -325,8 +325,8 @@ import { createManagedProviderOperationAuthority } from './connectedServices/pur
 import { createConnectedAccountRequestAuthSubjectRegistry } from './connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from './connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
-import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
 import { createDaemonTeamCredentialDirectMaterialOpen } from './providers/teamCredentialDirectMaterialComposition';
+import { openDaemonSessionTeamCredentialProviderBinding } from './providers/sessionTeamCredentialProviderBindingComposition';
 import {
   createCurrentRuntimeProviderOperationsSource,
   type RuntimeProviderOperationsProducer,
@@ -612,6 +612,14 @@ export async function startDaemon(
     let reconcileTeamCredentialDirectMaterialAfterSourceChange = (): void => {};
     let daemonServerWorkScheduler: DaemonServerWorkScheduler | null = null;
     let apiMachineForSessions: ApiMachineClient | null = null;
+    const postWorkflowMessage: NonNullable<import('./workflows/production').WorkflowProductionExecutionDeps['postWorkflowMessage']> = async (publication, options) => {
+      const client = apiMachineForSessions;
+      if (!client || homeTransportCancellation.signal.aborted || isDaemonQuiescing()
+        || configuration.activeServerId !== requesterRuntimeServerId) {
+        return { v: 1, ok: false, error: 'discussions_unavailable' };
+      }
+      return await client.postAgentDiscussionMessage(publication, options);
+    };
     let managedMachinePolicyRuntime: ReturnType<typeof createDaemonManagedMachinePolicyRuntime> | null = null;
     let confidentialSecretFill: ReturnType<typeof api.createConfidentialSecretFillExecutor> | null = null;
     const machineAdmissionTransport = async (
@@ -773,10 +781,6 @@ export async function startDaemon(
         logger.debug('[DAEMON RUN] Server-features snapshot refresh failed (non-fatal)', error);
       },
     });
-    api.setServerFeaturesSnapshotProvider(
-      () => serverFeaturesSnapshotStore.getSnapshot(),
-      () => serverFeaturesSnapshotStore.refresh(),
-    );
     const resolvePeerMediationTrustRoots = () => {
       return resolvePeerMediationTrustRootsFromSnapshot(
         serverFeaturesSnapshotStore.getSnapshot(),
@@ -785,28 +789,32 @@ export async function startDaemon(
     };
     let refreshBrowserRouteOwners: (() => Promise<void>) | null = null;
     const minimumServerFeaturesSnapshotRefreshIntervalMs = 30_000;
-    const configuredServerFeaturesSnapshotRefreshIntervalMs = resolvePositiveIntEnv(
-      process.env.HAPPIER_DAEMON_SERVER_FEATURES_REFRESH_INTERVAL_MS,
-      5 * 60_000,
-      { min: minimumServerFeaturesSnapshotRefreshIntervalMs, max: 60 * 60_000 },
-    );
-    const refreshServerFeaturesAndBrowserRouteOwners = async (): Promise<void> => {
-      await serverFeaturesSnapshotStore.refresh();
-      await refreshBrowserRouteOwners?.();
-    };
     // Prime offline-safe (non-blocking): a freshly booted daemon warms the cache so the first
     // session runtime-action dispatch reads real bits rather than failing closed. After the session
     // control runtime exists, the same refresh also gives browser route owners a late-registration
     // chance if the server was temporarily unreachable during startup.
     const serverFeaturesSnapshotRefreshLoop = startServerFeaturesSnapshotRefreshLoop({
-      refresh: refreshServerFeaturesAndBrowserRouteOwners,
+      refresh: async () => { await serverFeaturesSnapshotStore.refresh(); },
       isTransitionActive: serverFeaturesSnapshotStore.isRefreshTransitionActive,
       transitionIntervalMs: minimumServerFeaturesSnapshotRefreshIntervalMs,
-      stableIntervalMs: configuredServerFeaturesSnapshotRefreshIntervalMs,
       onError: (error) => {
         logger.debug('[DAEMON RUN] Server-features scheduled refresh failed (non-fatal)', error);
       },
     });
+    const refreshServerFeaturesSnapshot = async () => {
+      await serverFeaturesSnapshotRefreshLoop.refresh();
+      return serverFeaturesSnapshotStore.getSnapshot();
+    };
+    const refreshServerFeaturesAndBrowserRouteOwners = async (): Promise<void> => {
+      await refreshServerFeaturesSnapshot();
+      // The route owner's gate may request features itself. Keep that consumer
+      // outside the feature fetch flight, so it cannot await its own producer.
+      await refreshBrowserRouteOwners?.();
+    };
+    api.setServerFeaturesSnapshotProvider(
+      () => serverFeaturesSnapshotStore.getSnapshot(),
+      refreshServerFeaturesSnapshot,
+    );
     let automationWorker: AutomationWorkerHandle | null = null;
     let memoryWorker: MemoryWorkerHandle | null = null;
     let voiceInferenceWorker: VoiceInferenceWorkerHandle | null = null;
@@ -1570,10 +1578,24 @@ export async function startDaemon(
     await refreshDaemonAcpCatalog({ credentials, signal: homeTransportCancellation.signal });
     const externalSessionHostOperationOwner =
       createExternalSessionHostOperationOwner();
+    if (!homeTarget.homeServerIdentityId && !serverFeaturesSnapshotStore.getSnapshot()) {
+      // URL-only predecessor profiles join the existing startup discovery.
+      await refreshServerFeaturesSnapshot();
+    }
     const resolveCurrentMachineExecutionOriginContext =
       createCurrentMachineExecutionOriginContextResolver({
         serverUrl: resolveServerHttpBaseUrl(),
         resolveCurrentMachineId: () => machineId,
+        resolveCurrentServerIdentityId: () => {
+          if (homeTransportCancellation.signal.aborted) return null;
+          // Home transport authenticates the binding at startup/reconnect.
+          // Origin stamps carry that identity; each real use still admits it.
+          if (homeTarget.homeServerIdentityId) return homeTarget.homeServerIdentityId;
+          const snapshot = serverFeaturesSnapshotStore.getSnapshot();
+          return snapshot?.status === 'ready'
+            ? snapshot.features.capabilities.serverIdentity.serverIdentityId ?? null
+            : null;
+        },
       });
     const managedPolicyServerHttpBaseUrl = resolveServerHttpBaseUrl();
     const pluginRemovalOrigin = await resolveCurrentMachineExecutionOriginContext();
@@ -1939,58 +1961,22 @@ export async function startDaemon(
     > | undefined = homeDomainAction && externalActionAccountId
       ? async (input) => {
           const workerMachineId = machineId;
-          const openTunnel = machineIrohRuntime
-            ? createProviderBrokerMachineCarrierTunnelOpen({
-                accountId: externalActionAccountId,
-                localMachineId: workerMachineId,
-                runtime: machineIrohRuntime,
-                resolveTrustRoots: resolvePeerMediationTrustRoots,
-              })
-            : undefined;
-          const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
+          return await openDaemonSessionTeamCredentialProviderBinding(input, {
+            machineId: workerMachineId,
+            accountId: externalActionAccountId,
+            serverId: requesterRuntimeServerId,
+            serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
+            credentials,
             happyHomeDir: configuration.happyHomeDir,
             controller: pluginReloadController,
-          });
-          try {
-            const opened = await openSessionTeamCredentialProviderBinding({
-              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-              ...(input.consumer ? { consumer: input.consumer } : {}),
-              machineId: workerMachineId,
-              agentId: input.agentId,
-              agentTargetKey: input.agentTargetKey,
-              modelId: input.modelId,
-              binding: {
-                v: 1,
-                slot: { kind: 'provider_model' },
-                resourceId: input.resourceId,
-                expectedResourceRevision: input.expectedResourceRevision,
-                deliveryMode: input.deliveryMode,
-                teamId: input.teamId,
-              },
-              lease,
-              materializationBaseDir: join(configuration.happyHomeDir, 'providers', 'materialized'),
-              signal: input.signal,
-              providerSettingsOperationContext: input.providerSettingsOperationContext,
-              readCatalog: signal => readSessionTeamCredentialProviderModels({
-                homeDomainAction, lease, agentId: input.agentId, agentTargetKey: input.agentTargetKey,
-                resourceId: input.resourceId, teamId: input.teamId, signal,
-              }),
-              ...(openTunnel ? {
-                openBroker: async (request, signal) =>
-                  await api.openTeamCredentialProviderBroker(request, { signal }),
-                openTunnel,
-              } : {}),
-              openTeamDirect: createDaemonTeamCredentialDirectMaterialOpen({
+            runtime: machineIrohRuntime,
+            resolveTrustRoots: resolvePeerMediationTrustRoots,
+            openTeamDirect: createDaemonTeamCredentialDirectMaterialOpen({
                 clientOpen: teamCredentialDirectMaterialClient.open,
                 workerMachineId,
                 signal: input.signal,
               }),
-            });
-            if (!opened) throw new Error('team_credential_provider_selection_not_current');
-            return opened;
-          } finally {
-            await lease.release();
-          }
+          });
         }
       : undefined;
     let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
@@ -2287,7 +2273,7 @@ export async function startDaemon(
       onBrowserRecordingRuntimeReady: bindStorageRecordings,
       onSimulatorPreviewRoutesReady: machineRpcRouteAttachments.attachSimulatorPreviewRoutes,
       onConnectedServicePoolSelectionReadReady: machineRpcRouteAttachments.attachConnectedServicePoolSelectionRead,
-      resolveServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.refresh(),
+      resolveServerFeaturesSnapshot: refreshServerFeaturesSnapshot,
       liveStreamCaptureRegistry,
       simulatorInputLeaseManager,
       spawnResourceCleanupByPid,
@@ -2872,9 +2858,9 @@ export async function startDaemon(
             readLiveSkillCachePaths: skillStore.readLiveSkillCachePaths,
             readInUsePaths: async () => {
               const [owners, residentModels] = await Promise.all([
-                processOwnershipRuntime.readOwners({ freshness: 'shared' }),
-                readResidentVoiceModelPackPaths({ worker: voiceInferenceWorker, modelPacks: storageModelPacks,
-                  packsRootDir: join(activeServerDir, 'voiceInference', 'packs') }),
+                timeWebLatencyPhase('storage.facts.process-census', () => processOwnershipRuntime.readOwners({ freshness: 'shared' })),
+                timeWebLatencyPhase('storage.facts.resident-models', () => readResidentVoiceModelPackPaths({ worker: voiceInferenceWorker, modelPacks: storageModelPacks,
+                  packsRootDir: join(activeServerDir, 'voiceInference', 'packs') })),
               ]);
               const paths = [projectPath(), process.execPath, ...readTrackedSessions().map(session => session.cwd),
                 ...getSharedTerminalProcessRegistry().listProcesses().map(terminal => terminal.workspacePath), ...residentModels.paths];
@@ -2960,7 +2946,12 @@ export async function startDaemon(
           );
         },
         invalidateConnectedAccounts: () => {
-          connectedAccountPurposeBindingRuntime.invalidate();
+          connectedAccountPurposeBindingRuntime.invalidate({
+            ...(notification.quotaRefreshRecordIds
+              ? { quotaRefreshRecordIds: notification.quotaRefreshRecordIds } : {}),
+            ...(['startup', 'reconnect', 'cursor-gone'].includes(notification.source)
+              ? { resetQuotaSchedule: true } : {}),
+          });
         },
       });
     };
@@ -3882,7 +3873,7 @@ export async function startDaemon(
         ownerRemainder,
         getServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.getSnapshot(),
         resolvePeerMediationTrustRoots,
-        refreshServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.refresh(),
+        refreshServerFeaturesSnapshot,
         readLocalServiceInventorySnapshot: async () => localServiceInventoryRoutes?.getSnapshot() ?? null,
         localServiceSummary,
         onPublicVoiceModelPackRuntimeReady: bindStorageModels,
@@ -3919,6 +3910,7 @@ export async function startDaemon(
               createWorkflowRunCoordinatorForMachine: (input) => {
                 const installation = readInstallationIdentityIfExistsSync();
                 return workflowRuntime.createCoordinatorForMachine({ ...input, managedMachineAction: managedMachinePolicyAdapter,
+                  postWorkflowMessage,
                   sessionStartup: async request => {
                     const client = apiMachineForSessions;
                     const stamp = input.requesterWorkAttributionV1;
@@ -3975,7 +3967,7 @@ export async function startDaemon(
                   } });
               },
               createWorkflowRecoveryForMachine: (input) =>
-                workflowRuntime.createRecoveryForMachine(input),
+                workflowRuntime.createRecoveryForMachine({ ...input, postWorkflowMessage }),
             }
           : {}),
         prepareApiMachineForSessions:

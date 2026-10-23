@@ -1,4 +1,5 @@
 import type { ProviderAccountUsageUsageIdentityResolver } from '../connectedServices/accountUsage/hydration';
+import type { RequesterConnectedAccountObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { readQualifiedConnectedAccountCredentialIdentity, readQualifiedConnectedAccountCredentialMaterial } from '../connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
@@ -92,7 +93,7 @@ import type {
 } from '../connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveStackDebugDirectPeerStartServer } from './resolveStackDebugDirectPeerStartServer';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshotChanges } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { warmActiveAccountSettingsSnapshotBestEffort } from '@/settings/accountSettings/warmActiveAccountSettingsSnapshot';
 import { getSessionNotificationTitle } from '@/agent/runtime/notifications/sessionNotificationContext';
@@ -155,7 +156,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   qualifiedConnectedAccountEstablishedRuntimeOwner?: Pick<
     QualifiedConnectedAccountEstablishedRuntimeOwner,
-    'invokeWithReceipt' | 'readQuotaSourceSnapshot'
+    'invokeWithReceipt' | 'invokeScheduledWithReceipts' | 'readQuotaSourceSnapshot'
   >;
   resolveQualifiedConnectedAccountV4Support?: () =>
     QualifiedConnectedAccountV4Support;
@@ -171,7 +172,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
   listScheduledQualifiedConnectedAccounts?: (service?: QualifiedConnectedAccountRef['service']) => Promise<
     readonly QualifiedConnectedAccountProfileV4[]
   >;
-  subscribeConnectedAccountInvalidations?: (listener: () => void) => () => void;
+  subscribeConnectedAccountInvalidations?: (listener: (event?: RequesterConnectedAccountObservation) => void) => () => void;
   listQualifiedConnectedAccountGroupQuotaTargets?: NonNullable<
     ConstructorParameters<typeof ConnectedServiceQuotasCoordinator>[0]['qualifiedConnectedAccountRuntime']
   >['listGroupQuotaTargets'];
@@ -408,6 +409,7 @@ export async function startDaemonConnectedServiceRuntime(
     | 'resolveConnectedServiceQualifiedPurposeBindingSnapshot' | 'resolveQualifiedConnectedAccountPeerClass'
     | 'resolveQualifiedConnectedAccountPeerOperationTransport' | 'resolveConnectedAccountUsageIdentity' | 'activatePurposeBindings'> & Readonly<{
     accountSettingsSnapshot?: () => import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null;
+    subscribeAccountSettingsSnapshot?: (listener: () => void) => () => void;
     connectedServicesMaterializationBaseDir?: string;
     isAccountRuntimeCurrent?: () => Promise<boolean>;
     runAccountOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -426,17 +428,20 @@ export async function startDaemonConnectedServiceRuntime(
       true,
     );
   const connectedServiceRuntimeRegistry = params.connectedServiceRuntimeRegistry ?? new ConnectedServiceRuntimeRegistry();
-  const subscribeCoordinatorWake = (listener: () => void, invalidateInventory?: () => void): (() => void) => {
-    const onInventoryChanged = () => { invalidateInventory?.(); listener(); };
+  const subscribeCoordinatorWake = (listener: () => void, invalidateInventory?: (event?: RequesterConnectedAccountObservation) => void): (() => void) => {
+    const onInventoryChanged = (event?: RequesterConnectedAccountObservation) => { invalidateInventory?.(event); listener(); };
     const cleanups = [
       connectedServiceRuntimeRegistry.subscribeTargetRegistrations(listener),
       params.subscribeConnectedAccountInvalidations?.(onInventoryChanged),
+      params.subscribeAccountSettingsSnapshot?.(onInventoryChanged)
+        ?? (!params.accountSettingsSnapshot ? subscribeActiveAccountSettingsSnapshotChanges(() => onInventoryChanged()) : undefined),
       pluginReloadController.subscribe(onInventoryChanged),
     ];
     return () => { for (const cleanup of cleanups) cleanup?.(); };
   };
   let connectedServiceRefreshCoordinator: ConnectedServiceRefreshCoordinator | null = null;
   let connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle = null;
+  let startRefreshLoop: ((skipQualified: boolean) => void) | undefined;
   if (connectedServicesRefreshEnabled) {
     const refreshTickMs = resolvePositiveIntEnv(
       params.processEnv.HAPPIER_CONNECTED_SERVICES_REFRESH_TICK_MS,
@@ -593,20 +598,20 @@ export async function startDaemonConnectedServiceRuntime(
       },
     });
 
-    connectedServiceRefreshLoopHandle = startConnectedServiceRefreshLoop({
+    startRefreshLoop = (skipQualified) => { connectedServiceRefreshLoopHandle = startConnectedServiceRefreshLoop({
       enabled: true,
       tickMs: refreshTickMs,
       subscribeWake: subscribeCoordinatorWake,
       coordinator: { tickOnce: async () => {
         if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
-        const operation = () => connectedServiceRefreshCoordinator!.tickOnce();
+        const operation = () => connectedServiceRefreshCoordinator!.tickOnce({ skipQualified });
         return await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
       } },
       runImmediately: true,
       onTickError: (error) => {
         params.logger.debug('[DAEMON RUN] Connected services refresh tick failed (non-fatal)', error);
       },
-    });
+    }); };
   }
 
   const connectedServicesQuotasEnabled =
@@ -723,6 +728,7 @@ export async function startDaemonConnectedServiceRuntime(
         })
       ).hydration,
       createCoordinator: () => new ConnectedServiceQuotasCoordinator({
+      qualifiedHealth: connectedServiceRefreshCoordinator,
       api: params.api,
       credentials: params.credentials,
       quotaFetchers,
@@ -861,6 +867,10 @@ export async function startDaemonConnectedServiceRuntime(
           params.logger.debug('[DAEMON RUN] Connected-service usage notification failed (non-fatal)', error);
         });
       },
+      accountSettingsProvider: () => {
+        const snapshot = readAccountSettingsSnapshot();
+        return snapshot?.source === 'none' ? null : snapshot?.settings;
+      },
       // K2 (cmpn4hhdi fix): the proactive quota pre-turn switch coordinator is built by
       // startDaemonSessionControlRuntime (where the FSM/deferral/hot-apply primitives live)
       // and injected here. It routes the proactive usage-limit switch through the FSM
@@ -923,7 +933,7 @@ export async function startDaemonConnectedServiceRuntime(
         enabled: true,
         runImmediately: true,
         tickMs: quotasTickMs,
-        subscribeWake: listener => subscribeCoordinatorWake(listener, () => coordinator.invalidateInventory()),
+        subscribeWake: listener => subscribeCoordinatorWake(listener, event => coordinator.invalidateInventory(event)),
         coordinator: { tickOnce: async () => {
           if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
           const operation = () => coordinator.tickOnce();
@@ -942,6 +952,11 @@ export async function startDaemonConnectedServiceRuntime(
       connectedServiceQuotasLoopHandle = activation.loopHandle;
     }
   }
+  // Quota's incumbent loop owns the combined qualified deadline. The refresh
+  // loop retains released legacy work, or all health work when quota is disabled.
+  startRefreshLoop?.(connectedServiceQuotasCoordinator !== null
+    && params.qualifiedConnectedAccountEstablishedRuntimeOwner !== undefined
+    && params.listScheduledQualifiedConnectedAccounts !== undefined);
 
   return { connectedServiceRefreshCoordinator, connectedServiceRefreshLoopHandle,
     connectedServiceQuotasCoordinator, connectedServiceQuotasLoopHandle,

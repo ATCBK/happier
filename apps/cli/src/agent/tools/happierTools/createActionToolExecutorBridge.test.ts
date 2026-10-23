@@ -123,6 +123,39 @@ describe('createActionToolExecutorBridge', () => {
     expect(sessionList).not.toHaveBeenCalled();
   });
 
+  it('refuses a foreign subtree on a current-Session bridge before reading the list', async () => {
+    // Session listing is the HTTP boundary; bridge binding and Action admission stay real.
+    const sessionList = vi.fn(async () => markSessionListQueryResultV1({
+      sessions: [], nextCursor: null, hasNext: false,
+      attentionNextCursor: null, attentionHasNext: false,
+    }));
+    const executor = createActionExecutor({
+      ...createCliActionDeps({ token: 'test-token', sessionId: 'lead', mode: 'plain', ctx: null }),
+      sessionList,
+      isActionApprovalRequired: () => false,
+    });
+    const caller = { kind: 'session', sessionId: 'lead', starterDepth: 0, turnDepth: 0 } as const;
+    const bridge = createActionToolExecutorBridge({
+      surface: 'agent',
+      executor: { execute: (actionId, input, context) => executor.execute(actionId, input, {
+        ...context,
+        actionCaller: caller,
+        agentStartContext: { caller, baseline: { machineId: 'machine', directory: '/repo' }, roles: {},
+          ledSubtreeSessionIds: [], workDepthLimit: 4, callerPermissionCeiling: 'default' },
+      }) },
+      resolveSessionListAccess: () => 'current_session',
+      requiredDirectActionIds: ['session.list'],
+    });
+    for (const [toolName, args] of [
+      ['action_execute', { actionId: 'session.list', input: { underSessionId: 'another-lead' } }],
+      ['session_list', { underSessionId: 'another-lead' }],
+    ] as const) {
+      await expect(bridge.executeActionByToolName(toolName, args, 'lead'))
+        .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    }
+    expect(sessionList).not.toHaveBeenCalled();
+  });
+
   it('keeps current-Session Board tools on the host-bound Session before family dispatch', async () => {
     const sessionBoardAction = vi.fn(async (args: Parameters<NonNullable<ActionExecutorDeps['sessionBoardAction']>>[0]) => {
       const input = SessionBoardGetInputV1Schema.parse(args.input);

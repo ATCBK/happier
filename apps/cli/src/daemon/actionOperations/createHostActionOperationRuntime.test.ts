@@ -125,6 +125,104 @@ describe('finite host operation custody', () => {
     expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'actual-spawn-operation'))
       .not.toHaveProperty('observation');
   });
+  it('keeps one keyed Session creation call attached after acceptance until its operation settles', async () => {
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'requester',
+      generateOperationId: () => 'settling-spawn-operation' });
+    let release!: () => void;
+    const completion = new Promise<void>(resolve => { release = resolve; });
+    let accepted!: () => void;
+    const acceptance = new Promise<void>(resolve => { accepted = resolve; });
+    let returned = false;
+    const request = runtime.observeExecution({ actionId: 'session.spawn_new', input: {}, actionRequestId: 'one-call-creation',
+      execute: async ({ operationAcceptance }) => {
+        operationAcceptance!.accept({ type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' });
+        accepted();
+        await completion;
+        return { ok: true as const, result: { type: 'success' as const, disposition: 'created' as const,
+          sessionId: 'created-session', executionTarget: { serverId: 'home', machineId: 'guest' },
+          organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' as const } } };
+      } }).then(result => { returned = true; return result; });
+
+    await acceptance;
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'settling-spawn-operation'))
+      .toMatchObject({ state: 'running', requestId: 'one-call-creation' });
+
+    release();
+    await expect(request).resolves.toMatchObject({ ok: true, result: {
+      type: 'success', disposition: 'created', sessionId: 'created-session',
+    } });
+    expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'settling-spawn-operation'))
+      .toMatchObject({ state: 'succeeded', result: { type: 'success', sessionId: 'created-session' } });
+  });
+  it('returns a terminal Session creation refusal after acceptance instead of swallowing it as pending', async () => {
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'requester',
+      generateOperationId: () => 'refused-spawn-operation' });
+    let release!: () => void;
+    const completion = new Promise<void>(resolve => { release = resolve; });
+    let accepted!: () => void;
+    const acceptance = new Promise<void>(resolve => { accepted = resolve; });
+    const request = runtime.observeExecution({ actionId: 'session.spawn_new', input: {}, actionRequestId: 'refused-creation',
+      execute: async ({ operationAcceptance }) => {
+        operationAcceptance!.accept({ type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' });
+        accepted();
+        await completion;
+        return { ok: true as const, result: { type: 'error' as const, code: 'spawn_failed' as const, retryable: false } };
+      } });
+
+    await acceptance;
+    release();
+    await expect(request).resolves.toEqual({ ok: true, result: {
+      type: 'error', code: 'spawn_failed', retryable: false,
+    } });
+    expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'refused-spawn-operation'))
+      .toMatchObject({ state: 'succeeded', result: { type: 'error', code: 'spawn_failed', retryable: false } });
+  });
+  it('releases an aborted Session creation waiter without cancelling or duplicating its keyed operation', async () => {
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'requester',
+      generateOperationId: () => 'detached-spawn-operation' });
+    const caller = new AbortController();
+    const disconnect = new Error('caller disconnected');
+    let release!: () => void;
+    const completion = new Promise<void>(resolve => { release = resolve; });
+    let accepted!: () => void;
+    const acceptance = new Promise<void>(resolve => { accepted = resolve; });
+    let executions = 0;
+    const execute = async ({ operationAcceptance }: Parameters<Parameters<typeof runtime.observeExecution>[0]['execute']>[0]) => {
+      executions += 1;
+      operationAcceptance!.accept({ type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' });
+      accepted();
+      await completion;
+      return { ok: true as const, result: { type: 'success' as const, disposition: 'created' as const,
+        sessionId: 'created-session', executionTarget: { serverId: 'home', machineId: 'guest' },
+        organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' as const } } };
+    };
+    const input = { creationKey: 'detached-creation' };
+    const request = runtime.observeExecution({ actionId: 'session.spawn_new', input,
+      actionRequestId: input.creationKey, rpcContext: { signal: caller.signal }, execute });
+    let detached = false;
+    void request.catch(() => { detached = true; });
+    try {
+      await acceptance;
+      caller.abort(disconnect);
+      await vi.waitFor(() => expect(detached).toBe(true));
+      await expect(request).rejects.toBe(disconnect);
+      expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'detached-spawn-operation'))
+        .toMatchObject({ state: 'running', requestId: input.creationKey });
+
+      const retry = runtime.observeExecution({ actionId: 'session.spawn_new', input,
+        actionRequestId: input.creationKey, execute });
+      release();
+      await expect(retry).resolves.toMatchObject({ ok: true, result: {
+        type: 'success', disposition: 'created', sessionId: 'created-session',
+      } });
+      expect(executions).toBe(1);
+    } finally {
+      release();
+      await request.catch(() => undefined);
+    }
+  });
   it('retries a Discussion birth after HTTP 503 through the same ordinary creator instead of replaying its failed result forever', async () => {
     let operationSequence = 0;
     const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'owner',

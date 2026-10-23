@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 import { SERVER_ROUTED_FILE_TRANSFER_SIZE_LIMIT_ERROR } from '../policy/serverRoutedTransferPolicy';
 import { resolveWorkspaceFileDownloadSource } from './resolveWorkspaceFileDownloadSource';
@@ -22,6 +24,28 @@ afterEach(() => {
 });
 
 describe('resolveWorkspaceFileDownloadSource', () => {
+    it('keeps the ZIP implementation out of the cold download-owner graph until a ZIP is requested', async () => {
+        const source = fileURLToPath(new URL('../download/buildZipArchive.ts', import.meta.url));
+        const result = await build({
+            entryPoints: [source], bundle: true, platform: 'node', format: 'esm',
+            splitting: true, write: false, metafile: true,
+            outdir: join(createWorkspace(), 'output'), logLevel: 'silent',
+        });
+        const inputs = result.metafile.inputs;
+        const entry = Object.keys(inputs).find(key => resolve(key) === source);
+        expect(entry).toBeDefined();
+        const coldInputs = new Set<string>();
+        const pending = [entry!];
+        for (const input of pending) {
+            if (coldInputs.has(input)) continue;
+            coldInputs.add(input);
+            for (const dependency of inputs[input]?.imports ?? []) {
+                if (!dependency.external && dependency.kind !== 'dynamic-import') pending.push(dependency.path);
+            }
+        }
+        expect([...coldInputs].filter(key => /(?:^|\/)node_modules\/archiver\//.test(key))).toEqual([]);
+    });
+
     it('confines a publication download despite a broader OS-user policy, including symlink escapes', async () => {
         const root = createWorkspace();
         mkdirSync(join(root, 'workspace'));

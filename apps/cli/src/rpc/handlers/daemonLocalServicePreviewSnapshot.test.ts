@@ -17,6 +17,14 @@ import { createLocalServicePreviewRoutes } from '@/daemon/local/services/preview
 import { createLocalServicePreviewRegistry } from '@/daemon/local/services/preview/registry';
 import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inventory/registry';
 import type { NormalizedLocalServiceInventoryEntry } from '@/daemon/local/services/inventory/scanner';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { addServerProfile, adoptServerProfileHomeConnectionDescriptor } from '@/server/serverProfiles';
 
 function createRegistrar(): { handlers: Map<string, (payload: unknown) => Promise<unknown>>; registrar: RpcHandlerRegistrar } {
     const handlers = new Map<string, (payload: unknown) => Promise<unknown>>();
@@ -91,6 +99,69 @@ function createLifecycleRoutes() {
 }
 
 describe('daemon local service preview snapshot rpc handler', () => {
+    it('admits and retires a declared Service addressed by the exact Home identity of its daemon profile', async () => {
+        const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+        await withTempDir('happier-preview-home-', async homeDir => {
+            env.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+                HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+            reloadConfiguration();
+            const owner = createManagedServicesOwner({
+                processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+                dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+            });
+            try {
+                const profile = await addServerProfile({ name: 'preview-daemon', serverUrl: 'https://home.example.test', webappUrl: 'https://home.example.test' });
+                const homeId = 'srv_preview_home';
+                const workspace = { id: 'workspace-preview', serverId: homeId, machineId: LIFECYCLE_MACHINE_ID,
+                    rootPath: homeDir, createdAtMs: 1 };
+                const declaration = { workspaceRefId: workspace.id, selection: { kind: 'manifest' as const, name: 'web' } };
+                let stopped = false;
+                const handle = await owner.superviseProject({ workspace, declaration, cwd: homeDir,
+                    serviceId: 'declared-web', specIdentity: 'declared-web', isCurrent: () => true,
+                    requester: { serverId: homeId, accountId: 'starter', machineId: workspace.machineId, installationId: 'installation' },
+                    // Only the external native process lifecycle is substituted.
+                    processSpec: { mode: { kind: 'native',
+                        instance: { adapter: { pluginId: 'fixture.plugin', localId: 'web' }, nativeResourceId: 'preview-web' },
+                        lifecycle: { inspect: async () => ({ phase: stopped ? 'stopped' : 'running', readiness: 'ready', endpoint: 'http://127.0.0.1:4312' }),
+                            stop: async () => { stopped = true; return { status: 'stopped' }; } } } },
+                    authorizeLaunch: async () => ({ command: process.execPath, args: ['-e', ''], env: {}, release: async () => undefined }),
+                });
+                const rpc = new RpcHandlerManager({ scopePrefix: workspace.machineId, localMachineId: workspace.machineId,
+                    encryptionMode: 'plain', logger() {}, authorizeRequest: request => authorizeMachineRpcRequest(request, {
+                        machineId: workspace.machineId, resolveCustodianAccountId: async () => 'starter',
+                        resolveInstallationId: () => 'installation', verifyMachineAdmission: async () => true,
+                    }) });
+                registerDaemonLocalServicePreviewSnapshotHandler(rpc, { projectManagedServices: owner,
+                    machineId: workspace.machineId, serverId: profile.id });
+                const target = { kind: 'managed_service', machineId: workspace.machineId, managedServiceId: handle.instanceId,
+                    workspaceId: workspace.id, cwd: homeDir, declaration };
+                const read = () => rpc.handleRequest({ method: `${workspace.machineId}:${RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION}`,
+                    params: { v: 1, kind: 'read', target }, authorization: { kind: 'localServices.preview.admission.serverOrigin' },
+                    machineAdmission: { actorAccountId: 'starter', custodianAccountId: 'starter', machineId: workspace.machineId,
+                        installationId: 'installation', role: 'manage', encryptionMode: 'plain' } });
+                expect(await read()).toMatchObject({ kind: 'refused', reasonCode: 'service_unavailable' });
+                const accessLoss = { serverId: profile.id, accountId: 'starter',
+                    machineId: workspace.machineId, installationId: 'installation' };
+                const currentLoss = { verifyCurrentMachineAdmission: async () => true };
+                expect(await owner.stopForAccessLoss(accessLoss, currentLoss)).toEqual([]);
+                await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: profile.id, observation: 'exact',
+                    descriptor: { v: 1, homeServerIdentityId: homeId, canonicalServerUrl: profile.serverUrl,
+                        revision: 1, endpoints: [{ kind: 'https', url: profile.serverUrl }] } });
+                expect(await read()).toMatchObject({ v: 1, kind: 'admitted', instanceId: handle.instanceId,
+                    serviceTarget: target, starterAccountId: 'starter', endpoint: { scheme: 'http', host: '127.0.0.1', port: 4312 } });
+                expect(await owner.stopForAccessLoss({ ...accessLoss, serverId: 'srv_foreign_home' }, currentLoss)).toEqual([]);
+                expect(await owner.stopForAccessLoss(accessLoss, currentLoss))
+                    .toMatchObject([{ status: 'stopped', instanceId: handle.instanceId }]);
+                expect(stopped).toBe(true);
+                expect(await read()).toMatchObject({ kind: 'refused', reasonCode: 'service_unavailable' });
+            } finally {
+                await owner.dispose();
+                env.restore();
+                reloadConfiguration();
+            }
+        });
+    });
+
     it('preserves the installed preview snapshot when another registration has no preview owner', async () => {
         const { handlers, registrar } = createRegistrar();
         const routes = createLifecycleRoutes();

@@ -9,6 +9,8 @@ import { DaemonLocalServicePreviewAdmissionRequestV1Schema, DaemonLocalServicePr
     type DaemonLocalServicePreviewAdmissionResponseV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { readProjectManagedServicePreviewEndpoint } from '@/daemon/local/services/preview/projectEndpoint';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { logger } from '@/ui/logger';
 
 // The snapshot RPC reads the preview registry; the lifecycle methods (openOrCreate/revoke)
 // dispatch through the same daemon `LocalServicePreviewRoutes` owner so the UI runtime-action
@@ -49,24 +51,37 @@ export function registerDaemonLocalServicePreviewSnapshotHandler(
     if (options.projectManagedServices && options.serverId && options.machineId) rpc.registerHandler(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION, async (raw: unknown, context): Promise<DaemonLocalServicePreviewAdmissionResponseV1> => {
         const refused = { v: 1, kind: 'refused', reasonCode: 'service_unavailable' } as const;
         const request = DaemonLocalServicePreviewAdmissionRequestV1Schema.parse(raw);
+        const reply = (result: DaemonLocalServicePreviewAdmissionResponseV1, reason?: string) => {
+            logger.debug('[LocalServicePreview] Service admission reply', { requestId: context?.transportRequestId,
+                instanceId: request.target.managedServiceId, operation: request.kind, kind: result.kind,
+                ...(reason ? { reason } : {}) });
+            return result;
+        };
         const admission = context?.machineAdmission;
         if (!options.projectManagedServices || !options.serverId || !options.machineId || !admission
             || !isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext(context?.authorization)
             || !context?.verifyMachineAdmissionCurrent || context.signal.aborted
-            || admission.machineId !== options.machineId || request.target.machineId !== options.machineId) return refused;
+            || admission.machineId !== options.machineId || request.target.machineId !== options.machineId) return reply(refused, 'machine_admission_unavailable');
         const resolved = options.projectManagedServices.resolveProjectService(request.target);
-        if (resolved.status !== 'found') return refused;
+        if (resolved.status !== 'found') return reply(refused, 'service_target_unresolved');
         const handle = resolved.handle;
         const current = () => {
             const latest = options.projectManagedServices?.resolveProjectService(request.target);
             return !context.signal.aborted && !handle.retirementSignal.aborted && handle.isCurrent()
-                && handle.workspace.serverId === options.serverId && handle.workspace.machineId === options.machineId
-                && handle.requester.serverId === options.serverId && handle.requester.machineId === admission.machineId
+                && handle.workspace.machineId === options.machineId && handle.requester.machineId === admission.machineId
                 && handle.requester.installationId === admission.installationId && latest?.status === 'found' && latest.handle === handle;
         };
-        if (!current() || !await context.verifyMachineAdmissionCurrent() || !current()) return refused;
+        // Project Start admits portable Home ids through this same saved-profile owner.
+        // A local profile label is not the identity retained by the Service's Workspace.
+        const homeCurrent = async () => {
+            const serverId = options.serverId;
+            return Boolean(serverId && await isServerProfileHomeIdentity(serverId, handle.workspace.serverId)
+                && await isServerProfileHomeIdentity(serverId, handle.requester.serverId));
+        };
+        if (!current() || !await homeCurrent()) return reply(refused, 'service_home_or_custody_changed');
+        if (!await context.verifyMachineAdmissionCurrent() || !await homeCurrent() || !current()) return reply(refused, 'service_admission_changed');
         if (request.kind === 'wait_retirement') {
-            if (request.instanceId !== handle.instanceId) return refused;
+            if (request.instanceId !== handle.instanceId) return reply(refused, 'service_instance_changed');
             await new Promise<void>((resolve) => {
                 const finish = () => {
                     handle.retirementSignal.removeEventListener('abort', finish);
@@ -77,16 +92,16 @@ export function registerDaemonLocalServicePreviewSnapshotHandler(
                 context.signal.addEventListener('abort', finish, { once: true });
                 if (handle.retirementSignal.aborted || context.signal.aborted) finish();
             });
-            if (context.signal.aborted || !await context.verifyMachineAdmissionCurrent()) return refused;
-            return { v: 1, kind: 'retired', instanceId: handle.instanceId };
+            if (context.signal.aborted || !await context.verifyMachineAdmissionCurrent() || !await homeCurrent()) return reply(refused, 'service_admission_changed');
+            return reply({ v: 1, kind: 'retired', instanceId: handle.instanceId });
         }
         const endpoint = readProjectManagedServicePreviewEndpoint(handle);
-        if (!endpoint || !current()) return refused;
-        return DaemonLocalServicePreviewAdmissionResponseV1Schema.parse({ v: 1, kind: 'admitted', instanceId: handle.instanceId,
+        if (!endpoint || !current()) return reply(refused, 'service_endpoint_unavailable');
+        return reply(DaemonLocalServicePreviewAdmissionResponseV1Schema.parse({ v: 1, kind: 'admitted', instanceId: handle.instanceId,
             serviceTarget: { kind: 'managed_service', managedServiceId: handle.instanceId, machineId: handle.workspace.machineId,
                 cwd: handle.cwd, declaration: handle.declaration,
                 ...(request.target.workspaceId !== undefined ? { workspaceId: handle.workspace.id } : {}) },
-            starterAccountId: handle.requester.accountId, endpoint });
+            starterAccountId: handle.requester.accountId, endpoint }));
     });
     const routes = options.localServicesPreview;
     if (routes) {

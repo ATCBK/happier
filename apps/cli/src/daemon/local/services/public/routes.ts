@@ -10,13 +10,21 @@ import type {
     LocalServicePublicExposureV1,
     LocalServicePublicPreviewSnapshotV1,
 } from '@happier-dev/protocol';
-import { DaemonLocalServicePublicPreviewCopyUrlResponseV1Schema, DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServicePublicPreviewRevokeResponseV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, LocalServicePublicExposureV1Schema } from '@happier-dev/protocol/local/services/public/v1';
+import { DaemonLocalServicePublicPreviewCopyUrlResponseV1Schema, DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServicePublicPreviewRevokeResponseV1Schema, DaemonLocalServicePublicPreviewStatusResponseV1Schema, LocalServicePublicExposureV1Schema, LocalServicePublicPreviewCreateFailureV1Schema, type LocalServicePublicPreviewCreateFailureReasonV1 } from '@happier-dev/protocol/local/services/public/v1';
 import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { assertLocalServiceCredentialAdmission } from '../credentialAdmission';
+
+/** Positive refusal of the create request, never a later status-read failure. */
+export class LocalServicePublicPreviewCreateRefusal extends Error {
+    constructor(readonly reasonCode: LocalServicePublicPreviewCreateFailureReasonV1, readonly httpStatus: 403 | 503) {
+        super(reasonCode);
+        this.name = 'LocalServicePublicPreviewCreateRefusal';
+    }
+}
 
 export type LocalServicePublicPreviewRoutes = Readonly<{
     getStatus(request: DaemonLocalServicePublicPreviewStatusRequestV1, context?: RpcHandlerContext): Promise<LocalServicePublicPreviewSnapshotV1>;
@@ -167,7 +175,13 @@ export function createLocalServicePublicPreviewServerRoutes(
                     ...(request.confirmation ? { confirmation: request.confirmation } : {}),
                 },
                 { headers },
-            );
+            ).catch((error: unknown) => {
+                if (axios.isAxiosError<unknown>(error) && (error.response?.status === 403 || error.response?.status === 503)) {
+                    const parsed = LocalServicePublicPreviewCreateFailureV1Schema.safeParse(error.response.data);
+                    if (parsed.success) throw new LocalServicePublicPreviewCreateRefusal(parsed.data.reasonCode, error.response.status);
+                }
+                throw error;
+            });
             const rawExposure = typeof response.data === 'object' && response.data !== null
                 ? (response.data as { exposure?: unknown }).exposure
                 : undefined;

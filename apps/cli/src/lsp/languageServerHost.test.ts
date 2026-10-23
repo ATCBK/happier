@@ -498,7 +498,12 @@ describe('language intelligence composed host', () => {
             const f = await fixture(rootPath, definitionCount, {}, undefined, () => policy);
             try {
                 await f.open('a.ts', 'shared');
-                await Promise.all(f.protocolHandles.map(handle => handle.wait()));
+                await Promise.all(f.protocolHandles.map(async handle => {
+                    // Root exit proves idle reaping initiated the stop. Disposal
+                    // joins native subtree verification before membership retires.
+                    await handle.wait();
+                    await handle.dispose();
+                }));
                 await vi.waitFor(async () => expect(await f.call(RPC_METHODS.DAEMON_LSP_WATCH, { rootPath })).toMatchObject({ status: 'ok', servers: [] }));
                 await f.open('a.ts', 'shared');
                 const closed = await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'close', path: 'a.ts' } });

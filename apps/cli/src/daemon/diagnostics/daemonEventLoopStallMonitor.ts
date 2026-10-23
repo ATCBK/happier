@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 import type { DoctorDaemonSelfVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 
 const SAMPLE_INTERVAL_MS = 1_000;
-const WARNING_THRESHOLD_MS = 2_000;
+export const DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS = 2_000;
 const MAX_REPORTED_OPERATIONS = 8;
 
 type TimerHandle = Readonly<{ unref?: () => void }>;
@@ -42,7 +42,7 @@ export function createDaemonEventLoopStallMonitor(input: Readonly<{
     );
     expectedSampleAtMs = observedAtMs + SAMPLE_INTERVAL_MS;
     if (reportsRuntimeCounters) utilizationBaseline = performance.eventLoopUtilization();
-    if (eventLoopDelayMs < WARNING_THRESHOLD_MS) return;
+    if (eventLoopDelayMs < DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS) return;
 
     const activeRpcOperations = input.getActiveRpcOperations()
       .map((operation) => ({

@@ -2,7 +2,6 @@ import { deriveConnectedServiceRunMaterializeToken } from './connectedServices/r
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
-import { Agent } from 'undici';
 import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 
 export type DaemonControlRequestOptions = {
@@ -26,6 +25,8 @@ export async function readDaemonControlHttpResponse(params: Readonly<{
   headers: Readonly<Record<string, string>>;
   signal?: AbortSignal;
 }>): Promise<Readonly<{ ok: boolean; status: number; body: string }>> {
+  params.signal?.throwIfAborted();
+  const { Agent } = await import('undici');
   params.signal?.throwIfAborted();
   const dispatcher = new Agent({ connect: { timeout: 0 }, headersTimeout: 0, bodyTimeout: 0 });
   try {

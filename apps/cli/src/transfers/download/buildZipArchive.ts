@@ -1,4 +1,3 @@
-import archiver from 'archiver';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readdir, stat, lstat } from 'fs/promises';
 import { basename, dirname, join } from 'path';
@@ -15,6 +14,7 @@ export async function buildZipArchive(input: Readonly<{
   maxTotalBytes: number;
   maxOutputBytes: number;
 }>): Promise<void> {
+  const { default: archiver } = await import('archiver');
   await mkdir(dirname(input.zipPath), { recursive: true });
 
   const archive = archiver('zip', { zlib: { level: 9 } });

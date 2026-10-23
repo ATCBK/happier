@@ -24,13 +24,15 @@ import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER } from '@happier-dev/protocol/acti
 /** Installed Project/Account/Trust and native IO composition for cold launch seam tests. */
 export async function createInstalledProjectAgentLaunchFixture(options: Readonly<{
   accountActionCredentials?: StoredCredentials;
+  prepareProject?: boolean;
 }> = {}) {
   const f = await createProjectSessionRuntimeFixture(options.accountActionCredentials
     ? { serverId: 'session-home', serverUrl: 'https://session-home.test',
       // Account decision ingress may proceed directly over RPC. Original
       // CLI Run ingress remains unwaived and must retain setup review.
       accountSettings: { actionsSettingsV1: setActionApprovalOverride({ settings: { v: 1, actions: {} },
-        actionId: 'projects.prepare', surface: 'rpc', approvalRequired: false }) } } : {});
+        actionId: 'projects.prepare', surface: 'rpc', approvalRequired: false }) } }
+    : { serverId: 'session-home', serverUrl: 'https://session-home.test' });
   let accountActionCredentials: StoredCredentials | undefined;
   let accountActionSettings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>> | undefined;
   if (options.accountActionCredentials) {
@@ -121,15 +123,17 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
     } : undefined);
   onTestFinished(() => machine.shutdown());
   const signal: AbortSignal = new AbortController().signal;
-  const runtime = await machine.resolveProjectFiniteRuntime({ signal, requesterSessionBootstrap: f.bootstrap });
-  if (!runtime) throw new Error('Missing installed requester Project runtime');
-  const reviewed = await prepareProjectAgentLaunch({ cwd, machineId: 'machine', serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test',
-    account: projectRuntimeAccountRowsInput(runtime), nativeIo: runtime.nativeIo, successHomeDir: runtime.successHomeDir,
-    platform: { os: 'linux', arch: 'x64' }, signal });
-  if (reviewed.kind !== 'prepared') throw new Error(`Project review failed: ${JSON.stringify(reviewed)}`);
-  await createProjectSetupTrustClient({ credentials: f.bootstrap.credentials, serverHttpBaseUrl: 'https://session-home.test' })
-    .approveReviewedEffect({ project: reviewed.outcome.plan.project, expectedRevision: 'absent', authority: 'present_user',
-      reviewedEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, currentEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, approvedAtMs: 1 });
+  if (options.prepareProject !== false) {
+    const runtime = await machine.resolveProjectFiniteRuntime({ signal, requesterSessionBootstrap: f.bootstrap });
+    if (!runtime) throw new Error('Missing installed requester Project runtime');
+    const reviewed = await prepareProjectAgentLaunch({ cwd, machineId: 'machine', serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test',
+      account: projectRuntimeAccountRowsInput(runtime), nativeIo: runtime.nativeIo, successHomeDir: runtime.successHomeDir,
+      platform: { os: 'linux', arch: 'x64' }, signal });
+    if (reviewed.kind !== 'prepared') throw new Error(`Project review failed: ${JSON.stringify(reviewed)}`);
+    await createProjectSetupTrustClient({ credentials: f.bootstrap.credentials, serverHttpBaseUrl: 'https://session-home.test' })
+      .approveReviewedEffect({ project: reviewed.outcome.plan.project, expectedRevision: 'absent', authority: 'present_user',
+        reviewedEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, currentEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, approvedAtMs: 1 });
+  }
   return { f, cwd, machine, finite, signal, admission, installedCredentials: accountActionCredentials,
     nativeEffects: () => nativeEffects, accountReads: () => [...accountReads],
     trustWrites: () => trustWrites,

@@ -9,17 +9,24 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { logger } from '@/ui/logger';
 import { DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT, fetchChanges } from '@/api/changes';
 import { readSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
+import { readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
+import { parseConnectedAccountCatalogPhysicalKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 type Scope = Readonly<{ accountId: string; token: string; serverBaseUrl: string; signal?: AbortSignal }>;
 export type RequesterAccountSettingsObservation = Readonly<
     { kind: 'settings'; update: unknown } | { kind: 'hint'; version: unknown }
     | { kind: 'reconnected' } | { kind: 'disconnected' }
 >;
+export type RequesterConnectedAccountObservation = Readonly<{
+    quotaRefreshRecordIds?: readonly string[];
+    resetQuotaSchedule?: boolean;
+}>;
 type Observation = Readonly<{
     read(signal?: AbortSignal): Promise<AccountEncryptionIdentity>;
     isCurrent(expected: AccountEncryptionIdentity): boolean;
     subscribeAccountSettings(listener: (event: RequesterAccountSettingsObservation) => void): () => void;
     subscribeSessionFollowRules(listener: () => void): () => void;
+    subscribeConnectedAccounts(listener: (event: RequesterConnectedAccountObservation) => void): () => void;
     /** Exact Session invalidation; null rebuilds demanded ranges after a gap/reconnect. */
     subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
     dispose(): Promise<void>;
@@ -134,6 +141,12 @@ export function acquireRequesterAccountEncryptionCurrentness(scope: Scope): Obse
             subscriptions.add(release);
             return () => { subscriptions.delete(release); release(); };
         },
+        subscribeConnectedAccounts(listener) {
+            if (released) throw new AccountEncryptionCurrentnessUnavailableError();
+            const release = owned.subscribeConnectedAccounts(listener);
+            subscriptions.add(release);
+            return () => { subscriptions.delete(release); release(); };
+        },
         async dispose() {
             if (released) return;
             released = true;
@@ -173,12 +186,16 @@ function createObservation(scope: Scope): SharedObservation {
     let settingsEvent: RequesterAccountSettingsObservation | null = null;
     const followListeners = new Set<() => void>();
     const sourceListeners = new Set<(sourceSessionId: string | null) => void>();
+    const connectedAccountListeners = new Set<(event: RequesterConnectedAccountObservation) => void>();
     let followCursor = 0;
     let followSyncRequested = false;
     let followSyncPending: Promise<void> | null = null;
     const publishFollow = () => { for (const listener of followListeners) listener(); };
     const publishSource = (sourceSessionId: string | null) => { for (const listener of sourceListeners) listener(sourceSessionId); };
-    const hasFollowDemand = () => followListeners.size > 0 || sourceListeners.size > 0;
+    const publishConnectedAccounts = (event: RequesterConnectedAccountObservation) => {
+        for (const listener of connectedAccountListeners) listener(event);
+    };
+    const hasFollowDemand = () => followListeners.size > 0 || sourceListeners.size > 0 || connectedAccountListeners.size > 0;
     const publishSettings = (event: RequesterAccountSettingsObservation) => {
         settingsEvent = event;
         for (const listener of settingsListeners) listener(event);
@@ -207,12 +224,23 @@ function createObservation(scope: Scope): SharedObservation {
                         if (result.response.changes.some(change => change.kind === 'account'
                             && readSessionFollowChangeHintV1(change.hint) !== null)) publishFollow();
                         for (const change of result.response.changes) if (change.kind === 'session') publishSource(change.entityId);
+                        const quotaRefreshRecordIds = result.response.changes.flatMap(change => {
+                            const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
+                            return recordId ? [recordId] : [];
+                        });
+                        if (quotaRefreshRecordIds.length || result.response.changes.some(change => change.kind === 'account'
+                            && (parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null
+                                || change.entityId === 'self' && typeof change.hint === 'object' && change.hint !== null
+                                    && 'connectedServices' in change.hint && change.hint.connectedServices === true))) {
+                            publishConnectedAccounts(quotaRefreshRecordIds.length ? { quotaRefreshRecordIds } : {});
+                        }
                         followCursor = result.response.nextCursor;
                         more = result.response.changes.length === DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT;
                     } else {
                         // A gap/failed classification cannot preserve a trusted cached rule set.
                         publishFollow();
                         publishSource(null);
+                        publishConnectedAccounts({ resetQuotaSchedule: true });
                         if (result.status === 'cursor-gone') followCursor = result.currentCursor;
                         else logger.warn('Requester Follow Account changes unavailable.');
                         more = false;
@@ -274,7 +302,7 @@ function createObservation(scope: Scope): SharedObservation {
                     lifetime = new AbortController();
                 }
             });
-            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); currentness.connected(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); syncFollowChanges(); } });
+            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); currentness.connected(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); publishConnectedAccounts({ resetQuotaSchedule: true }); syncFollowChanges(); } });
             transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); currentness.disconnected(); publishSettings({ kind: 'disconnected' }); publishFollow(); publishSource(null); } });
             return transport;
         };
@@ -300,15 +328,23 @@ function createObservation(scope: Scope): SharedObservation {
             return () => { settingsListeners.delete(listener); };
         },
         subscribeSessionFollowRules(listener) {
+            const alreadyDemanded = hasFollowDemand();
             followListeners.add(listener);
-            syncFollowChanges();
+            if (!alreadyDemanded) syncFollowChanges();
             return () => { followListeners.delete(listener); };
         },
         subscribeSessionFollowSources(listener) {
+            const alreadyDemanded = hasFollowDemand();
             sourceListeners.add(listener);
             listener(null);
-            syncFollowChanges();
+            if (!alreadyDemanded) syncFollowChanges();
             return () => { sourceListeners.delete(listener); };
+        },
+        subscribeConnectedAccounts(listener) {
+            const alreadyDemanded = hasFollowDemand();
+            connectedAccountListeners.add(listener);
+            if (!alreadyDemanded) syncFollowChanges();
+            return () => { connectedAccountListeners.delete(listener); };
         },
         async releaseCredential(token) {
             if (disposed || token !== activeToken || references.has(token)) return;
@@ -362,6 +398,7 @@ function createObservation(scope: Scope): SharedObservation {
             settingsListeners.clear();
             followListeners.clear();
             sourceListeners.clear();
+            connectedAccountListeners.clear();
             settingsEvent = null;
             await stopConnection();
             await initial;

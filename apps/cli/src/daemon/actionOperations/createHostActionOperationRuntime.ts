@@ -62,6 +62,19 @@ function readInitialDomainRef(
   };
 }
 
+function observeUntilCallerAbort<T>(result: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return result;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    void result.then(
+      value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
 export function createHostActionOperationRuntime(deps: Readonly<{
   /** Exact configured Home binding, shared with the incumbent Session launch owner. */
   serverId?: string;
@@ -200,7 +213,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
       || readRequestId(request.actionId, request.input);
     const domainRef = readInitialDomainRef(request.actionId, request.input, requestId);
     let observedOperationId: string | undefined;
-    const result = await runner.observe({
+    const execution = runner.observe({
       actionId: request.actionId,
       scope,
       ...(attribution ? { requesterWorkAttributionV1: attribution } : {}),
@@ -228,6 +241,11 @@ export function createHostActionOperationRuntime(deps: Readonly<{
         ...(operationAcceptance ? { operationAcceptance } : {}),
       }),
     });
+    // The keyed Session startup remains daemon-owned after its caller leaves.
+    // Detach only this transport waiter; a retry can rejoin the same execution.
+    const result = await (request.actionId === 'session.spawn_new'
+      ? observeUntilCallerAbort(execution, request.rpcContext?.signal)
+      : execution);
     const serverId = deps.custodyBinding?.serverId ?? deps.serverId;
     if (request.actionId === 'session.spawn_new' && result.ok && serverId && observedOperationId) {
       const pending = SessionSpawnNewResultV1Schema.safeParse(result.result);
