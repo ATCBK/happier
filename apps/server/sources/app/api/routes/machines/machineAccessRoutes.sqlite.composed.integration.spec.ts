@@ -72,7 +72,7 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         // Observe real Prisma operations through the existing diagnostic sink;
         // the HTTP handler, access policy and SQLite reads all remain real.
         const phases: string[] = [];
-        const diagnostic = vi.spyOn(logger, 'debug').mockImplementation(record => {
+        const diagnostic = vi.spyOn(logger, 'trace').mockImplementation(record => {
             if (typeof record === 'object' && record !== null && 'phase' in record
                 && typeof record.phase === 'string' && /^db\.[A-Z]/u.test(record.phase)) phases.push(record.phase);
         });

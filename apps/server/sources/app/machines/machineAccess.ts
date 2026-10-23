@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { Prisma } from '@prisma/client';
+import type { Machine, MachineKeyEnvelope, Prisma } from '@prisma/client';
 import { decodeBase64, encodeBase64 } from 'privacy-kit';
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { decodePlainMachineStoredContent, machineStoredContentMatchesAccountMode } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -13,6 +13,7 @@ import { isRequesterProjectExecutionActionV1 } from '@happier-dev/protocol/actio
 import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/db';
+import { portableQueryChunks } from '@/storage/portableQueryChunks';
 import { isEffectiveTeamMembership } from '@/app/teams/memberships/effectiveMembership';
 import { isEffectiveTeamGroupMembership } from '@/app/teams/groups/effectiveGroupMembership';
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from '@/app/encryption/accountRecipientEnvelopeReadiness';
@@ -53,6 +54,14 @@ const MACHINE_ACCESS_FACTS_SELECT = {
             memberships: { select: { teamMembership: { select: { accountId: true, status: true, account: { select: { status: true } } } } } },
         } } } },
     } as const;
+
+const MACHINE_OPENING_INCLUDE = {
+    account: MACHINE_RESOURCE_FACTS_SELECT.account,
+    accountGrants: MACHINE_ACCESS_FACTS_SELECT.accountGrants,
+    teamGrants: MACHINE_ACCESS_FACTS_SELECT.teamGrants,
+    groupGrants: MACHINE_ACCESS_FACTS_SELECT.groupGrants,
+} as const;
+type MachineOpeningRow = Prisma.MachineGetPayload<{ include: typeof MACHINE_OPENING_INCLUDE }>;
 
 // Bulk role maps need current permission facts, not Machine content or key material.
 const MACHINE_PERMISSION_FACTS_SELECT = {
@@ -110,8 +119,12 @@ export async function resolveEffectiveMachineAccessForMachinesInTx(tx: Tx, input
     const result = new Map<string, Map<string, MachineAccessRoleV1 | null>>();
     const machineIds = [...new Set(input.machineIds)];
     if (machineIds.length === 0) return result;
-    const rows = await tx.machine.findMany({ where: { id: { in: machineIds } }, select: MACHINE_PERMISSION_FACTS_SELECT });
-    const byId = new Map(rows.map(row => [row.id, row]));
+    const byId = new Map<string, MachinePermissionFacts>();
+    // Prisma 6.19.2 emits eight fixed relation-projection bindings in addition to IDs.
+    for (const ids of portableQueryChunks({ values: machineIds, bindingsPerValue: 1, fixedBindings: 8 })) {
+        const rows = await tx.machine.findMany({ where: { id: { in: [...ids] } }, select: MACHINE_PERMISSION_FACTS_SELECT });
+        for (const row of rows) byId.set(row.id, row);
+    }
     for (const machineId of machineIds) {
         const row = byId.get(machineId);
         const sources = row ? contributions(row) : [];
@@ -163,9 +176,15 @@ function safePlainContent(row: MachineFacts): boolean {
 async function readRecipientAccessMaterialInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]) {
     const recipient = await tx.account.findUnique({ where: { id: actorAccountId }, select: RECIPIENT_READINESS_SELECT });
     const readiness = recipient ? deriveAccountRecipientEnvelopeReadinessFromRow(recipient) : null;
-    const envelopes = readiness?.status === 'available'
-        ? await tx.machineKeyEnvelope.findMany({ where: { machineId: { in: [...machineIds] }, recipientAccountId: actorAccountId } }) : [];
-    return { readiness, envelopes: new Map(envelopes.map(envelope => [envelope.machineId, envelope])) };
+    const envelopes = new Map<string, MachineKeyEnvelope>();
+    if (readiness?.status === 'available') {
+        // Recipient equality and the portable Prisma OFFSET accompany the ID set.
+        for (const ids of portableQueryChunks({ values: machineIds, bindingsPerValue: 1, fixedBindings: 2 })) {
+            const rows = await tx.machineKeyEnvelope.findMany({ where: { machineId: { in: [...ids] }, recipientAccountId: actorAccountId } });
+            for (const row of rows) envelopes.set(row.machineId, row);
+        }
+    }
+    return { readiness, envelopes };
 }
 
 async function accessFromFactsInTx(tx: Tx, row: MachineFacts, actorAccountId: string,
@@ -251,27 +270,40 @@ async function readMachineFactsInTx(tx: Tx, actorAccountId: string, machineIds: 
 }
 
 interface AccessibleMachineOpening {
+    machine: Machine;
     access: AccessibleMachineAccessV1;
     owned: boolean;
     callerDataEncryptionKey: Uint8Array<ArrayBuffer> | null;
 }
 
-/** Fleet and point projections share policy and read each recipient's material once. */
+/** Acquire row material and its opening together; callers never reacquire admitted content. */
 export async function readAccessibleMachineOpeningsInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; machineIds: readonly string[];
 }>): Promise<ReadonlyMap<string, AccessibleMachineOpening>> {
     const result = new Map<string, AccessibleMachineOpening>();
     if (input.machineIds.length === 0) return result;
-    const rows = await readMachineFactsInTx(tx, input.actorAccountId, input.machineIds);
-    const foreignEncryptedIds = [...rows.values()].filter(row => row.accountId !== input.actorAccountId && resourceMode(row) === 'e2ee').map(row => row.id);
+    const rows: MachineOpeningRow[] = [];
+    // An owner's grants cannot change their role. Do not load their foreign grant graph.
+    const foreignGrant = { machine: { accountId: { not: input.actorAccountId } } };
+    // Eight relation-projection bindings plus the three foreign-custody predicates.
+    for (const ids of portableQueryChunks({ values: [...new Set(input.machineIds)], bindingsPerValue: 1, fixedBindings: 11 })) {
+        rows.push(...await tx.machine.findMany({ where: { id: { in: [...ids] } }, include: {
+            ...MACHINE_OPENING_INCLUDE,
+            accountGrants: { ...MACHINE_OPENING_INCLUDE.accountGrants, where: foreignGrant },
+            teamGrants: { ...MACHINE_OPENING_INCLUDE.teamGrants, where: foreignGrant },
+            groupGrants: { ...MACHINE_OPENING_INCLUDE.groupGrants, where: foreignGrant },
+        } }));
+    }
+    const foreignEncryptedIds = rows.filter(row => row.accountId !== input.actorAccountId && resourceMode(row) === 'e2ee').map(row => row.id);
     const material = foreignEncryptedIds.length > 0
         ? await readRecipientAccessMaterialInTx(tx, input.actorAccountId, foreignEncryptedIds) : undefined;
-    for (const row of rows.values()) {
+    for (const row of rows) {
         const facts = await accessFromFactsInTx(tx, row, input.actorAccountId, material);
         if (!facts) continue;
         const key = facts.owned ? row.dataEncryptionKey
             : facts.accessState === 'ready' && facts.encryptionMode === 'e2ee' ? material?.envelopes.get(row.id)?.encryptedDataKey : null;
         result.set(row.id, {
+            machine: row,
             access: { custodian: { accountId: row.accountId, displayName: resolveAccountDisplayLabelV1(row.account) ?? '' },
                 role: facts.role, resourceMode: facts.encryptionMode, accessState: facts.accessState },
             owned: facts.owned,

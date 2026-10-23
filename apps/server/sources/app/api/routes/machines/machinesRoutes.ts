@@ -4,7 +4,6 @@ import { z } from "zod/mini";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
-import type { Machine } from '@prisma/client';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { timingSafeEqual } from "node:crypto";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -68,15 +67,15 @@ import {
 
 async function readAccessibleMachineProjectionsInTx(
     tx: Tx,
-    input: Readonly<{ actorAccountId: string; machines: readonly Machine[]; request: FastifyRequest }>,
+    input: Readonly<{ actorAccountId: string; machineIds: readonly string[]; request: FastifyRequest }>,
 ) {
-    const machineIds = input.machines.map(machine => machine.id);
-    const openings = await readAccessibleMachineOpeningsInTx(tx, { actorAccountId: input.actorAccountId, machineIds });
+    const openings = await readAccessibleMachineOpeningsInTx(tx, { actorAccountId: input.actorAccountId, machineIds: input.machineIds });
     const children = await readMachineDevcontainerChildrenInTx(tx, [...openings.keys()]);
-    return input.machines.flatMap(machine => {
-        const opening = openings.get(machine.id);
+    return input.machineIds.flatMap(machineId => {
+        const opening = openings.get(machineId);
         if (!opening) return [];
-        return [{ machine, ...opening, projection: serializeAccessibleMachineRow(machine, {
+        const { machine } = opening;
+        return [{ ...opening, projection: serializeAccessibleMachineRow(machine, {
             ...opening,
             devcontainerChild: children.get(machine.id) ?? null,
             recipientAccountStoredContentProtocolVersion:
@@ -104,8 +103,7 @@ async function readRequestedMachineProjectionsInTx(
         // Only this verified controller's exact guest can borrow its custody.
         actorAccountId = binding.custodianAccountId;
     }
-    const machines = await tx.machine.findMany({ where: { id: { in: [...admittedIds] } } });
-    const projections = await readAccessibleMachineProjectionsInTx(tx, { actorAccountId, machines, request });
+    const projections = await readAccessibleMachineProjectionsInTx(tx, { actorAccountId, machineIds: admittedIds, request });
     if (guestProof) {
         const binding = request.externalActionExecutionAuthorizationBinding;
         const current = binding ? await readCurrentManagedGuestActivityInTx(tx, binding, guestProof.machineId) : null;
@@ -940,8 +938,9 @@ export function machinesRoutes(app: Fastify) {
                     ...(isApiTokenCaller ? {} : persistentMachineWhere),
                 },
                 orderBy: { lastActiveAt: 'desc' },
+                select: { id: true },
             });
-            return readAccessibleMachineProjectionsInTx(tx, { actorAccountId: userId, machines, request });
+            return readAccessibleMachineProjectionsInTx(tx, { actorAccountId: userId, machineIds: machines.map(machine => machine.id), request });
         });
         if (isApiTokenCaller) {
             // A Runner is also selectable by the exact Session it was activated

@@ -22,6 +22,7 @@ import { resolveCurrentPluginDeclarationTx } from "@/app/plugins/availability/cu
 import { afterTx, inTx, TransactionReplayRequiredError, type ResolvedTransactionResult, type Tx } from "@/storage/inTx";
 import { buildUpdateMachineUpdate, eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
+import { portableQueryChunks } from '@/storage/portableQueryChunks';
 
 export type StoredManagedMachine = Prisma.ManagedMachineGetPayload<Record<string, never>>;
 export type ManagedDeclaration = Pick<MachineProvisionerContributionV1, "resourceKind" | "actions" | "schemaVersion" | "launchSchema" | "resourceSchema" | "billing" | "retention" | "reconciliation" | "credentialPurposeRequirements"> & Readonly<{
@@ -253,12 +254,20 @@ async function readCurrentMachineManagedEnrollmentInTx(tx: Tx, machineId: string
 async function readCurrentMachineManagedEnrollmentsInTx(tx: Tx, machineIds: readonly string[]): Promise<ReadonlyMap<string, StoredManagedMachine>> {
     const result = new Map<string, StoredManagedMachine>();
     if (machineIds.length === 0) return result;
-    const rows = await tx.managedMachine.findMany({ where: { enrolledMachineId: { in: [...machineIds] } } });
+    const rows: StoredManagedMachine[] = [];
+    for (const ids of portableQueryChunks({ values: [...new Set(machineIds)], bindingsPerValue: 1, fixedBindings: 1 })) {
+        rows.push(...await tx.managedMachine.findMany({ where: { enrolledMachineId: { in: [...ids] } } }));
+    }
     if (rows.length === 0) return result;
     const homeId = await readCurrentServerIdentityId(process.env, tx);
-    const machines = await tx.machine.findMany({ where: { id: { in: rows.flatMap(row => row.enrolledMachineId ? [row.enrolledMachineId] : []) } },
-        select: { id: true, accountId: true, revokedAt: true, replacedByMachineId: true } });
-    const byId = new Map(machines.map(machine => [machine.id, machine]));
+    const byId = new Map<string, Pick<Prisma.MachineGetPayload<Record<string, never>>, 'id' | 'accountId' | 'revokedAt' | 'replacedByMachineId'>>();
+    for (const ids of portableQueryChunks({
+        values: rows.flatMap(row => row.enrolledMachineId ? [row.enrolledMachineId] : []), bindingsPerValue: 1, fixedBindings: 1,
+    })) {
+        const machines = await tx.machine.findMany({ where: { id: { in: [...ids] } },
+            select: { id: true, accountId: true, revokedAt: true, replacedByMachineId: true } });
+        for (const machine of machines) byId.set(machine.id, machine);
+    }
     for (const row of rows) {
         const machine = row.enrolledMachineId ? byId.get(row.enrolledMachineId) : null;
         if (row.homeId === homeId && machine && machine.accountId === row.custodianAccountId
