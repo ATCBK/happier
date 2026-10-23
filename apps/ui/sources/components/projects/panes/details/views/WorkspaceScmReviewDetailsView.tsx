@@ -32,6 +32,7 @@ import {
     type PluginPermissionGrantTargetScope,
 } from '@/sync/domains/plugins/permissions/types';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
+import type { SessionAttributedFile } from '@/scm/scmAttribution';
 import { SCM_COMMIT_STRATEGIES, type ScmCommitStrategy } from '@/scm/settings/commitStrategy';
 import { buildCommitSelectionPathHints, isFileSelectedForCommit } from '@/scm/operations/commitSelectionHints';
 import { isDirectoryLikeScmFileStatus } from '@/scm/isDirectoryLikeScmFileStatus';
@@ -74,6 +75,7 @@ import { useReviewListHunkReview } from '@/components/workspaces/scm/review/hunk
 
 /** The same comparison body serves Changes and explicit review Details destinations. */
 const WORKSPACE_REVIEW_DETAILS_HEADER = Object.freeze({});
+const NO_WORKSPACE_SESSION_ATTRIBUTION: SessionAttributedFile[] = [];
 
 export type WorkspaceScmReviewDetailsViewProps = Readonly<{
     scopeId: string;
@@ -191,7 +193,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     const reachability = useCheckoutReachability(scope);
     // Keep / Discard on each file's changes in the Uncommitted list (P5); Discard needs the checkout's write capability.
     const hunkReview = useReviewListHunkReview({ scope, discard: scmWriteEnabled && snapshot?.capabilities?.writeDiscard === true,
-        refresh: () => { void refresh(); } });
+        refresh });
     const comparison = props.comparison ?? { kind: 'workingTree' };
     const view = props.view ?? 'files';
     const explain = props.explain === true;
@@ -483,9 +485,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 changedFilesViewMode="repository"
 
                 allRepositoryChangedFiles={changedFiles.allRepositoryChangedFiles}
-                turnAttributedFiles={[]}
-                turnRepositoryOnlyFiles={[]}
-                sessionAttributedFiles={[]}
+                sessionAttributedFiles={NO_WORKSPACE_SESSION_ATTRIBUTION}
                 repositoryOnlyFiles={changedFiles.allRepositoryChangedFiles}
 
                 maxFiles={maxFiles}

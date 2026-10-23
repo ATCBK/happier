@@ -52,6 +52,40 @@ async function mountWithRows(kind: 'exact' | 'missing' | 'ambiguous') {
 }
 
 describe('WorkspaceScmReviewDetailsView', () => {
+    it('does not republish absent attribution in a 300-file review for 20 editor draft updates in the same pane', async () => {
+        const entries = Array.from({ length: 300 }, (_, index) => ({ ...CHANGED_ENTRIES[0]!, path: `src/file-${index}.ts` }));
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
+            if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries }) };
+            if (request.method === 'scm.diff.file') return { success: true, diff: '@@ -1 +1 @@\n-old\n+new\n' };
+            return undefined;
+        } });
+        fixture.storage.setState({ sessions: {} });
+        const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+        const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
+        let pane!: ReturnType<typeof useAppPaneScope>;
+        function Control() { pane = useAppPaneScope('project:draft-cost'); return null; }
+        const screen = await fixture.render(<><Control /><WorkspaceScmReviewDetailsView scopeId="project:draft-cost"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" /></>);
+        await act(async () => pane.openDetailsTab({ key: 'file:a', kind: 'file', title: 'a.ts',
+            resource: { kind: 'file', path: 'src/a.ts' } }, { intent: 'pinned', present: false }));
+        await flushHookEffects({ cycles: 20 });
+        const model = () => screen.tree.root.findByType(ChangedFilesReview).props;
+        expect(model().allRepositoryChangedFiles).toHaveLength(300);
+        const initial = model();
+        let publications = 0;
+        let previous = initial;
+        for (let index = 0; index < 20; index += 1) {
+            await act(async () => pane.patchDetailsTabState('file:a', { editorText: `draft ${index}` }));
+            const next = model();
+            if (next.turnAttributedFiles !== previous.turnAttributedFiles
+                || next.turnRepositoryOnlyFiles !== previous.turnRepositoryOnlyFiles
+                || next.sessionAttributedFiles !== previous.sessionAttributedFiles
+                || next.hunkReview?.onOutOfDate !== previous.hunkReview?.onOutOfDate) publications += 1;
+            previous = next;
+        }
+        expect(publications).toBe(0);
+        expect(model().allRepositoryChangedFiles).toBe(initial.allRepositoryChangedFiles);
+    });
     it('offers Start review at the actual workspace comparison without opening a Session', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
             request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
