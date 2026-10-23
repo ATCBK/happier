@@ -13,7 +13,7 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import { requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { AccountRouteAuthenticationForbiddenResponseSchema } from '@/app/api/utils/enableAuthentication';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
 import { afterAccountChangePublication } from '@/app/changes/markAccountChanged';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
@@ -104,7 +104,7 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
   const config = { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') };
   app.get(REMOTE_HOST_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(RemoteHostCatalogRowReadResponseV1Schema) } },
-  }, async (request, reply) => reply.send(await inTx(tx => readRemoteHostCatalogRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
+  }, async (request, reply) => reply.send(await inReadSnapshot(tx => readRemoteHostCatalogRowInTx(tx, { accountId: request.userId }))));
   app.post(REMOTE_HOST_ROWS_ROUTE_V1, { preHandler: [app.authenticate, async (request, reply) => {
     if (request.body.savedSecretResources?.length) return requirePresentUser(request, reply);
   }], config,

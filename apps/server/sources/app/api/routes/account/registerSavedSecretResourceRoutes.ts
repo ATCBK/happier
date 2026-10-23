@@ -3,7 +3,7 @@ import { z } from "zod/mini";
 
 import { SavedSecretResourceActionErrorV1Schema, SavedSecretResourceEnvelopeRepairInputV1Schema, SavedSecretResourceEnvelopeRepairOutputV1Schema, SavedSecretResourceRecipientEnvelopeInputV1Schema, SharedSavedSecretCreateInputV1Schema, SharedSavedSecretDeleteInputV1Schema, SharedSavedSecretDeleteOutputV1Schema, SharedSavedSecretGrantsSetInputV1Schema, SharedSavedSecretListOutputV1Schema, SharedSavedSecretMutationOutputV1Schema, SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema, SharedSavedSecretUpdateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { SavedSecretResourceMaterialsResponseV1Schema, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 import { type Fastify } from "../../types";
@@ -98,11 +98,11 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
     }, async (request, reply) => {
         try {
             const authentication = readTeamOperationAuthenticationFromRequest(request);
-            const resources = await inTx((tx) => listSavedSecretResourcesForAccountInTx(
+            const resources = await inReadSnapshot((tx) => listSavedSecretResourcesForAccountInTx(
                 tx,
                 request.userId,
                 authentication,
-            ), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
+            ));
             return reply.send({ resources: [...resources] });
         } catch {
             return reply.code(500).send({ error: "internal" });
@@ -115,11 +115,11 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
     }, async (request, reply) => {
         try {
             const authentication = readTeamOperationAuthenticationFromRequest(request);
-            const rows = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(
+            const rows = await inReadSnapshot((tx) => listSavedSecretResourceMaterialsForAccountInTx(
                 tx,
                 request.userId,
                 authentication,
-            ), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
+            ));
             return reply.send({
                 resources: rows.map((row) => {
                     if (!("resourceId" in row)) return { entry: row.entry };
@@ -156,12 +156,12 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
     }, async (request, reply) => {
         const parsed = SavedSecretResourceEnvelopeCensusRequestV1Schema.safeParse(request.query);
         if (!parsed.success) return reply.code(400).send({ error: "invalid_cursor" });
-        const result = await inTx((tx) => listSavedSecretResourceEnvelopeCensusInTx(tx, {
+        const result = await inReadSnapshot((tx) => listSavedSecretResourceEnvelopeCensusInTx(tx, {
             accountId: request.userId,
             resourceId: parsed.data.resourceId,
             cursor: parsed.data.cursor,
             limit: parsed.data.limit,
-        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
+        }));
         if (!result.ok) {
             return reply.code(savedSecretResourceErrorHttpStatus(result.error, 404)).send({ error: result.error });
         }

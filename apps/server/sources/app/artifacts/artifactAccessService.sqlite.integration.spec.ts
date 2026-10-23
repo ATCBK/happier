@@ -333,6 +333,10 @@ describe("Artifact document grants (real SQLite)", () => {
                 const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
                 const detailUrl = `/v1/artifacts/${artifact.id}`;
                 const readAudience = async (expected: 'retained' | 'none') => {
+                    const list = await app.inject({ method: 'GET', url: '/v1/artifacts', headers });
+                    expect(list.statusCode, list.body).toBe(200);
+                    expect(list.json()).toMatchObject([{ id: artifact.id, publicAudience: expected,
+                        headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion }]);
                     const response = await app.inject({ method: 'GET', url: detailUrl, headers });
                     expect(response.statusCode, response.body).toBe(200);
                     expect(response.json()).toMatchObject({ publicAudience: expected });

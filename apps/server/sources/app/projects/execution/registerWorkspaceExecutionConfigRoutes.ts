@@ -10,7 +10,7 @@ import {
     WorkspaceExecutionConfigStorageUnavailableV1Schema,
 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { listWorkspaceExecutionConfigRowsInTx, mutateWorkspaceExecutionConfigRow, readWorkspaceExecutionConfigRowInTx } from './workspaceExecutionConfigRowService';
 
 const failureResponses = {
@@ -25,7 +25,7 @@ export function registerWorkspaceExecutionConfigRoutes(app: Fastify): void {
         preHandler: app.authenticate,
         schema: { body: asServerProtocolZod(WorkspaceExecutionConfigReadRequestV1Schema), response: { 200: asServerProtocolZod(WorkspaceExecutionConfigReadResponseV1Schema), ...failureResponses } },
     }, async (request, reply) => {
-        const result = await inTx(tx => readWorkspaceExecutionConfigRowInTx(tx, { accountId: request.userId, address: request.body.address }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+        const result = await inReadSnapshot(tx => readWorkspaceExecutionConfigRowInTx(tx, { accountId: request.userId, address: request.body.address }));
         if (result.status === 'absent' || result.status === 'deleted') return reply.send(result);
         if (result.status !== 'present') return reply.code(503).send(unavailable);
         return reply.send({ status: 'present', revision: result.revision, content: result.envelope });
@@ -42,7 +42,7 @@ export function registerWorkspaceExecutionConfigRoutes(app: Fastify): void {
         preHandler: app.authenticate,
         schema: { response: { 200: asServerProtocolZod(WorkspaceExecutionConfigListResponseV1Schema), ...failureResponses } },
     }, async (request, reply) => {
-        const result = await inTx(tx => listWorkspaceExecutionConfigRowsInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+        const result = await inReadSnapshot(tx => listWorkspaceExecutionConfigRowsInTx(tx, { accountId: request.userId }));
         return result.status === 'listed' ? reply.send({ rows: [...result.rows] }) : reply.code(503).send(unavailable);
     });
 }

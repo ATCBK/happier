@@ -350,6 +350,7 @@ export async function materializeEphemeralRunner(params: Readonly<{
                 tag: request.session.tag,
                 initialAccess: request.session.initialAccess,
                 primaryTeamId: request.session.primaryTeamId,
+                teamCredentialBindings: request.session.teamCredentialBindings,
             }),
             // Materialization revalidates foreign Team/resource/broker facts outside the creator fence.
             isolationLevel: "Serializable",

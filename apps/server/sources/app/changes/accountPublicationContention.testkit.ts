@@ -1,3 +1,44 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { db } from "@/storage/db";
+import { inTx, type Tx } from "@/storage/inTx";
+import { markAccountChanged } from "./markAccountChanged";
+
+/** Commit a real cursor publication before a selected SQL boundary on each writer attempt. */
+export async function withAccountPublicationBeforeTransactionSql<T>(
+    accountId: string,
+    matches: (sql: string) => boolean,
+    operation: () => Promise<T>,
+): Promise<Readonly<{ result: T; advances: number }>> {
+    const original = db.$transaction;
+    const peerScope = new AsyncLocalStorage<boolean>();
+    let advances = 0;
+    // Interpose only at Prisma's actual SQL boundary: domain logic and both
+    // transactions, including publication and retry handling, remain real.
+    db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+        const callback = args[0];
+        if (typeof callback !== "function" || peerScope.getStore()) return Reflect.apply(target, receiver, args);
+        return Reflect.apply(target, receiver, [async (tx: Tx) => {
+            let advanced = false;
+            const query = tx.$queryRawUnsafe.bind(tx);
+            return callback(new Proxy(tx, { get(owner, property, proxyReceiver) {
+                if (property !== "$queryRawUnsafe") return Reflect.get(owner, property, proxyReceiver);
+                return async (...values: Parameters<typeof query>) => {
+                    if (!advanced && matches(values[0])) {
+                        advanced = true;
+                        await peerScope.run(true, () => inTx(async peer => {
+                            await markAccountChanged(peer, { accountId, kind: "account", entityId: "cursor-peer" });
+                        }));
+                        advances++;
+                    }
+                    return query(...values);
+                };
+            } }));
+        }, ...args.slice(1)]);
+    } });
+    try { return { result: await operation(), advances }; }
+    finally { db.$transaction = original; }
+}
+
 interface QueryObservation {
     started(): void;
     settled(succeeded: boolean, error?: unknown): void;

@@ -95,8 +95,9 @@ export function changeUsernameInTx(tx: Tx, accountId: string, change: { kind: "r
 export function changeUsernameInTx(tx: Tx, accountId: string, change: { kind: "operator_reclaim"; username: string }, env?: NodeJS.ProcessEnv): Promise<UsernameReclaimResult>;
 export function changeUsernameInTx(tx: Tx, accountId: string, change: UsernameChange, env?: NodeJS.ProcessEnv): Promise<{ username: string | null }>;
 /**
- * The sole username writer. Callers compose it in their admitted serializable
- * inTx transaction so claim/hold reads and identity lifecycle commit together.
+ * The sole username writer. Claiming callers use an admitted serializable
+ * transaction so claim/hold reads and identity lifecycle commit together.
+ * Explicit release instead relies on the exclusive Account admission below.
  */
 export async function changeUsernameInTx(
     tx: Tx, accountId: string, change: UsernameChange, env: NodeJS.ProcessEnv = process.env,
@@ -190,5 +191,5 @@ export async function usernameUpdate(ctx: Context, username: string, env: NodeJS
 
 /** Explicit release and hold commit once; a repeated release never extends expiry. */
 export async function usernameRelease(ctx: Context, env: NodeJS.ProcessEnv = process.env): Promise<UsernameReleaseResult> {
-    return inTx(tx => changeUsernameInTx(tx, ctx.uid, { kind: "release" }, env), { isolationLevel: "Serializable" });
+    return inTx(tx => changeUsernameInTx(tx, ctx.uid, { kind: "release" }, env), { isolationLevel: "ReadCommitted" });
 }

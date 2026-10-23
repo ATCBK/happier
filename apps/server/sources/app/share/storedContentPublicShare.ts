@@ -10,7 +10,8 @@ import { readLocalServicesFeatureEnv } from "@/app/features/catalog/readFeatureE
 import { artifactVisibleWhere } from "@/app/artifacts/artifactClassification";
 import { openArtifactStoredContentPair } from "@/app/artifacts/artifactStoredContent";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireArtifactPublicationLocksInTx } from "@/app/artifacts/artifactAccessService";
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { tryParseEncryptedDataKeyV0 } from "@/app/api/routes/share/encryptedDataKeyValidation";
 import { resolvePublicShareUseLimit } from "@/app/api/routes/share/publicShareMessageAccessGrant";
@@ -20,7 +21,7 @@ import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/
 import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import * as privacyKit from "privacy-kit";
-import { enforceSessionPublicLinkExternalSharingPolicyInTx } from "@/app/session/access/sessionAccessExternalSharingPolicy";
+import { enforceSessionPublicLinkExternalSharingPolicyInTx, type SessionExternalSharingPolicyError } from "@/app/session/access/sessionAccessExternalSharingPolicy";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
 import { removeUnsafeSessionManagerEdgesForAccessChangeInTx } from "@/app/session/follow/sessionManagerService";
@@ -38,6 +39,12 @@ function equalDates(left: Date | null, right: Date | null): boolean {
 }
 function publicShareMaterialRotates(existing: ShareRow | null, hash: Uint8Array | null, keyDerivation: string): boolean {
     return hash !== null && (!existing || !equalBytes(hash, existing.tokenHash) || existing.keyDerivation !== keyDerivation);
+}
+class SessionPublicSharePolicyChangedError extends Error {
+    constructor(readonly policyError: SessionExternalSharingPolicyError) {
+        super(policyError);
+        this.name = "SessionPublicSharePolicyChangedError";
+    }
 }
 export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWrite, "userId" | "sessionId" | "authentication">) {
     const { userId, sessionId, authentication } = input;
@@ -77,7 +84,7 @@ export async function deleteSessionPublicShare(input: Pick<SessionPublicShareWri
             });
         });
         return { type: "ok" as const };
-    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
     return result;
 }
 export type SessionPublicShareWrite = Readonly<{
@@ -167,7 +174,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
             : null;
         const nextKeyDerivation = input.lookupId ? "fragment_v1" : existing?.keyDerivation ?? "fragment_v1";
         const shouldRotateToken = publicShareMaterialRotates(existing, suppliedTokenHash, nextKeyDerivation);
-        const externalPolicyError = await enforceSessionPublicLinkExternalSharingPolicyInTx(tx, {
+        const policyInput = {
             actorAccountId: userId,
             primaryTeamId: session.primaryTeamId,
             previous: existing,
@@ -177,7 +184,8 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
                 rotatesToken: shouldRotateToken,
             },
             authentication,
-        });
+        };
+        const externalPolicyError = await enforceSessionPublicLinkExternalSharingPolicyInTx(tx, policyInput);
         if (externalPolicyError) {
             return { type: "external-sharing-error" as const, error: externalPolicyError };
         }
@@ -195,6 +203,13 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
         if (!changed) {
             return { type: 'ok' as const, publicShare };
         }
+        // Team policy writers do not share the Session resource fence. Reuse
+        // the policy owner after terminal Account locking, rolling back this
+        // mutation if a policy commit invalidated its original admission.
+        beforeAccountChangePublication(tx, [userId], async client => {
+            const error = await enforceSessionPublicLinkExternalSharingPolicyInTx(client, policyInput);
+            if (error) throw new SessionPublicSharePolicyChangedError(error);
+        });
         if (isPublicSessionShareActive(publicShare)) {
             await removeUnsafeSessionFollowEdgesForAccessChangeInTx(tx, { sessionId });
             await removeUnsafeSessionManagerEdgesForAccessChangeInTx(tx, { sessionId });
@@ -213,7 +228,12 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
             });
         });
         return { type: 'ok' as const, publicShare };
-    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" }).catch((error: unknown) => {
+        if (error instanceof SessionPublicSharePolicyChangedError) {
+            return { type: "external-sharing-error" as const, error: error.policyError };
+        }
+        throw error;
+    });
     return result;
 }
 type ShareRow = NonNullable<Awaited<ReturnType<typeof db.publicSessionShare.findUnique>>>;
@@ -332,7 +352,7 @@ export async function writeArtifactPublicShare(input: Omit<SessionPublicShareWri
     artifactId: string;
 }) {
     return inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [input.userId], { includeSingleAccount: true });
+        await acquireArtifactPublicationLocksInTx(tx, input.artifactId, [input.userId]);
         const artifact = await tx.artifact.findFirst({ where: { id: input.artifactId, accountId: input.userId, ...artifactVisibleWhere }, include: { account: { select: { encryptionMode: true } } } });
         if (!artifact)
             return { type: "forbidden" as const };
@@ -360,5 +380,5 @@ export async function writeArtifactPublicShare(input: Omit<SessionPublicShareWri
         if (result.type === "ok" && result.changed)
             await markAccountChanged(tx, { accountId: input.userId, kind: "artifact", entityId: artifact.id });
         return result;
-    }, { /* Share token/key rotation and effective access cleanup must share one mutation snapshot. */ isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }

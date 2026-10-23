@@ -1,5 +1,6 @@
 import { persistentMachineWhere } from "@/app/machines/machineSelection";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 import { db } from "@/storage/db";
 import type { Prisma } from "@prisma/client";
 
@@ -150,18 +151,15 @@ async function assertMachineAssignmentsCanBeWritten(params: {
     automationId: string;
     machineIds: string[];
     requestedEnabledByMachineId: ReadonlyMap<string, boolean>;
-}): Promise<void> {
-    if (params.machineIds.length === 0) return;
+}): Promise<(tx: Tx) => Promise<void>> {
+    if (params.machineIds.length === 0) return async () => {};
 
+    const readMachines = (tx: Tx) => tx.machine.findMany({
+        where: { accountId: params.accountId, id: { in: params.machineIds }, ...persistentMachineWhere },
+        select: { id: true, revokedAt: true, replacedByMachineId: true },
+    });
     const [rows, existingAssignments] = await Promise.all([
-        params.tx.machine.findMany({
-            where: {
-                accountId: params.accountId,
-                id: { in: params.machineIds },
-                ...persistentMachineWhere,
-            },
-            select: { id: true, revokedAt: true, replacedByMachineId: true },
-        }),
+        readMachines(params.tx),
         params.tx.automationAssignment.findMany({
             where: {
                 automationId: params.automationId,
@@ -171,41 +169,35 @@ async function assertMachineAssignmentsCanBeWritten(params: {
         }),
     ]);
 
-    const machinesById = new Map(rows.map((row) => [row.id, row] as const));
     const existingByMachineId = new Map(
         existingAssignments.map((assignment) => [assignment.machineId, assignment] as const),
     );
-    const unknown: string[] = [];
-    const unavailable: string[] = [];
-    for (const machineId of params.machineIds) {
-        const machine = machinesById.get(machineId) ?? null;
-        const availability = classifyMachineAvailabilityState(machine);
-        if (availability === "available") continue;
-        // Preserve the incumbent public validation contract for missing and
-        // permanently revoked machine authority. Replacement is a distinct,
-        // reversible availability fact and receives the narrower error below.
-        if (availability !== "replaced") {
-            unknown.push(machineId);
-            continue;
+    const assertAvailable = (machines: typeof rows) => {
+        const machinesById = new Map(machines.map((row) => [row.id, row] as const));
+        const unknown: string[] = [];
+        const unavailable: string[] = [];
+        for (const machineId of params.machineIds) {
+            const machine = machinesById.get(machineId) ?? null;
+            const availability = classifyMachineAvailabilityState(machine);
+            if (availability === "available") continue;
+            // Missing/permanently revoked authority keeps the public unknown
+            // Machine refusal; reversible replacement remains distinct.
+            if (availability !== "replaced") {
+                unknown.push(machineId);
+                continue;
+            }
+            // Preserve only a genuinely incumbent assignment. The terminal
+            // recheck must not mistake this transaction's new rows for incumbents.
+            const existing = existingByMachineId.get(machineId);
+            if (!existing || (!existing.enabled && params.requestedEnabledByMachineId.get(machineId) === true)) {
+                unavailable.push(machineId);
+            }
         }
-
-        // Reversible replacement preserves an already-configured assignment,
-        // including through a whole-editor reconciliation. It does not grant
-        // new execution authority: adding an unavailable machine or enabling a
-        // previously disabled assignment is rejected until replacement is
-        // undone. Missing and permanently revoked machines always fail closed;
-        // the revoke owner normally removes those rows transactionally.
-        const existing = existingByMachineId.get(machineId);
-        if (!existing || (!existing.enabled && params.requestedEnabledByMachineId.get(machineId) === true)) {
-            unavailable.push(machineId);
-        }
-    }
-    if (unknown.length > 0) {
-        throw new AutomationValidationError(`Unknown machine assignments: ${unknown.join(", ")}`);
-    }
-    if (unavailable.length > 0) {
-        throw new AutomationValidationError(`Unavailable machine assignments: ${unavailable.join(", ")}`);
-    }
+        if (unknown.length > 0) throw new AutomationValidationError(`Unknown machine assignments: ${unknown.join(", ")}`);
+        if (unavailable.length > 0) throw new AutomationValidationError(`Unavailable machine assignments: ${unavailable.join(", ")}`);
+    };
+    assertAvailable(rows);
+    return async tx => { assertAvailable(await readMachines(tx)); };
 }
 
 /**
@@ -240,7 +232,7 @@ export async function replaceAutomationAssignmentsTx(params: {
     assignments: ReadonlyArray<AutomationAssignmentInput>;
 }): Promise<Array<{ machineId: string; enabled: boolean; priority: number; updatedAt: Date }>> {
     const normalizedAssignments = normalizeAutomationAssignments(params.assignments) ?? [];
-    await assertMachineAssignmentsCanBeWritten({
+    const recheckAdmission = await assertMachineAssignmentsCanBeWritten({
         tx: params.tx,
         accountId: params.accountId,
         automationId: params.automationId,
@@ -250,6 +242,17 @@ export async function replaceAutomationAssignmentsTx(params: {
             item.enabled ?? true,
         ])),
     });
+    if (normalizedAssignments.length > 0) {
+        beforeAccountChangePublication(params.tx, [params.accountId], async tx => {
+            try { await recheckAdmission(tx); }
+            catch (error) {
+                if (error instanceof AutomationValidationError) {
+                    throw new TransactionReplayRequiredError("automation-assignment-admission-changed");
+                }
+                throw error;
+            }
+        });
+    }
 
     await params.tx.automationAssignment.deleteMany({
         where: { automationId: params.automationId },

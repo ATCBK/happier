@@ -23,7 +23,7 @@ import {
     type ReservedAccountScopedKvRowMutationResult,
     type ReservedAccountScopedKvRowMutationInTxResult,
 } from '@/app/kv/reservedAccountScopedKvRow';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 
 export const workspaceExecutionConfigRowDomain: ReservedAccountScopedKvRowDomain<WorkspaceExecutionConfigContentV1> = Object.freeze({
     label: 'Workspace execution config',
@@ -79,7 +79,7 @@ export async function mutateWorkspaceExecutionConfigRowInTx(tx: Tx, input: Reado
     });
 }
 export function readWorkspaceExecutionConfigRow(input: Parameters<typeof readWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowReadResult<WorkspaceExecutionConfigContentV1>> {
-    return inTx(tx => readWorkspaceExecutionConfigRowInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+    return inReadSnapshot(tx => readWorkspaceExecutionConfigRowInTx(tx, input));
 }
 export async function mutateWorkspaceExecutionConfigRow(input: Parameters<typeof mutateWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
     try { return await inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, input)); }

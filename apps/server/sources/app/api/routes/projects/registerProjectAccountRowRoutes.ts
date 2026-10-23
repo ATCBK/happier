@@ -9,7 +9,7 @@ import {
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { listProjectAccountRowsInTx, mutateProjectAccountRows, readProjectAccountRowInTx } from '@/app/projects/projectAccountRowService';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 
 /** All private rows use the authenticated Account, never a caller-supplied owner. */
 export function registerProjectAccountRowRoutes(app: Fastify): void {
@@ -19,14 +19,14 @@ export function registerProjectAccountRowRoutes(app: Fastify): void {
         preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ProjectAccountRowReadRequestV1Schema), response: { 200: asServerProtocolZod(ProjectAccountRowReadResponseV1Schema), ...errors } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => readProjectAccountRowInTx(tx, { accountId: request.userId, key: request.body.key }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => readProjectAccountRowInTx(tx, { accountId: request.userId, key: request.body.key }))); }
         catch { return reply.code(500).send({ error: 'internal' }); }
     });
     app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, {
         preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ProjectAccountRowListRequestV1Schema), response: { 200: asServerProtocolZod(ProjectAccountRowListResponseV1Schema), ...errors } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => listProjectAccountRowsInTx(tx, { accountId: request.userId, ...request.body }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => listProjectAccountRowsInTx(tx, { accountId: request.userId, ...request.body }))); }
         catch { return reply.code(500).send({ error: 'internal' }); }
     });
     app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/mutate`, {

@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Context } from '@/context';
 import { db, getDbProviderFromEnv, initDbMysql, initDbPostgres } from '@/storage/db';
 import type { Tx } from '@/storage/inTx';
+import { acrossAccountCursorCommit } from '@/testkit/postgresAccountCursorContention';
 
 import { usernameRelease, usernameUpdate, UsernameTakenError } from './usernameUpdate';
 
@@ -50,6 +51,25 @@ describe.skipIf(provider !== 'postgres' && provider !== 'mysql')('Username claim
         accountIds.push(row.id);
         return row;
     }
+
+    it.skipIf(provider !== 'postgres')('releases across a cursor commit and preserves the original hold on repeat', async () => {
+        const username = freshUsername();
+        const holder = await account(username);
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        try {
+            const result = await acrossAccountCursorCommit(holder.id, () => usernameRelease(Context.create(holder.id)));
+            expect(result).toMatchObject({ username: null, released: true });
+            const hold = await db.releasedUsername.findUniqueOrThrow({ where: { username } });
+            expect(hold.expiresAt.getTime()).toBe(result.reservedUntilMs);
+            expect(await db.account.findUniqueOrThrow({ where: { id: holder.id } }))
+                .toMatchObject({ username: null, usernameAutoFillEnabled: false, seq: holder.seq + 2 });
+            expect(await usernameRelease(Context.create(holder.id)))
+                .toEqual({ username: null, released: false, reservedUntilMs: null });
+            expect((await db.releasedUsername.findUniqueOrThrow({ where: { username } })).expiresAt).toEqual(hold.expiresAt);
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
 
     it('acknowledges exactly one simultaneous claim and returns a domain conflict for the other', async () => {
         const username = freshUsername();

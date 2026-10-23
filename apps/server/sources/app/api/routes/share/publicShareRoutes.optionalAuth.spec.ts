@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from "@happier-dev/protocol";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock, matchesDbMockWhere } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, matchesDbMockWhere, inTxPostgresControlStatementMock } from "../../testkit/dbMocks";
+import { isPrismaErrorCode } from '@/storage/prismaErrors';
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
@@ -27,6 +28,7 @@ const txDbMocks = createDbMocks({
     publicShareAccessLog: ["create"],
 } as const);
 const dbTransaction = createDbTransactionMock(() => ({
+    ...inTxPostgresControlStatementMock,
     homeSettings: dbMocks.db.homeSettings,
     homeGovernancePolicy: dbMocks.db.homeGovernancePolicy,
     account: txDbMocks.db.account,
@@ -67,6 +69,7 @@ function retainCredentialRows() {
 }
 
 installDbModuleMock(() => ({
+    isPrismaErrorCode,
     db: dbTransaction.wrapDb(dbMocks.db),
 }));
 

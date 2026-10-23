@@ -47,12 +47,14 @@ const artifactListItemSchema = z.object({
     body: z.optional(z.string()), bodyVersion: z.number(), provenance: z.optional(z.nullable(z.string())),
     provenanceDataEncryptionKey: z.optional(z.nullable(z.string())), dataEncryptionKey: z.string(), seq: z.number(),
     createdAt: z.number(), updatedAt: z.number(), ownerAccountId: z.string(), access: ArtifactCallerAccessV1Schema,
+    publicAudience: z.enum(['retained', 'none']),
     encryptionMode: ArtifactAccessRecipientCensusResponseV1Schema.shape.encryptionMode,
 });
 
 function projectArtifactListItem(artifact: ArtifactListItemForCaller) {
     return {
         id: artifact.id, kind: artifact.kind, ownerAccountId: artifact.ownerAccountId, access: artifact.access,
+        publicAudience: artifact.publicAudience,
         encryptionMode: artifact.encryptionMode, header: privacyKit.encodeBase64(artifact.header), headerVersion: artifact.headerVersion,
         ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }), bodyVersion: artifact.bodyVersion,
         provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,

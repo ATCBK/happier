@@ -1,4 +1,4 @@
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 import { changesRequestsCounter, changesReturnedChangesCounter } from "@/app/monitoring/metrics/index";
@@ -103,7 +103,7 @@ export function changesRoutes(app: Fastify) {
             sessionAccessSessionId !== undefined
             && compatibility.supportsSessionAccessWitnessProtocol
         ) {
-            const probe = await inTx(async (tx) => {
+            const probe = await inReadSnapshot(async (tx) => {
                 const account = await tx.account.findUnique({
                     where: { id: userId },
                     select: { seq: true },
@@ -121,10 +121,6 @@ export function changesRoutes(app: Fastify) {
                     throughCursor: account.seq,
                     status: access.status,
                 };
-            }, {
-                // The access witness and throughCursor describe one committed snapshot.
-                readOnly: true,
-                isolationLevel: "Serializable",
             });
             if (!probe) {
                 changesRequestsCounter.inc({ result: 'account-not-found' });

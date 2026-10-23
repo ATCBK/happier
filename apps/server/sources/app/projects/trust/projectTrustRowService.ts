@@ -12,7 +12,7 @@ import {
     type ReservedAccountScopedKvRowReadResult, type ReservedAccountScopedKvRowMutationResult,
     type ReservedAccountScopedKvRowMutationInTxResult,
 } from '@/app/kv/reservedAccountScopedKvRow';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 
 export function isProjectTrustContentBoundToProject(content: ProjectTrustContentV1 | null, project: QualifiedProjectTrustProjectV1): boolean {
     if (content === null || content.t === 'encrypted') return true;
@@ -70,8 +70,8 @@ export async function mutateProjectTrustInTx(tx: Tx, input: Readonly<{ accountId
     });
 }
 
-export async function readProjectTrust(input: Parameters<typeof readProjectTrustInTx>[1]): ReturnType<typeof readProjectTrustInTx> { return await inTx(tx => readProjectTrustInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true }); }
-export async function listProjectTrust(input: Parameters<typeof listProjectTrustInTx>[1]): ReturnType<typeof listProjectTrustInTx> { return await inTx(tx => listProjectTrustInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true }); }
+export async function readProjectTrust(input: Parameters<typeof readProjectTrustInTx>[1]): ReturnType<typeof readProjectTrustInTx> { return await inReadSnapshot(tx => readProjectTrustInTx(tx, input)); }
+export async function listProjectTrust(input: Parameters<typeof listProjectTrustInTx>[1]): ReturnType<typeof listProjectTrustInTx> { return await inReadSnapshot(tx => listProjectTrustInTx(tx, input)); }
 export async function mutateProjectTrust(input: Parameters<typeof mutateProjectTrustInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
     try { return await inTx(tx => mutateProjectTrustInTx(tx, input)); }
     catch (error) {

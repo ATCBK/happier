@@ -7,7 +7,7 @@ import { registerPublicShareReadRoutes } from "./registerPublicShareReadRoutes";
 import { registerStoredContentPublicShareRoutes } from "./registerStoredContentPublicShareRoutes";
 import { registerPublicShareViewerRoutes } from "./registerPublicShareViewerRoutes";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
 
 /**
@@ -44,7 +44,7 @@ export function publicShareRoutes(app: Fastify): void {
         const { sessionId } = request.params;
         const limit = request.query?.limit || 50;
 
-        const result = await inTx(async (tx) => {
+        const result = await inReadSnapshot(async (tx) => {
             const authority = await assertSessionCapabilityInTx({
                 tx,
                 accountId: userId,
@@ -71,7 +71,7 @@ export function publicShareRoutes(app: Fastify): void {
                 take: limit,
             });
             return { type: "ok" as const, logs };
-        }, { /* Public share authority and access-log contents must share one capture. */ isolationLevel: "Serializable" });
+        });
 
         if (result.type === "forbidden") {
             if (result.reason === "authentication_unavailable") {

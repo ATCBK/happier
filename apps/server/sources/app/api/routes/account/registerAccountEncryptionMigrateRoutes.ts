@@ -5,7 +5,7 @@ import { readDiscussionAccountEncryptionInventoryInTx, migrateDiscussionAccountE
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 import { type Fastify } from "../../types";
 import { z } from "zod/mini";
-import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { AccountEncryptionMigrateRequestSchema, AccountEncryptionMigrateSuccessResponseSchema, AccountEncryptionMigrateBadRequestResponseSchema, AccountEncryptionMigrateForbiddenResponseSchema, AccountEncryptionMigrateNotFoundResponseSchema, AccountEncryptionMigrateConflictResponseSchema, AccountEncryptionMigrateInternalResponseSchema, AccountEncryptionMigrateAutomationsInventoryResponseSchema, AccountEncryptionMigrateInvalidParamsReasonSchema, AccountEncryptionMigrateTransitionPrepareRequestSchema, AccountEncryptionMigrateTransitionPrepareResponseSchema, AccountEncryptionMigrateTransitionAuthorizeRequestSchema, AccountEncryptionMigrateTransitionAuthorizeResponseSchema, AccountEncryptionMigrateCollectionInventoryPageRequestSchema, AccountEncryptionMigrateCollectionInventoryPageSchema, AccountEncryptionMigrateCollectionStageBatchRequestSchema, AccountEncryptionMigrateCollectionStageBatchResponseSchema, AccountEncryptionMigrateTransitionCancelRequestSchema, AccountEncryptionMigrateTransitionCancelResponseSchema, AccountEncryptionMigrateTransitionActivateRequestSchema, AccountEncryptionMigrateTransitionActivateResponseSchema, ACCOUNT_ENCRYPTION_MIGRATE_REQUEST_MAX_UTF8_BYTES, createAccountEncryptionMigrateProofSigningInputV1, createAccountEncryptionMigrateRequestBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationProofSigningInputV1, type AccountEncryptionMigrateKeyProof, type AccountEncryptionMigrateRequest, type AccountEncryptionMigrateTransitionAuthorizeRequest } from '@happier-dev/protocol/account/encryptionMigrate';
 import { ArtifactQuotaExceededV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -525,9 +525,9 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
     app.get('/v1/account/encryption/migrate/discussions/inventory', {
         preHandler: [app.authenticate, requirePresentUser],
         schema: { response: { 200: DiscussionAccountEncryptionInventoryV1Schema, 403: PresentUserRequiredResponseSchema } },
-    }, async (request, reply) => reply.send(await inTx(tx => readDiscussionAccountEncryptionInventoryInTx(tx, {
+    }, async (request, reply) => reply.send(await inReadSnapshot(tx => readDiscussionAccountEncryptionInventoryInTx(tx, {
         accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request),
-    }), { isolationLevel: 'Serializable' })));
+    }))));
     app.get("/v1/account/encryption/migrate/automations/inventory", {
         preHandler: app.authenticate,
         schema: { response: {
@@ -558,11 +558,11 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
         },
         async (request, reply) => {
             try {
-                const inventory = await inTx(async (tx) => {
+                const inventory = await inReadSnapshot(async (tx) => {
                     return await createReviewCommentAccountEncryptionMigrationPersistenceInTx(
                         tx,
                     ).readInventory(request.userId);
-                }, { readOnly: true, isolationLevel: "Serializable" /* Review comments and their migration events must describe one inventory epoch. */ });
+                });
                 return reply.send(
                     buildReviewCommentAccountEncryptionMigrationInventoryResponse(
                         inventory,
@@ -590,12 +590,12 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
         },
         async (request, reply) => {
             try {
-                return reply.send(await inTx(async (tx) => {
+                return reply.send(await inReadSnapshot(async (tx) => {
                     return await readSessionOrganizationAccountEncryptionMigrationInventoryInTx({
                         tx,
                         accountId: request.userId,
                     });
-                }, { readOnly: true, isolationLevel: "Serializable" /* Organization rows, envelopes and ordering must describe one migration inventory. */ }));
+                }));
             } catch (error) {
                 if (error instanceof InactiveAccountError) throw error;
                 return reply.code(500).send({

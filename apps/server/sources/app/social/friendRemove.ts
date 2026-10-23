@@ -7,10 +7,9 @@ import { RelationshipStatus } from "@/storage/prisma";
 import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 
 export async function friendRemove(ctx: Context, uid: string): Promise<UserProfile | null> {
-    // Removal shares the bilateral read-then-write invariant with friendAdd;
-    // ordered cursor publication alone does not protect those earlier reads.
+    // Share friendAdd's complete bilateral admission before either state is read.
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true });
+        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true, intent: 'serializing' });
         // Read current user objects
         const currentUser = await tx.account.findUnique({
             where: { id: ctx.uid },
@@ -64,5 +63,5 @@ export async function friendRemove(ctx: Context, uid: string): Promise<UserProfi
 
         // Return the target user profile with status none
         return buildUserProfile(targetUser as any, currentUserRelationship, identities, presentation);
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }

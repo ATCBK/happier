@@ -5,7 +5,7 @@ import type { Fastify } from "@/app/api/types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { asServerProtocolZod } from "@/app/api/utils/protocolComposableZodAdapter";
 import { listAuthoringMemoryInTx, mutateAuthoringMemoryInTx, readAuthoringMemoryInTx } from "@/app/kv/authoringMemoryStorage";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 
 const AuthoringMemoryRouteParamsSchema = z.strictObject({ key: asServerProtocolZod(AuthoringMemoryKeyV1Schema) });
 const InvalidParamsSchema = z.strictObject({ error: z.literal("invalid-params") });
@@ -37,7 +37,7 @@ export function registerAuthoringMemoryRoutes(app: Fastify): void {
         },
     }, async (request, reply) => {
         try {
-            const result = await inTx(tx => readAuthoringMemoryInTx(tx, { accountId: request.userId, key: request.params.key }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+            const result = await inReadSnapshot(tx => readAuthoringMemoryInTx(tx, { accountId: request.userId, key: request.params.key }));
             const response = readResponse(result);
             if (response === null) return reply.code(503).send(unavailable());
             return reply.send(response);
@@ -80,7 +80,7 @@ export function registerAuthoringMemoryRoutes(app: Fastify): void {
         } },
     }, async (request, reply) => {
         try {
-            const result = await inTx(tx => listAuthoringMemoryInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+            const result = await inReadSnapshot(tx => listAuthoringMemoryInTx(tx, { accountId: request.userId }));
             if (result.status !== "listed") return reply.code(503).send({ error: "authoring_memory_storage_unavailable" });
             return reply.send({ rows: [...result.rows] });
         } catch {

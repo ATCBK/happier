@@ -43,21 +43,18 @@ export async function resolveArtifactAccessInTx(tx: Tx, input: Readonly<{
     return resolveResourceGrantAccessInTx(tx, artifactGrantStorageAdapter, { resourceId: input.artifactId, actorAccountId: input.actorAccountId });
 }
 
-/** Candidate discovery starts at grant relations, then the access owner decides. */
+/** Candidate discovery is a database predicate; only the access owner admits rows. */
+function artifactCandidateWhere(actorAccountId: string, kind?: ArtifactCoarseKindV1 | null): Prisma.ArtifactWhereInput {
+    return { OR: [
+        { accountId: actorAccountId, ...artifactVisibleWhere, ...(kind !== undefined ? { kind } : {}) },
+        { accountGrants: { some: { accountId: actorAccountId } } },
+        { teamGrants: { some: { team: { memberships: { some: { accountId: actorAccountId } } } } } },
+        { groupGrants: { some: { teamGroup: { memberships: { some: { teamMembership: { accountId: actorAccountId } } } } } } },
+    ] };
+}
+
 export async function listArtifactCandidatesInTx(tx: Tx, actorAccountId: string, kind?: ArtifactCoarseKindV1 | null): Promise<string[]> {
-    const [owned, direct, memberships, groupMemberships] = await Promise.all([
-        tx.artifact.findMany({ where: { accountId: actorAccountId, ...artifactVisibleWhere,
-            ...(kind !== undefined ? { kind } : {}) }, select: { id: true } }),
-        tx.artifactAccountGrant.findMany({ where: { accountId: actorAccountId }, select: { artifactId: true } }),
-        tx.teamMembership.findMany({ where: { accountId: actorAccountId }, select: { teamId: true } }),
-        tx.teamGroupMembership.findMany({ where: { teamMembership: { accountId: actorAccountId } }, select: { teamGroupId: true } }),
-    ]);
-    const [teams, groups] = await Promise.all([
-        tx.artifactTeamGrant.findMany({ where: { teamId: { in: memberships.map(row => row.teamId) } }, select: { artifactId: true } }),
-        tx.artifactGroupGrant.findMany({ where: { teamGroupId: { in: groupMemberships.map(row => row.teamGroupId) } }, select: { artifactId: true } }),
-    ]);
-    return [...new Set([...owned.map(row => row.id), ...direct.map(row => row.artifactId),
-        ...teams.map(row => row.artifactId), ...groups.map(row => row.artifactId)])];
+    return (await tx.artifact.findMany({ where: artifactCandidateWhere(actorAccountId, kind), select: { id: true } })).map(row => row.id);
 }
 
 /** Fan-out and recipient preparation consume the same live access decision. */
@@ -141,7 +138,8 @@ export interface ArtifactForCaller {
 type ArtifactReadFailure = Readonly<{ ok: false; error: "artifact_not_found" | "artifact_content_unavailable"; ownerAccountId?: string }>;
 export type ArtifactReadResult = Readonly<{ ok: true; artifact: ArtifactForCaller }> | ArtifactReadFailure;
 export type ArtifactHeaderForCaller = Omit<ArtifactForCaller, "body" | "bodyVersion" | "provenance">;
-export type ArtifactListItemForCaller = ArtifactHeaderForCaller & Pick<ArtifactForCaller, "bodyVersion" | "provenance"> & Partial<Pick<ArtifactForCaller, "body">>;
+export type ArtifactListItemForCaller = ArtifactHeaderForCaller & Pick<ArtifactForCaller, "bodyVersion" | "provenance">
+    & Partial<Pick<ArtifactForCaller, "body">> & Readonly<{ publicAudience: "retained" | "none" }>;
 export type ArtifactHeaderReadResult = Readonly<{ ok: true; artifact: ArtifactHeaderForCaller }> | ArtifactReadFailure;
 
 /** Project already-authorized Plain bytes once; E2EE remains client-opened. */
@@ -185,7 +183,7 @@ function projectArtifactHeader(row: StoredArtifactHeader, access: ArtifactAccess
 /** Revision-bound private metadata is available in header inventories without loading document bodies. */
 function projectArtifactRevisionMetadata(header: ArtifactHeaderForCaller,
     row: Readonly<{ bodyVersion: number; dataEncryptionKey: Uint8Array; provenance: Uint8Array | null }>):
-    Readonly<{ ok: true; artifact: ArtifactListItemForCaller }> | ArtifactReadFailure {
+    Readonly<{ ok: true; artifact: Omit<ArtifactListItemForCaller, "publicAudience"> }> | ArtifactReadFailure {
     const provenance = row.provenance && (header.encryptionMode === 'plain' || header.provenanceDataEncryptionKey)
         ? openArtifactProvenanceBytes({ accountId: header.ownerAccountId, artifactId: header.id, mode: header.encryptionMode,
             dataEncryptionKey: row.dataEncryptionKey, content: row.provenance, bodyVersion: row.bodyVersion,
@@ -302,7 +300,6 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     includeBody?: boolean;
     kind?: ArtifactCoarseKindV1 | null;
 }>): Promise<ArtifactListItemForCaller[]> {
-    const candidates = await listArtifactCandidatesInTx(tx, input.actorAccountId, input.kind);
     const result: ArtifactListItemForCaller[] = [];
     let cursor = input.cursor;
     while (result.length < input.limit) {
@@ -312,15 +309,16 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
             // Prisma batches these relations inside the same read snapshot.
             ...(getDbProviderFromEnv(process.env, "postgres") === "postgres" ? { relationLoadStrategy: "query" as const } : {}),
             where: {
-                id: { in: candidates }, ...artifactVisibleWhere,
+                ...artifactVisibleWhere,
                 ...(input.kind !== undefined ? { kind: input.kind } : {}),
-                ...(cursor ? { OR: [
+                AND: [artifactCandidateWhere(input.actorAccountId, input.kind), ...(cursor ? [{ OR: [
                     { updatedAt: { lt: cursor.updatedAt } },
                     { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
-                ] } : {}),
+                ] }] : [])],
             }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: input.limit, select: {
                 ...artifactReadAdmissionSelect(input.actorAccountId),
                 body: input.includeBody === true, bodyVersion: true, provenance: true,
+                publicShare: { select: { expiresAt: true } },
             } });
         for (const row of rows) {
             const access = resolveArtifactAccessFromFacts(row, input.actorAccountId);
@@ -335,7 +333,8 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
                 if (access.level === "owner") throw new Error("Artifact content is unavailable");
                 continue;
             }
-            result.push(content.artifact);
+            result.push({ ...content.artifact,
+                publicAudience: isPublicSessionShareActive(row.publicShare) ? 'retained' : 'none' });
             if (result.length === input.limit) return result;
         }
         if (rows.length < input.limit) break;

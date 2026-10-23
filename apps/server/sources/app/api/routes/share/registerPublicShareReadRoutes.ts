@@ -16,7 +16,7 @@ import {
     projectSessionTranscriptPublicationPreview,
     SESSION_TRANSCRIPT_PUBLICATION_SELECT,
 } from "@/app/session/sessionTranscriptPublicationPolicy";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { tryParseEncryptedDataKeyV0Bytes } from "./encryptedDataKeyValidation";
 import {
     createPublicShareMessagesAccessToken,
@@ -396,7 +396,7 @@ export function registerPublicShareReadRoutes(app: Fastify): void {
             ? messageAccessTokenHeader[0]
             : messageAccessTokenHeader;
 
-        const accessResult = await inTx(async (tx) => {
+        const accessResult = await inReadSnapshot(async (tx) => {
             const publicShare = await tx.publicSessionShare.findUnique({
                 where: { tokenHash },
                 select: {
@@ -504,7 +504,7 @@ export function registerPublicShareReadRoutes(app: Fastify): void {
                 messages,
                 hasMore,
             };
-        }, { /* Public share admission, subject mode and disclosed transcript must share one capture. */ isolationLevel: "Serializable" });
+        });
 
         if ('error' in accessResult) {
             if (accessResult.requiresConsent) {

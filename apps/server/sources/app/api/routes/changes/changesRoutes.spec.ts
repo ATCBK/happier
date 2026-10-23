@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 
 const { db, reset: resetDbMocks } = createDbMocks({
@@ -16,7 +16,7 @@ const accountChangeFindMany = db.accountChange.findMany;
 const accountChangeFindUnique = db.accountChange.findUnique;
 const sessionFindUnique = db.session.findUnique;
 const sessionShareFindUnique = db.sessionShare.findUnique;
-const { transaction, wrapDb } = createDbTransactionMock(() => db);
+const { transaction, wrapDb } = createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...db }));
 
 const changesRequestsInc = vi.fn();
 const changesReturnedInc = vi.fn();

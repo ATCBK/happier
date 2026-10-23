@@ -8,7 +8,7 @@ import {
     ProjectSourcesDeleteInputV1Schema, ProjectSourcesDeleteOutputV1Schema,
     ProjectSourcesFailureV1Schema,
 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { createProjectSourceInTx, readProjectSourceInTx, listProjectSourcesInTx, updateProjectSourceInTx, deleteProjectSourceInTx } from '@/app/projects/sources/projectSourceService';
 import type { Fastify } from '../../types';
@@ -36,14 +36,14 @@ export function projectSourceRoutes(app: Fastify): void {
         let audience: unknown;
         try { audience = request.query.audience === undefined ? undefined : JSON.parse(request.query.audience); }
         catch { return reply.code(400).send({ ok: false, error: 'source_invalid' }); }
-        const result = await inTx(tx => listProjectSourcesInTx(tx, request.userId, { ...request.query, audience }, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
+        const result = await inReadSnapshot(tx => listProjectSourcesInTx(tx, request.userId, { ...request.query, audience }, readTeamOperationAuthenticationFromRequest(request)));
         return reply.code(resultStatus(result)).send(result);
     });
     app.get('/v1/projects/sources/:id', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
         params, querystring: omit(ProjectSourcesReadInputV1Schema, { sourceId: true }), response: readResponse,
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
-        const result = await inTx(tx => readProjectSourceInTx(tx, request.userId, { serverId: request.query.serverId, sourceId: request.params.id }, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
+        const result = await inReadSnapshot(tx => readProjectSourceInTx(tx, request.userId, { serverId: request.query.serverId, sourceId: request.params.id }, readTeamOperationAuthenticationFromRequest(request)));
         return reply.code(resultStatus(result)).send(result);
     });
     app.post('/v1/projects/sources', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {

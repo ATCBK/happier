@@ -1,4 +1,4 @@
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1, resolveSessionPersonalAttentionV1, type SessionPersonalAttentionProjectionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { projectViewerReadStateV1, type ViewerReadStateV1 } from '@happier-dev/protocol/sessions';
 
@@ -205,11 +205,7 @@ async function computeAccountActivityBadgeCountsForAuthentication(
     accountIds: ReadonlyArray<string>,
     authentication: SessionAccessAuthentication,
 ): Promise<Map<string, number>> {
-    return await inTx(async (tx) => await computeAccountActivityBadgeCountsInTx(tx, accountIds, authentication), {
-        // Credential-qualified access and protected attention counts share one snapshot.
-        readOnly: true,
-        isolationLevel: "Serializable",
-    });
+    return await inReadSnapshot(async (tx) => await computeAccountActivityBadgeCountsInTx(tx, accountIds, authentication));
 }
 
 /**

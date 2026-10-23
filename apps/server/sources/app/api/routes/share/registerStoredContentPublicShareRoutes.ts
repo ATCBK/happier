@@ -2,7 +2,7 @@ import { type Fastify } from "../../types";
 import { z } from "zod/mini";
 import { StoredContentPublicShareCreateRequestV1Schema } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { createHash } from "node:crypto";
 import { writeSessionPublicShare, writeArtifactPublicShare, deleteSessionPublicShare, projectStoredContentPublicShare, checkStoredContentPublicShareRateLimit } from "@/app/share/storedContentPublicShare";
 import { resolveStoredContentPublicShareSubjectOrigin } from "@/app/share/storedContentPublicShareOrigin";
@@ -19,7 +19,8 @@ import { tryParseEncryptedDataKeyV0Bytes } from "./encryptedDataKeyValidation";
 import { buildShareableSessionMessagePublicationWhere, isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createPublicShareMessagesAccessToken, validatePublicShareMessagesAccessToken, requirePublicShareAccessGrantSecret, PUBLIC_SHARE_MESSAGES_ACCESS_TOKEN_HEADER } from "./publicShareMessageAccessGrant";
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireArtifactPublicationLocksInTx } from "@/app/artifacts/artifactAccessService";
 import { readArtifactBlob } from '@/app/artifacts/artifactBlobService';
 import { SessionTranscriptSurfaceItemReferenceInputV1Schema, readSessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { readPublishedSessionSurfaceItemInTx } from '@/app/session/systemRecords/sessionSystemRecordService';
@@ -47,7 +48,7 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
         if (request.headers.authorization || request.headers.cookie) return reply.code(403).send({ error: 'public_share_credentials_forbidden' });
         const hash = createHash('sha256').update(request.params.lookupId, 'utf8').digest();
         const configEnv = await readRequestHomeEnv(request);
-        const result = await inTx(async tx => {
+        const result = await inReadSnapshot(async tx => {
             const share = await tx.publicSessionShare.findUnique({ where: { tokenHash: hash } });
             const origin = share && resolveStoredContentPublicShareSubjectOrigin(share, configEnv);
             if (!share?.sessionId || share.artifactId || share.keyDerivation !== 'fragment_v1'
@@ -71,7 +72,7 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
             if (!record || !isSessionSystemRecordRevisionAtLeastAcknowledged(record.revision, reference.itemRevision)) return { type: 'missing' as const };
             return { type: 'ok' as const, value: { messageId: message.id, encryptionMode: session.encryptionMode, networkOff: share.networkOff,
                 reference, record } };
-        }, { /* Public share token/key, subject access and disclosed content must stay coherent. */ isolationLevel: "Serializable" });
+        });
         if (result.type === 'consent') return reply.code(403).send({ error: 'consent_required', requiresConsent: true });
         if (result.type !== 'ok') return reply.code(result.type === 'limited' ? 429 : result.type === 'unavailable' ? 503 : 404).send({ error: 'public_share_unavailable' });
         return reply.send(result.value);
@@ -98,21 +99,21 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
     });
     app.get("/v1/public-shares", { preHandler: app.authenticate, schema: { querystring: subjectQuery } }, async (request, reply) => {
         const subject = { kind: request.query.subjectKind, id: request.query.subjectId };
-        const result = await inTx(async tx => {
+        const result = await inReadSnapshot(async tx => {
             if (!await canManageSubject(tx, subject, request.userId, readSessionAccessAuthenticationFromRequest(request))) return null;
             return tx.publicSessionShare.findMany({ where: subject.kind === "session" ? { sessionId: subject.id } : { artifactId: subject.id } });
-        }, { /* Public share token/key, subject access and disclosed content must stay coherent. */ isolationLevel: "Serializable" });
+        });
         return result === null ? reply.code(403).send({ error: "public_share_forbidden" }) : reply.send({ publicShares: result.map(projectStoredContentPublicShare) });
     });
     app.get("/v1/public-shares/:shareId/access-log", { preHandler: app.authenticate, schema: { params: shareParams } }, async (request, reply) => {
-        const result = await inTx(async tx => {
+        const result = await inReadSnapshot(async tx => {
             const share = await tx.publicSessionShare.findUnique({ where: { id: request.params.shareId } });
             if (!share) return { type: "missing" as const };
             const subject = projectStoredContentPublicShare(share).subject;
             if (!await canManageSubject(tx, subject, request.userId, readSessionAccessAuthenticationFromRequest(request))) return { type: "forbidden" as const };
             const logs = await tx.publicShareAccessLog.findMany({ where: { publicShareId: share.id }, orderBy: { accessedAt: "desc" }, take: 50 });
             return { type: "ok" as const, accessLog: logs.map(log => ({ id: log.id, accessedAt: log.accessedAt.getTime(), ipAddress: log.ipAddress, userAgent: log.userAgent })) };
-        }, { /* Public share token/key, subject access and disclosed content must stay coherent. */ isolationLevel: "Serializable" });
+        });
         if (result.type !== "ok") return reply.code(result.type === "missing" ? 404 : 403).send({ error: "public_share_unavailable" });
         return reply.send({ accessLog: result.accessLog });
     });
@@ -125,12 +126,13 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
             return result.type === "ok" ? reply.send({ success: true }) : reply.code(result.type === "forbidden" ? 403 : 404).send({ error: "public_share_unavailable" });
         }
         const removed = await inTx(async tx => {
-            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true });
-            if (!share.artifactId || !await canManageSubject(tx, { kind: "artifact", id: share.artifactId }, request.userId, authentication)) return false;
+            if (!share.artifactId) return false;
+            await acquireArtifactPublicationLocksInTx(tx, share.artifactId, [request.userId]);
+            if (!await canManageSubject(tx, { kind: "artifact", id: share.artifactId }, request.userId, authentication)) return false;
             const result = await tx.publicSessionShare.deleteMany({ where: { id: share.id, artifactId: share.artifactId } });
             if (result.count) await markAccountChanged(tx, { accountId: request.userId, kind: "artifact", entityId: share.artifactId });
             return result.count === 1;
-        }, { /* Public share token/key, subject access and disclosed content must stay coherent. */ isolationLevel: "Serializable" });
+        }, { isolationLevel: "ReadCommitted" });
         return removed ? reply.send({ success: true }) : reply.code(403).send({ error: "public_share_forbidden" });
     });
     app.get("/v1/public-shares/:lookupId/content", { schema: { params: z.object({ lookupId: z.string().check(z.minLength(1)) }), querystring: z.object({

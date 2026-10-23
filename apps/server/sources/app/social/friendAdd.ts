@@ -51,11 +51,10 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
         throw new FriendsDisabledError();
     }
 
-    // Both directional states and notification cooldowns are read before
-    // unconditional tuple writes. A unique relationship key is not a guard
-    // for reciprocal request/accept/remove decisions.
+    // Serialize the complete pair before reading reciprocal states or cooldowns.
+    // Removal uses the same Account admission, including absent relationship rows.
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true });
+        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true, intent: 'serializing' });
         // Read current user objects
         const currentUser = await tx.account.findUnique({
             where: { id: ctx.uid },
@@ -146,5 +145,5 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
         const identities = toSocialIdentities(targetUser.AccountIdentity);
         return buildUserProfile(targetUser as any, currentUserRelationship, identities,
             await describeIdentityPresentation(identities, tx));
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
 }

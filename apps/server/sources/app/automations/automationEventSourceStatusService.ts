@@ -2,9 +2,10 @@ import { AutomationEventSourceStatusReportV1Schema, automationEventSourceCatalog
 import { type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 
 import { emitAutomationSourceStatusUpdated } from "@/app/automations/automationChangePublisher";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { isPrismaErrorCode } from "@/storage/prisma";
 
 import {
     assertCurrentAutomationEventCallerMaterializationTx,
@@ -216,13 +217,15 @@ function sourceTargetMatchesCaller(
         && trigger.watcherMaterializationId === caller.materializationId;
 }
 
-async function reportSourceStatus(params: Readonly<{
+type SourceStatusParams = Readonly<{
     tx: Tx;
     accountId: string;
     caller: AutomationEventSourceStatusCallerV1;
     callerVersion: string;
     input: Extract<AutomationEventSourceStatusReportV1, { kind: "source" }>;
-}>): Promise<void> {
+}>;
+
+async function assertCurrentSourceStatusTarget(params: SourceStatusParams): Promise<void> {
     const trigger = await params.tx.automationTrigger.findFirst({
         where: {
             id: params.input.triggerId,
@@ -304,6 +307,10 @@ async function reportSourceStatus(params: Readonly<{
         ) fail("observation_target_changed");
     }
 
+}
+
+async function reportSourceStatus(params: SourceStatusParams): Promise<void> {
+    await assertCurrentSourceStatusTarget(params);
     const key = { triggerId: params.input.triggerId };
     const existing = await params.tx.automationEventSourceStatus.findUnique({
         where: key,
@@ -352,24 +359,35 @@ async function reportSourceStatus(params: Readonly<{
         ),
         revision: addBoundedCounter(existing?.revision ?? 0, 1),
     };
-    await params.tx.automationEventSourceStatus.upsert({
-        where: key,
-        create: { ...key, ...values },
-        update: values,
-    });
+    if (existing) {
+        const updated = await params.tx.automationEventSourceStatus.updateMany({
+            where: { ...key, revision: existing.revision, triggerRevision: existing.triggerRevision },
+            data: values,
+        });
+        if (updated.count !== 1) throw new TransactionReplayRequiredError("automation-event-source-status-conflict");
+    } else {
+        try {
+            await params.tx.automationEventSourceStatus.create({ data: { ...key, ...values } });
+        } catch (error) {
+            if (isPrismaErrorCode(error, "P2002")) throw new TransactionReplayRequiredError("automation-event-source-status-conflict");
+            throw error;
+        }
+    }
     await markAutomationSourceStatusChangedTx({
         tx: params.tx,
         accountId: params.accountId,
     });
 }
 
-async function reportCatalogStatus(params: Readonly<{
+type CatalogStatusParams = Readonly<{
     tx: Tx;
     accountId: string;
     caller: AutomationEventSourceStatusCallerV1;
     callerVersion: string;
     input: Extract<AutomationEventSourceStatusReportV1, { kind: "catalogReconciliation" }>;
-}>): Promise<void> {
+}>;
+
+async function assertCurrentCatalogStatusTarget(params: CatalogStatusParams) {
     // Protocol owns the durable scope-key grammar for the canonical scope
     // union; this reporter only proves the scope is current.
     const scopeKey = automationEventSourceCatalogScopeKeyV1(params.input.scope);
@@ -413,6 +431,11 @@ async function reportCatalogStatus(params: Readonly<{
         fail("catalog_revision_not_current");
     }
 
+    return { scopeKey, observedRevision, adoptedRevision };
+}
+
+async function reportCatalogStatus(params: CatalogStatusParams): Promise<void> {
+    const { scopeKey, observedRevision, adoptedRevision } = await assertCurrentCatalogStatusTarget(params);
     const key = {
         accountId: params.accountId,
         eventPluginId: params.caller.pluginId,
@@ -438,14 +461,20 @@ async function reportCatalogStatus(params: Readonly<{
         reportedAt: new Date(),
         revision: addBoundedCounter(existing?.revision ?? 0, 1),
     };
-    await params.tx.automationEventSourceCatalogStatus.upsert({
-        where: {
-            accountId_eventPluginId_reporterMaterializationId_scopeKey:
-                key,
-        },
-        create: { ...key, ...values },
-        update: values,
-    });
+    if (existing) {
+        const updated = await params.tx.automationEventSourceCatalogStatus.updateMany({
+            where: { ...key, revision: existing.revision },
+            data: values,
+        });
+        if (updated.count !== 1) throw new TransactionReplayRequiredError("automation-event-source-status-conflict");
+    } else {
+        try {
+            await params.tx.automationEventSourceCatalogStatus.create({ data: { ...key, ...values } });
+        } catch (error) {
+            if (isPrismaErrorCode(error, "P2002")) throw new TransactionReplayRequiredError("automation-event-source-status-conflict");
+            throw error;
+        }
+    }
     await markAutomationSourceStatusChangedTx({
         tx: params.tx,
         accountId: params.accountId,
@@ -467,6 +496,17 @@ export async function reportAutomationEventSourceStatusV1(params: Readonly<{
             serverIdentityId,
             caller: params.caller,
         });
+        // Domain rows are already settled. Recheck currentness after the
+        // existing terminal Account lock, using reads only and no resource locks.
+        beforeAccountChangePublication(tx, [params.accountId], async currentTx => {
+            const currentCaller = await assertCurrentCallerMaterialization({
+                tx: currentTx, accountId: params.accountId, serverIdentityId, caller: params.caller,
+            });
+            const current = { tx: currentTx, accountId: params.accountId, caller: params.caller,
+                callerVersion: currentCaller.version };
+            if (input.kind === "source") await assertCurrentSourceStatusTarget({ ...current, input });
+            else await assertCurrentCatalogStatusTarget({ ...current, input });
+        });
         if (input.kind === "source") {
             await reportSourceStatus({
                 tx,
@@ -485,11 +525,9 @@ export async function reportAutomationEventSourceStatusV1(params: Readonly<{
             input,
         });
     }, {
-        // Source deltas are added to prior counters and catalog status is
-        // validated against the current definition revision before absolute
-        // upserts. These reads have no row lock or CAS to prevent lost deltas
-        // or a stale "current" report, so they require one serializable read set.
-        isolationLevel: "Serializable",
+        // Revision CAS preserves concurrent deltas; terminal currentness reads
+        // validate definition/materialization changes before publication.
+        isolationLevel: "ReadCommitted",
         transactionClass: "automation-event-source-status-report",
     });
     return {};

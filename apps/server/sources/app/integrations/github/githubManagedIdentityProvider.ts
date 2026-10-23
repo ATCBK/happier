@@ -13,7 +13,7 @@ import type { IdentityProvider } from "@/app/auth/providers/identityProviders/ty
 import type { AuthProviderFeatures } from "@/app/auth/providers/types";
 
 import { prepareIdentityLink, refreshIdentity, unlinkIdentity } from "@/app/auth/providers/accountIdentityLifecycle";
-import { db } from "@/storage/db";
+import { db, getDbProviderFromEnv } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { prepareIdentityConnectionGroupRefresh } from "@/app/teams/memberships/identityConnectionGroupRefresh";
 import {
@@ -338,6 +338,10 @@ export async function resolveManagedGitHubIdentityProviderRuntimeMetadataBatchIn
     const [home, installations] = await Promise.all([
         readHomeGovernancePolicyInTx(tx),
         tx.gitHubAppInstallation.findMany({
+            // A catalog capture must not mix installation facts with a later
+            // registration snapshot. Row providers support one joined statement;
+            // SQLite's enclosing write admission already excludes other writers.
+            ...(getDbProviderFromEnv(process.env, "postgres") === "sqlite" ? {} : { relationLoadStrategy: "join" as const }),
             where: { id: { in: [...new Set(candidates.flatMap((candidate) =>
                 candidate.provider.githubAppInstallationId ? [candidate.provider.githubAppInstallationId] : []))] } },
             select: {

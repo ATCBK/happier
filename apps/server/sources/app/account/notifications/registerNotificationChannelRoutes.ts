@@ -10,7 +10,7 @@ import { PresentUserRequiredResponseSchema, requirePresentUser } from '@/app/api
 import { enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { isServerFeatureEnabledForRequest } from '@/app/features/catalog/serverFeatureGate';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { mutateNotificationChannelCatalog, readNotificationChannelCatalogInTx } from './channelRows';
 
@@ -21,7 +21,7 @@ export function registerNotificationChannelRoutes(app: Fastify): void {
   app.get(NOTIFICATION_CHANNELS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(NotificationChannelCatalogReadResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => readNotificationChannelCatalogInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+    try { return reply.send(await inReadSnapshot(tx => readNotificationChannelCatalogInTx(tx, { accountId: request.userId }))); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });
   app.post(NOTIFICATION_CHANNELS_ROUTE_V1, { preHandler: app.authenticate, config,
