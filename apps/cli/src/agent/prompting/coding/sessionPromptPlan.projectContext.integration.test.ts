@@ -563,7 +563,7 @@ it.each(['enabled', 'account-disabled', 'profile-disabled'] as const)(
   expect(text.includes('change_title')).toBe(titleBehavior === 'enabled');
   expect(changed).toBe(true);
   expect(prepare.assertPreparedPlanCurrent).not.toThrow();
-  expect(prepare.readCodingPromptBehavior?.()?.sessionTitleUpdates).toBe(titleBehavior === 'enabled' ? 'ongoing' : 'disabled');
+  expect(prepare.readCodingPromptBehavior?.()?.sessionTitleUpdates).toBe(titleBehavior === 'enabled' ? 'initial' : 'disabled');
   const startupInstructions = prepare.readStartupInstructions?.();
   const retained = operationContext.readSnapshot();
   if (!retained) throw new Error('Captured Account retired');

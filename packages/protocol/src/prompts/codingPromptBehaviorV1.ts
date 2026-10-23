@@ -13,11 +13,11 @@ const CodingPromptSessionTitleUpdatesInputV1Schema = lazyZodSchema(() => z.pipe(
 export const CodingPromptBehaviorV1Schema = lazyZodSchema(() => z.catch(z
   .object({
     v: z._default(z.literal(1), 1),
-    sessionTitleUpdates: z._default(CodingPromptSessionTitleUpdatesInputV1Schema, 'ongoing'),
+    sessionTitleUpdates: z._default(CodingPromptSessionTitleUpdatesInputV1Schema, 'initial'),
     responseOptions: z._default(CodingPromptBehaviorModeV1Schema, 'agent'),
   }), {
     v: 1,
-    sessionTitleUpdates: 'ongoing',
+    sessionTitleUpdates: 'initial',
     responseOptions: 'agent',
   }));
 

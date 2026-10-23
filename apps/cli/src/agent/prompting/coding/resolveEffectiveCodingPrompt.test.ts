@@ -570,7 +570,7 @@ describe('resolveEffectiveCodingPromptText', () => {
     expect(out).not.toContain('# Session title');
   });
 
-  it('uses start-only shell-bridge title guidance for initial title updates', async () => {
+  it.each([undefined, 'initial'] as const)('uses start-only shell-bridge title guidance for %s title updates', async (sessionTitleUpdates) => {
     const credentials = createCredentials();
 
     const out = await resolveEffectiveCodingPromptText({
@@ -578,7 +578,7 @@ describe('resolveEffectiveCodingPromptText', () => {
       settings: {
         codingPromptBehaviorV1: {
           v: 1,
-          sessionTitleUpdates: 'initial',
+          sessionTitleUpdates,
           responseOptions: 'disabled',
         },
       },

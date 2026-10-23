@@ -1235,12 +1235,12 @@ describe('accountSettings', () => {
     expect(parsed.notificationsSettingsV1.connectedServiceQuotaRecovered).toBe(false);
   });
 
-  it('defaults coding prompt behavior to current agent-managed behavior', () => {
+  it('defaults coding prompt title updates to session start', () => {
     const parsed = accountSettingsParse({});
 
     expect(parsed.codingPromptBehaviorV1).toEqual({
       v: 1,
-      sessionTitleUpdates: 'ongoing',
+      sessionTitleUpdates: 'initial',
       responseOptions: 'agent',
     });
   });

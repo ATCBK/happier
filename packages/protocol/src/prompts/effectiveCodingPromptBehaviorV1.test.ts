@@ -39,9 +39,14 @@ describe('resolveEffectiveCodingPromptBehaviorV1', () => {
     })).toEqual({ v: 1, sessionTitleUpdates: 'initial', responseOptions: 'disabled' });
   });
 
-  it('returns the built-in default when the Account setting is absent', () => {
-    expect(resolveEffectiveCodingPromptBehaviorV1({ settings: {}, profileId: null }))
-      .toEqual(DEFAULT_CODING_PROMPT_BEHAVIOR_V1);
+  it.each([
+    {},
+    { codingPromptBehaviorV1: {} },
+    { codingPromptBehaviorV1: { sessionTitleUpdates: 'invalid' } },
+  ])('defaults absent or invalid Account title preferences to session start for %j', (settings) => {
+    expect(resolveEffectiveCodingPromptBehaviorV1({ settings, profileId: null }))
+      .toEqual({ v: 1, sessionTitleUpdates: 'initial', responseOptions: 'agent' });
+    expect(DEFAULT_CODING_PROMPT_BEHAVIOR_V1.sessionTitleUpdates).toBe('initial');
   });
 
   it('applies a sparse profile override on top of the Account default', () => {
