@@ -240,6 +240,7 @@ export function buildCausalSessionInputAdmissionV1(params: Readonly<{
   sourceSessionId: string;
   sourceTurnId: string;
   sourceInputId?: string;
+  discussionAddressing?: SessionInputRequestV1['discussionAddressing'];
   callerDepth: number;
   via: 'action' | 'mcp';
   causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
@@ -252,6 +253,7 @@ export function buildCausalSessionInputAdmissionV1(params: Readonly<{
     sourceSessionId: params.sourceSessionId,
     sourceTurnId: params.sourceTurnId,
     ...(params.sourceInputId ? { sourceInputId: params.sourceInputId } : {}),
+    ...(params.discussionAddressing !== undefined ? { discussionAddressing: params.discussionAddressing } : {}),
     via: params.via,
   });
   const causalPermissionAuthority = SessionInputCausalPermissionAuthorityV1Schema.parse(
