@@ -1458,7 +1458,8 @@ describe('multi-Home Session creation composition', () => {
             = await import('@happier-dev/protocol/providers/connections/connectionRowsV1');
         const { DEFAULT_PROVIDER_SETTINGS_V1 } = await import('@happier-dev/protocol/providers/settings/v1');
         const { setProviderExperimentalConfirmationV1 } = await import('@happier-dev/protocol/providers/settings/operationsV1');
-        const { TeamsPageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
+        const { TeamsPageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceDiscoveryPageV1Schema,
+            TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
             NO_TEAM_CAPABILITIES_V1, resolveTeamAdmissionProjectionV1 } = await import('@happier-dev/protocol/teams');
         const { RunnerArtifactAvailabilityProjectionV1Schema } = await import('@happier-dev/protocol/ephemeralRunner/runnerArtifact');
         const { EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1 } = await import('@happier-dev/protocol/ephemeralRunner/routes');
@@ -1532,6 +1533,7 @@ describe('multi-Home Session creation composition', () => {
         const activationEffects: string[] = [];
         const observedHomePaths = new Set<string>();
         let catalogRefreshGate: Promise<void> | null = null;
+        let catalogReads = 0;
         let releaseSelectionGates: (() => void) | null = null;
         sessionHttpBoundary = (url, init) => {
             const parsed = new URL(url);
@@ -1542,8 +1544,14 @@ describe('multi-Home Session creation composition', () => {
                     currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     declarationTransport: 'http-header-and-socket-auth-v1' } } });
             if (`${parsed.pathname}${parsed.search}` === teamPath) return Response.json(teams);
-            if (`${parsed.pathname}${parsed.search}` === resourcesPath) return catalogRefreshGate
-                ? catalogRefreshGate.then(() => Response.json(entitled)) : Response.json(entitled);
+            if ([resourcesPath, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1].includes(`${parsed.pathname}${parsed.search}`)) {
+                catalogReads++;
+                const catalogResponse = () => Response.json(parsed.pathname === TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1
+                    ? TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: entitled.resources, nextCursor: null, failures: [] })
+                    : entitled);
+                return catalogRefreshGate
+                    ? catalogRefreshGate.then(catalogResponse) : catalogResponse();
+            }
             if (parsed.pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 && (!init?.method || init.method === 'GET')) {
                 return Response.json(ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
                     content: { t: 'plain', v: providerCatalog } }));
@@ -1641,8 +1649,20 @@ describe('multi-Home Session creation composition', () => {
                     });
                     await vi.waitFor(() => expect(socketBoundary.teamModelProjectionRequested).toBe(true));
                     catalogRefreshGate = catalog.promise;
-                    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
-                    await act(async () => { publishHomeAccountChange(homeBScopeId); });
+                    if (run) {
+                        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+                        await act(async () => { publishHomeAccountChange(homeBScopeId); });
+                    } else {
+                        const detail = model.wizardProps.agent.agentPickerOptions
+                            .find(option => option.id === 'agent:happier.agent.codex/codex')
+                            ?.renderDetailContent?.({ onRequestClose: () => {} });
+                        type EngineDetailProps = React.ComponentProps<typeof import('@/components/sessions/new/components/NewSessionEngineOptionDetail').NewSessionEngineOptionDetail>;
+                        if (!React.isValidElement<EngineDetailProps>(detail)) throw new Error('Expected production engine detail');
+                        const readsBeforeRefresh = catalogReads;
+                        entitled.resources[0]!.displayName = 'Refreshed Runner model';
+                        await act(async () => { detail.props.refreshProbe?.onRefresh?.(); });
+                        await vi.waitFor(() => expect(catalogReads).toBeGreaterThan(readsBeforeRefresh));
+                    }
                     const refreshing = hook.getCurrent();
                     if (refreshing.variant !== 'wizard') throw new Error('Expected the production model selector');
                     expect(refreshing.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
@@ -1659,6 +1679,7 @@ describe('multi-Home Session creation composition', () => {
                         const refreshed = hook.getCurrent();
                         if (refreshed.variant !== 'wizard') throw new Error('Expected the production model selector');
                         expect(refreshed.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
+                        if (!run) expect(refreshed.wizardProps.agent.teamCredentialResources?.[0]?.displayName).toBe('Refreshed Runner model');
                     });
                 } finally { await run?.unmount(); }
                 if (!run) {

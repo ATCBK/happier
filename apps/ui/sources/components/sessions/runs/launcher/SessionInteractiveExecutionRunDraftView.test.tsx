@@ -60,7 +60,7 @@ import { ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/ac
 import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
 import { askSelectionQuote, type AskSelectionTargetContext } from '@/components/ui/code/selection/askSelectionTarget';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
-import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceDiscoverInputV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
 import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
@@ -430,6 +430,11 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 accountId: 'account_1', currentAccount: true }],
             route: createSessionReadBatchHttpBoundary(async (request) => {
                 if (teamModelsEnabled && request.path === '/v1/teams/list') return Response.json({ items: [teamSummaryFixture({ id: teamModel.teamId, name: 'Engineering' })], nextCursor: null });
+                if (teamModelsEnabled && request.path === TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1) {
+                    const { application } = TeamCredentialResourceDiscoverInputV1Schema.parse(request.body);
+                    return Response.json({ resources: [teamResource(application)], nextCursor: null, failures: [] });
+                }
+                // Session-status admission still performs a finite single-Team read.
                 if (teamModelsEnabled && request.path === '/v1/teams/credential-resources/entitled/list') {
                     const { application } = TeamCredentialResourceReadInputV1Schema.parse(request.body);
                     return Response.json({ resources: [teamResource(application)], nextCursor: null });

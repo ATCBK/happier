@@ -5,7 +5,7 @@ import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendPr
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
-import { TeamCredentialProviderModelSelectionV1Schema, TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialProviderModelSelectionV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceDiscoverInputV1Schema } from '@happier-dev/protocol/teams';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
@@ -516,6 +516,10 @@ describe('real execution Run launch admission', () => {
             }));
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(secretMaterials);
             if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+            if (path === TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1) {
+                TeamCredentialResourceDiscoverInputV1Schema.parse(JSON.parse(String(init?.body)));
+                return Response.json({ resources: [teamResource], nextCursor: null, failures: [] });
+            }
             const body = path === '/v1/features'
                 ? FeaturesResponseSchema.parse(createRootLayoutFeaturesResponse({ features: { teams: FeatureGatesSchema.shape.teams.parse({
                     enabled: true, credentialResources: { enabled: true } }) } }))
@@ -639,7 +643,7 @@ describe('real execution Run launch admission', () => {
         expect(httpRequests.filter((request) => request.path.startsWith('/v1/teams/')))
             .toEqual(expect.arrayContaining([
                 { path: '/v1/teams/list', authorization: expect.stringContaining('Bearer ') },
-                { path: '/v1/teams/credential-resources/entitled/list', authorization: expect.stringContaining('Bearer ') },
+                { path: TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, authorization: expect.stringContaining('Bearer ') },
             ]));
         expect(boundary.rpc.mock.calls.some(([request]) => request.method.includes('action.invoke'))).toBe(false);
     });
