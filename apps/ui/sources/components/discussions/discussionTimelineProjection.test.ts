@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DiscussionDocEditProposalContentV1Schema } from '@happier-dev/protocol/discussions/content';
+import { DiscussionDocEditProposalContentV1Schema, DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
 
 import {
     NO_SESSION_AGENT_ACTIVITY_ATTENTION,
@@ -7,7 +7,7 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, resolveDiscussionReplyPresentation, startsDiscussionMessageGroup } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
@@ -311,5 +311,88 @@ describe('placeDiscussionRequesterApprovals', () => {
 
     it('places nothing whose message is not loaded in this thread', () => {
         expect(placeDiscussionRequesterApprovals([botReply('other', 'req-2')], [approval]).size).toBe(0);
+    });
+});
+
+describe('Workflow-produced messages', () => {
+    const workflow = (outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result') => ({
+        id: 'workflow-reply',
+        producerV1: { v: 1 as const, kind: 'workflow' as const, runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0',
+            execution: { kind: 'action' as const, actionId: 'review.verdict' }, outcome },
+    });
+    const result = (value: unknown, summary = 'Ship it') => DiscussionMessageContentV1Schema.parse({ kind: 'workflow_result', value, summary,
+        source: { runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } });
+
+    it('is attributed to its exact Run with its own outcome, never as an Agent reply', () => {
+        expect(resolveDiscussionWorkflowAttribution(workflow('answer'))).toEqual({ runId: 'run-1', outcome: 'answer' });
+        expect(resolveDiscussionWorkflowAttribution(workflow('terminal_no_result'))).toEqual({ runId: 'run-1', outcome: 'failed' });
+        expect(resolveDiscussionWorkflowAttribution(workflow('cancelled'))).toEqual({ runId: 'run-1', outcome: 'cancelled' });
+        // The Agent reply outcome reads only an Agent's stamped return.
+        expect(resolveDiscussionReplyOutcome(workflow('failed'))).toBeNull();
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: null })).toBeNull();
+        expect(resolveDiscussionWorkflowAttribution({ producerV1: { v: 1, kind: 'agent', sessionId: 'checkout-ui' } })).toBeNull();
+    });
+
+    it('names no requester and anchors no requester approval', () => {
+        expect(resolveDiscussionReplyAttributionLine(workflow('answer'), { serverId: 'home', accountId: 'bob' })).toBeNull();
+        const approval = { id: 'approval-1', requestRef: 'req-1', originMessageId: 'ask' };
+        expect([...placeDiscussionRequesterApprovals([{ id: 'ask', producerV1: null }, workflow('answer')], [approval]).entries()])
+            .toEqual([['ask', [approval]]]);
+    });
+
+    it('reads its summary as the message and keeps a typed value that says more as the result', () => {
+        expect(readDiscussionMessagePreview(result({ verdict: 'ship' }))).toBe('Ship it');
+        expect(readDiscussionWorkflowResultDetail(result({ verdict: 'ship', blockers: [] })))
+            .toBe(JSON.stringify({ verdict: 'ship', blockers: [] }, null, 2));
+        expect(readDiscussionWorkflowResultDetail(result('Ship it'))).toBeNull();
+        expect(readDiscussionWorkflowResultDetail(result(3))).toBe('3');
+        expect(readDiscussionWorkflowResultDetail({ v: 1, parts: [{ t: 'text', text: 'Ship it' }] })).toBeNull();
+    });
+});
+
+describe('reply outcome presentation and speaker groups', () => {
+    type Outcome = 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
+    const body = (text: string) => DiscussionMessageContentV1Schema.parse({ v: 1, parts: [{ t: 'text', text }] });
+    const agent = (outcome: Outcome | undefined, content: ReturnType<typeof body> | null = null) => ({
+        authorAccountId: 'owner', content,
+        producerV1: { v: 1 as const, kind: 'agent' as const, sessionId: 'checkout-ui',
+            ...(outcome ? { replyReturn: { serverId: 'home', requestLocalId: 'ask-1', outcome } } : {}) },
+    });
+    const run = (outcome: Outcome, content: ReturnType<typeof body> | null = null) => ({
+        authorAccountId: 'owner', content,
+        producerV1: { v: 1 as const, kind: 'workflow' as const, runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0',
+            execution: { kind: 'action' as const, actionId: 'review.verdict' }, outcome },
+    });
+    const partial = body('1. **Choose names** that describe intent.\n\n```ts\nconst activeUsers = users.filter(isActive);\n```');
+
+    it('keeps a stopped reply that kept a partial answer as a message, marked stopped', () => {
+        expect(resolveDiscussionReplyPresentation(agent('cancelled', partial))).toEqual({ kind: 'message', stopped: true });
+        expect(resolveDiscussionReplyPresentation(run('cancelled', partial))).toEqual({ kind: 'message', stopped: true });
+    });
+
+    it('reads passed, failed and bodiless stopped outcomes as a compact notice', () => {
+        expect(resolveDiscussionReplyPresentation(agent('pass'))).toEqual({ kind: 'notice', outcome: 'pass' });
+        expect(resolveDiscussionReplyPresentation(agent('failed', body('Model unavailable')))).toEqual({ kind: 'notice', outcome: 'failed' });
+        expect(resolveDiscussionReplyPresentation(agent('terminal_no_result'))).toEqual({ kind: 'notice', outcome: 'failed' });
+        expect(resolveDiscussionReplyPresentation(agent('cancelled'))).toEqual({ kind: 'notice', outcome: 'cancelled' });
+        expect(resolveDiscussionReplyPresentation(run('failed', body('Step 2 failed')))).toEqual({ kind: 'notice', outcome: 'failed' });
+    });
+
+    it('reads answers and ordinary messages as messages', () => {
+        expect(resolveDiscussionReplyPresentation(agent('answer', body('Done')))).toEqual({ kind: 'message', stopped: false });
+        expect(resolveDiscussionReplyPresentation(agent(undefined, body('FYI')))).toEqual({ kind: 'message', stopped: false });
+        expect(resolveDiscussionReplyPresentation({ producerV1: null, content: body('Hi') })).toEqual({ kind: 'message', stopped: false });
+    });
+
+    it('starts its own speaker group for every reply with an outcome, even after the same speaker', () => {
+        const person = { authorAccountId: 'owner', producerV1: null };
+        expect(startsDiscussionMessageGroup(agent('cancelled', partial), person)).toBe(true);
+        expect(startsDiscussionMessageGroup(agent('failed'), agent('answer', body('Earlier')))).toBe(true);
+        expect(startsDiscussionMessageGroup(run('cancelled'), run('answer', body('Earlier')))).toBe(true);
+        // Ordinary messages from one speaker still share a byline.
+        expect(startsDiscussionMessageGroup(person, person)).toBe(false);
+        expect(startsDiscussionMessageGroup(agent(undefined), agent(undefined))).toBe(false);
+        expect(startsDiscussionMessageGroup(person, agent(undefined))).toBe(true);
+        expect(startsDiscussionMessageGroup(person, undefined)).toBe(true);
     });
 });

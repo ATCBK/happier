@@ -46,8 +46,9 @@ export function DiscussionMessageContent(props: Readonly<{
         };
     }, [ink, projection, props.resolveSessionLabel, props.serverId, router]);
     const testID = `session-discussion-message-content-${props.message.id}`;
-    if (!projection || !inlineReferences) return <Text testID={testID} selectable style={props.textStyle}>
-        {projection?.readableText ?? t('session.collaboration.discussion.contentUnavailable')}
+    // Every message body is Markdown, with or without mentions: an Agent's answer keeps its emphasis and code blocks.
+    if (!projection) return <Text testID={testID} selectable style={props.textStyle}>
+        {t('session.collaboration.discussion.contentUnavailable')}
     </Text>;
     return <MarkdownView testID={testID} markdown={projection.text} textStyle={props.textStyle}
         selectable inlineReferences={inlineReferences} />;

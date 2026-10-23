@@ -757,7 +757,9 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
     const primaryAnswerRef = usePendingPromptPrimaryFocus(toolCallId, executionRun === undefined && canInteract, messageId);
     const completedRequest = toolCallId ? agentState?.completedRequests?.[toolCallId] : null;
     const questionV1 = activeMatchingRequest?.questionV1 ?? completedRequest?.questionV1;
-    const handler = useAskUserQuestionHandler(isRunning ? activeMatchingRequest?.currentHandler : undefined, source.serverId ?? null);
+    const handler = useAskUserQuestionHandler(isRunning ? activeMatchingRequest?.currentHandler : undefined, source.serverId ?? null,
+        isRunning && activeMatchingRequest?.questionV1 && sessionId
+            ? { sessionId, questionV1: activeMatchingRequest.questionV1 } : undefined);
     const answeredByLabel = useAskUserQuestionAnsweredByLabel(tool.permission?.status === 'approved' ? tool.permission.answeredBy : undefined, source.serverId ?? null);
     const rememberAnchorRef = React.useRef<View>(null);
     const [rememberOpen, setRememberOpen] = React.useState(false);

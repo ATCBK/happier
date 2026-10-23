@@ -19,6 +19,7 @@ import {
 } from '@/components/workflows/presentation/workflowRunDisplayName';
 import { useWorkflowInlineRunControls } from '@/components/workflows/run/useWorkflowInlineRunControls';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { isTerminalWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { t } from '@/text';
 
@@ -37,6 +38,10 @@ export const DiscussionWorkflowRunRow = React.memo(
       accountLifetime: ServerAccountScopeLifetime;
       /** The new round stays here: the list re-reads and shows it under its message. */
       onStarted: (result: WorkflowRunStartResultV1) => void;
+      /** The committed replies this Run published here, in thread order. */
+      publishedMessageIds: readonly string[];
+      /** Save as pattern from this finished Run's replies; the Discussion's one capture controller. */
+      onSaveAsPattern: (messageIds: readonly string[]) => void;
     }>,
   ) {
     const { theme } = useUnistyles();
@@ -77,6 +82,14 @@ export const DiscussionWorkflowRunRow = React.memo(
     const anotherRound = controls.anotherRound;
     const runId = props.run.id;
     const open = React.useCallback(() => openRun(runId), [openRun, runId]);
+    const { publishedMessageIds, onSaveAsPattern } = props;
+    const savePattern = React.useCallback(
+      () => onSaveAsPattern(publishedMessageIds),
+      [onSaveAsPattern, publishedMessageIds],
+    );
+    const canSavePattern =
+      isTerminalWorkflowRunState(props.run.state) &&
+      publishedMessageIds.length > 0;
     return (
       <View
         style={[styles.outer, column]}
@@ -89,7 +102,22 @@ export const DiscussionWorkflowRunRow = React.memo(
             presentation={presentation}
             onOpen={open}
             actions={
-              anotherRound ? (
+              <>
+                {canSavePattern ? (
+                  <ToolbarButton
+                    testID={`discussion-workflow-run-save-pattern:${runId}`}
+                    label={t('workflows.start.capture.title')}
+                    icon={
+                      <Icon
+                        name="bookmark"
+                        size={ICON_SIZE.xs}
+                        color={theme.colors.text.secondary}
+                      />
+                    }
+                    onPress={savePattern}
+                  />
+                ) : null}
+                {anotherRound ? (
                 <ToolbarButton
                   testID={`discussion-workflow-run-another-round:${runId}`}
                   label={t('workflows.start.anotherRound')}
@@ -104,7 +132,8 @@ export const DiscussionWorkflowRunRow = React.memo(
                   busy={pending}
                   onPress={() => void anotherRound()}
                 />
-              ) : null
+                ) : null}
+              </>
             }
           />
           {controls.start.refusal ? (

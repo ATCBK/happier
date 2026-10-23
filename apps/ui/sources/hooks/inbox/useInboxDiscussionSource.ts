@@ -47,7 +47,7 @@ export function useInboxDiscussionSource(serverId: string | null) {
     const sessionAddresses = React.useMemo(() => binding ? [...new Set((attention?.discussions ?? [])
         .flatMap(entry => entry.occurrences.flatMap(({ message }) => message.content
             ? [...readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds,
-                ...(message.producerV1 ? [message.producerV1.sessionId] : [])] : [])))]
+                ...(message.producerV1?.kind === 'agent' ? [message.producerV1.sessionId] : [])] : [])))]
         .map(sessionId => ({ serverId: binding.scope.serverId, sessionId })) : [], [binding, attention?.discussions]);
     // A Discussion message names the Sessions it mentions from encrypted content: demanded like visible list rows.
     useSessionContentDemand(sessionAddresses, { tag: 'inbox.hydrateDiscussionSessions', hydrate: 'unsettled' });

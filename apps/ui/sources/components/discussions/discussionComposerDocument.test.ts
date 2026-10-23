@@ -11,6 +11,7 @@ import {
     buildDiscussionModelSlotMentionPayload,
     resolveDiscussionCreationTitle,
     prepareDiscussionContentForRecipients,
+    readDiscussionContentPassage,
 } from './discussionComposerDocument';
 import { projectDiscussionMessageReferences } from './discussionTimelineProjection';
 
@@ -109,5 +110,10 @@ describe('discussion composer document', () => {
         expect(resolveDiscussionCreationTitle({ title: '  Release review  ', text: '' })).toBe('Release review');
         expect(resolveDiscussionCreationTitle({ title: '', text: `\n${account.tokenText} First line\nSecond line`, mentions: [{ ...account, start: 1, end: account.end + 1 }] })).toBe('First line');
         expect(resolveDiscussionCreationTitle({ title: '', text: account.tokenText, mentions: [account] })).toBeNull();
+    });
+    it('reads no passage from a Workflow result, which has no Doc target', () => {
+        const result = DiscussionMessageContentV1Schema.parse({ kind: 'workflow_result', value: { verdict: 'ship' },
+            summary: 'Ship it', source: { runId: 'run-1', invocationRecordId: 'invocation-1', invocationAttempt: '0' } });
+        expect(readDiscussionContentPassage(result)).toBeNull();
     });
 });

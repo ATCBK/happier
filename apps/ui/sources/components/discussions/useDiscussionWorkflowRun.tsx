@@ -10,11 +10,7 @@ import { t } from '@/text';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-
-/** No capture producer is registered yet; no local graph builder may stand in for it. */
-export const DISCUSSION_PATTERN_CAPTURE_UNAVAILABLE = Object.freeze({
-    status: 'unavailable', reason: 'workflow_definition_capture_unavailable', actionId: 'workflow.definition.capture',
-} as const);
+import { useDiscussionWorkflowCapture } from './useDiscussionWorkflowCapture';
 
 /** Data binding only. The Discussion composition owner places this shared chip. */
 export function useDiscussionWorkflowRun(params: Readonly<{
@@ -35,6 +31,7 @@ export function useDiscussionWorkflowRun(params: Readonly<{
     onStarted: (result: WorkflowRunStartResultV1) => void;
     disabled?: boolean;
 }>) {
+    const saveAsPattern = useDiscussionWorkflowCapture(params);
     const origin = React.useMemo(() => params.addressingMessageId === null ? undefined : {
         kind: 'discussion' as const, discussion: params.discussion, addressingMessageId: params.addressingMessageId,
     }, [params.addressingMessageId, params.discussion]);
@@ -64,5 +61,5 @@ export function useDiscussionWorkflowRun(params: Readonly<{
         renderContent: ({ requestClose, maxHeight }) => <WorkflowStartPicker
             accountLifetime={params.accountLifetime} onSelect={select} onRequestClose={requestClose} maxHeight={maxHeight} />,
     }), [origin, params.accountLifetime, params.disabled, params.project, prepareOrigin, scoped, select]);
-    return { chip, select, saveAsPattern: DISCUSSION_PATTERN_CAPTURE_UNAVAILABLE };
+    return { chip, select, saveAsPattern };
 }

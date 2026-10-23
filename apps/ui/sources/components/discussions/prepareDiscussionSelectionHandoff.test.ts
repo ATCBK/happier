@@ -3,7 +3,7 @@ import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol';
 import { DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
 import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
-import { prepareDiscussionSelectionHandoff } from '@/components/discussions/prepareDiscussionSelectionHandoff';
+import { prepareDiscussionSelectionHandoff, projectWorkflowRunPublishedAnswerIds } from '@/components/discussions/prepareDiscussionSelectionHandoff';
 
 const message = (input: Readonly<{
     id: string;
@@ -139,5 +139,23 @@ describe('prepareDiscussionSelectionHandoff', () => {
         };
         expect(prepareDiscussionSelectionHandoff(input)?.text).toBe('@Build Agent');
         expect(prepareDiscussionSelectionHandoff({ ...input, resolveSessionLabel: () => null })).toBeNull();
+    });
+});
+
+describe('projectWorkflowRunPublishedAnswerIds', () => {
+    const published = (id: string, seq: number, runId: string, outcome: 'answer' | 'pass' | 'failed') => message({ id, seq, authorAccountId: 'alice',
+        producerV1: { v: 1, kind: 'workflow', runId, invocationRecordId: `invocation-${id}`, invocationAttempt: '0',
+            execution: { kind: 'action', actionId: 'review.verdict' }, outcome } });
+
+    it('lists each Run\'s answers in thread order and leaves out passes, failures and other producers', () => {
+        const byRun = projectWorkflowRunPublishedAnswerIds([
+            published('late', 5, 'run-a', 'answer'),
+            message({ id: 'human', seq: 1, authorAccountId: 'alice' }),
+            published('early', 2, 'run-a', 'answer'),
+            published('passed', 3, 'run-a', 'pass'),
+            published('stopped', 4, 'run-a', 'failed'),
+            published('other-run', 6, 'run-b', 'answer'),
+        ]);
+        expect(Object.fromEntries(byRun)).toEqual({ 'run-a': ['early', 'late'], 'run-b': ['other-run'] });
     });
 });

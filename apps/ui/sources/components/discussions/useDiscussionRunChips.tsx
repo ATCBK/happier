@@ -32,7 +32,7 @@ export function useDiscussionRunChips(
     onStarted: (result: WorkflowRunStartResultV1) => void;
     disabled: boolean;
   }>,
-): readonly AgentInputExtraActionChip[] {
+): Readonly<{ chips: readonly AgentInputExtraActionChip[]; capture: ReturnType<typeof useDiscussionWorkflowRun>['saveAsPattern'] }> {
   const { target, project, machines, machineName, choose } = useDiscussionWorkflowProject(params.accountLifetime);
   const run = useDiscussionWorkflowRun({
     discussion: params.discussion,
@@ -75,8 +75,9 @@ export function useDiscussionRunChips(
       }),
     [choose, machineName, machines, params.disabled, project, target],
   );
-  return React.useMemo(
+  const chips = React.useMemo(
     () => (project ? [run.chip, where] : [where]),
     [project, run.chip, where],
   );
+  return { chips, capture: run.saveAsPattern };
 }

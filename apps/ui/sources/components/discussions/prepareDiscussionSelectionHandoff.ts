@@ -2,6 +2,7 @@ import { omit } from 'zod/mini';
 import { DiscussionSelectionSourceV1Schema, readDiscussionMessagePartsV1, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
+import { resolveDiscussionWorkflowAttribution } from './discussionTimelineProjection';
 import { formatSelectedMessagesForClipboard } from '@/components/sessions/transcript/messageSelection/formatSelectedMessagesForClipboard';
 import type { TranscriptBulkCopyFormat } from '@/components/sessions/transcript/messageSelection/_types';
 
@@ -50,6 +51,24 @@ export function isSelectableDiscussionMessage(
 }
 
 /**
+ * The answers each Workflow Run published into this thread, by Run, in thread order: what Save as pattern
+ * starts from under a finished Run. A pass, a failure or a stop is an outcome rather than an answer, and
+ * a message the thread cannot offer for selection is not one either.
+ */
+export function projectWorkflowRunPublishedAnswerIds(
+    messages: ReadonlyArray<DiscussionOpenedMessageV1>,
+): ReadonlyMap<string, readonly string[]> {
+    const byRun = new Map<string, string[]>();
+    const ordered = [...messages].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+    for (const message of ordered) {
+        const attribution = resolveDiscussionWorkflowAttribution(message);
+        if (attribution?.outcome !== 'answer' || !isSelectableDiscussionMessage(message)) continue;
+        byRun.set(attribution.runId, [...(byRun.get(attribution.runId) ?? []), message.id]);
+    }
+    return byRun;
+}
+
+/**
  * Adapts opened Discussion rows to the one neutral transcript-selection formatter.
  * It neither fetches content nor invents labels, authority, queueing, or draft state.
  */
@@ -77,7 +96,7 @@ export function prepareDiscussionSelectionHandoff(params: Readonly<{
         const accountLabel = params.resolveAccountLabel(message.authorAccountId)?.trim();
         const text = renderDiscussionContent(message, params.resolveAccountLabel, params.resolveSessionLabel);
         if (!accountLabel || text === null) return null;
-        const label = message.producerV1 === null
+        const label = message.producerV1?.kind !== 'agent'
             ? accountLabel
             : `${accountLabel} · ${params.agentAttributionLabel}`;
         entries.push({ id: message.id, seq: message.seq, role: 'user', label, text });

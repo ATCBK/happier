@@ -59,6 +59,7 @@ import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layou
 import { useDiscussionSettings } from './useDiscussionSettings';
 import { buildDiscussionCheckInMenuAction } from './discussionCheckInMenu';
 import { useDiscussionRecipientSelection } from './useDiscussionRecipientSelection';
+import { DiscussionPatternCapturePanel, type DiscussionPatternCaptureMessage } from './DiscussionPatternCapturePanel';
 import type { DiscussionParticipantRefV1 } from '@happier-dev/protocol/discussions/references';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -114,13 +115,15 @@ import { DiscussionWorkflowRunRow } from '@/components/discussions/DiscussionWor
 import { useDiscussionManagedWorkflowRuns } from '@/components/discussions/useDiscussionManagedWorkflowRuns';
 import { useDiscussionRunChips } from '@/components/discussions/useDiscussionRunChips';
 import { buildDiscussionContent } from '@/components/discussions/discussionComposerDocument';
-import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem, placeDiscussionRequesterApprovals } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionReplyPresentation, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, startsDiscussionMessageGroup, type DiscussionTimelineItem, placeDiscussionRequesterApprovals } from '@/components/discussions/discussionTimelineProjection';
+import { DiscussionWorkflowResult, DiscussionWorkflowRunOpen } from '@/components/discussions/DiscussionWorkflowResult';
+import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
 import { joinList } from '@/utils/text/joinList';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
-import { isSelectableDiscussionMessage, prepareDiscussionSelectionHandoff } from '@/components/discussions/prepareDiscussionSelectionHandoff';
+import { isSelectableDiscussionMessage, prepareDiscussionSelectionHandoff, projectWorkflowRunPublishedAnswerIds } from '@/components/discussions/prepareDiscussionSelectionHandoff';
 import { sendDiscussionSelectionToSession } from '@/components/discussions/sendDiscussionSelectionToSession';
 import { DiscussionComposer } from '@/components/discussions/DiscussionComposer';
 import { resolveDiscussionCreationTitle } from './discussionComposerDocument';
@@ -158,6 +161,8 @@ const styles = StyleSheet.create((theme) => ({
     retryText: { color: theme.colors.accent.blue, fontWeight: '600' },
     fieldHint: { color: theme.colors.text.destructive },
     outcomeFailed: { color: theme.colors.text.destructive },
+    outcomeLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: theme.space.s8 },
+    outcomeText: { flexShrink: 1 },
     // The new page's name field is the header's title, at the title's own step, with no field chrome.
     titleInput: { flex: 1, minWidth: 0, padding: 0, color: theme.colors.text.primary, ...Typography.variant('heading', 'semiBold') },
     // A phone header takes the large title step; the name field follows it.
@@ -169,6 +174,7 @@ const styles = StyleSheet.create((theme) => ({
     draftPassageQuote: { flex: 1, minWidth: 0 },
 }));
 const VIEWABILITY = Object.freeze({ itemVisiblePercentThreshold: 1 });
+const NO_MESSAGE_IDS: readonly string[] = Object.freeze([]);
 const NO_VIEWERS: readonly SessionHumanPresenceViewer[] = Object.freeze([]);
 const PRESENCE_FACE_LIMIT = 3;
 /** Retained last-known presence is quieter than live presence (the facepile's own de-emphasis). */
@@ -240,21 +246,6 @@ function textOf(
 ): string {
     if (!content) return t('session.collaboration.discussion.contentUnavailable');
     return projectDiscussionMessageReferences(content, { account: resolveAccountLabel, session: resolveSessionLabel }).readableText;
-}
-
-function discussionMessageProducerClass(message: DiscussionDisplayMessage): string {
-    return message.producerV1 === null ? 'human' : `producer:${message.producerV1.kind}`;
-}
-
-function startsDiscussionMessageGroup(
-    message: DiscussionDisplayMessage,
-    previous: DiscussionDisplayMessage | undefined,
-): boolean {
-    return !previous
-        || message.authorAccountId === null
-        || previous.authorAccountId === null
-        || previous.authorAccountId !== message.authorAccountId
-        || discussionMessageProducerClass(previous) !== discussionMessageProducerClass(message);
 }
 
 function useRepository(
@@ -679,7 +670,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         ...(message.participantDeliveryV1?.map((delivery) => delivery.participantSessionId) ?? []),
         // A Bot reply's byline names the Session that answered, through the same title projection.
         // A suggested edit's author is named too: its Ask to redo addresses that Session.
-        ...(message.producerV1 && (message.producerV1.actionRequestAttributionV1?.requester
+        ...(message.producerV1?.kind === 'agent' && (message.producerV1.actionRequestAttributionV1?.requester
             || (message.content && isDiscussionDocEditProposalContentV1(message.content))) ? [message.producerV1.sessionId] : []),
     ]))]
         .map((sessionId) => ({ serverId: props.scope.serverId, sessionId })), [messages, props.scope.serverId]);
@@ -736,6 +727,18 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         .filter(isSelectableDiscussionMessage)
         .sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id))
         .map((message) => ({ id: message.id, role: 'user' as const, text: textOf(message.content, resolveAccountLabel, resolveSessionLabel) })), [messages, resolveAccountLabel, resolveSessionLabel]);
+    // Save as pattern chooses from the same committed messages, named as the thread names their speaker.
+    const patternCaptureMessages = React.useMemo<readonly DiscussionPatternCaptureMessage[]>(() => messages
+        .filter(isSelectableDiscussionMessage)
+        .sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id))
+        .map((message) => {
+            const author = (message.authorAccountId ? resolveAccountLabel(message.authorAccountId) : null) ?? t('session.collaboration.discussion.collaborator');
+            return { id: message.id, author: message.producerV1?.kind === 'agent' ? resolveSessionLabel(message.producerV1.sessionId) ?? author : author,
+                text: textOf(message.content, resolveAccountLabel, resolveSessionLabel) };
+        }), [messages, resolveAccountLabel, resolveSessionLabel]);
+    const patternCaptureAnchorRef = React.useRef<View>(null);
+    // What each Workflow Run published here: its answers, as the thread's committed replies carrying its provenance.
+    const publishedByRun = React.useMemo(() => projectWorkflowRunPublishedAnswerIds(messages), [messages]);
     const prepareSelection = React.useCallback((selected: ReadonlyArray<TranscriptSelectionToolbarMessage>) => prepareDiscussionSelectionHandoff({
         serverId: props.target.address.serverId,
         discussionId: props.target.discussionId,
@@ -878,7 +881,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const draftTextRef = React.useRef(draft.text);
     draftTextRef.current = draft.text;
     const readComposerDraft = React.useCallback(() => draftTextRef.current, []);
-    const runChips = useDiscussionRunChips({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
+    const { chips: runChips, capture: patternCapture } = useDiscussionRunChips({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
         readDraft: readComposerDraft, prepareAddressingMessage: prepareRunAddressingMessage, onStarted: managedRuns.retry,
         disabled: !discussion?.capabilities.postMessages || composerBlocked || mutationsDisabled || discussion?.archivedAt !== null });
     const lifecycle = React.useCallback(async (kind: 'rename' | 'archive' | 'restore') => {
@@ -894,13 +897,16 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         settings: { status: checkInStatus, override: checkInOverride, saving: checkInSaving, canManage: checkInCanManage, dontPause, inherit },
         accountAfterTurns: accountCheckIn.afterTurns,
     }), [accountCheckIn.afterTurns, checkInCanManage, checkInOverride, checkInSaving, checkInStatus, dontPause, inherit]);
+    // C4 capture-review composition consumes this controller; it owns no graph or save path here.
     const lifecycleActions = React.useMemo<readonly PageHeaderMenuAction[]>(() => discussion ? [
+        { id: 'save-as-pattern', title: t('workflows.start.capture.title'), testID: 'discussion-save-as-pattern',
+            disabled: !props.accountLifetime.isCurrent(), onSelect: () => patternCapture.open() },
         ...(discussion.capabilities.rename ? [{ id: 'rename', title: t('session.collaboration.discussion.rename'), disabled: mutationsDisabled, onSelect: () => setRename(discussion.title ?? '') }] : []),
         ...(discussion.capabilities.archive ? [{ id: 'archive', title: t('session.collaboration.discussion.archive'), disabled: mutationsDisabled, onSelect: () => lifecycle('archive') }] : []),
         ...(discussion.capabilities.restore ? [{ id: 'restore', title: t('session.collaboration.discussion.restore'), disabled: mutationsDisabled, onSelect: () => lifecycle('restore') }] : []),
         // DISC-17: this Discussion's own check-in, after the lifecycle rows (its own kind, so the menu divides them).
         ...(checkInAction && discussion.archivedAt === null ? [{ ...checkInAction, disabled: checkInAction.disabled || mutationsDisabled }] : []),
-    ] : [], [checkInAction, discussion, lifecycle, mutationsDisabled]);
+    ] : [], [checkInAction, discussion, lifecycle, mutationsDisabled, patternCapture.open, props.accountLifetime]);
     const displayMessages = React.useMemo<readonly DiscussionDisplayMessage[]>(() => {
         if (!mutation?.content || mutation.status === 'observed_success' || messages.some((message) => message.localId === mutation.localId)) return messages;
         return [...messages, {
@@ -1076,7 +1082,15 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         return shownProposalDocs.includes(artifactId) && entry?.client === proposalClient ? entry.read : LOADING_PROPOSAL_DOC;
     };
     // Legend retains its renderItem through refs; currentness/refusal must reach its mounted cells.
-    const rowsVersion = JSON.stringify([requesterApprovalsVersion, shownProposalDocs.map(artifactId => {
+    // A Workflow reply's byline names its Run once that Run's private metadata arrives.
+    // Only a real name speaks for the Run; an unnamed or unreadable one falls back to "Workflow run" in the row.
+    const workflowRunLabel = (runId: string): string | null => {
+        const name = resolveWorkflowRunDisplayName(managedRuns.metadataByRunId?.[runId]);
+        return name.kind === 'name' ? formatWorkflowRunDisplayName(name) : null;
+    };
+    const producerRunLabels = [...new Set(messages.flatMap((message) => message.producerV1?.kind === 'workflow' ? [message.producerV1.runId] : []))]
+        .map((runId) => [runId, workflowRunLabel(runId)]);
+    const rowsVersion = JSON.stringify([requesterApprovalsVersion, producerRunLabels, shownProposalDocs.map(artifactId => {
         const read = readProposalDoc(artifactId);
         return read.status === 'ready'
             ? [artifactId, read.status, read.value.artifact.revision, read.value.artifact.seq, read.value.artifact.access]
@@ -1205,7 +1219,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         constrainWidth={false}
         rightElement={<View style={styles.headerActions}>
             {participantsPopover}
-            {phoneMenuActions.length > 0 ? <PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={phoneMenuActions} /> : null}
+            {phoneMenuActions.length > 0 ? <View ref={patternCaptureAnchorRef} collapsable={false}><PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={phoneMenuActions} /></View> : null}
         </View>}
     /> : null;
     return <TranscriptMessageSelectionBoundary sessionId={dataKey} eligibleMessageIdsInOrder={selectableMessages.map((message) => message.id)}>
@@ -1247,7 +1261,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 </View> : null}
                 controls={rename !== null ? <TextInput testID="session-discussion-rename-input" style={[styles.input, { flex: 1 }]} value={rename} onChangeText={setRename} accessibilityLabel={t('session.collaboration.discussion.rename')} autoFocus /> : undefined}
                 buttons={rename !== null ? [{ label: t('common.save'), disabled: !rename.trim() || mutationsDisabled, onPress: () => void lifecycle('rename') }] : undefined}
-                menu={rename === null && lifecycleActions.length > 0 ? <PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={lifecycleActions} /> : undefined}
+                menu={rename === null && lifecycleActions.length > 0 ? <View ref={patternCaptureAnchorRef} collapsable={false}><PageHeaderMenu triggerTestID="session-discussion-actions-menu" actions={lifecycleActions} /></View> : undefined}
             />}
             {threadStaleLabel ? <SurfaceFreshnessLine
                 testID="session-discussion-freshness"
@@ -1284,7 +1298,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             return <DiscussionWorkflowRunRow run={item.run} metadata={managedRuns.metadataByRunId?.[item.run.id]}
                                 supportsAnotherRound={managedRuns.supportsAnotherRoundByRunId?.[item.run.id]}
                                 canEdit={managedRuns.callerAccessByRunId?.[item.run.id]?.canEdit === true}
-                                accountLifetime={props.accountLifetime} onStarted={managedRuns.retry} />;
+                                accountLifetime={props.accountLifetime} onStarted={managedRuns.retry}
+                                publishedMessageIds={publishedByRun.get(item.run.id) ?? NO_MESSAGE_IDS} onSaveAsPattern={patternCapture.open} />;
                         }
                         if (item.kind === 'agent_activity_reference') {
                             return <View style={styles.reference}>
@@ -1301,7 +1316,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             onOpenMessage={openQuotedMessage}
                             onReply={discussion.archivedAt === null && discussion.capabilities.postMessages ? replyToMessage : undefined}
                             authorLabel={resolveDiscussionMessageAuthorLabel(item.message, viewer)}
-                            agentLabel={item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null}
+                            agentLabel={item.message.producerV1?.kind === 'agent' ? resolveSessionLabel(item.message.producerV1.sessionId) : null}
+                            workflowRunLabel={item.message.producerV1?.kind === 'workflow' ? workflowRunLabel(item.message.producerV1.runId) : null}
                             startsGroup={messageGroupStarts.has(item.message.id)}
                             repeatsPassage={repeatedPassages.has(item.message.id)}
                             selectable={isCommittedDisplayMessage(item.message) && isSelectableDiscussionMessage(item.message) && item.message.id !== mutation?.localId}
@@ -1324,6 +1340,9 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 />
                 {/* The shared selection bar floats over the thread's foot (collab lab D1), so it never
                     reserves a band of its own while nothing is selected. */}
+                <DiscussionPatternCapturePanel capture={patternCapture} anchorRef={patternCaptureAnchorRef}
+                    discussionTitle={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
+                    messages={patternCaptureMessages} accountLifetime={props.accountLifetime} />
                 <View pointerEvents="box-none" style={styles.selectionToolbar}>
                 <TranscriptSelectionToolbar selectableMessagesInOrder={selectableMessages} bulkCopyFormat={transcriptBulkCopyFormat} roleLabels={{ user: t('session.collaboration.discussion.collaborator'), assistant: t('voiceActivity.format.assistant') }} sendToSessionEnabled={discussion.capabilities.sendToSession && props.source?.canSendToSession === true} onSendToSession={sendSelectionToComposer} formatSelection={(selected) => prepareSelection(selected)?.text ?? null} selectionUnavailableText={t('session.collaboration.discussion.contentUnavailable')} additionalAction={discussion.capabilities.askAgent && props.source?.canLaunchExecutionRuns ? { testID: 'session-discussion-selection-ask-agent', label: t('session.collaboration.discussion.selection.askAgent'), onPress: askAgentAboutSelection } : undefined} />
             </View>
@@ -1467,6 +1486,8 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     authorLabel: string;
     /** The Session that answered, named through this Home's title projection; null when not readable here. */
     agentLabel: string | null;
+    /** The Workflow Run that published this message, by the name its Account-private metadata gives it. */
+    workflowRunLabel: string | null;
     proposalClient: ArtifactActionsClient;
     proposalDocRead: AdmittedDocRead;
     viewerAccountId: string;
@@ -1498,22 +1519,15 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     const actor = message.accountActor;
     const faceAccountId = actor !== null && actor.accountId === message.authorAccountId ? actor.accountId : message.authorAccountId;
     const passage = props.repeatsPassage ? null : readDiscussionContentPassage(message.content);
-    const outcome = resolveDiscussionReplyOutcome(message);
-    const speaker = message.producerV1 ? props.agentLabel ?? props.authorLabel : props.authorLabel;
-    // A participant that passed, failed or stopped is one quiet attributed line in the thread (lab T2-A
-    // "Release bot passed · nothing to add"), not a message: nobody has to read past it.
-    if (outcome === 'pass' || outcome === 'failed' || outcome === 'cancelled') {
-        const reason = message.content ? textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel).trim() : '';
-        const said = t(outcome === 'pass' ? 'session.collaboration.discussion.reply.passed'
-            : outcome === 'failed' ? 'session.collaboration.discussion.reply.failed'
-                : 'session.collaboration.discussion.reply.cancelled', { name: speaker });
-        return <HappierThreadMessage testID={`session-discussion-outcome-${outcome}-${message.id}`} startsGroup={false}
-            space={theme.space} selectionColors={theme.colors.state.active} style={contentWidth}>
-            <Text accessibilityLiveRegion="polite" style={[styles.meta, outcome === 'failed' ? styles.outcomeFailed : null]}>
-                {reason ? `${said} · ${reason}` : said}
-            </Text>
-        </HappierThreadMessage>;
-    }
+    // A Workflow speaks as its Run, never as a Session; its outcome is the one its publisher stamped.
+    const workflow = resolveDiscussionWorkflowAttribution(message);
+    const agentOutcome = resolveDiscussionReplyOutcome(message);
+    const presentation = resolveDiscussionReplyPresentation(message);
+    const notice = presentation.kind === 'notice' ? presentation.outcome : null;
+    const stopped = presentation.kind === 'message' && presentation.stopped;
+    const speaker = message.producerV1?.kind === 'agent' ? props.agentLabel ?? props.authorLabel
+        : workflow ? props.workflowRunLabel ?? t('workflows.run.untitled') : props.authorLabel;
+    const actions = props.selectable && notice === null;
     return <HappierThreadMessage
         testID={`session-discussion-message-group-${props.startsGroup ? 'start' : 'continuation'}-${message.id}`}
         startsGroup={props.startsGroup}
@@ -1521,16 +1535,18 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
         space={theme.space}
         selectionColors={theme.colors.state.active}
         style={contentWidth}
-        {...(props.selectable ? hover.hoverProps : null)}
+        {...(actions ? hover.hoverProps : null)}
         face={props.startsGroup && faceAccountId
                 ? <Avatar id={faceAccountId} imageUrl={actor?.profile?.avatarUrl ?? null} size={28} />
                 : null}
         attribution={props.startsGroup ? <>
                 <Text testID={`session-discussion-message-actor-${message.id}`} style={styles.messageAuthor}>{speaker}</Text>
-                {message.producerV1 ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.viaAgent')}</Text> : null}
+                {/* An unnamed Run already reads "Workflow run"; the tag would only repeat it. */}
+                {message.producerV1 && (message.producerV1.kind === 'agent' || props.workflowRunLabel) ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>
+                    {message.producerV1.kind === 'agent' ? t('session.collaboration.discussion.viaAgent') : t('workflows.start.workflow')}</Text> : null}
                 {message.createdAt > 0 ? <Text testID={`session-discussion-message-timestamp-${message.id}`} accessibilityRole="text" accessibilityLabel={new Date(message.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTime(message.createdAt)}</Text> : null}
         </> : null}
-        trailing={props.selectable ? <RowActionRevealSlot revealed={selectRevealed || decisionOpen} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
+        trailing={actions ? <RowActionRevealSlot revealed={selectRevealed || decisionOpen} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
             <View style={styles.rowActions}>
                 {props.onReply && !selection.isSelectionMode ? <IconButton testID={`session-discussion-reply-${message.id}`} size={28} variant="plain"
                     icon={<Icon name="arrow-elbow-up-left" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
@@ -1553,6 +1569,18 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
             </View>
         </RowActionRevealSlot> : null}
     >
+            {/* Passed, failed or stopped with nothing kept: one quiet line under the speaker's byline (lab T2-A),
+                nothing anyone has to read past. A stopped reply that kept a partial answer reads as the answer it is. */}
+            {notice ? <View style={styles.outcomeLine} testID={`session-discussion-outcome-${notice}-${message.id}`}>
+                <Text accessibilityLiveRegion="polite" style={[styles.meta, styles.outcomeText, notice === 'failed' ? styles.outcomeFailed : null]}>
+                    {[t(notice === 'pass' ? 'session.collaboration.discussion.reply.passed'
+                        : notice === 'failed' ? 'session.collaboration.discussion.reply.failed'
+                            : 'session.collaboration.discussion.reply.cancelled'),
+                    message.content ? textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel).trim() : '',
+                    ].filter(Boolean).join(' · ')}
+                </Text>
+                {workflow ? <DiscussionWorkflowRunOpen messageId={message.id} runId={workflow.runId} serverId={props.serverId} /> : null}
+            </View> : <>
             {props.repeatsPassage ? null : passage || message.replyTarget?.kind === 'doc_passage'
                         ? <ArtifactPassageQuote testID={`discussion-reply-quote-${message.id}`} passage={passage} />
                         : message.replyTarget?.kind === 'message' ? <ReplyQuote testID={`discussion-reply-quote-${message.id}`} kind="message"
@@ -1571,16 +1599,21 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                     proposalRef={message.messageRef ?? null} proposal={message.content.proposal}
                     disposition={message.docEditProposalDispositionV1} viewerAccountId={props.viewerAccountId}
                     resolveAccountLabel={props.resolveAccountLabel}
-                    proposer={message.producerV1 ? { label: speaker, mention: { sessionId: message.producerV1.sessionId } }
-                        : message.authorAccountId ? { label: speaker, mention: { accountId: message.authorAccountId } } : null} />
+                    proposer={message.producerV1?.kind === 'agent' ? { label: speaker, mention: { sessionId: message.producerV1.sessionId } }
+                        // A Run can't be asked to redo: Ask to redo addresses only a Session or a person.
+                        : message.producerV1 === null && message.authorAccountId ? { label: speaker, mention: { accountId: message.authorAccountId } } : null} />
                 : <DiscussionMessageContent message={message} serverId={props.serverId}
                     resolveAccountLabel={props.resolveAccountLabel} resolveSessionLabel={props.resolveSessionLabel} textStyle={styles.messageText} />}
+            {workflow ? <DiscussionWorkflowResult messageId={message.id} runId={workflow.runId} serverId={props.serverId}
+                detail={readDiscussionWorkflowResultDetail(message.content)} /> : null}
             {/* One quiet line under an answer (lab T2-A): who asked, and that it read the conversation only up to
                 that question (C3 cutoff). Explicit and final-return replies share it. */}
-            {props.attributionLine || outcome === 'answer' ? <Text style={styles.meta}>
+            {props.attributionLine || agentOutcome === 'answer' || stopped ? <Text style={styles.meta}>
                 {props.attributionLine ? <Text testID={`session-discussion-message-attribution-${message.id}`}>{props.attributionLine}</Text> : null}
-                {props.attributionLine && outcome === 'answer' ? ' · ' : null}
-                {outcome === 'answer' ? <Text testID={`session-discussion-message-cutoff-${message.id}`}>{t('session.collaboration.discussion.reply.readUpTo')}</Text> : null}
+                {props.attributionLine && (agentOutcome === 'answer' || stopped) ? ' · ' : null}
+                {agentOutcome === 'answer' ? <Text testID={`session-discussion-message-cutoff-${message.id}`}>{t('session.collaboration.discussion.reply.readUpTo')}</Text> : null}
+                {/* DISC-19: the kept partial stays a readable answer; this says only that it isn't finished. */}
+                {stopped ? <Text testID={`session-discussion-message-stopped-${message.id}`}>{t('session.collaboration.discussion.reply.stopped')}</Text> : null}
             </Text> : null}
             {message.participantDeliveryV1?.map((delivery) => <Text
                 key={delivery.participantSessionId}
@@ -1590,6 +1623,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
             >{t('session.collaboration.discussion.participantHeld', {
                 participant: props.resolveSessionLabel(delivery.participantSessionId) ?? t('session.collaboration.discussion.heldParticipant'),
             })}</Text>)}
+            </>}
             {props.footer}
             {decisionOpen && decisionSource ? <SaveMemoryDecisionSheet
                 seed={seedMemoryDecisionFromMessage(decisionSource, textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel))}

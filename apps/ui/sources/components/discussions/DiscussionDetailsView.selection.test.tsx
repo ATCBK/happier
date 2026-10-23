@@ -1908,9 +1908,8 @@ describe('DiscussionDetailsView selection', () => {
       )?.props.accessibilityLiveRegion,
     ).toBe('polite');
     expect(
-      screen.findByTestId(
-        'session-discussion-message-content-post-local-unknown',
-      )?.props.children,
+      screen.findAllByType(MarkdownView).find((node) =>
+        node.props.testID === 'session-discussion-message-content-post-local-unknown')?.props.markdown,
     ).toBe('Uncertain message');
     expect(
       screen.findByTestId('session-discussion-mutation-retry')?.props,
@@ -2125,6 +2124,7 @@ describe('DiscussionDetailsView selection', () => {
     ).not.toBeNull();
     expect(screen.getTextContent()).toContain('This conversation is archived.');
     expect(dropdownProps.current?.items).toEqual([
+      expect.objectContaining({ id: 'save-as-pattern', testID: 'discussion-save-as-pattern' }),
       expect.objectContaining({ id: 'restore', title: 'Restore conversation' }),
     ]);
     expect(composerProps.current).toBeNull();

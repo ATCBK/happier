@@ -56,7 +56,11 @@ export function prepareDiscussionContentForRecipients(input: Readonly<{
 /** Reads the immutable passage basis from already opened Discussion content. */
 export function readDiscussionContentPassage(content: DiscussionMessageContentV1 | null | undefined): DocPassageRefV1 | null {
     if (!content || !('kind' in content)) return null;
-    return content.kind === 'doc_passage_comment' ? content.passage : content.proposal.target;
+    switch (content.kind) {
+        case 'doc_passage_comment': return content.passage;
+        case 'doc_edit_proposal': return content.proposal.target;
+        case 'workflow_result': return null;
+    }
 }
 
 /** Discussion-only identities remain inert until the committed post owner admits addressing. */

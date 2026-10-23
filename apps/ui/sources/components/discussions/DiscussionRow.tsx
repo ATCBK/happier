@@ -163,7 +163,7 @@ export const DiscussionRow = React.memo(function DiscussionRow(props: Readonly<{
     const subtitle = buildDiscussionRowSubtitle({
         latestAuthor: readLatestAuthorName(discussion),
         latestIsViewer: discussion.latestMessage.authorAccountId === props.viewerAccountId,
-        producedByAgent: discussion.latestMessage.producerV1 !== null,
+        producedByAgent: discussion.latestMessage.producerV1?.kind === 'agent',
         messageCount: discussion.messageSeq,
         labels: rowLabels,
     });
