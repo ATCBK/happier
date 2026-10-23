@@ -158,6 +158,7 @@ async function restoreTestAccount(options: {
     followingEnabled?: boolean;
     onRequest?: (path: string) => void;
     runtimeRequest?: (path: string, init?: RequestInit) => Response | undefined;
+    physicalRequest?: (url: string, init?: RequestInit) => Promise<Response> | undefined;
 } = {}): Promise<void> {
     await loadTestSync();
     const { profileDefaults } = await import('./domains/profiles/profile');
@@ -166,7 +167,10 @@ async function restoreTestAccount(options: {
         serverUrl: 'http://localhost:53288',
         accountId: ACCOUNT_ID,
         credentials: options.credentials ?? { token: ACCOUNT_TOKEN },
-        request: createSessionReadBatchFetchBoundary((url, init) => waitForNetworkResponseForTests((async () => {
+        request: (url, init) => options.physicalRequest?.(String(url), init) ?? sessionBoundary(url, init),
+    });
+    async function sessionBoundary(...args: Parameters<ReturnType<typeof createSessionReadBatchFetchBoundary>>) {
+        return createSessionReadBatchFetchBoundary((url, init) => waitForNetworkResponseForTests((async () => {
             const path = new URL(String(url)).pathname;
             options.onRequest?.(path);
             if (!bootstrapping) {
@@ -214,8 +218,8 @@ async function restoreTestAccount(options: {
                 return jsonResponse({ changes: page?.changes ?? [], nextCursor: Number(page?.nextCursor ?? 0) });
             }
             return domainHttp({ url: String(url), init });
-        })(), init?.signal)),
-    });
+        })(), init?.signal))(...args);
+    }
     const { storage } = await import('./domains/state/storage');
     await waitForHomeGovernance(() => {
         expect(storage.getState().isDataReady).toBe(true);
@@ -436,23 +440,30 @@ describe('sync AccountChange catch-up projection', () => {
     });
 
     it('publishes concurrent exact Session list projections as one store update without a publication timer', async () => {
-        const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
+        const ids = Array.from({ length: 6 }, (_, index) => `publication-projection-${index}`);
+        const responses = createDeferred<void>();
+        const requested = createDeferred<void>();
+        const physical: Array<{ path: string; ids: readonly string[] }> = [];
+        let directGets = 0;
+        await restoreTestAccount({ physicalRequest: (url, init) => {
+            const path = new URL(url).pathname;
+            if (ids.some(id => path === `/v2/sessions/${id}`)) directGets++;
+            if (path !== '/v2/sessions/read-batch') return undefined;
+            const input = JSON.parse(String(init?.body));
+            if (!input.sessionIds.some((id: string) => ids.includes(id))) return undefined;
+            physical.push({ path, ids: input.sessionIds });
+            requested.resolve();
+            return responses.promise.then(() => jsonResponse({ results: input.sessionIds.map((id: string) => ({
+                sessionId: id, detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id }) } },
+            })) }));
+        } });
+        const runtime = syncRuntime as unknown as SyncAccountChangeWakeSchedulingHarness & {
             refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
         };
         const { storage } = await import('./domains/state/storage');
         const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
         const scope = getActiveServerAccountScope();
         if (!scope) throw new Error('Expected restored Account scope');
-        const ids = Array.from({ length: 6 }, (_, index) => `publication-projection-${index}`);
-        const responses = createDeferred<void>();
-        let requested = 0;
-        domainHttp.mockImplementation(async ({ url }) => {
-            const id = new URL(url).pathname.split('/').at(-1)!;
-            if (!ids.includes(id)) return Response.json({}, { status: 404 });
-            requested++;
-            await responses.promise;
-            return jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) });
-        });
         let publications = 0;
         const unsubscribe = storage.subscribe((next, previous) => {
             if (next.sessionListRowsByServerId[scope.serverId] !== previous.sessionListRowsByServerId[scope.serverId]) publications++;
@@ -463,7 +474,9 @@ describe('sync AccountChange catch-up projection', () => {
         });
         let publicationTimersFrozen = false;
         try {
-            await waitForHomeGovernance(() => expect(requested).toBe(ids.length));
+            await requested.promise;
+            expect(physical).toEqual([{ path: '/v2/sessions/read-batch', ids }]);
+            expect(directGets).toBe(0);
             vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
             publicationTimersFrozen = true;
             responses.resolve();
@@ -484,9 +497,16 @@ describe('sync AccountChange catch-up projection', () => {
 
     it.each(['scope', 'account', 'same-home-retirement', 'other-home-retirement'] as const)(
         'rechecks exact Session list projection publication after %s', async change => {
-        const runtime = await prepareAccountChangeWakeSchedulingHarness() as SyncAccountChangeWakeSchedulingHarness & {
+        const started = createDeferred<void>();
+        const response = createDeferred<Response>();
+        let holdCurrentness = false;
+        await restoreTestAccount({ physicalRequest: (url) => {
+            if (!holdCurrentness || new URL(url).pathname !== '/v1/account/encryption/currentness') return undefined;
+            started.resolve();
+            return response.promise;
+        } });
+        const runtime = syncRuntime as unknown as SyncAccountChangeWakeSchedulingHarness & {
             refreshSessionListRowProjection(serverId: string, sessionId: string): Promise<void>;
-            readySessionListRowProjections: { getPendingCount(): number };
         };
         const { storage } = await import('./domains/state/storage');
         const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
@@ -496,33 +516,32 @@ describe('sync AccountChange catch-up projection', () => {
         domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === `/v2/sessions/${id}`
             ? jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) })
             : Response.json({}, { status: 404 }));
-        const scheduled = createDeferred<VoidFunction>();
-        const dispatchMicrotask = globalThis.queueMicrotask;
-        let intercepted = false;
-        const scheduler = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation(callback => {
-            if (!intercepted && runtime.readySessionListRowProjections.getPendingCount() > 0) {
-                intercepted = true;
-                scheduled.resolve(callback);
-            } else dispatchMicrotask(callback);
-        });
-        let publish: VoidFunction | undefined;
+        const { invalidateAccountEncryptionModeCache } = await import('./api/account/apiAccountEncryptionMode');
+        invalidateAccountEncryptionModeCache({ serverId: scope.serverId, reason: 'scope-reset' });
+        holdCurrentness = true;
         const read = runtime.refreshSessionListRowProjection(scope.serverId, id).then(() => 'applied', () => 'refused');
         try {
-            // The publication phase, rather than a guessed elapsed interval, is
-            // the point at which a retirement must still withdraw a completed read.
-            publish = await scheduled.promise;
+            // Hold the real fresh-witness HTTP boundary. Scope/access retirement
+            // must still fence the materialized row when that admission resumes.
+            await started.promise;
             if (change === 'scope') runtime.disconnectServer();
             else if (change === 'account') {
-                const { invalidateAccountEncryptionModeCache } = await import('./api/account/apiAccountEncryptionMode');
                 invalidateAccountEncryptionModeCache({ serverId: scope.serverId, reason: 'scope-reset' });
             }
             else storage.getState().deleteSession(id, change === 'same-home-retirement' ? scope.serverId : 'another-home');
-            publish();
-            publish = undefined;
+            response.resolve(jsonResponse({ mode: 'plain', version: 1, updatedAt: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null,
+                recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+            }));
             expect(await read).toBe(change === 'other-home-retirement' ? 'applied' : 'refused');
             expect(Boolean(storage.getState().sessionListRowsByServerId[scope.serverId]?.[id]))
                 .toBe(change === 'other-home-retirement');
-        } finally { scheduler.mockRestore(); publish?.(); await read; }
+        } finally {
+            response.resolve(jsonResponse({ mode: 'plain', version: 1, updatedAt: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null,
+            }));
+            await read;
+        }
     });
 
     it('publishes a ready exact Session list projection while another read remains pending', async () => {

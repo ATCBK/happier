@@ -119,7 +119,6 @@ import {
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { sessionAddressKey, normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
-import { createHydrationApplyQueue } from '@/sync/engine/hydrationApplyQueue';
 import { captureSessionListRetirementFence, wasSessionRetiredSinceFence } from '@/sync/store/domains/sessions';
 import type { OrdinarySessionListLifecycle } from '@/sync/domains/session/listing/ordinarySessionListHomeState';
 import {
@@ -670,7 +669,7 @@ import { resolveSessionMessageRouteId } from '@happier-dev/session-core/messages
 import type { SessionListQueryPageRequest } from './domains/session/listing/sessionListQueryController';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { readSessionOwnerMetadataView } from './domains/session/readSessionOwnerMetadataView';
-import { fetchAndApplySessionById } from './engine/sessions/sessionById';
+import { fetchAndApplySessionById, type SessionListRowPublication } from './engine/sessions/sessionById';
 import { looksLikeCurrentV2SessionNotFound404 } from './engine/sessions/sessionHttpCompat';
 import { getForkedTranscriptSnapshotCached } from './domains/sessionFork/forkedTranscriptSnapshot';
 import {
@@ -1331,15 +1330,6 @@ export type SessionSystemRecordRuntime = Readonly<{
     /** Read the current canonical Session key context without rehydrating the Session. */
     readContentContext(): SessionStoredContentContext | null;
     isCurrent(): boolean;
-}>;
-
-type SessionListRowProjectionPublication = Readonly<{
-    serverId: string;
-    row: SessionListRenderableSession;
-    isCurrent(): boolean;
-    ensureCurrent(): Promise<void>;
-    applied(): void;
-    reject(error: unknown): void;
 }>;
 
 class Sync {
@@ -4241,38 +4231,17 @@ class Sync {
             || (state.archivedSessionListMembershipByServerId[serverId] ?? []).includes(sessionId);
     }
 
-    private readonly readySessionListRowProjections = createHydrationApplyQueue<SessionListRowProjectionPublication>({
-        apply: entries => {
-            const byServer = new Map<string, SessionListRowProjectionPublication[]>();
-            for (const entry of entries) {
-                if (!entry.isCurrent()) {
-                    entry.reject(new Error('Session projection AccountChange scope changed before publication'));
-                    continue;
-                }
-                const group = byServer.get(entry.serverId) ?? [];
-                group.push(entry);
-                byServer.set(entry.serverId, group);
-            }
-            for (const [serverId, group] of byServer) {
-                try {
-                    storage.getState().applyServerScopedSessionListRows(serverId, group.map(entry => entry.row), {
-                        source: 'rowOnly', mode: 'append',
-                    });
-                    for (const entry of group) entry.applied();
-                } catch (error) { for (const entry of group) entry.reject(error); }
-            }
-        },
-    });
-    private readonly sessionListRowProjectionPublications = createHydrationApplyQueue<SessionListRowProjectionPublication>({
-        flushDelayMs: this.syncTuning.sessionListBackgroundHydrationApplyFlushDelayMs,
-        apply: entries => {
-            // A withdrawn Account witness can require I/O. Admit rows independently
-            // before the shared ready microtask so it cannot hold other completions.
-            for (const entry of entries) entry.ensureCurrent().then(
-                () => this.readySessionListRowProjections.enqueue(entry), entry.reject,
-            );
-        },
-    });
+    private readonly applySessionListRowProjections = (entries: readonly SessionListRowPublication[]): void => {
+        const byServer = new Map<string, SessionListRenderableSession[]>();
+        for (const { serverId, row } of entries) {
+            const group = byServer.get(serverId) ?? [];
+            group.push(row);
+            byServer.set(serverId, group);
+        }
+        for (const [serverId, rows] of byServer) storage.getState().applyServerScopedSessionListRows(serverId, rows, {
+            source: 'rowOnly', mode: 'append',
+        });
+    };
 
     private refreshSessionListRowProjection = async (serverId: string, sessionId: string): Promise<void> => {
         const target = this.getAppliedTransportTarget();
@@ -4308,6 +4277,7 @@ class Sync {
                 accountCurrentnessSource,
                 activeReadTransport: this.createAppliedReadTransport(target),
                 applySessions: (sessions) => { if (isCurrent()) this.applySessions(sessions); },
+                applySessionListRows: this.applySessionListRowProjections,
                 getExistingSession: readExistingSession,
                 getCurrentSessionListRenderable: (id) => readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, serverId, id),
                 includeTurnsProjection: false,
@@ -4323,15 +4293,7 @@ class Sync {
                 throw new Error(`Session projection refresh failed: ${result.errorCode ?? 'unknown'}`);
             }
             if (!result.sessionListRenderable) throw new Error('Session projection refresh returned no row');
-            const row = result.sessionListRenderable;
-            await new Promise<void>((resolve, reject) => this.sessionListRowProjectionPublications.enqueue({
-                serverId, row, isCurrent, ensureCurrent: accountCurrentnessSource.ensureCurrent,
-                applied: () => {
-                    if (readExistingSession(sessionId)) this.markSessionStateHydrationDeferred(sessionId);
-                    resolve();
-                },
-                reject,
-            }));
+            if (readExistingSession(sessionId)) this.markSessionStateHydrationDeferred(sessionId);
         } finally { accountCurrentnessSource.dispose(); }
     };
 
