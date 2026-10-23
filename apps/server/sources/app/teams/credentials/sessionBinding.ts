@@ -4,6 +4,7 @@ import { type TeamCredentialRouteV1 } from '@happier-dev/protocol/teams/credenti
 import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import type { RequiredSessionTeamCredentialV1, SessionTeamCredentialBindingConsequenceV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import type { Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { assertSessionTeamReadableGrantInTx } from "@/app/session/access/sessionAccess";
 import { putSessionAccessGrantInTx, sessionAccessGrantMutationCursorLockOptions } from "@/app/session/access/sessionAccessGrantService";
@@ -641,17 +642,20 @@ export async function listSessionTeamCredentialBindingConsequencesInTx(
     input: Readonly<{ sessionId: string; teamIds: readonly string[] }>,
 ): Promise<readonly SessionTeamCredentialBindingConsequence[]> {
     if (input.teamIds.length === 0) return [];
-    const rows = await tx.sessionTeamCredentialBinding.findMany({
+    const rows = (await Promise.all(portableQueryChunks({
+        values: [...new Set(input.teamIds)], bindingsPerValue: 1,
+        fixedBindings: CONDITIONAL_SESSION_USE_POLICIES.length + 2, // Session id and Prisma OFFSET.
+    }).map(teamIds => tx.sessionTeamCredentialBinding.findMany({
         where: {
             sessionId: input.sessionId,
             resource: {
-                teamId: { in: [...input.teamIds] },
+                teamId: { in: [...teamIds] },
                 sessionUsePolicy: { in: [...CONDITIONAL_SESSION_USE_POLICIES] },
             },
         },
         select: { resource: { select: { id: true, displayName: true, teamId: true, sessionUsePolicy: true } } },
         orderBy: [{ resourceId: "asc" }],
-    });
+    })))).flat().sort((left, right) => left.resource.id < right.resource.id ? -1 : left.resource.id > right.resource.id ? 1 : 0);
     const seen = new Set<string>();
     return rows.flatMap(({ resource }) => {
         if (seen.has(resource.id)) return [];
