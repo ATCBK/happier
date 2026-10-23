@@ -203,7 +203,6 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
   ) {
     // The real controller owns one file-lifetime publication; keep its source roots until shutdown.
     retainedRuntimeHomes.add(homeDir);
-    const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
     const packageRoot = join(homeDir, 'archive-source', 'package');
     await materializeZipformerVoiceModelPackPluginFixture(packageRoot);
     const pluginJsonPath = join(packageRoot, '.happier-plugin', 'plugin.json');
