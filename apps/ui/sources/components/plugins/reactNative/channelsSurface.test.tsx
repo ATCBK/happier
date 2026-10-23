@@ -2492,7 +2492,9 @@ describe('Channels settings surface (real source, mounted)', () => {
       }
       return false;
     });
-    expect(detailHasListItemAncestor).toBe(true);
+    // The detail follows its row as a region of the list, never as another list item: its own sections hold
+    // list items, and a list item inside a list item is invalid markup.
+    expect(detailHasListItemAncestor).toBe(false);
   });
 
   it('sorts current attention before user-facing labels rather than Resource collection order', async () => {
@@ -4370,6 +4372,13 @@ describe('Channels settings surface (real source, mounted)', () => {
       findPressableByTestId(renderer!, 'channels-connection-connection-1').props.onPress();
     });
     await flushHookEffects();
+    // Each undecided delivery is a folded row; its decision mounts when the row opens.
+    for (const custodyId of [partialCustodyId, unknownCustodyId]) {
+      await act(async () => {
+        findPressableByTestId(renderer!, `channels-delivery-resolution-${custodyId}.header`).props.onPress();
+      });
+    }
+    await flushHookEffects();
 
     const accept = findPressableByTestId(
       renderer,
@@ -4379,9 +4388,11 @@ describe('Channels settings surface (real source, mounted)', () => {
       renderer,
       `channels-delivery-resolution-accept-${partialCustodyId}`,
     ).some((instance) => (
+      // A delivery is named by when it was sent, never by its custody id.
       instance.props?.role === 'button'
-        && instance.props?.accessibilityLabel
-          === `Accept as sent (Resolve delivery outcome — ${partialCustodyId.slice(0, 8)})`
+        && typeof instance.props?.accessibilityLabel === 'string'
+        && instance.props.accessibilityLabel.startsWith('Accept as sent (Delivery sent ')
+        && !instance.props.accessibilityLabel.includes(partialCustodyId.slice(0, 8))
     ))).toBe(true);
     expect(findByTestId(
       renderer,
@@ -4440,6 +4451,10 @@ describe('Channels settings surface (real source, mounted)', () => {
 
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-connection-1').props.onPress();
+    });
+    await flushHookEffects();
+    await act(async () => {
+      findPressableByTestId(renderer!, `channels-delivery-resolution-${custodyId}.header`).props.onPress();
     });
     await flushHookEffects();
     await act(async () => {
