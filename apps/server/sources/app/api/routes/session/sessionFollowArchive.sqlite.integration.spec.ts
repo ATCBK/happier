@@ -3,6 +3,7 @@ import type { LightMyRequestResponse } from "fastify";
 
 import { db } from "@/storage/db";
 import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { getAccountSessionFollow } from '@/app/session/follow/accountFollowService';
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { registerSessionArchiveRoutes } from "./registerSessionArchiveRoutes";
@@ -83,8 +84,8 @@ describe("Follow at the Session archive HTTP owner", () => {
         await db.accountSessionFollow.create({ data: { accountId: suppressed.id, sessionId: source.id,
             following: false, followPolicy: null, includeInVoice: false } });
         const readFollow = async (accountId = owner.id) => {
-            const rows = await db.$queryRaw<Array<{ following: boolean; includeInVoice: boolean; voiceDeliveredFrontier: string | null }>>`
-                SELECT following, includeInVoice, voiceDeliveredFrontier FROM AccountSessionFollow
+            const rows = await db.$queryRaw<Array<{ following: boolean; includeInVoice: boolean; followPolicy: string | null; voiceDeliveredFrontier: string | null }>>`
+                SELECT following, includeInVoice, followPolicy, voiceDeliveredFrontier FROM AccountSessionFollow
                 WHERE accountId = ${accountId} AND sessionId = ${source.id}`;
             return rows[0];
         };
@@ -111,7 +112,12 @@ describe("Follow at the Session archive HTTP owner", () => {
                 await db.$executeRawUnsafe("DROP TRIGGER reject_follow_restore");
             }
             await post(source.id, "unarchive");
-            expect(await readFollow()).toMatchObject({ following: true, includeInVoice: true, voiceDeliveredFrontier: null });
+            expect(await readFollow()).toMatchObject({ following: true, includeInVoice: false,
+                followPolicy: JSON.stringify({ preset: 'important', voice: true }), voiceDeliveredFrontier: null });
+            expect(await getAccountSessionFollow({ accountId: owner.id, sessionId: source.id,
+                authentication: { env: process.env, authority: 'present_user', authenticationEvidence: undefined } }))
+                .toMatchObject({ ok: true, value: { follow: { following: true, includeInVoice: true,
+                    policy: { preset: 'important', voice: true } }, voiceInitialSnapshotPending: true } });
             expect(await db.sessionFollowEdge.findUnique({ where: edgeWhere })).toMatchObject({ deliveredTranscriptSeq: 1 });
             await post(destination.id, "unarchive");
             expect(await db.sessionFollowEdge.findUnique({ where: edgeWhere })).toMatchObject({ deliveredTranscriptSeq: 12 });
@@ -119,6 +125,9 @@ describe("Follow at the Session archive HTTP owner", () => {
             await db.session.update({ where: { id: source.id }, data: { seq: 13 } });
             await post(source.id, "unarchive");
             expect(await readFollow()).toMatchObject({ voiceDeliveredFrontier: frontier(12) });
+            expect(await getAccountSessionFollow({ accountId: owner.id, sessionId: source.id,
+                authentication: { env: process.env, authority: 'present_user', authenticationEvidence: undefined } }))
+                .toMatchObject({ ok: true, value: { follow: { includeInVoice: true }, voiceInitialSnapshotPending: false } });
             expect(await db.sessionFollowEdge.findUnique({ where: edgeWhere })).toMatchObject({ deliveredTranscriptSeq: 12 });
         });
         expect(await db.accountSessionReadState.findUnique({ where })).toMatchObject({ lastViewedSessionSeq: 2 });
