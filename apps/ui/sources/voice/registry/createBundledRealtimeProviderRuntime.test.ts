@@ -2832,6 +2832,14 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(duplicateStopSettled).toBe(false);
       releaseReboundCarrier.resolve();
       await Promise.all([stopping, duplicateStopping]);
+      await expect(controllerInput!.resources!.release({
+        controlSessionId: 'voice-global',
+        attemptId: 2,
+        reason: { code: 'user_stop' },
+      })).rejects.toThrow('audio_mode_release_failed');
+      // The transcript drain is already settled, but native cleanup still owns
+      // its lease until restoration succeeds. Retry that same resource release.
+      rejectAudioModeRelease = false;
       await controllerInput!.resources!.release({
         controlSessionId: 'voice-global',
         attemptId: 2,
@@ -2840,7 +2848,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(releaseDirectMediaConversation.mock.calls.filter(
         ([input]) => (input as Readonly<{ conversationSessionId?: string }>).conversationSessionId === 'carrier-2',
       )).toHaveLength(1);
-      expect(releaseAudioMode).toHaveBeenCalledTimes(1);
+      expect(releaseAudioMode).toHaveBeenCalledTimes(3);
       await vi.waitFor(() => expect(projectTranscript).toHaveBeenCalledWith(expect.objectContaining({
         conversationSessionId: 'carrier-2',
         event: expect.objectContaining({ eventId: 'user-final-before-stop' }),

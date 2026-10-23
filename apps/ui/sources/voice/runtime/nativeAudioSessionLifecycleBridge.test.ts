@@ -783,12 +783,12 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
     });
   });
 
-  it('releases suspension leases even when terminal session stop fails', async () => {
+  it.each(['ios', 'android'] as const)('releases suspension custody and retries failed native Stop on %s', async platform => {
     await withNativeBridge(async ({ lifecycle, conversation, coordinator, emit }) => {
     // The vendor End boundary is best-effort by contract. Native lease release
     // is the fallible teardown boundary that reaches the real lifecycle Stop.
     const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
-    restore.mockRejectedValueOnce(new Error('session_stop_failed'));
+    restore.mockRejectedValue(new Error('session_stop_failed'));
     const suspensionReleased = createDeferred<void>();
     const suspendInput = lifecycle.suspendInput.bind(lifecycle);
     const suspension = vi.spyOn(lifecycle, 'suspendInput').mockImplementation(async (...args) => {
@@ -814,14 +814,23 @@ describe('createNativeAudioSessionLifecycleBridge', () => {
 
     await stopped.promise;
     await suspensionReleased.promise;
-    expect(lifecycle.getSnapshot().status, JSON.stringify({ snapshot: lifecycle.getSnapshot(), audio: coordinator.getSnapshot() })).toBe('disconnected');
+    // R27 retains Stop until the adapter's physical cleanup succeeds. Releasing
+    // the bridge suspension must neither hide that custody nor reopen input.
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'idle', canStop: true });
     expect(conversation.endSession).toHaveBeenCalledTimes(1);
-    expect(coordinator.getSnapshot().pendingReleaseCount).toBe(1);
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 1, pendingReleaseCount: 1 });
+    await expect(lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID)).rejects.toThrow('session_stop_failed');
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'idle', canStop: true });
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 1, pendingReleaseCount: 1 });
+
     restore.mockResolvedValue(undefined);
-    const recovery = await coordinator.acquire({ ownerId: 'bridge-release-recovery', mode: 'conversation', input: true, output: true, aec: 'preferred', capture: 'provider_managed_exclusive' });
-    await recovery.release();
+    // Recover through the same user-facing End, without acquiring an unrelated
+    // lease to trigger coordinator recovery on the user's behalf.
+    await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+    expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', canStop: false });
     expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 0, pendingReleaseCount: 0 });
-    });
+    expect(conversation.endSession).toHaveBeenCalledTimes(1);
+    }, false, platform);
   });
 
   it('stops when required echo cancellation is lost at runtime', async () => {

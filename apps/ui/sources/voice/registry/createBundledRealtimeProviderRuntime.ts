@@ -702,7 +702,6 @@ export function createBundledRealtimeProviderRuntime(
         await attempt.preparePromise?.catch(() => {});
         await attempt.transcriptCarrierRebindPromise?.catch(() => {});
         const audioModeLease = attempt.audioModeLease;
-        attempt.audioModeLease = null;
         const directMediaConversation = attempt.directMediaConversation;
         attempt.directMediaConversation = null;
         if (directMediaConversation) {
@@ -754,16 +753,22 @@ export function createBundledRealtimeProviderRuntime(
           };
           void transcriptRelease.then(forgetTranscriptRelease, forgetTranscriptRelease);
         }
-        try {
-          await audioModeLease?.release();
-        } finally {
-          if (resourceAttempts.get(input.attemptId) === attempt) {
-            resourceAttempts.delete(input.attemptId);
-          }
+        // A failed native release retains coordinator custody. Keep this exact
+        // lease reachable so a later End joins that same cleanup obligation
+        // instead of reporting terminal success while the lease is still held.
+        await audioModeLease?.release();
+        attempt.audioModeLease = null;
+        if (resourceAttempts.get(input.attemptId) === attempt) {
+          resourceAttempts.delete(input.attemptId);
         }
       })();
       attempt.releasePromise = release;
-      await release;
+      try {
+        await release;
+      } catch (error) {
+        attempt.releasePromise = null;
+        throw error;
+      }
     },
   });
 
