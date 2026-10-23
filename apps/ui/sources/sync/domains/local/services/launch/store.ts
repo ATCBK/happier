@@ -57,18 +57,15 @@ export function applyLocalServiceLauncherRefreshStarted(
     };
 }
 
-export function applyLocalServiceLauncherSnapshot(
-    state: LocalServiceLauncherState,
-    snapshot: LocalServiceLauncherSnapshot,
-): LocalServiceLauncherState {
-    // Reads and Action responses share this owner. A delayed earlier read cannot
-    // replace the native facts already published by a newer response.
-    if (state.machineId === snapshot.machineId && state.sessionId === (snapshot.sessionId ?? null)
-        && state.updatedAt !== null && snapshot.updatedAt < state.updatedAt) return state;
+/** The keyed collection owner, shared by native snapshots and Project binding projection. */
+export function reconcileLocalServiceLauncherTargets(
+    state: Pick<LocalServiceLauncherState, 'targetIds' | 'targetsById'>,
+    targets: readonly LocalServiceLaunchTarget[],
+): Pick<LocalServiceLauncherState, 'targetIds' | 'targetsById'> {
     const targetsById = new Map<string, LocalServiceLaunchTarget>();
     const targetIds: string[] = [];
 
-    for (const target of snapshot.targets) {
+    for (const target of targets) {
         // Project declaration enrichment can resolve to an occurrence already in the feed.
         // The keyed target remains authoritative; its ordered identity appears only once.
         if (!targetsById.has(target.id)) targetIds.push(target.id);
@@ -80,8 +77,23 @@ export function applyLocalServiceLauncherSnapshot(
 
     const sameIds = state.targetIds.length === targetIds.length && targetIds.every((id, index) => id === state.targetIds[index]);
     const sameTargets = sameIds && targetIds.every(id => targetsById.get(id) === state.targetsById.get(id));
+    return sameTargets ? state : {
+        targetIds: sameIds ? state.targetIds : targetIds,
+        targetsById,
+    };
+}
+
+export function applyLocalServiceLauncherSnapshot(
+    state: LocalServiceLauncherState,
+    snapshot: LocalServiceLauncherSnapshot,
+): LocalServiceLauncherState {
+    // Reads and Action responses share this owner. A delayed earlier read cannot
+    // replace the native facts already published by a newer response.
     if (state.machineId === snapshot.machineId && state.sessionId === (snapshot.sessionId ?? null)
-        && state.updatedAt === snapshot.updatedAt && state.refreshStatus === 'idle' && state.refreshError === null && sameTargets) return state;
+        && state.updatedAt !== null && snapshot.updatedAt < state.updatedAt) return state;
+    const collection = reconcileLocalServiceLauncherTargets(state, snapshot.targets);
+    if (state.machineId === snapshot.machineId && state.sessionId === (snapshot.sessionId ?? null)
+        && state.updatedAt === snapshot.updatedAt && state.refreshStatus === 'idle' && state.refreshError === null && collection === state) return state;
 
     return {
         machineId: snapshot.machineId,
@@ -89,8 +101,8 @@ export function applyLocalServiceLauncherSnapshot(
         updatedAt: snapshot.updatedAt,
         refreshStatus: 'idle',
         refreshError: null,
-        targetIds: sameIds ? state.targetIds : targetIds,
-        targetsById: sameTargets ? state.targetsById : targetsById,
+        targetIds: collection.targetIds,
+        targetsById: collection.targetsById,
     };
 }
 

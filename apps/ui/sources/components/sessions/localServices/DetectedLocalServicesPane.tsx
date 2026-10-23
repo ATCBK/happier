@@ -47,6 +47,7 @@ import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { LocalServicePublicPreviewActions } from './publicPreviewActions';
@@ -350,6 +351,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
     testID?: string;
 }>): React.ReactElement {
     const testID = props.testID ?? 'detected-local-services-pane';
+    const preferredLanguage = usePreferredLanguage();
     const reducedMotion = useReducedMotionPreference();
     const animationEnabled = !reducedMotion;
     const scope: ServicesScope = props.scope ?? 'workspace';
@@ -359,10 +361,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
     // The pane is ALWAYS driven by the controller's launcherState (the live host supplies
     // it). No inventory-derived fallback builder — that dead, churning path is removed.
     const launcherState = props.launcherState ?? createLocalServiceLauncherState();
-    const launcherTargets = React.useMemo(
-        () => selectLocalServiceLaunchTargets(launcherState),
-        [launcherState],
-    );
+    const launcherTargets = selectLocalServiceLaunchTargets(launcherState);
     const hasLauncherTargets = launcherTargets.length > 0;
 
     // Active session for D1 grouping: explicit prop wins, else the launcher feed's session.
@@ -519,6 +518,41 @@ export function DetectedLocalServicesPane(props: Readonly<{
         testID,
     ]);
 
+    // The inventory still publishes its scan cursor. Its material row projection is stable,
+    // so that observation must not re-enter every Service row (including expanded controls).
+    const renderedRowsBySection = React.useMemo(() => sections.map(entry => entry.rows.map(renderRow)), [sections, renderRow, preferredLanguage]);
+    const renderedDetailRow = React.useMemo(() => detailRow ? (
+        <TargetServiceRow
+            row={detailRow}
+            presentation="detail"
+            onOpenServiceInBrowser={props.onOpenServiceInBrowser}
+            onStartLauncherTarget={props.onStartLauncherTarget}
+            findRunningOpenTarget={findRunningOpenTarget}
+            onTerminateDetectedService={props.onTerminateDetectedService}
+            onForgetDetectedService={props.onForgetDetectedService}
+            onStopManagedService={props.onStopManagedService}
+            onRestartManagedService={props.onRestartManagedService}
+            onCopyServiceUrl={props.onCopyServiceUrl}
+            sourceMachineId={props.sourceMachineId}
+            serverId={props.serverId}
+            sourceMachine={props.machine}
+            publicPreviewEnabled={props.publicPreviewEnabled}
+            publicPreviewStatusClient={props.publicPreviewStatusClient}
+            startedByName={detailRow.target.startedByAccountId ? starterNames[detailRow.target.startedByAccountId] ?? null : null}
+            placement={props.renderServicePlacement?.(detailRow)}
+            publicPreviewState={props.publicPreviewState}
+            publicPreviewActions={props.publicPreviewActions}
+            publicPreviewCapabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
+            animationEnabled={animationEnabled}
+            testID={`${testID}-detail-row`}
+        />
+    ) : null, [detailRow, animationEnabled, findRunningOpenTarget, starterNames, testID, preferredLanguage,
+        props.onOpenServiceInBrowser, props.onStartLauncherTarget, props.onTerminateDetectedService,
+        props.onForgetDetectedService, props.onStopManagedService, props.onRestartManagedService,
+        props.onCopyServiceUrl, props.sourceMachineId, props.serverId, props.machine,
+        props.publicPreviewEnabled, props.publicPreviewStatusClient, props.renderServicePlacement,
+        props.publicPreviewState, props.publicPreviewActions, props.publicPreviewCapabilityDisabledReasons]);
+
     const page = props.presentation === 'page';
     const columnMaxWidth = useLayoutMaxWidth();
     // The phone page is titled by its cockpit header and leads straight into the list (lab PAGEp).
@@ -659,7 +693,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                                                     />
                                                 )}
                                             >
-                                                {entry.rows.map(renderRow)}
+                                                {renderedRowsBySection[index]}
                                             </ExpandableItem>
                                         </ItemGroup>
                                     ) : (
@@ -678,7 +712,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                                                 surface="none"
                                                 selectableItemCountOverride={entry.rows.length}
                                             >
-                                                {entry.rows.map(renderRow)}
+                                                {renderedRowsBySection[index]}
                                             </ItemGroup>
                                         </>
                                     )}
@@ -704,30 +738,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                         />
                     </View>
                     {effectReview}
-                    <TargetServiceRow
-                        row={detailRow}
-                        presentation="detail"
-                        onOpenServiceInBrowser={props.onOpenServiceInBrowser}
-                        onStartLauncherTarget={props.onStartLauncherTarget}
-                        findRunningOpenTarget={findRunningOpenTarget}
-                        onTerminateDetectedService={props.onTerminateDetectedService}
-                        onForgetDetectedService={props.onForgetDetectedService}
-                        onStopManagedService={props.onStopManagedService}
-                        onRestartManagedService={props.onRestartManagedService}
-                        onCopyServiceUrl={props.onCopyServiceUrl}
-                        sourceMachineId={props.sourceMachineId}
-                        serverId={props.serverId}
-                        sourceMachine={props.machine}
-                        publicPreviewEnabled={props.publicPreviewEnabled}
-                        publicPreviewStatusClient={props.publicPreviewStatusClient}
-                        startedByName={detailRow.target.startedByAccountId ? starterNames[detailRow.target.startedByAccountId] ?? null : null}
-                        placement={props.renderServicePlacement?.(detailRow)}
-                        publicPreviewState={props.publicPreviewState}
-                        publicPreviewActions={props.publicPreviewActions}
-                        publicPreviewCapabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
-                        animationEnabled={animationEnabled}
-                        testID={`${testID}-detail-row`}
-                    />
+                    {renderedDetailRow}
                 </ScrollView>
             ) : null}
         </View>

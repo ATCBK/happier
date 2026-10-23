@@ -61,19 +61,38 @@ describe('Project Services source feed plus actual native binding', () => {
         return new Promise((resolve, reject) => watches.push(value => value instanceof Error ? reject(value) : resolve(value)));
       }
       if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
-        snapshot: { v: 1, machineId, updatedAt: running ? 2 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
+        snapshot: { v: 1, machineId, updatedAt: running ? 100 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
       return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
     });
     let presented = true;
     const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, { active: presented, children });
-    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
-      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }), { wrapper });
+    let rowPublications = 0;
+    const hook = await renderHook(() => {
+      const feeds = useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
+        workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' });
+      React.useLayoutEffect(() => { rowPublications++; }, [feeds.launcherState?.targetsById, feeds.launcherState?.rowIdsByTargetId]);
+      return feeds;
+    }, { wrapper });
     const readRows = () => buildLocalServiceRows({ inventoryRows: [],
       launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
       rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
     try {
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
       await vi.waitFor(() => expect(watches).toHaveLength(1));
+      if (recovery === 'watch') {
+        const before = rowPublications;
+        const reads = remote.mock.calls.length;
+        // Seventy-five unchanged four-second scan generations represent five settled minutes.
+        // The watch cursor stays current; none of these observations changes a Service row.
+        for (let generation = 2; generation <= 76; generation++) {
+          await act(async () => { publishLocalServiceLauncherSnapshot({ machineId: source.machineId, serverId,
+            scope: 'workspace', workspaceRoot: source.rootPath }, { v: 1, machineId: source.machineId,
+            updatedAt: generation, targets: [structuredClone(declaration)] }); });
+        }
+        expect(rowPublications - before).toBe(0);
+        expect(remote.mock.calls.length - reads).toBe(0);
+        expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } });
+      }
       if (recovery === 'visibility') {
         presented = false;
         await hook.rerender();

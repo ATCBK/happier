@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     applyLocalServiceInventoryRefreshStarted,
+    applyLocalServiceInventorySnapshot,
 } from '@/sync/domains/local/services/inventory/store';
 import {
     buildLocalServiceInventoryRow,
@@ -35,6 +36,7 @@ import type { UserProfile } from '@happier-dev/protocol';
 import { LocalServiceLaunchTargetV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { act } from 'react-test-renderer';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 
 function collectText(node: ReactTestInstance): string {
     return node.children.map((child) => typeof child === 'string' ? child : collectText(child)).join(' ');
@@ -109,6 +111,45 @@ const openableTarget = {
 };
 
 describe('DetectedLocalServicesPane', () => {
+    it.each(['tablet', 'phone'] as const)('commits no unchanged Service row details across repeated scan observations, then renders a real change (%s)', async device => {
+        deviceState.type = device;
+        const originalLanguage = getPreferredLanguage();
+        const inventoryRow = buildLocalServiceInventoryRow({ id: 'openable-row' });
+        let inventory = buildLocalServiceInventoryState({ rows: [inventoryRow] });
+        let launcher = launcherStateWith([openableTarget]);
+        let commits = 0;
+        const placement = () => <React.Profiler id="service-row-detail" onRender={() => { commits++; }}>
+            <Text>{`language:${getPreferredLanguage()}`}</Text>
+        </React.Profiler>;
+        const render = () => <DetectedLocalServicesPane inventoryState={inventory} launcherState={launcher}
+            machine={MACBOOK_ONLINE} publicPreviewState={null} renderServicePlacement={placement} testID="scan-cost" />;
+        const screen = await renderScreen(render());
+        try {
+            await expandRow(screen, 'scan-cost-row:inventory:openable-row');
+            await flushHookEffects();
+            expect(commits).toBeGreaterThan(0);
+            commits = 0;
+            for (let generation = 2; generation <= 76; generation++) {
+                inventory = applyLocalServiceInventorySnapshot(inventory, { v: 1, machineId: 'machine-a',
+                    generatedAt: generation * 4_000, refreshState: 'idle', diagnostics: [],
+                    entries: [{ ...inventoryRow, lastSeenAt: generation * 4_000 }] });
+                launcher = applyLocalServiceLauncherSnapshot(launcher, { v: 1, machineId: 'machine-a',
+                    updatedAt: generation * 4_000, targets: [structuredClone(openableTarget)] });
+                await screen.update(render());
+            }
+            expect(commits).toBe(0);
+            launcher = applyLocalServiceLauncherSnapshot(launcher, { v: 1, machineId: 'machine-a',
+                updatedAt: 400_000, targets: [{ ...openableTarget, title: 'Changed service' }] });
+            await screen.update(render());
+            expect(commits).toBeGreaterThan(0);
+            expect(screen.getTextContent()).toContain('Changed service');
+            const nextLanguage = originalLanguage === 'fr' ? 'en' : 'fr';
+            await act(async () => { commitPreferredLanguage(nextLanguage); });
+            expect(screen.getTextContent()).toContain(`language:${nextLanguage}`);
+        } finally {
+            await screen.unmount(); deviceState.type = 'tablet'; commitPreferredLanguage(originalLanguage);
+        }
+    });
     it('keeps one declared Service selected through native handoffs and phone recomposition', async () => {
         const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-web', source: 'managed_service',
             machineId: 'machine-a', title: 'Web', confidence: 'high', state: 'unavailable',

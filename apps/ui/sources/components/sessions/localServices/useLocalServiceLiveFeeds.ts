@@ -13,7 +13,8 @@ import { readUiWorkspaceSyncChildMachineFacts } from '@/sync/ops/workspaceSyncCh
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import { presentLocalServiceActionFailure, readLocalServiceActionFailureReason, readLocalServiceActionOutcome } from './localServiceActionOutcome';
-import { applyLocalServiceLauncherSnapshot, selectLocalServiceLaunchTargets, snapshotFromLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
+import { selectLocalServiceLaunchTargets, snapshotFromLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
+import { reconcileLocalServiceLauncherTargets } from '@/sync/domains/local/services/launch/store';
 
 import {
     type LocalServiceLauncherSnapshotClient,
@@ -186,8 +187,12 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 values: new Map(declarations.map(target => [target.id, { status: 'unavailable' as const }])) }); });
         return () => { current = false; abort.abort(); };
     }, [binding, canObserve, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
-    const state = React.useMemo(() => {
-        if (!enabled || !sourceState || !declarations.length) return sourceState;
+    const sourceTargetIds = sourceState?.targetIds;
+    const sourceTargetsById = sourceState?.targetsById;
+    // Project rows depend on native facts and their binding, not a new scan cursor.
+    // Reconcile that collection once per structural change; carry freshness separately below.
+    const projection = React.useMemo(() => {
+        if (!enabled || !sourceTargetIds || !sourceTargetsById || !declarations.length) return null;
         const values = canObserve && observation?.subscriptions === subscriptions ? observation.values : null;
         const rowIdsByTargetId = new Map<string, string>();
         const targets = sourceTargets.flatMap(target => {
@@ -211,11 +216,16 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 unavailableReason: !actual && canObserve ? 'project_service_binding_pending' : 'project_service_binding_unavailable',
                 ...(actual?.status === 'unavailable' && actual.machineId ? { unavailableMachineId: actual.machineId } : {}), actions: [] }];
         });
-        const projected = applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
-            ...(sourceState.sessionId ? { sessionId: sourceState.sessionId } : {}), updatedAt: sourceState.updatedAt!, targets });
-        return { ...projected, rowIdsByTargetId,
-            ...(!values && canObserve && sourceState.refreshStatus !== 'error' ? { refreshStatus: 'refreshing' as const } : {}) };
-    }, [canObserve, declarations, enabled, observation, sourceState, sourceTargets, subscriptions]);
+        return { collection: reconcileLocalServiceLauncherTargets({ targetIds: sourceTargetIds, targetsById: sourceTargetsById }, targets),
+            rowIdsByTargetId, pending: !values && canObserve };
+    }, [canObserve, declarations, enabled, observation, sourceTargetIds, sourceTargetsById, sourceTargets, subscriptions]);
+    const state = React.useMemo(() => !projection || !sourceState ? sourceState : {
+        ...sourceState,
+        targetIds: projection.collection.targetIds,
+        targetsById: projection.collection.targetsById,
+        rowIdsByTargetId: projection.rowIdsByTargetId,
+        ...(projection.pending && sourceState.refreshStatus !== 'error' ? { refreshStatus: 'refreshing' as const } : {}),
+    }, [projection, sourceState]);
     const refresh = React.useCallback(async (sourceMachineId: string, sourceRefreshed: boolean) => {
         const refreshed = new Map<string, boolean>([[sourceMachineId, sourceRefreshed]]);
         for (const { key } of subscriptions.values()) {
