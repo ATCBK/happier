@@ -2,7 +2,7 @@ import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import type { ManagedControllerV1, ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import { ManagedMachineControllerError } from '@/machines/managed/acquire';
+import { ManagedMachineControllerError } from '@/machines/managed/controllerErrors';
 import { logger } from '@/ui/logger';
 import type { createDaemonManagedMachineActionAdapter } from './managedMachineActionAdapter';
 import { createManagedPolicyCensusProofV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema,
