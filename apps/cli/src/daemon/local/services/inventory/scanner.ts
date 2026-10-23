@@ -156,6 +156,7 @@ export function normalizeLocalServiceScan(input: Readonly<{
     internalEndpointUrls?: readonly string[];
 }>): NormalizedLocalServiceInventorySnapshot {
     const entries = new Map<string, NormalizedLocalServiceInventoryEntry>();
+    const previousById = new Map(input.previous?.entries.map(entry => [entry.id, entry]));
     const ownershipByPid = new Map((input.ownership ?? resolveLocalServiceOwnership(input)).map(item => [item.pid, item]));
     const incompleteSocketOwners = new Set((input.socketOwnerReadFailures ?? []).flatMap(pid => {
         const owner = ownershipByPid.get(pid)?.owner;
@@ -227,7 +228,7 @@ export function normalizeLocalServiceScan(input: Readonly<{
             protocol: listener.protocol,
             establishedConnections: owned?.owner && incompleteSocketOwners.has(processOwnerKey(owned.owner))
                 ? null : listener.establishedConnections ?? null,
-            detectedAt: input.previous?.entries.find((entry) => entry.id === id)?.detectedAt ?? now,
+            detectedAt: previousById.get(id)?.detectedAt ?? now,
             lastSeenAt: now,
             state: 'listening',
             source: 'detected',

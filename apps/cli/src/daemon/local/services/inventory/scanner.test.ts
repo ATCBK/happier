@@ -8,6 +8,27 @@ import { configuration } from '@/configuration';
 import type { LocalServiceProcessFact } from './provenance';
 
 describe('normalizeLocalServiceScan', () => {
+    it('reads the previous inventory linearly when refreshing a thousand listeners', () => {
+        const listeners = Array.from({ length: 1_000 }, (_, index) => ({
+            address: '127.0.0.1', port: 10_000 + index, protocol: 'tcp' as const,
+        }));
+        const first = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1_000,
+            previous: null, listeners, processes: new Map(), workspaces: [], ownership: [] });
+        let previousIdentityReads = 0;
+        // Instrument real input rows, keeping the normalization and stale-row logic real.
+        const previous = { ...first, entries: first.entries.map(entry => ({
+            ...entry,
+            get id() { previousIdentityReads += 1; return entry.id; },
+        })) };
+        const refreshed = normalizeLocalServiceScan({ machineId: 'machine-a', now: 2_000,
+            previous, listeners: [...listeners].reverse(), processes: new Map(), workspaces: [], ownership: [] });
+
+        expect(refreshed.entries).toHaveLength(listeners.length);
+        expect(refreshed.entries.every(entry => entry.detectedAt === 1_000 && entry.lastSeenAt === 2_000
+            && entry.state === 'listening')).toBe(true);
+        expect(previousIdentityReads).toBeLessThanOrEqual(listeners.length * 3);
+    });
+
     it('keeps unreadable or empty process commands valid at the strict inventory provenance boundary', () => {
         const snapshot = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1, previous: null,
             workspaces: [], listeners: [{ address: '127.0.0.1', port: 3005, protocol: 'tcp', pid: 10 }],
