@@ -262,6 +262,8 @@ export function createVoiceToolHandlers(
      */
     resolveSessionId: (explicitSessionId?: string | null) => string | null | Promise<string | null>;
     currentSessionAddress?: SessionAddress | null;
+    /** Admitted conversation Home when global Voice has no coding Session. */
+    currentServerId?: string | null;
     currentUiContext?: VoiceCurrentUiToolPort;
   }>,
 ): Readonly<Record<string, VoiceToolHandler>> {
@@ -459,7 +461,7 @@ export function createVoiceToolHandlers(
       normalizeId(input?.sessionId) || normalizeId(input?.sessionTitle),
     );
     const serverId = boundAddress?.serverId ?? ctx?.serverId ?? (
-      !hasNaturalSessionReference ? deps.currentSessionAddress?.serverId : null
+      !hasNaturalSessionReference ? deps.currentSessionAddress?.serverId ?? deps.currentServerId : null
     ) ?? (actionId === 'session.list' ? getActiveServerSnapshot().serverId : null);
     const actionInput = boundAddress ? { ...input, returnToSessionId: boundAddress.sessionId }
       : useAwareness ? { ...input, view: 'awareness' } : parameters;

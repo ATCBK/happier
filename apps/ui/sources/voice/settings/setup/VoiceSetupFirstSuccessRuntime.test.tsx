@@ -85,8 +85,11 @@ it.each([
     { source: 'canonical', endBeforeReply: true, restartBeforeInput: false },
     { source: 'durable', endBeforeReply: false, restartBeforeInput: false },
     { source: 'durable', endBeforeReply: true, restartBeforeInput: false },
+    { source: 'durable', endBeforeReply: false, restartBeforeInput: false, replyBeforeInput: true },
     { source: 'canonical', endBeforeReply: true, restartBeforeInput: true },
-] as const)('publishes one observed $source completion to real setup and composer consumers (reply after End: $endBeforeReply, second Try: $restartBeforeInput)', async ({ source, endBeforeReply, restartBeforeInput }) => {
+] as const)('publishes one observed $source completion to real setup and composer consumers (reply after End: $endBeforeReply, second Try: $restartBeforeInput, reply persisted first: $replyBeforeInput)', async (scenario) => {
+    const { source, endBeforeReply, restartBeforeInput } = scenario;
+    const replyBeforeInput = 'replyBeforeInput' in scenario && scenario.replyBeforeInput;
     const initial = storage.getState();
     const locks = installWebLockManagerMock();
     network.resetRequests();
@@ -240,7 +243,7 @@ it.each([
                         revision: 1, eventId: 'input-live', itemId: 'input', role: 'user', text: 'hello', provenance: 'live' } })?.status).toBe('applied');
             } else {
                 messages = messages.map((message) => ({ ...message,
-                    seq: message.kind === 'user-text' ? messageSequence + 1 : messageSequence + 2,
+                    seq: message.kind === 'user-text' ? messageSequence + (replyBeforeInput ? 2 : 1) : messageSequence + (replyBeforeInput ? 1 : 2),
                     localId: message.kind === 'user-text' ? 'durable-current-input' : 'durable-current-reply',
                     // Local capture's retained input and the daemon reply have
                     // different envelopes, as observed in the composed ship journey.

@@ -50,6 +50,7 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
         completion: Promise<void>;
         cleanup: ReturnType<ReturnType<typeof createVoiceRunRecovery>['prepareStop']>;
         failed: boolean;
+        signal: AbortSignal | undefined;
     }>();
     const voiceAgentLifetimeBySessionId = new Map<string, AbortController>();
 
@@ -112,6 +113,7 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
                     sessionId,
                     signal: lifetime.signal,
                     getDaemonVoiceAgentClient: (scope) => new DaemonVoiceAgentClient(scope, lifetime.signal),
+                    getCleanupSignal: () => voiceAgentStopPromiseBySessionId.get(sessionId)?.signal,
                     setDeferredTargetSessionContext: (pendingSessionId, update) => {
                         const text = update.trim();
                         if (!text) return;
@@ -160,7 +162,7 @@ export function createVoiceExecutionTransport(): VoiceExecutionTransport {
                 clearRetainedLocalVoiceEffectOutcomes(sessionId);
             }
         })();
-        const stop = { completion: stopPromise, cleanup, failed: false };
+        const stop = { completion: stopPromise, cleanup, failed: false, signal };
         voiceAgentStopPromiseBySessionId.set(sessionId, stop);
         void stopPromise.then(
             () => {

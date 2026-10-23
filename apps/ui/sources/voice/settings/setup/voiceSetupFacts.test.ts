@@ -28,7 +28,9 @@ describe('Voice setup facts', () => {
             microphonePermission: 'granted', messages }).firstTurnComplete;
         expect(facts([input, output])).toBe(true);
         expect(facts([output, input])).toBe(true); // Storage iteration order is not acknowledgement order.
-        expect(facts([input, { ...output, seq: 86 }])).toBe(false);
+        // Pending settlement can commit the input after the daemon reply. The
+        // Session sequence orders writes; it does not order the spoken turn.
+        expect(facts([input, { ...output, seq: 86 }])).toBe(true);
         expect(facts([{ ...input, localId: 'voice-realtime:other:user:input' }, output])).toBe(false);
         expect(facts([{ ...input, meta: undefined }, output])).toBe(false);
     });

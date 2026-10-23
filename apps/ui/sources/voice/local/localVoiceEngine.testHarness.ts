@@ -444,7 +444,11 @@ export async function warmLocalVoiceEngineHarnessGraph() {
 export let localVoiceHomeId = '';
 export const localVoicePendingEnqueue = vi.fn<(request: Readonly<{ sessionId: string; body: Record<string, unknown> }>) => Promise<Response>>();
 /** Publish a server message through the actual Socket SDK listeners and HTTP page, never a rendered store row. */
-export async function publishLocalVoiceAssistantMessage(input: Readonly<{ sessionId: string; id: string; text: string }>) {
+export async function publishLocalVoiceAssistantMessage(input: Readonly<{
+    sessionId: string; id: string; text: string;
+    localId?: string;
+    meta?: Readonly<Record<string, unknown>>;
+}>) {
     const createdAt = Date.now();
     const [projected] = projectClaudeJsonlLineToDirectMessages({
         fileRelPath: 'session.jsonl', lineStartOffsetBytes: 0,
@@ -452,7 +456,8 @@ export async function publishLocalVoiceAssistantMessage(input: Readonly<{ sessio
             message: { role: 'assistant', content: [{ type: 'text', text: input.text }] } },
     });
     if (!projected || projected.messageRole !== 'agent') throw new Error('Expected published Claude assistant transcript');
-    await publishLocalVoiceTranscriptMessage({ ...input, localId: null, messageRole: 'agent', content: { t: 'plain', v: projected.raw } });
+    await publishLocalVoiceTranscriptMessage({ ...input, localId: input.localId ?? null, messageRole: 'agent',
+        content: { t: 'plain', v: { ...projected.raw, ...(input.meta ? { meta: input.meta } : {}) } } });
 }
 
 /** Model the server's committed user row before the Agent's reply, using the actual admitted payload. */
@@ -462,7 +467,7 @@ export async function publishLocalVoiceSubmittedUserMessage(request: Parameters<
         localId: request.body.localId, messageRole: 'user', content: request.body.content });
 }
 
-async function publishLocalVoiceTranscriptMessage(input: Readonly<{
+export async function publishLocalVoiceTranscriptMessage(input: Readonly<{
     sessionId: string; id: string; localId: string | null; messageRole: 'user' | 'agent'; content: unknown;
 }>) {
     if (!speechAccount) throw new Error('Expected admitted Voice Account transcript transport');
@@ -483,7 +488,7 @@ async function publishLocalVoiceTranscriptMessage(input: Readonly<{
     if (input.messageRole === 'agent') {
         const user = messages.findLast(message => message.messageRole === 'user');
         // Tests may also seed retained history before submitting any input.
-        if (!user) return;
+        if (!user) return update.body.message;
         const turnId = `turn-${user.id}`;
         const previous = localVoiceRemoteTurns.get(remoteKey);
         localVoiceRemoteTurns.set(remoteKey, buildSessionTurnsProjectionV1({ sessionId: input.sessionId,
@@ -496,6 +501,7 @@ async function publishLocalVoiceTranscriptMessage(input: Readonly<{
             body: { t: 'update-session', id: input.sessionId, latestTurnId: turnId,
                 latestTurnStatus: 'completed', latestTurnStatusObservedAt: createdAt } }));
     }
+    return update.body.message;
 }
 
 async function publishLocalVoiceSocketUpdate(update: ReturnType<typeof UpdateContainerSchema.parse>) {

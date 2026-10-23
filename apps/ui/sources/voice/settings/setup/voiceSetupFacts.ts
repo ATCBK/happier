@@ -45,8 +45,8 @@ export function deriveVoiceSetupFacts(input: VoiceSetupInput) {
 
 export function hasRetainedVoiceInputAndReply(messages: readonly Message[]): boolean {
     const attempts = new Map<string, { inputSeq: number | null; replySeq: number | null }>();
-    let localCaptureInputSeq: number | null = null;
-    let localAgentReplySeq: number | null = null;
+    let hasLocalCaptureInput = false;
+    let hasLocalAgentReply = false;
     for (const message of messages) {
         const seq = message.seq;
         if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) continue;
@@ -59,15 +59,16 @@ export function hasRetainedVoiceInputAndReply(messages: readonly Message[]): boo
         const id = message.localId ?? message.id;
         const retainedAttempt = readCanonicalVoiceTranscriptAttemptKey(id, role);
         if (id.startsWith('voice-realtime:') && !retainedAttempt) continue;
-        // Local capture commits the ordinary Voice-marked user row before the
-        // daemon run exists. Its reply carries the run's voice_agent_turn.v1,
-        // not a realtime attempt id. Acknowledged order in this conversation is
-        // their shared provenance; never bridge a different realtime attempt.
+        // Local capture's ordinary Voice-marked user row and the daemon reply
+        // have different envelopes. The reply carries voice_agent_turn.v1,
+        // not a realtime attempt id. Pending settles that input after daemon
+        // acceptance, so the reply can commit first: seq orders writes, not
+        // spoken turns. Never bridge a different realtime attempt.
         if (!retainedAttempt && !agentTurn && role === 'user') {
-            localCaptureInputSeq = Math.min(localCaptureInputSeq ?? seq, seq);
+            hasLocalCaptureInput = true;
         }
         if (!retainedAttempt && agentTurn?.role === 'assistant' && role === 'assistant') {
-            localAgentReplySeq = Math.max(localAgentReplySeq ?? seq, seq);
+            hasLocalAgentReply = true;
         }
         const key = retainedAttempt ? `realtime:${retainedAttempt}` : agentTurn
             ? JSON.stringify(['agent', agentTurn.voiceAgentId, agentTurn.epoch])
@@ -79,7 +80,7 @@ export function hasRetainedVoiceInputAndReply(messages: readonly Message[]): boo
         else attempt.replySeq = Math.max(attempt.replySeq ?? seq, seq);
         attempts.set(key, attempt);
     }
-    return (localCaptureInputSeq !== null && localAgentReplySeq !== null && localAgentReplySeq > localCaptureInputSeq)
+    return (hasLocalCaptureInput && hasLocalAgentReply)
         || [...attempts.values()].some(({ inputSeq, replySeq }) => inputSeq !== null && replySeq !== null && replySeq > inputSeq);
 }
 

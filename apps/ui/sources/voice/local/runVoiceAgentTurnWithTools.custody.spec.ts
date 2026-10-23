@@ -119,6 +119,25 @@ describe('runVoiceAgentTurnWithTools local effect custody', () => {
       voiceAgentSessions, ...options });
   }
 
+  it('reads Account settings from the bound Voice Home without a coding Session target', async () => {
+    await prepareSession();
+    const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    const binding = voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID);
+    if (!binding) throw new Error('Expected an admitted Voice conversation');
+    voiceSessionBindingStore.getState().bind({ ...binding, targetSessionAddress: null });
+    const storage = await getStorage();
+    const expected = readLocalConversationVoiceSettings(storage.getState().settings.voice).handsFree.endpointing.minSpeechMs;
+    queueAction('read-voice-setting', { t: 'settings_get', args: { anchor: 'voiceConversations.minSpeechMs' } });
+    queueFinal();
+    const result = await run('read the saved minimum speech duration', {
+      currentToolSessionAddress: null, currentToolSessionId: null,
+    });
+    expect(result.toolResultBatches[0]?.[0]?.result).toMatchObject({
+      ok: true, anchor: 'voiceConversations.minSpeechMs', value: expected,
+    });
+    expect(targetPendingRequests()).toEqual([]);
+  });
+
   it('forwards accepted canonical output from every tool round', async () => {
     await prepareSession();
     turns.push(streamId => [

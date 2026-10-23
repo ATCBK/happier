@@ -1422,10 +1422,13 @@ describe('createVoiceSessionLifecycleController', () => {
                     await controller.toggle({ serverId: localVoiceHomeId, sessionId: 's1' });
                     await vi.waitFor(() => expect(seeds()).toHaveLength(1));
                     expect(seeds()[0]?.disabledActionIds ?? []).not.toEqual(expect.arrayContaining(currentUiActionIds));
+                    const initialRunId = localVoiceAgentRpc.readRetainedRun()?.runId;
+                    expect(initialRunId).toBeDefined();
                     setMode('off');
                     await vi.waitFor(() => expect(seeds()).toHaveLength(2));
                     expect(seeds()[1]?.disabledActionIds).toEqual(expect.arrayContaining(currentUiActionIds));
-                    expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
+                    expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
+                        .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: initialRunId } }]);
                     expect(controller.getSnapshot()).toMatchObject({ adapterId: 'local_conversation', status: 'connected', canStop: true });
                     setMode(restoredMode);
                     await vi.waitFor(() => expect(seeds()).toHaveLength(3));

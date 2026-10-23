@@ -28,6 +28,9 @@ import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceCo
 import { voiceOutputStatusStore } from '@/voice/runtime/outputStatus/voiceOutputStatusStore';
 import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { resetWebAudioContextForTests } from '@/voice/output/webAudioContext';
+import { TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
 
 /**
  * Convergence proof (RL-L4-1): the live streaming TTS path must route every
@@ -70,6 +73,7 @@ const [
 ]);
 let account: Awaited<ReturnType<typeof serveAccountHomes>> | null = null;
 let disconnect: (() => Promise<void>) | null = null;
+let webStorage: ReturnType<typeof installLocalStorageMock> | null = null;
 const sessionMetadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
 
 function readDeviceSpeech() { return expoSpeechSpeak.mock.calls.map(([text]) => text); }
@@ -166,7 +170,7 @@ function buildAccountSettings(ttsProvider = 'device') {
     ...settingsDefaults,
     ...normalizeVoiceSettingsLocalDelta({
       experiments: true,
-      featureToggles: { ...settingsDefaults.featureToggles, voice: true, 'voice.agent': true, 'execution.runs': true },
+      featureToggles: { ...settingsDefaults.featureToggles, voice: true, 'voice.agent': true, 'voice.daemonInference': true, 'execution.runs': true },
       voice: {
         ...settingsDefaults.voice,
         providerId: 'local_conversation',
@@ -182,7 +186,9 @@ function buildAccountSettings(ttsProvider = 'device') {
               conversationMode: 'agent',
               agent: { agentSource: 'session', prewarmOnConnect: false },
               streaming: { enabled: true, ttsEnabled: true, ttsChunkChars: 120 },
-              tts: { autoSpeakReplies: true, provider: ttsProvider },
+              tts: { autoSpeakReplies: true, provider: ttsProvider,
+                ...(ttsProvider === 'local_neural' ? { localNeural: { execution: 'daemon' } } : {}),
+              },
             },
           },
         },
@@ -215,9 +221,12 @@ async function establishProductionBinding() {
   expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
 }
 
-describe('sendVoiceTextTurn streaming playback convergence', () => {
+function registerStreamingPlaybackHooks(platform: 'ios' | 'web' = 'ios', ttsProvider = 'device') {
   beforeEach(async () => {
     speechBoundary.reset();
+    speechBoundary.platform.value = platform;
+    if (platform === 'web') webStorage = installLocalStorageMock();
+    resetWebAudioContextForTests();
     retainedAgent = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: answerVoiceAgentRpc });
     const nativeSdkRpc = speechBoundary.machineRpc.getMockImplementation();
     speechBoundary.machineRpc.mockImplementation(async request => {
@@ -237,7 +246,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     observedStatuses.length = 0;
     streamEvents.clear();
     account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://streaming-voice.test',
-      accountId: 'account-a', currentAccount: true, settings: buildAccountSettings() }], route: createSessionReadBatchHttpBoundary(async request => {
+      accountId: 'account-a', currentAccount: true, settings: buildAccountSettings(ttsProvider) }], route: createSessionReadBatchHttpBoundary(async request => {
         const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'machine-1', 'account-a', request);
         if (machineReply) return machineReply;
         const metadataReply = await sessionMetadata.handle(request.url.toString(), {
@@ -246,7 +255,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
         });
         if (metadataReply) return metadataReply;
         if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
-          features: { voice: { enabled: true, agent: { enabled: true } }, execution: { runs: { enabled: true } },
+          features: { voice: { enabled: true, agent: { enabled: true }, daemonInference: { enabled: true } }, execution: { runs: { enabled: true } },
             machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } } },
           capabilities: { session: { pendingInput: { protocolVersion: 1 } }, machines: { liveStream: {
             serverRouted: { disabledReason: null, caps: {
@@ -292,7 +301,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
       metadata: writeVoiceConversationScopeMetadata({ ...target.metadata!,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }),
       }, { kind: 'session_root', sessionRootId: target.id }) });
-    storage.setState({ settings: buildAccountSettings(),
+    storage.setState({ settings: buildAccountSettings(ttsProvider),
       settingsScope: { serverId, accountId: 'account-a' },
       sessions: { s1: target, 'carrier-s1': carrier }, machines: { [machine.id]: machine },
       machineListByServerId: { [serverId]: [machine] }, sessionMessages: {},
@@ -312,7 +321,16 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     disconnect = null;
     await account?.dispose();
     account = null;
+    webStorage?.restore();
+    webStorage = null;
+    speechBoundary.platform.value = 'ios';
+    vi.unstubAllGlobals();
+    resetWebAudioContextForTests();
   });
+}
+
+describe('sendVoiceTextTurn streaming playback convergence', () => {
+  registerStreamingPlaybackHooks();
 
   it('routes streamed chunks through the canonical queue and speaks them in contiguous order', async () => {
     resetVoiceAdapterRegistryForTests();
@@ -422,36 +440,91 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     expect(expoSpeechSpeak).not.toHaveBeenCalled();
     expect(speechSynthesizeRpc).not.toHaveBeenCalled();
   });
+});
 
-  it('terminates streamed playback on the first provider failure without retrying later chunks', async () => {
+describe.each([
+  { failure: 'synthesis', provider: 'happier.voice.google/google-cloud-tts' },
+  { failure: 'playback_start', provider: 'happier.voice.google/google-cloud-tts' },
+  { failure: 'playback_start', provider: 'local_neural' },
+  { failure: 'playback_start_then_cancelled', provider: 'local_neural' },
+] as const)('streamed $provider $failure failure', ({ failure, provider }) => {
+  registerStreamingPlaybackHooks(provider === 'local_neural' ? 'web' : 'ios', provider);
+
+  it('surfaces the fault without retrying later chunks', async () => {
     await establishProductionBinding();
     streamDeltas.current = ['Unavailable first. ', 'Must not retry.'];
-    speechBoundary.failNextSynthesis('provider_unavailable');
+    const errorCode = failure === 'synthesis' ? 'provider_unavailable' : 'QA_OUTPUT_START_FAILED';
+    const outputStart = vi.fn(() => { throw Object.assign(new Error(errorCode), { name: 'OperationError' }); });
+    if (provider === 'local_neural') {
+      // Only the browser output boundary is replaced: the daemon client, both
+      // playback queues, durable input admission and lifecycle caller stay real.
+      vi.stubGlobal('AudioContext', class extends TestVoiceAudioContext {
+        readonly decodeAudioData = vi.fn(async (_bytes: ArrayBuffer) => ({ duration: 4.8 }));
+        constructor() {
+          super();
+          const createSource = this.createBufferSource.getMockImplementation()!;
+          this.createBufferSource.mockImplementation(() => {
+            const source = createSource();
+            source.start.mockImplementation(outputStart);
+            return source;
+          });
+        }
+      });
+    }
+    if (failure === 'synthesis') speechBoundary.failNextSynthesis('provider_unavailable');
+    else {
+      if (failure === 'playback_start_then_cancelled') {
+        streamMode = 'cancelled';
+        // The remote terminal can arrive after local playback has failed. Cross
+        // an OS task boundary so the real playback rejection settles first.
+        playbackStarted = new Promise<void>(resolve => {
+          outputStart.mockImplementationOnce(() => {
+            setTimeout(resolve, 0);
+            throw Object.assign(new Error(errorCode), { name: 'OperationError' });
+          });
+        });
+      } else encodedAudio.start.mockRejectedValueOnce(Object.assign(new Error(errorCode), { name: 'OperationError' }));
+    }
 
-    const outcome = await sendVoiceTextTurn({
-      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-      settings: buildAccountSettings('happier.voice.google/google-cloud-tts'),
-      userText: 'go',
-      playbackController: makePlaybackController(),
-      voiceAgentSessions,
-      durableDispatch: {
-        localId: 'tts-failure-turn',
-        deliveryCommand: 'interrupt_and_send',
-      },
-    }).then(
+    const settings = buildAccountSettings(provider);
+    const usesLifecycleCaller = provider === 'local_neural' && failure === 'playback_start';
+    const send = usesLifecycleCaller
+      ? (await import('./localVoiceEngine')).sendLocalVoiceAgentTextTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'go')
+      : sendVoiceTextTurn({
+        sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+        settings,
+        userText: 'go',
+        playbackController: makePlaybackController(),
+        voiceAgentSessions,
+      });
+    const outcome = await send.then(
       () => ({ ok: true as const, error: null }),
       (error: unknown) => ({ ok: false as const, error }),
     );
 
+    expect(provider === 'local_neural' ? speechBoundary.daemonStreamStartRpc : speechSynthesizeRpc,
+      outcome.error instanceof Error ? outcome.error.message : undefined).toHaveBeenCalledTimes(1);
+    expect(provider === 'local_neural' ? outputStart : encodedAudio.start).toHaveBeenCalledTimes(failure === 'synthesis' ? 0 : 1);
     expect(outcome).toMatchObject({
       ok: false,
-      error: { kind: 'tts_failed', code: 'provider_unavailable' },
+      error: { kind: 'tts_failed', code: errorCode },
     });
-    expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
-    expect(encodedAudio.start).not.toHaveBeenCalled();
-    // Capture retirement and terminal failure publication belong to the caller.
-    expect(voiceConversationRuntimeMachine.getSnapshot().error).toBeNull();
+    expect(account?.requests.filter(request => request.method === 'POST' && /\/pending$/.test(request.path))).toHaveLength(1);
+    expect(account?.requests.filter(request => /\/delivery\/handled$/.test(request.path))).toHaveLength(1);
+    if (usesLifecycleCaller) {
+      expect(voiceConversationRuntimeMachine.getSnapshot()).toMatchObject({
+        state: 'disconnected',
+        error: { kind: 'tts_failed', reason: errorCode, recoveryAction: 'retry' },
+      });
+    } else {
+      // Direct dispatch leaves publication to the lifecycle caller.
+      expect(voiceConversationRuntimeMachine.getSnapshot().error).toBeNull();
+    }
   });
+});
+
+describe('sendVoiceTextTurn playback cancellation', () => {
+  registerStreamingPlaybackHooks();
 
   it('aborts queued and active playback exactly once when the canonical turn is cancelled', async () => {
     await establishProductionBinding();

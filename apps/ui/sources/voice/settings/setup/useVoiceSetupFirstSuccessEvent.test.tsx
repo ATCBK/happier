@@ -46,6 +46,18 @@ describe('useVoiceSetupFirstSuccessEvent', () => {
         await h.rerender({ complete: true, live: false, messages: delayed });
         expect(h.getCurrent()).toBeNull();
     });
+    it('does not celebrate another Local attempt whose reply was committed before its input', async () => {
+        const h = await mount({ complete: false, live: true, liveInputIds: ['current-local-input'] });
+        const delayed: readonly Message[] = [
+            { ...turn[0]!, localId: 'old-local-input', seq: 12 },
+            { ...turn[1]!, localId: 'old-stream:assistant', seq: 11, meta: { happier: {
+                kind: 'voice_agent_turn.v1', payload: { v: 1, epoch: 0, role: 'assistant',
+                    voiceAgentId: 'old-run', streamId: 'old-stream', ts: 20 },
+            } } },
+        ];
+        await h.rerender({ complete: true, live: true, messages: delayed, liveInputIds: ['current-local-input'] });
+        expect(h.getCurrent()).toBeNull();
+    });
     it.each([true, false])('does not celebrate old acknowledged rows hydrating after a live Try (still live: %s)', async (live) => {
         const h = await mount({ complete: false, live: false });
         await h.rerender({ complete: false, live: true });

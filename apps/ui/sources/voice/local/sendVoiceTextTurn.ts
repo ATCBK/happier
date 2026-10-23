@@ -113,6 +113,7 @@ export async function sendVoiceTextTurn(params: {
 
   if (conversationMode === 'agent' && !params.durableDispatch) {
     if (!projectedConversationSessionId) throw new Error('voice_session_binding_required');
+    const dispatchOutcome: { failure?: Readonly<{ error: unknown }> } = {};
     const result = await submitDurableVoiceTextTurn({
       conversationSessionId: projectedConversationSessionId,
       text: userText,
@@ -122,11 +123,19 @@ export async function sendVoiceTextTurn(params: {
           ...params,
           durableDispatch: { localId, deliveryCommand },
           onUserTranscriptAccepted: onAccepted,
+        }).catch((error: unknown) => {
+          dispatchOutcome.failure = { error };
+          throw error;
         });
       },
     });
     if (!result.ok) throw Object.assign(new Error(result.message ?? result.reason), { code: result.errorCode ?? result.reason });
-    if (result.disposition === 'settled') return;
+    if (result.disposition === 'settled') {
+      // Pending settlement acknowledges the input, not successful reply audio.
+      // Preserve the original turn failure for the lifecycle's single publisher.
+      if (dispatchOutcome.failure) throw dispatchOutcome.failure.error;
+      return;
+    }
     const code = result.errorCode ?? (result.disposition === 'ambiguous' ? 'voice_turn_dispatch_ambiguous' : 'voice_turn_pending');
     throw Object.assign(new Error(code), { code });
   }
@@ -465,16 +474,18 @@ export async function sendVoiceTextTurn(params: {
       }
       return;
     } catch (error) {
-      if (isTurnAbortedError(error) || params.signal?.aborted) {
-        transitionVoiceRuntimeToIdleIfCurrent({ controlSessionId: sessionId });
-        return;
-      }
-      if (streamingPlaybackError !== null) {
+      // Queue/remote cancellation after a playback fault cannot erase its cause.
+      // An explicit caller abort still retires the turn quietly.
+      if (streamingPlaybackError !== null && !params.signal?.aborted) {
         const machineError = classifyVoiceMachineError(streamingPlaybackError, {
           kind: 'tts_failed',
           reason: 'tts_failed',
         });
         throw new VoiceTextTurnError(machineError.kind, machineError.reason, streamingPlaybackError);
+      }
+      if (isTurnAbortedError(error) || params.signal?.aborted) {
+        transitionVoiceRuntimeToIdleIfCurrent({ controlSessionId: sessionId });
+        return;
       }
       throw error instanceof Error ? error : new Error('send_failed');
     } finally {

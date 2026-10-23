@@ -70,6 +70,7 @@ type InitializeVoiceAgentHandleParams = Readonly<{
     sessionId: string;
     signal?: AbortSignal;
     getDaemonVoiceAgentClient: (scope: ServerAccountScope) => VoiceAgentClient;
+    getCleanupSignal?: () => AbortSignal | undefined;
     setDeferredTargetSessionContext: (sessionId: string, update: string) => void;
 }>;
 
@@ -155,6 +156,7 @@ export async function initializeVoiceAgentHandle({
     sessionId,
     signal,
     getDaemonVoiceAgentClient,
+    getCleanupSignal,
     setDeferredTargetSessionContext,
 }: InitializeVoiceAgentHandleParams): Promise<VoiceAgentHandle> {
     const accountLifetime = captureActiveServerAccountScopeLifetime();
@@ -826,7 +828,12 @@ export async function initializeVoiceAgentHandle({
     try {
         assertWelcomeInputsCurrent();
     } catch (error) {
-        await client.stop({ sessionId: rpcSessionId, voiceAgentId: started.voiceAgentId, signal }).catch(() => {});
+        // Preparation may already be cancelled while its acknowledged run
+        // still needs retirement. The coalesced Stop owns that cleanup's
+        // cancellation; standalone callers retain their live caller signal.
+        const cleanupSignal = getCleanupSignal?.() ?? (signal?.aborted ? undefined : signal);
+        await client.stop({ sessionId: rpcSessionId, voiceAgentId: started.voiceAgentId,
+            signal: cleanupSignal }).catch(() => {});
         throw error;
     }
 
