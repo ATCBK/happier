@@ -12,7 +12,17 @@ type TriageStatusRowContent = Readonly<{
 export type TriageStatusRowProps = TriageStatusRowContent & (
   | Readonly<{ presentation: 'compact'; leading?: React.ReactNode; grow?: boolean }>
   | Readonly<{ presentation: 'summary'; nameVariant?: 'label' | 'micro'; nameTone?: TextTone }>
-  | (Readonly<{ presentation: 'list'; detail?: string }> & (
+  | (Readonly<{
+    presentation: 'list';
+    detail?: string;
+    /**
+     * The row opens in place (the shared row disclosure): what the source knows about this status — its summary,
+     * its log excerpt, where to read the rest. The row's press toggles it.
+     */
+    expandedContent?: React.ReactNode;
+    expanded?: boolean;
+    onPress?: () => void;
+  }> & (
     /** Row-level actions live in the row's quiet overflow, never as buttons beside every row. */
     | Readonly<{
       secondaryActions: readonly Readonly<{ id: string; label: string }>[];
@@ -34,7 +44,12 @@ export function TriageStatusRow(props: TriageStatusRowProps): React.ReactElement
       {...(props.detail === undefined ? {} : props.status === undefined ? { detail: props.detail } : { subtitle: props.detail })}
       {...(props.secondaryActions === undefined
         ? {}
-        : { secondaryActions: props.secondaryActions, onSecondaryAction: props.onSecondaryAction })} />;
+        : { secondaryActions: props.secondaryActions, onSecondaryAction: props.onSecondaryAction })}
+      {...(props.expandedContent === undefined ? {} : {
+        expandedContent: props.expandedContent,
+        expanded: props.expanded === true,
+        ...(props.onPress === undefined ? {} : { onPress: props.onPress }),
+      })} />;
   }
   if (props.presentation === 'summary') {
     const name = <Text variant={props.nameVariant ?? 'label'} tone={props.nameTone ?? 'neutral'} value={props.name} />;

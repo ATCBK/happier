@@ -37,6 +37,7 @@
  */
 
 import * as React from 'react';
+import { formatUsageDurationCompact } from '@happier-dev/protocol/usage/usageFormatting';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import {
   createReviewCommentLinkedIssueIdV1,
@@ -2571,6 +2572,15 @@ function ChecksBody({
   const text = usePluginTranslation();
   const hostApi = usePluginHostApi();
   const { spacing } = usePluginTheme();
+  // Which checks are open in place. Failing checks lead the list; any row opens to what GitHub said about it.
+  const [openKeys, setOpenKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+  const toggle = React.useCallback((key: string) => {
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
   const failures = [
     ...(view.checkRunsFailure === undefined
       ? []
@@ -2672,22 +2682,73 @@ function ChecksBody({
           />
         </Stack>
       )}
-      renderItem={(row) => (
-        <TriageStatusRow
-          presentation="list"
-          name={row.name}
-          status={checkStatusText(text, row)}
-          tone={checkTone(row)}
-          {...(row.completedAtMs === undefined
-            ? {}
-            : { detail: formatTimestamp(locale, row.completedAtMs, 'relative', nowMs) })}
-          {...quietRowActions(hostApi, text, {
-            copyValue: row.name,
-            ...(row.detailsUrl === undefined ? {} : { openUrl: row.detailsUrl }),
-          })}
-        />
-      )}
+      renderItem={(row) => {
+        // How long it ran, then when it finished: the two facts that tell a slow check from a stuck one.
+        const ran = row.startedAtMs !== undefined && row.completedAtMs !== undefined && row.completedAtMs >= row.startedAtMs
+          ? formatUsageDurationCompact(row.completedAtMs - row.startedAtMs, locale)
+          : null;
+        const when = row.completedAtMs === undefined ? null : formatTimestamp(locale, row.completedAtMs, 'relative', nowMs);
+        const detail = [ran, when].filter((part) => part !== null).join(' · ');
+        return (
+          <TriageStatusRow
+            presentation="list"
+            name={row.name}
+            status={checkStatusText(text, row)}
+            tone={checkTone(row)}
+            {...(detail === '' ? {} : { detail })}
+            expanded={openKeys.has(row.key)}
+            onPress={() => toggle(row.key)}
+            expandedContent={<GithubCheckDetails row={row} />}
+            {...quietRowActions(hostApi, text, {
+              copyValue: row.name,
+              ...(row.detailsUrl === undefined ? {} : { openUrl: row.detailsUrl }),
+            })}
+          />
+        );
+      }}
     />
+  );
+}
+
+/** What GitHub said about one check: its output summary (failing step, assertion), and where to read the whole log. */
+function GithubCheckDetails({ row }: Readonly<{ row: GithubProjectedCheckRowV1 }>): React.ReactElement {
+  const hostApi = usePluginHostApi();
+  return (
+    <Stack gap="small">
+      {row.logExcerpt === undefined
+        ? (
+          <Text
+            variant="micro"
+            tone="secondary"
+            valueKey="plugins.github.ui.checkNoSummary"
+            fallback="GitHub has no summary for this check. Its full log is on GitHub."
+          />
+        )
+        : <Markdown value={githubMarkdownDisplayText(row.logExcerpt)} />}
+      {row.truncated === true
+        ? (
+          <Text
+            variant="micro"
+            tone="secondary"
+            valueKey="plugins.github.ui.checkSummaryTruncated"
+            fallback="This summary is shortened. The rest is on GitHub."
+          />
+        )
+        : null}
+      {row.detailsUrl === undefined
+        ? null
+        : (
+          <Row>
+            <Button
+              title="Open on GitHub"
+              titleKey="plugins.github.ui.openCheckOnGithub"
+              variant="secondary"
+              size="small"
+              onPress={() => { void hostApi.openExternalLink(row.detailsUrl!); }}
+            />
+          </Row>
+        )}
+    </Stack>
   );
 }
 
