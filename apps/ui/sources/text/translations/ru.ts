@@ -1674,7 +1674,8 @@ export const ru: TranslationStructure = {
             composerFocus: 'Перейти к вводу',
             composerPromptsOpen: promptPickerTranslations.ru.open,
             voiceToggle: 'Начать или завершить голосовой разговор',
-            composerSendImmediate: 'Отправить сразу',
+            composerSendImmediate: 'Альтернативная отправка (очередь / направление)',
+            composerSendInterrupt: 'Прервать и отправить',
             composerSendPending: 'Отправить в очередь ожидания',
             commandPaletteOpen: 'Открыть поиск',
             searchTextInFiles: fileContentSearchTranslations["ru"].textInFiles,
@@ -9261,6 +9262,11 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         },},
 
     agentInput: {
+        sendOptions: {
+            title: "Варианты отправки",
+            queue: "В очередь",
+            hint: "Удерживайте, чтобы выбрать способ отправки",
+        },
         profile: {
             sectionTitle: 'Профиль',
         },

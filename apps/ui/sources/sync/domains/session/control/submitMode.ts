@@ -386,6 +386,16 @@ export function decideSessionMessageDelivery(opts: {
         }
     }
 
+    if (opts.explicitMode === 'agent_queue') {
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'explicit_steer',
+            pendingSupportState,
+            requestedAction: { v: 1, kind: 'steer_now' },
+        };
+    }
+
     if (canSteerBusyTurnNow && busySteerSendPolicy === 'steer_immediately') {
         return {
             mode: 'server_pending',
@@ -443,4 +453,39 @@ export function chooseForceImmediateSubmitMode(opts: {
     steerWithoutConfig?: boolean;
 }): MessageSendMode {
     return decideSessionMessageDelivery({ ...opts, forceImmediate: true }).mode;
+}
+
+export function canSteerUserMessageNow(opts: { session: Session | null; nowMs?: number }): boolean {
+    const state = deriveSubmitRuntimeState(opts.session, opts.nowMs ?? Date.now());
+    return opts.session?.agentState?.controlledByUser !== true && !state.localControlBlocksDirectSubmit
+        && state.inputReadinessDisposition === 'steer_available';
+}
+
+export function supportsInFlightSteerUserMessage(opts: { session: Session | null }): boolean {
+    const { session } = opts;
+    const capabilities = session?.agentState?.capabilities;
+    return session?.presence === 'online' && session.agentState?.controlledByUser !== true
+        && (capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer ?? getProviderInFlightSteerSupported(session)) === true;
+}
+const COMPOSER_SEND_MODES = ['agent_queue', 'server_pending', 'interrupt'] as const;
+const COMPOSER_SEND_MODES_WITHOUT_STEER = ['server_pending', 'interrupt'] as const;
+const COMPOSER_STEER_ONLY = ['agent_queue'] as const;
+const NO_COMPOSER_SEND_MODES = [] as const;
+
+/** Labels and keyboard alternatives consume the same default delivery decision as submission. */
+export function resolveSessionComposerSendActions(opts: {
+    configuredMode: MessageSendMode;
+    busySteerSendPolicy?: BusySteerSendPolicy;
+    session: Session | null;
+    nowMs?: number;
+}): Readonly<{ alternateMode: MessageSendMode; modes: readonly MessageSendMode[] }> {
+    const decision = decideSessionMessageDelivery(opts);
+    const queueAvailable = getPendingQueueSubmitSupportState(opts.session) === 'supported';
+    const steerAvailable = canSteerUserMessageNow(opts);
+    return {
+        alternateMode: queueAvailable && (decision.requestedAction?.kind === 'steer_if_active' || decision.requestedAction?.kind === 'steer_now')
+            ? 'server_pending' : 'agent_queue',
+        modes: queueAvailable ? (steerAvailable ? COMPOSER_SEND_MODES : COMPOSER_SEND_MODES_WITHOUT_STEER)
+            : steerAvailable ? COMPOSER_STEER_ONLY : NO_COMPOSER_SEND_MODES,
+    };
 }

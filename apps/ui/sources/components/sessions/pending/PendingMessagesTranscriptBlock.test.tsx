@@ -932,7 +932,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
     });
 
-    it('keeps steer and force-send available when the active flag and AgentState version lag a fresh in-progress turn', async () => {
+    it('uses canonical input readiness when an inactive runtime retains an in-progress turn', async () => {
         const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(130_000);
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         sessionValue = {
@@ -960,11 +960,11 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-            expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeNull();
+            expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeTruthy();
 
             await hoverPendingMessageRow(screen, 'p1');
 
-            expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeTruthy();
+            expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
             expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeTruthy();
             expect(screen.findByTestId('pendingMessages.edit:p1')).toBeTruthy();
             expect(screen.findByTestId('pendingMessages.remove:p1')).toBeTruthy();

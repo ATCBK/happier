@@ -157,16 +157,21 @@ describe('KeyboardShortcutProvider', () => {
             textarea.dispatchEvent(event);
             return event;
         };
-        await act(async () => { textarea.focus(); });
-        expect(press().defaultPrevented).toBe(false);
-        expect(next).not.toHaveBeenCalled();
-        captured.mockClear();
-        section.style.display = 'none';
-        expect(press().defaultPrevented).toBe(true);
-        expect(captured).not.toHaveBeenCalled();
-        expect(next).toHaveBeenCalledOnce();
-        await screen.unmount();
-        dom.window.close();
+        try {
+            await act(async () => { textarea.focus(); });
+            expect(press().defaultPrevented).toBe(false);
+            expect(next).not.toHaveBeenCalled();
+            captured.mockClear();
+            section.style.display = 'none';
+            expect(press().defaultPrevented).toBe(true);
+            expect(captured).not.toHaveBeenCalled();
+            expect(next).toHaveBeenCalledOnce();
+        } finally {
+            await screen.unmount();
+            // Store cleanup can read window.location; never leave a closed DOM installed.
+            vi.unstubAllGlobals();
+            dom.window.close();
+        }
     });
     it('forwards configured Ask and Save chords from embedded editors only while their handlers are registered', async () => {
         testState.platformOS = 'ios';

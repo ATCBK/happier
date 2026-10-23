@@ -1422,7 +1422,8 @@ const enSettingsKeyboard = {
     composerFocus: 'Focus composer',
     composerPromptsOpen: promptPickerTranslations.en.open,
     voiceToggle: 'Start or end Voice',
-    composerSendImmediate: 'Send immediately',
+    composerSendImmediate: 'Alternate send (queue / steer)',
+            composerSendInterrupt: 'Interrupt and send',
     composerSendPending: 'Send to pending queue',
     commandPaletteOpen: 'Open Search',
     searchTextInFiles: fileContentSearchTranslations['en'].textInFiles,
@@ -11139,6 +11140,11 @@ const enZen = {
 };
 
 const enAgentInput = {
+    sendOptions: {
+        title: "Send options",
+        queue: "Queue",
+        hint: "Hold to choose how to send",
+    },
   promptPicker: promptPickerTranslations['en'],
   chipPicker: {
     selectedOptionAccessibilityLabel: ({ option }: { option: string }) =>

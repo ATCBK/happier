@@ -1659,7 +1659,8 @@ export const it: TranslationStructure = {
             composerFocus: 'Metti a fuoco il compositore',
             composerPromptsOpen: promptPickerTranslations.it.open,
             voiceToggle: 'Avvia o termina Voce',
-            composerSendImmediate: 'Invia subito',
+            composerSendImmediate: 'Invio alternativo (coda / indirizza)',
+            composerSendInterrupt: 'Interrompi e invia',
             composerSendPending: 'Invia alla coda in sospeso',
             commandPaletteOpen: 'Apri la ricerca',
             searchTextInFiles: fileContentSearchTranslations["it"].textInFiles,
@@ -9627,6 +9628,11 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opzioni di invio",
+          queue: "Accoda",
+          hint: "Tieni premuto per scegliere come inviare",
+      },
       profile: {
           sectionTitle: 'Profilo',
       },

@@ -1,3 +1,4 @@
+import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
@@ -26,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 
   suggestionMoveUp: vi.fn(),
   suggestionMoveDown: vi.fn(),
-  suggestions: [] as Array<Record<string, unknown>>,
+  suggestions: [] as AutocompleteSuggestion[],
   selectedSuggestionIndex: -1,
 
   onChangeText: vi.fn(),
@@ -216,15 +217,6 @@ vi.mock('@/components/plugins/actions/ActionInputFormModal', () => ({
   ActionInputFormModal: () => null,
 }));
 
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-  useActiveSuggestions: () => [
-    mocks.suggestions,
-    mocks.selectedSuggestionIndex,
-    mocks.suggestionMoveUp,
-    mocks.suggestionMoveDown,
-  ],
-}));
-
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
   applySuggestion: (text: string) => ({ text, cursorPosition: text.length }),
 }));
@@ -347,6 +339,8 @@ describe('AgentInput (history navigation)', () => {
       qualifiedActionId: 'acme.beta/review',
       title: 'Run Beta review',
       description: null,
+      icon: null,
+      priority: 0,
       placement: 'secondary' as const,
       scope: 'session' as const,
       scopes: ['session'] as const,
@@ -383,7 +377,7 @@ describe('AgentInput (history navigation)', () => {
           placeholder="p"
           onSend={mocks.onSend}
           autocompleteKinds={['slashCommand']}
-          autocompleteSuggestions={async () => []}
+          autocompleteSuggestions={async () => mocks.suggestions}
           onContributedActionSuggestionSelect={onContributedActionSuggestionSelect}
         />,
       );
@@ -442,7 +436,7 @@ describe('AgentInput (history navigation)', () => {
         placeholder="p"
         onSend={mocks.onSend}
         autocompleteKinds={['slashCommand']}
-        autocompleteSuggestions={async () => []}
+        autocompleteSuggestions={async () => mocks.suggestions}
         onContributedActionSuggestionSelect={onContributedActionSuggestionSelect}
       />,
     );
@@ -525,7 +519,7 @@ describe('AgentInput (history navigation)', () => {
         placeholder="p"
         onSend={mocks.onSend}
         autocompleteKinds={['slashCommand']}
-        autocompleteSuggestions={async () => []}
+        autocompleteSuggestions={async () => mocks.suggestions}
         onContributedActionSuggestionSelect={onContributedActionSuggestionSelect}
       />,
     );
@@ -533,6 +527,8 @@ describe('AgentInput (history navigation)', () => {
 
     await act(async () => {
       input.props.onFocus?.();
+    });
+    await act(async () => {
       input.props.onKeyPress?.({ key: 'Enter', shiftKey: false });
       await Promise.resolve();
     });
@@ -588,7 +584,7 @@ describe('AgentInput (history navigation)', () => {
         placeholder="p"
         onSend={mocks.onSend}
         autocompleteKinds={['slashCommand']}
-        autocompleteSuggestions={async () => []}
+        autocompleteSuggestions={async () => mocks.suggestions}
         onContributedActionSuggestionSelect={onContributedActionSuggestionSelect}
       />,
     );
@@ -667,7 +663,7 @@ describe('AgentInput (history navigation)', () => {
         placeholder="p"
         onSend={mocks.onSend}
         autocompleteKinds={['slashCommand']}
-        autocompleteSuggestions={async () => []}
+        autocompleteSuggestions={async () => mocks.suggestions}
         onContributedActionSuggestionSelect={onContributedActionSuggestionSelect}
       />,
     );
@@ -706,7 +702,7 @@ describe('AgentInput (history navigation)', () => {
         placeholder="p"
         onSend={mocks.onSend}
         autocompleteKinds={[]}
-        autocompleteSuggestions={async () => []}
+        autocompleteSuggestions={async () => mocks.suggestions}
         isSendDisabled={false}
         disabled={false}
         showAbortButton={false}
@@ -738,7 +734,7 @@ describe('AgentInput (history navigation)', () => {
           placeholder="p"
           onSend={mocks.onSend}
           autocompleteKinds={[]}
-          autocompleteSuggestions={async () => []}
+          autocompleteSuggestions={async () => mocks.suggestions}
           isSendDisabled={true}
           disabled={false}
           showAbortButton={false}
@@ -754,6 +750,30 @@ describe('AgentInput (history navigation)', () => {
     expect(handled).toBe(false);
     expect(mocks.onSend).not.toHaveBeenCalled();
     expect(mocks.historyReset).not.toHaveBeenCalled();
+  });
+
+  it.each(['agent_queue', 'server_pending'] as const)('uses the resolved %s alternative for a typed draft', async (alternateSendMode) => {
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(<AgentInput sessionId="s1" value="draft" placeholder="p"
+      onChangeText={mocks.onChangeText} onSend={mocks.onSend} alternateSendMode={alternateSendMode}
+      autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+    await act(async () => { findMultiTextInput(screen).props.onKeyPress?.({ key: 'Enter', metaKey: true,
+      platformOS: 'web', webPlatform: 'MacIntel' }); });
+    expect(mocks.onSend).toHaveBeenCalledExactlyOnceWith({ deliveryIntent: alternateSendMode });
+    await screen.unmount();
+  });
+
+  it.each([false, true])('sends the next queued message from an empty composer (interrupt=%s)', async (shiftKey) => {
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(<AgentInput sessionId="s1" value="" placeholder="p"
+      onChangeText={mocks.onChangeText} onSend={mocks.onSend} canSendNextQueued
+      alternateSendMode="server_pending" autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+    await act(async () => { findMultiTextInput(screen).props.onKeyPress?.({ key: 'Enter', metaKey: true, shiftKey,
+      platformOS: 'web', webPlatform: 'MacIntel' }); });
+    expect(mocks.onSend).toHaveBeenCalledExactlyOnceWith({ deliveryIntent: shiftKey ? 'interrupt' : 'agent_queue', sendNextQueued: true });
+    expect(mocks.onChangeText).not.toHaveBeenCalled();
+    expect(mocks.historyReset).not.toHaveBeenCalled();
+    await screen.unmount();
   });
 
   it('uses immediate-send bypass on Cmd+Enter (web)', async () => {
@@ -788,7 +808,7 @@ describe('AgentInput (history navigation)', () => {
 
     expect(handled).toBe(true);
     expect(mocks.onSend).toHaveBeenCalledTimes(1);
-    expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
+    expect(mocks.onSend).toHaveBeenCalledWith({ deliveryIntent: 'agent_queue' });
   });
 
   it('uses immediate-send bypass on Ctrl+Enter for non-Apple web platforms', async () => {
@@ -823,7 +843,7 @@ describe('AgentInput (history navigation)', () => {
 
     expect(handled).toBe(true);
     expect(mocks.onSend).toHaveBeenCalledTimes(1);
-    expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
+    expect(mocks.onSend).toHaveBeenCalledWith({ deliveryIntent: 'agent_queue' });
   });
 
   it('does not optimistically clear existing-session text before send acknowledgement', async () => {
@@ -853,7 +873,18 @@ describe('AgentInput (history navigation)', () => {
     expect(mocks.onChangeText).not.toHaveBeenCalledWith('');
   });
 
-  it('uses the pending-send shortcut delivery intent', async () => {
+  it('preserves an explicitly rebound queue command', async () => {
+    localSettingState.values.keyboardShortcutOverridesV1 = { 'composer.sendPending': [{ binding: 'Alt+Enter' }] };
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(<AgentInput sessionId="s1" value="draft" placeholder="p"
+      onChangeText={mocks.onChangeText} onSend={mocks.onSend} autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+    await act(async () => { findMultiTextInput(screen).props.onKeyPress?.({ key: 'Enter', altKey: true,
+      platformOS: 'web', webPlatform: 'MacIntel' }); });
+    expect(mocks.onSend).toHaveBeenCalledExactlyOnceWith({ deliveryIntent: 'server_pending' });
+    await screen.unmount();
+  });
+
+  it('interrupts with the Shift send shortcut', async () => {
     const { AgentInput } = await import('./AgentInput');
     const screen = await renderScreen(
       <AgentInput
@@ -886,7 +917,7 @@ describe('AgentInput (history navigation)', () => {
 
     expect(handled).toBe(true);
     expect(mocks.onSend).toHaveBeenCalledTimes(1);
-    expect(mocks.onSend).toHaveBeenCalledWith({ deliveryIntent: 'server_pending' });
+    expect(mocks.onSend).toHaveBeenCalledWith({ deliveryIntent: 'interrupt' });
   });
 
   it('does not treat Ctrl+Enter as immediate-send on Apple web platforms', async () => {

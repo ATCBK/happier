@@ -206,8 +206,13 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
     },
     {
         id: 'composer.sendPending',
+        allowInEditable: true,
         settingsTitleKey: 'settingsKeyboard.commands.composerSendPending',
-        defaultBinding: { binding: 'Mod+Shift+Enter', allowInEditable: true },
+    },
+    {
+        id: 'composer.sendInterrupt',
+        settingsTitleKey: 'settingsKeyboard.commands.composerSendInterrupt',
+        defaultBinding: { binding: 'Mod+Shift+Enter', allowInEditable: true, nativeConsumable: true },
     },
     {
         id: 'commandPalette.open',

@@ -1882,7 +1882,8 @@ export const pt: TranslationStructure = {
             composerFocus: 'Focar compositor',
             composerPromptsOpen: promptPickerTranslations.pt.open,
             voiceToggle: 'Iniciar ou encerrar Voz',
-            composerSendImmediate: 'Enviar imediatamente',
+            composerSendImmediate: 'Envio alternativo (fila / orientar)',
+            composerSendInterrupt: 'Interromper e enviar',
             composerSendPending: 'Enviar para a fila pendente',
             commandPaletteOpen: 'Abrir a pesquisa',
             searchTextInFiles: fileContentSearchTranslations["pt"].textInFiles,
@@ -9525,6 +9526,11 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opções de envio",
+          queue: "Enfileirar",
+          hint: "Mantenha pressionado para escolher como enviar",
+      },
       promptPicker: promptPickerTranslations['pt'],
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}. Selecionado.`,

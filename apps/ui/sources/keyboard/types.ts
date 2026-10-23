@@ -46,6 +46,7 @@ export type KeyboardCommandId =
     | 'composer.prompts.open'
     | 'composer.sendImmediate'
     | 'composer.sendPending'
+    | 'composer.sendInterrupt'
     | 'voice.toggle'
     | 'commandPalette.open'
     | 'search.textInFiles'
@@ -160,6 +161,7 @@ export type KeyboardCommandSettingsTitleKey = Extract<
     | 'settingsKeyboard.commands.composerPromptsOpen'
     | 'settingsKeyboard.commands.composerSendImmediate'
     | 'settingsKeyboard.commands.composerSendPending'
+    | 'settingsKeyboard.commands.composerSendInterrupt'
     | 'settingsKeyboard.commands.voiceToggle'
     | 'settingsKeyboard.commands.commandPaletteOpen'
     | 'settingsKeyboard.commands.searchTextInFiles'
@@ -267,6 +269,7 @@ export type ParsedKeybindingRule = KeybindingRule & Readonly<{
 export type KeyboardCommand = Readonly<{
     id: KeyboardCommandId;
     settingsTitleKey: KeyboardCommandSettingsTitleKey;
+    allowInEditable?: boolean;
     defaultBinding?: KeybindingRule;
     defaultBindings?: readonly KeybindingRule[];
     when?: (context: KeyboardContext) => boolean;

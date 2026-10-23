@@ -317,3 +317,20 @@ function derivePendingMessageQueuedReason(
     if (context.runtimeActivity !== 'idle') return 'runtime_activity_unknown';
     return undefined;
 }
+
+export function isAcceptedLocalPendingProjection(message: PendingMessage): boolean {
+    return message.deliveryStatus === 'accepted' && message.source !== 'server_pending';
+}
+
+/** Shared by row actions and the empty-composer shortcut; in-flight custody stays with its sender. */
+export function canUseDirectPendingDeliveryActions(message: PendingMessage, visualState = getPendingMessageVisualState(message)): boolean {
+    const deliveryState = visualState.kind === 'materializing' ? getPendingMessageVisualState(message) : visualState;
+    return message.source !== 'local_outbound'
+        && !isAcceptedLocalPendingProjection(message)
+        && message.pendingDecryptFailure?.kind !== 'decrypt_failed'
+        && message.pendingDecryption?.kind !== 'loading'
+        && !message.pendingOutboxOperation
+        && deliveryState.kind !== 'cancelling'
+        && deliveryState.kind !== 'cancel_failed'
+        && deliveryState.deliveryMutationPolicy !== 'effect_possible';
+}

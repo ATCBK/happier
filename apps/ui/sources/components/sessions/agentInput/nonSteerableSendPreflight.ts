@@ -53,6 +53,7 @@ export async function resolveNonSteerableSendPlan(opts: {
     nonSteerableSendPrompt: 'on' | 'off';
     forceImmediate?: boolean;
     explicitPendingIntent?: boolean;
+    explicitMode?: MessageSendMode;
     structuredInputMetaOverrides?: Record<string, unknown> | null;
     agentTargetKey?: string | null;
     currentRunnerProcessIdentity?: CurrentSessionRunnerProcessIdentity | null;
@@ -68,6 +69,7 @@ export async function resolveNonSteerableSendPlan(opts: {
 
     const preflight = decideSessionMessageDelivery({
         configuredMode: opts.configuredMode,
+        explicitMode: opts.explicitMode,
         busySteerSendPolicy: opts.busySteerSendPolicy,
         session: opts.session,
         text: opts.text,

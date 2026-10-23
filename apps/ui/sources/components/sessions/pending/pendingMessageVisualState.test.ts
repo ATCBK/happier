@@ -7,6 +7,7 @@ import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import {
     createSessionInputFailureError,
     getPendingMessageVisualState,
+    canUseDirectPendingDeliveryActions,
     getSessionInputFailureLabelKey,
     resolvePendingMessageHeightBearingChrome,
     type PendingMessageVisualStateKind,
@@ -408,5 +409,17 @@ describe('session input failure copy owner', () => {
             .toBe('sessionDrafts.executionRunStart.targetChanged');
         expect(getSessionInputFailureLabelKey(new Error('participant send rejected'))).toBeNull();
         expect(getSessionInputFailureLabelKey(Object.assign(new Error('x'), { code: 'not_a_known_code' }))).toBeNull();
+    });
+});
+
+describe('pending delivery actions', () => {
+    it('allows the queued row and retains custody restrictions', () => {
+        expect(canUseDirectPendingDeliveryActions(pendingMessage())).toBe(true);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ pendingDecryption: { kind: 'loading' } }))).toBe(false);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ source: 'local_outbound', deliveryStatus: 'queued' }))).toBe(false);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ pendingOutboxOperation: 'cancel' }))).toBe(false);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ pendingOutboxOperation: 'enqueue' }))).toBe(false);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ pendingDecryptFailure: { kind: 'decrypt_failed' } }))).toBe(false);
+        expect(canUseDirectPendingDeliveryActions(pendingMessage({ pendingDeliveryStatus: 'server_delivering' }))).toBe(false);
     });
 });

@@ -192,17 +192,6 @@ vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: () => null,
 }));
 
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: (query: string | null) => {
-        mocks.lastSuggestionQuery = query;
-        const suggestions = mocks.respectSuggestionQuery && query === null
-            ? []
-            : mocks.activeSuggestions;
-        const selected = suggestions.length > 0 ? mocks.activeSuggestionIndex : -1;
-        return [suggestions, selected, mocks.suggestionMoveUp, mocks.suggestionMoveDown];
-    },
-}));
-
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
     applySuggestion: (text: string) => ({ text, cursorPosition: text.length }),
 }));
@@ -331,7 +320,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions}
+                autocompleteSuggestions={async (query) => { mocks.lastSuggestionQuery = query; return mocks.activeSuggestions; }}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -402,7 +391,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions}
+                autocompleteSuggestions={async (query) => { mocks.lastSuggestionQuery = query; return mocks.activeSuggestions; }}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -459,7 +448,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -467,6 +456,7 @@ describe('AgentInput (enter to send on native)', () => {
         );
 
         const input = findNativeTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
 
         await act(async () => {
             input.props.onKeyPress?.({
@@ -524,7 +514,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -532,6 +522,7 @@ describe('AgentInput (enter to send on native)', () => {
         );
         const screen = await renderScreen(render('/qa'));
         const input = findNativeTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
 
         await act(async () => {
             input.props.onKeyPress?.({
@@ -573,7 +564,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -581,6 +572,7 @@ describe('AgentInput (enter to send on native)', () => {
         );
 
         const input = findNativeTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
 
         await act(async () => {
             input.props.onKeyPress?.({
@@ -620,7 +612,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompleteKinds={['file', 'vendorPlugin']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions}
+                autocompleteSuggestions={async (query) => { mocks.lastSuggestionQuery = query; return mocks.activeSuggestions; }}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -628,6 +620,7 @@ describe('AgentInput (enter to send on native)', () => {
         );
 
         const input = findNativeTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
 
         await act(async () => {
             input.props.onKeyPress?.({
@@ -640,7 +633,7 @@ describe('AgentInput (enter to send on native)', () => {
         const insertedText = formatInlineReferenceTokenV1({ label: 'GitHub', ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'github') }) + ' ';
         await screen.update(<AgentInput sessionId="session-1" value={insertedText} onChangeText={mocks.onChangeText}
             placeholder="p" onSend={mocks.onSend} autocompleteKinds={['file', 'vendorPlugin']}
-            autocompleteSuggestions={async () => mocks.activeSuggestions} />);
+            autocompleteSuggestions={async (query) => { mocks.lastSuggestionQuery = query; return mocks.activeSuggestions; }} />);
         await act(async () => {
             findNativeTextInput(screen).props.onSubmitEditing?.();
         });
@@ -738,8 +731,9 @@ describe('AgentInput (enter to send on native)', () => {
         mocks.activeSuggestionIndex = 0;
         const screen = await renderScreen(<AgentInput value="/qa" onChangeText={mocks.onChangeText}
             placeholder="p" onSend={mocks.onSend} autocompleteKinds={['slashCommand']}
-            autocompleteSuggestions={async () => mocks.activeSuggestions} />);
+            autocompleteSuggestions={async (query) => { mocks.lastSuggestionQuery = query; return mocks.activeSuggestions; }} />);
         const input = findNativeTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
         expect(input.props.submitBehavior).toBe('submit');
         await act(async () => {
             input.props.onKeyPress({ nativeEvent: { key: 'Enter', submitting: true } });
@@ -926,7 +920,7 @@ describe('AgentInput (enter to send on native)', () => {
         });
 
         expect(mocks.onSend).toHaveBeenCalledTimes(2);
-        expect(mocks.onSend).toHaveBeenNthCalledWith(1, { forceImmediate: true });
-        expect(mocks.onSend).toHaveBeenNthCalledWith(2, { forceImmediate: true });
+        expect(mocks.onSend).toHaveBeenNthCalledWith(1, { deliveryIntent: 'agent_queue' });
+        expect(mocks.onSend).toHaveBeenNthCalledWith(2, { deliveryIntent: 'agent_queue' });
     });
 });

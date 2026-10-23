@@ -34,8 +34,19 @@ describe('composer keyboard semantics', () => {
             platformOS: 'ios',
         } as const;
 
-        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true }, settings)).toBe('sendImmediate');
-        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true, shiftKey: true }, settings)).toBe('sendPending');
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true }, settings)).toBe('sendAlternate');
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true, shiftKey: true }, settings)).toBe('sendInterrupt');
+    });
+
+    it('allows empty-composer queue actions while retaining disabled, IME and repeat guards', () => {
+        const settings = { keyboardShortcutsV2Enabled: false, keyboardSingleKeyShortcutsEnabled: false,
+            keyboardShortcutDisabledCommandIdsV1: [], keyboardShortcutOverridesV1: {}, hasSendableInput: false,
+            canSendNextQueued: true, sendActionDisabled: false, platformOS: 'ios' } as const;
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true }, settings)).toBe('sendAlternate');
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true, shiftKey: true }, settings)).toBe('sendInterrupt');
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true, repeat: true }, settings)).toBeNull();
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true, isComposing: true }, settings)).toBeNull();
+        expect(resolveComposerSendShortcutAction({ key: 'Enter', metaKey: true }, { ...settings, sendActionDisabled: true })).toBeNull();
     });
 
     it('does not resolve Mod+Enter in the plain Enter-to-send path', () => {

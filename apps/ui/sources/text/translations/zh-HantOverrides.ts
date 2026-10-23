@@ -1621,7 +1621,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
           composerFocus: '聚焦輸入框',
           composerPromptsOpen: promptPickerTranslations['zh-Hant'].open,
           voiceToggle: '開始或結束語音對話',
-          composerSendImmediate: '立即傳送',
+          composerSendImmediate: '切換傳送方式（排隊 / 引導）',
+            composerSendInterrupt: '中斷並傳送',
           composerSendPending: '傳送到待處理佇列',
           commandPaletteOpen: '開啟搜尋',
           searchTextInFiles: fileContentSearchTranslations["zh-Hant"].textInFiles,
@@ -7520,6 +7521,11 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     agentInput: {
+        sendOptions: {
+            title: "傳送選項",
+            queue: "加入佇列",
+            hint: "長按選擇傳送方式",
+        },
         promptPicker: promptPickerTranslations['zh-Hant'],
         chipPicker: {
             selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}。已選擇。`,

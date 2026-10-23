@@ -15,22 +15,12 @@ type MultiTextInputSelection = { start: number; end: number };
 // Cold imports belong to fixture setup, not the timeout of the first selected interaction test.
 beforeAll(async () => { await import('./AgentInput'); }, 600_000);
 type MultiTextInputState = { text: string; selection: MultiTextInputSelection };
-type ActiveSuggestionsResult = readonly [
-    readonly AutocompleteSuggestion[],
-    number,
-    () => void,
-    () => void,
-];
-
 const multiTextInputHandleMocks = vi.hoisted(() => ({
     blur: vi.fn(),
     focus: vi.fn(),
     setTextAndSelection: vi.fn(),
 }));
 const multiTextInputRenderCount = vi.hoisted(() => ({ value: 0 }));
-const useActiveSuggestionsMock = vi.hoisted(() => vi.fn<() => ActiveSuggestionsResult>(
-    () => [[], -1, () => {}, () => {}],
-));
 const dictationState = vi.hoisted(() => ({
     status: 'idle' as 'idle' | 'starting' | 'listening' | 'transcribing',
     failure: null as null | Readonly<{
@@ -203,9 +193,6 @@ vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: () => null,
 }));
 
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: useActiveSuggestionsMock,
-}));
 
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
     applySuggestion: (text: string) => ({ text, cursorPosition: text.length }),
@@ -213,13 +200,14 @@ vi.mock('@/components/autocomplete/applySuggestion', () => ({
 
 vi.mock('@/components/ui/popover', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/components/ui/popover')>(),
-    Popover: () => null,
+    Popover: ({ open, children }: { open: boolean; children: (args: { maxHeight: number }) => React.ReactNode }) =>
+        open ? children({ maxHeight: 400 }) : null,
     PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
     MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {},
 }));
 
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
-    FloatingOverlay: () => null,
+    FloatingOverlay: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
 }));
 
 vi.mock('@/components/ui/scroll/useScrollEdgeFades', () => ({
@@ -264,6 +252,92 @@ function HostFieldAccessory() {
 }
 
 describe('AgentInput (send button accessibility)', () => {
+    it('exposes available send choices to assistive technology and dismisses without changing the draft', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const { Popover } = await import('@/components/ui/popover');
+        const onSend = vi.fn();
+        const onChangeText = vi.fn();
+        const screen = await renderScreen(<AgentInput
+            sessionId="session-1"
+            value="Keep this draft"
+            placeholder="Type"
+            onChangeText={onChangeText}
+            onSend={onSend}
+            sendMenuModes={['server_pending', 'interrupt']}
+            autocompleteKinds={[]}
+            autocompleteSuggestions={async () => []}
+        />);
+        const send = screen.findByTestId('session-composer-send');
+        await act(async () => { send?.props.onAccessibilityAction({ nativeEvent: { actionName: 'longpress' } }); });
+        expect(screen.findByTestId('agent-input-send-option-server_pending')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-send-option-agent_queue')).toBeNull();
+        await act(async () => {
+            screen.root.findAllByType(Popover).find((popover) => popover.props.open)?.props.onRequestClose?.();
+        });
+        expect(screen.findByTestId('agent-input-send-option-server_pending')).toBeNull();
+        expect(onSend).not.toHaveBeenCalled();
+        expect(onChangeText).not.toHaveBeenCalled();
+        await act(async () => { screen.pressByTestId('session-composer-send'); });
+        expect(onSend).toHaveBeenCalledExactlyOnceWith(undefined);
+        await screen.unmount();
+    });
+
+    it.each([
+        { value: '', submitDictation: true },
+        { value: '', showAbortButton: true, onAbort: () => {} },
+        { value: 'draft', disabled: true },
+        { value: 'draft', isSending: true },
+        { value: 'draft', armedContinuationTarget: { agentId: 'claude', label: 'Claude' } },
+    ])('keeps send choices off non-send or unavailable controls: %j', async (props) => {
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderScreen(<AgentInput
+            {...props}
+            sessionId="session-1"
+            placeholder="Type"
+            onChangeText={() => {}}
+            onSend={() => {}}
+            sendMenuModes={['server_pending', 'interrupt']}
+            autocompleteKinds={[]}
+            autocompleteSuggestions={async () => []}
+        />);
+        expect(screen.findByTestId('session-composer-send')?.props.onLongPress).toBeUndefined();
+        expect(screen.findByTestId('agent-input-send-option-server_pending')).toBeNull();
+        await screen.unmount();
+    });
+
+    it.each(['agent_queue', 'server_pending', 'interrupt'] as const)(
+        'opens send choices without submitting and sends once with the selected %s intent',
+        async (mode) => {
+            const { AgentInput } = await import('./AgentInput');
+            const onSend = vi.fn();
+            const onChangeText = vi.fn();
+            const screen = await renderScreen(<AgentInput
+                sessionId="session-1"
+                value="Keep this draft"
+                placeholder="Type"
+                onChangeText={onChangeText}
+                onSend={onSend}
+                sendMenuModes={['agent_queue', 'server_pending', 'interrupt']}
+                autocompleteKinds={[]}
+                autocompleteSuggestions={async () => []}
+            />);
+
+            const send = screen.findByTestId('session-composer-send');
+            expect(send?.props.onLongPress).toBeTypeOf('function');
+            await act(async () => { send?.props.onLongPress(); });
+            expect(onSend).not.toHaveBeenCalled();
+            expect(onChangeText).not.toHaveBeenCalled();
+            expect(screen.findByTestId(`agent-input-send-option-${mode}`)).toBeTruthy();
+
+            await act(async () => { screen.pressByTestId(`agent-input-send-option-${mode}`); });
+            expect(onSend).toHaveBeenCalledExactlyOnceWith({ deliveryIntent: mode });
+            expect(screen.findByTestId(`agent-input-send-option-${mode}`)).toBeNull();
+            expect(onChangeText).not.toHaveBeenCalledWith('');
+            await screen.unmount();
+        },
+    );
+
+
     afterEach(() => {
         translateOverride.fn = null;
         featureEnabledState.voice = true;
@@ -403,60 +477,26 @@ describe('AgentInput (send button accessibility)', () => {
 
     it('does not request autocomplete suggestions before focus, then follows focused text state', async () => {
         const { AgentInput } = await import('./AgentInput');
-        const autocompleteSuggestions = vi.fn(async () => []);
-
+        const autocompleteSuggestions = vi.fn(async (_query: string) => []);
         const screen = await renderScreen(<AgentInput
-            sessionId="session-1"
-            value="@src"
-            placeholder="Type"
-            onChangeText={() => {}}
-            onSend={() => {}}
+            sessionId="session-1" value="@src" placeholder="Type"
+            onChangeText={() => {}} onSend={() => {}}
             autocompleteKinds={['file', 'vendorPlugin']}
             autocompleteSuggestions={autocompleteSuggestions}
         />);
-
-        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
-            null,
-            autocompleteSuggestions,
-            expect.objectContaining({ wrapAround: true }),
-        );
-
+        expect(autocompleteSuggestions).not.toHaveBeenCalled();
         const input = screen.root.findByType('MultiTextInput' as any);
-        expect(input.props.accessibilityRole).toBe('combobox');
-        expect(input.props.accessibilityState).toEqual({ expanded: false });
-        expect(input.props['aria-controls']).toBe('agent-input-command-menu:list:listbox');
-        expect(input.props['aria-activedescendant']).toBeUndefined();
-        await act(async () => {
-            input.props.onFocus?.();
-        });
-
-        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
-            '@src',
-            autocompleteSuggestions,
-            expect.objectContaining({ wrapAround: true }),
-        );
-
-        await act(async () => {
-            input.props.onStateChange?.({ text: '@/src', selection: { start: 5, end: 5 } });
-        });
-
-        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
-            '@/src',
-            autocompleteSuggestions,
-            expect.objectContaining({ wrapAround: true }),
-        );
-
+        await act(async () => { input.props.onFocus?.(); });
+        await vi.waitFor(() => expect(autocompleteSuggestions).toHaveBeenLastCalledWith(
+            '@src', expect.any(AbortSignal), expect.any(Function),
+        ));
         await act(async () => {
             input.props.onChangeText?.('@/src');
             input.props.onStateChange?.({ text: '@/src', selection: { start: 5, end: 5 } });
         });
-
-        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
-            '@/src',
-            autocompleteSuggestions,
-            expect.objectContaining({ wrapAround: true }),
-        );
-
+        await vi.waitFor(() => expect(autocompleteSuggestions).toHaveBeenLastCalledWith(
+            '@/src', expect.any(AbortSignal), expect.any(Function),
+        ));
         await screen.unmount();
     });
 
@@ -510,37 +550,22 @@ describe('AgentInput (send button accessibility)', () => {
     });
 
     it('publishes one real combobox relationship for the active suggestion identity', async () => {
-        useActiveSuggestionsMock.mockReturnValueOnce([
-            [
-                { kind: 'slashCommand', key: 'goal', text: '/goal' },
-                { kind: 'slashCommand', key: 'help', text: '/help' },
-            ],
-            1,
-            () => {},
-            () => {},
-        ] as const);
         const { AgentInput } = await import('./AgentInput');
-
+        const suggestions = [{ kind: 'slashCommand', key: 'help', text: '/help' }] satisfies AutocompleteSuggestion[];
         const screen = await renderScreen(<AgentInput
-            sessionId="session-1"
-            value="/h"
-            placeholder="Type"
-            onChangeText={() => {}}
-            onSend={() => {}}
+            sessionId="session-1" value="/h" placeholder="Type"
+            onChangeText={() => {}} onSend={() => {}}
             autocompleteKinds={['slashCommand']}
-            autocompleteSuggestions={async () => []}
+            autocompleteSuggestions={async () => suggestions}
         />);
-
         const input = screen.root.findByType('MultiTextInput' as any);
+        await act(async () => { input.props.onFocus?.(); });
+        await vi.waitFor(() => expect(input.props.accessibilityState).toEqual({ expanded: true }));
         expect(input.props.accessibilityRole).toBe('combobox');
-        expect(input.props.accessibilityState).toEqual({ expanded: true });
         expect(input.props['aria-haspopup']).toBe('listbox');
         expect(input.props['aria-autocomplete']).toBe('list');
         expect(input.props['aria-controls']).toBe('agent-input-command-menu:list:listbox');
-        expect(input.props['aria-activedescendant']).toBe(
-            'agent-input-command-menu:list:command-menu-root:option:slashCommand:help',
-        );
-
+        expect(input.props['aria-activedescendant']).toBe('agent-input-command-menu:list:command-menu-root:option:slashCommand:help');
         await screen.unmount();
     });
 

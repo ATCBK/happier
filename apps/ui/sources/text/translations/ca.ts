@@ -1680,7 +1680,8 @@ export const ca: TranslationStructure = {
             composerFocus: 'Enfoca el compositor',
             composerPromptsOpen: promptPickerTranslations.ca.open,
             voiceToggle: 'Inicia o finalitza la Veu',
-            composerSendImmediate: 'Envia immediatament',
+            composerSendImmediate: 'Enviament alternatiu (cua / orientar)',
+            composerSendInterrupt: 'Interromp i envia',
             composerSendPending: 'Envia a la cua pendent',
             commandPaletteOpen: 'Obre la cerca',
             searchTextInFiles: fileContentSearchTranslations["ca"].textInFiles,
@@ -8671,6 +8672,11 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Opcions d’enviament",
+            queue: "Posa a la cua",
+            hint: "Mantén premut per triar com enviar",
+        },
         profile: { sectionTitle: 'Perfil' },
         promptPicker: promptPickerTranslations['ca'],
         chipPicker: {

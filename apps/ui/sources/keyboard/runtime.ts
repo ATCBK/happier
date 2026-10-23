@@ -83,7 +83,7 @@ function getCommandBindings(
     const override = overrides[commandId];
     const command = defaultKeyboardCommands.find((entry) => entry.id === commandId);
     if (override && override.length > 0) {
-        const defaultAllowInEditable = command?.defaultBindings?.find((rule) => rule.allowInEditable != null)?.allowInEditable
+        const defaultAllowInEditable = command?.allowInEditable ?? command?.defaultBindings?.find((rule) => rule.allowInEditable != null)?.allowInEditable
             ?? command?.defaultBinding?.allowInEditable;
         const defaultNativeConsumable = command?.defaultBindings?.find((rule) => rule.nativeConsumable != null)?.nativeConsumable
             ?? command?.defaultBinding?.nativeConsumable;
@@ -370,7 +370,7 @@ export function readKeyboardContextFromEventTarget(target: EventTarget | null): 
         || tagName === 'textarea'
         || tagName === 'select'
         || element?.isContentEditable === true
-        || element?.closest?.('[contenteditable="true"], [data-keyboard-shortcuts-owned="true"]') != null;
+        || element?.closest?.('[contenteditable="true"], [role="textbox"], [data-keyboard-shortcuts-owned="true"]') != null;
     return {
         isEditableTarget,
         isInteractiveTarget: tagName === 'button' || tagName === 'a'

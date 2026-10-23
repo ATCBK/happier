@@ -1466,7 +1466,8 @@ export const de: TranslationStructure = {
             composerFocus: 'Composer fokussieren',
             composerPromptsOpen: promptPickerTranslations.de.open,
             voiceToggle: 'Voice starten oder beenden',
-            composerSendImmediate: 'Sofort senden',
+            composerSendImmediate: 'Alternativ senden (Warteschlange / steuern)',
+            composerSendInterrupt: 'Unterbrechen und senden',
             composerSendPending: 'An die Warteschlange senden',
             commandPaletteOpen: 'Suche öffnen',
             searchTextInFiles: fileContentSearchTranslations["de"].textInFiles,
@@ -9367,6 +9368,11 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
     },
 
     agentInput: {
+        sendOptions: {
+            title: "Sendeoptionen",
+            queue: "Einreihen",
+            hint: "Gedrückt halten, um die Sendeart zu wählen",
+        },
         chipRail: { accessibilityLabel: "Eingabesteuerung", moreControlsHint: "Weitere Steuerelemente sind verfügbar. Nutze die linke und rechte Pfeiltaste, um sie durchzugehen." },
         promptPicker: promptPickerTranslations['de'],
         chipPicker: {

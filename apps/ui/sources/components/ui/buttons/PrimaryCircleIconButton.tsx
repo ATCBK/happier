@@ -41,6 +41,10 @@ export const PrimaryCircleIconButton = React.memo(
       accessibilityState?: { disabled?: boolean } & Record<string, unknown>;
       hitSlop?: HappierPressableProps['hitSlop'];
       onPress?: () => void;
+      overlay?: HappierPressableProps['overlay'];
+      onLongPress?: () => void;
+      accessibilityActions?: HappierPressableProps['accessibilityActions'];
+      onAccessibilityAction?: HappierPressableProps['onAccessibilityAction'];
       style?: StyleProp<ViewStyle>;
       children?: React.ReactNode;
     }>,
@@ -71,6 +75,10 @@ export const PrimaryCircleIconButton = React.memo(
           hitSlop={props.hitSlop}
           disabled={computedDisabled}
           onPress={() => { props.onPress?.(); }}
+          overlay={props.overlay}
+          onLongPress={props.onLongPress}
+          accessibilityActions={props.accessibilityActions}
+          onAccessibilityAction={props.onAccessibilityAction}
           style={({ pressed, focused }) => [
             styles.inner,
             {

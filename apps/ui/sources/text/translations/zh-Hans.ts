@@ -1658,7 +1658,8 @@ export const zhHans: TranslationStructure = {
             composerFocus: '聚焦输入框',
             composerPromptsOpen: promptPickerTranslations['zh-Hans'].open,
             voiceToggle: '开始或结束语音会话',
-            composerSendImmediate: '立即发送',
+            composerSendImmediate: '切换发送方式（排队 / 引导）',
+            composerSendInterrupt: '中断并发送',
             composerSendPending: '发送到待处理队列',
             commandPaletteOpen: '打开搜索',
             searchTextInFiles: fileContentSearchTranslations["zh-Hans"].textInFiles,
@@ -9063,6 +9064,11 @@ export const zhHans: TranslationStructure = {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "发送选项",
+          queue: "加入队列",
+          hint: "长按选择发送方式",
+      },
       promptPicker: promptPickerTranslations['zh-Hans'],
       chipPicker: {
           selectedOptionAccessibilityLabel: ({ option }: { option: string }) => `${option}。已选择。`,

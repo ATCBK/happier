@@ -1846,7 +1846,8 @@ export const es: TranslationStructure = {
             composerFocus: 'Enfocar el compositor',
             composerPromptsOpen: promptPickerTranslations.es.open,
             voiceToggle: 'Iniciar o finalizar Voz',
-            composerSendImmediate: 'Enviar de inmediato',
+            composerSendImmediate: 'Envío alternativo (cola / dirigir)',
+            composerSendInterrupt: 'Interrumpir y enviar',
             composerSendPending: 'Enviar a la cola pendiente',
             commandPaletteOpen: 'Abrir la búsqueda',
             searchTextInFiles: fileContentSearchTranslations["es"].textInFiles,
@@ -9407,6 +9408,11 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
   },
 
   agentInput: {
+      sendOptions: {
+          title: "Opciones de envío",
+          queue: "Poner en cola",
+          hint: "Mantén pulsado para elegir cómo enviar",
+      },
       profile: {
           sectionTitle: 'Perfil',
       },

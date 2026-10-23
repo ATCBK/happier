@@ -21,6 +21,9 @@ import { PendingNavigationSettledNotice } from "@/components/sessions/pendingNav
 import { normalizeSessionAddress, type SessionAddress } from "@/sync/domains/session/sessionAddress";
 import { resolveWorkspaceTargetForSession } from "@/sync/domains/session/resolveWorkspaceTargetForSession";
 import type { AgentInputSendOptions } from "@/components/sessions/agentInput";
+import { resolveSessionComposerSendActions } from '@/sync/domains/session/control/submitMode';
+import { canUseDirectPendingDeliveryActions } from '@/components/sessions/pending/pendingMessageVisualState';
+import { sendPendingMessageWithIntent } from '@/components/sessions/pending/pendingMessageSendActions';
 import { useComposerTextStore } from "@/components/sessions/agentInput/composerTextStore";
 import { SessionComposerAgentInput } from "@/components/sessions/composer/SessionComposerAgentInput";
 import type { SessionInstrumentStripQuota } from "@/components/sessions/agentInput/instrumentStrip";
@@ -5941,6 +5944,15 @@ export function useSessionComposerController({
     // The send handler closes over a lot of per-render state, so a ref is pointed
     // at the freshest closure (refreshed in render, just below) and AgentInput is
     // handed a permanently stable wrapper that forwards to it.
+    const composerSendMode = useSetting('sessionMessageSendMode');
+    const composerBusySteerSendPolicy = useSetting('sessionBusySteerSendPolicy');
+    const composerSendActions = resolveSessionComposerSendActions({
+        configuredMode: composerSendMode, busySteerSendPolicy: composerBusySteerSendPolicy, session,
+    });
+    const canChooseComposerSendActions = !pendingMessageEdit && !pendingComposerDocument
+        && !recipientState.recipient && !recipientState.scmDiffSummaryDiscussion
+        && !armedContinuationTarget && !armedRouteContinuation
+        && resolveVoiceSessionComposerRouting({ conversationSessionId: sessionId, sessionMetadata: ownerMetadata })?.kind !== 'adapter_text';
     const agentInputSendRef = React.useRef<(options?: AgentInputSendOptions) => void>(() => {});
     const handleAgentInputSend = React.useCallback(
         (options?: AgentInputSendOptions) => { agentInputSendRef.current(options); },
@@ -6185,6 +6197,9 @@ export function useSessionComposerController({
                 }) || undefined : undefined}
                 agentCatalogIdentity={agentCatalogIdentity}
                 armedContinuationTarget={armedContinuationTarget}
+                sendMenuModes={canChooseComposerSendActions ? composerSendActions.modes : undefined}
+                alternateSendMode={composerSendActions.alternateMode}
+                canSendNextQueued={canChooseComposerSendActions}
                 armedRouteContinuation={armedRouteContinuation}
                 onUnarmRoute={armedRouteContinuation && hasWriteAccess ? unarmRoute : null}
                 unarmRoutePending={unarmRoutePending}
@@ -6271,6 +6286,21 @@ export function useSessionComposerController({
                     const composerMessage = activePendingEdit?.document.text
                         ?? sendOptions?.inputTextOverride
                         ?? readLatestDraftValue();
+                    if (sendOptions?.sendNextQueued) {
+                        const message = pendingMessages[0];
+                        if (!canChooseComposerSendActions || activePendingEdit || composerMessage.trim()
+                            || sendableAttachmentDrafts(getAttachmentDraftsSnapshot()).length > 0 || hasIncludedReviewCommentDrafts
+                            || !message || !canUseDirectPendingDeliveryActions(message)
+                            || (sendOptions.deliveryIntent !== 'agent_queue' && sendOptions.deliveryIntent !== 'interrupt')) return;
+                        setIsComposerSending(true);
+                        try {
+                            await sendPendingMessageWithIntent({ sessionId, serverId: sessionRouteServerId ?? undefined, session, message,
+                                deliveryIntent: sendOptions.deliveryIntent === 'interrupt' ? 'interrupt_and_send' : 'steer_now',
+                                isCurrent: () => outboundAccountLifetime.isCurrent(),
+                            });
+                        } finally { if (outboundAccountLifetime.isCurrent()) setIsComposerSending(false); }
+                        return;
+                    }
                     if (activePendingEdit) {
                         const pendingAccountLifetime = activePendingEdit.accountLifetime;
                         const pendingComposerSnapshot = readPendingMessageComposerSnapshot(activePendingEdit);
@@ -6507,9 +6537,7 @@ export function useSessionComposerController({
                             ? 'next_prompt' as const
                             : 'current_turn' as const;
                         const forceImmediateSend = sendIntent?.forceImmediate === true;
-                        const explicitSubmitMode = sendIntent?.deliveryIntent === 'server_pending' && !forceImmediateSend
-                            ? 'server_pending' as const
-                            : undefined;
+                        const explicitSubmitMode = !forceImmediateSend ? sendIntent?.deliveryIntent : undefined;
 
                         // Capture all semantic fields before an asynchronous send-choice prompt.
                         // The canonical draft owner later clears only this exact value/revision snapshot.
@@ -6860,6 +6888,7 @@ export function useSessionComposerController({
                                 nonSteerableSendPrompt,
                                 forceImmediate: forceImmediateSend,
                                 explicitPendingIntent: explicitSubmitMode === 'server_pending',
+                                explicitMode: explicitSubmitMode,
                                 structuredInputMetaOverrides: structuredInputMetaOverrides ?? null,
                                 agentTargetKey: providerAgentTargetKey,
                                 currentRunnerProcessIdentity,

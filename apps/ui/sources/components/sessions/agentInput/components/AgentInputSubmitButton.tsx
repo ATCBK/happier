@@ -14,6 +14,10 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { t } from '@/text';
 import type { VoiceDictationSnapshot } from '@/voice/dictation/VoiceDictationController';
 import { Icon } from '@/components/ui/icons/Icon';
+import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import type { MessageSendMode } from '@/sync/domains/session/control/submitMode';
+import type { AgentInputSendIntentOptions } from '../agentInputSendOptions';
 import type { Theme } from '@/theme';
 
 import { readArmedRouteContinuationLabel, resolveArmedSubmitPresentation, type ArmedRouteContinuation } from './agentContinuationSubmitPresentation';
@@ -101,6 +105,11 @@ function AgentInputSubmitShape(props: Readonly<{ children: React.ReactNode }>) {
     );
 }
 
+function getSendModeTitle(mode: MessageSendMode): string {
+    return mode === 'agent_queue' ? t('session.pendingMessages.actions.steerNow')
+        : mode === 'interrupt' ? t('session.pendingMessages.actions.sendNowInterrupt') : t('agentInput.sendOptions.queue');
+}
+
 export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton(props: Readonly<{
     testID: string;
     /** Resolved appearance for static composer previews; live inputs use the current theme. */
@@ -146,12 +155,25 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
     unarmRoutePending?: boolean;
     /** Exact selected picker mark for an external/machine-qualified target. */
     armedContinuationIdentityMark?: React.ReactNode;
-    onSend: () => void;
+    onSend: (options?: AgentInputSendIntentOptions) => void;
+    sendMenuModes?: readonly MessageSendMode[];
+    sendMenuShortcuts?: Partial<Record<MessageSendMode, string>>;
     onStop?: () => void;
 }>) {
     const { theme: currentTheme } = useUnistyles();
     const theme = props.appearance ?? currentTheme;
     const dictationActive = props.dictationStatus !== 'idle';
+    const sendMenuAnchorRef = React.useRef<View>(null);
+    const [sendMenuOpen, setSendMenuOpen] = React.useState(false);
+    const sendMenuEnabled = props.hasSendableContent && !props.disabled && !props.isSending
+        && !dictationActive && !props.armedContinuationTarget && !props.armedRouteContinuation
+        && Boolean(props.sendMenuModes?.length);
+    const openSendMenu = () => {
+        if (!sendMenuEnabled) return;
+        hapticsLight();
+        setSendMenuOpen(true);
+    };
+    React.useEffect(() => { setSendMenuOpen(false); }, [props.sessionId, sendMenuEnabled]);
     const dictationTranscribing = props.dictationStatus === 'transcribing';
     /*
      * Stopping a running turn outranks *starting* Dictation on an empty composer —
@@ -285,7 +307,23 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
     }
 
     return (
-        <AgentInputSubmitShape>
+        <View
+            ref={sendMenuAnchorRef}
+            collapsable={false}
+            {...(Platform.OS === 'web' && sendMenuEnabled ? {
+                onContextMenu: (event: React.MouseEvent) => {
+                    event.preventDefault();
+                    openSendMenu();
+                },
+                onKeyDown: (event: React.KeyboardEvent) => {
+                    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10') && !(event.altKey && event.key === 'ArrowDown')) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openSendMenu();
+                },
+            } : {})}
+        >
+          <AgentInputSubmitShape>
         {unarmRoute}
         <PrimaryCircleIconButton
             appearance={props.appearance}
@@ -311,14 +349,29 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
             accessibilityHint={
                 (!props.hasSendableContent && !showDictation && !showStopWhenEmpty)
                     ? t('session.inputPlaceholder')
-                    : undefined
+                    : sendMenuEnabled ? t('agentInput.sendOptions.hint') : undefined
             }
             accessibilityState={{
                 busy: dictationTranscribing,
                 disabled: Boolean(props.disabled),
+                ...(sendMenuEnabled ? { expanded: sendMenuOpen } : {}),
             }}
             hitSlop={SUBMIT_HIT_SLOP}
             onPress={submitPress}
+                onLongPress={sendMenuEnabled ? openSendMenu : undefined}
+            overlay={sendMenuEnabled ? ({ hovered, focused }) => (
+                Platform.OS === 'web' && (hovered || focused) && !sendMenuOpen ? (
+                    <DeferredAnchoredTooltip activationKey={`${hovered}:${focused}`} anchorRef={sendMenuAnchorRef} placement="top"
+                        label={(props.sendMenuModes ?? []).map((mode) => {
+                            const title = getSendModeTitle(mode);
+                            return props.sendMenuShortcuts?.[mode] ? `${title} (${props.sendMenuShortcuts[mode]})` : title;
+                        }).join('\n')} />
+                ) : null
+            ) : undefined}
+            accessibilityActions={sendMenuEnabled ? [{ name: 'longpress', label: t('agentInput.sendOptions.title') }] : undefined}
+            onAccessibilityAction={sendMenuEnabled ? (event) => {
+                if (event.nativeEvent.actionName === 'longpress') openSendMenu();
+            } : undefined}
         >
             {dictationActive && showDictation ? (
                 <Icon name="stop-circle" size={20} color={theme.colors.button.primary.tint} />
@@ -346,6 +399,30 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
                 />
             )}
         </PrimaryCircleIconButton>
-        </AgentInputSubmitShape>
+          </AgentInputSubmitShape>
+          {sendMenuOpen && sendMenuEnabled ? (
+            <DropdownMenu
+                open
+                onOpenChange={setSendMenuOpen}
+                popoverAnchorRef={sendMenuAnchorRef}
+                placement="top"
+                popoverAnchorAlign="end"
+                matchTriggerWidth={false}
+                closeOnSelect={false}
+                items={(props.sendMenuModes ?? []).map((mode) => ({
+                    id: mode,
+                    shortcut: props.sendMenuShortcuts?.[mode],
+                    testID: `agent-input-send-option-${mode}`,
+                    title: getSendModeTitle(mode),
+                }))}
+                onSelect={(id) => {
+                    const mode = props.sendMenuModes?.find((mode) => mode === id);
+                    if (!mode) return;
+                    setSendMenuOpen(false);
+                    props.onSend({ deliveryIntent: mode });
+                }}
+            />
+          ) : null}
+        </View>
     );
 });

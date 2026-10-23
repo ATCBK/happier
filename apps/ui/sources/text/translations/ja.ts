@@ -1827,7 +1827,8 @@ export const ja: TranslationStructure = {
             composerFocus: 'コンポーザーにフォーカス',
             composerPromptsOpen: promptPickerTranslations.ja.open,
             voiceToggle: '音声会話を開始または終了',
-            composerSendImmediate: 'すぐに送信',
+            composerSendImmediate: '別の方法で送信（キュー / 方向修正）',
+            composerSendInterrupt: '中断して送信',
             composerSendPending: '保留キューに送信',
             commandPaletteOpen: '検索を開く',
             searchTextInFiles: fileContentSearchTranslations["ja"].textInFiles,
@@ -9710,6 +9711,11 @@ localTailscale: {
   },
 
   agentInput: {
+      sendOptions: {
+          title: "送信オプション",
+          queue: "キューに追加",
+          hint: "長押しして送信方法を選択",
+      },
     profile: {
       sectionTitle: 'プロファイル',
     },

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
 
 import {
     buildKeyboardShortcutLabels,
@@ -6,6 +7,7 @@ import {
     isKeybindingRuleAvailable,
     normalizeKeyboardEvent,
     normalizeNativeHardwareKeyboardEvent,
+    readKeyboardContextFromEventTarget,
     resolveNativeHardwareKeyboardConsumableEventSignatures,
 } from './runtime';
 import type { KeyboardContext, NormalizedKeyboardEvent } from './types';
@@ -30,6 +32,26 @@ function keyEvent(event: Partial<NormalizedKeyboardEvent>): NormalizedKeyboardEv
 }
 
 describe('createKeyboardShortcutDispatcher', () => {
+    it('leaves review letters with an ARIA textbox editor that uses EditContext rather than contenteditable', () => {
+        const dom = new JSDOM('<div role="textbox" tabindex="0"><span></span></div><button>Review</button>');
+        try {
+            let kept = 0;
+            let target: EventTarget | null = dom.window.document.querySelector('[role="textbox"]');
+            const dispatch = createKeyboardShortcutDispatcher({
+                enabled: true, platform: 'linux', surface: 'web', singleKeyShortcutsEnabled: true,
+                disabledCommandIds: [], overrides: {}, handlers: { 'review.change.keep': () => { kept++; } },
+                getContext: () => readKeyboardContextFromEventTarget(target),
+            });
+            const letter = keyEvent({ key: 'r', code: 'KeyR' });
+            expect(dispatch(letter)).toBe(false);
+            target = dom.window.document.querySelector('span');
+            expect(dispatch(letter)).toBe(false);
+            expect(kept).toBe(0);
+            target = dom.window.document.querySelector('button');
+            expect(dispatch(letter)).toBe(true);
+            expect(kept).toBe(1);
+        } finally { dom.window.close(); }
+    });
     it.each(['macos', 'windows', 'linux', 'ios', 'android'] as const)('opens Files and Symbols from editable focus on %s without consuming IME', (platform) => {
         for (const [id, key, shiftKey] of [['search.files', 'p', false], ['search.symbols', 'o', true]] as const) {
             const open = vi.fn();
