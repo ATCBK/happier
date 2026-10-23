@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createDeferred } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 import { parseRealtimeSettingsDescriptor } from './descriptor';
@@ -222,6 +223,8 @@ describe('RealtimeProviderFields', () => {
   });
 
   it('shows a failure result when a provider privacy action rejects', async () => {
+    const alertPresented = createDeferred<void>();
+    nativeAlert.mockImplementationOnce(() => { alertPresented.resolve(); });
     action.mockRejectedValueOnce(new Error('provider unavailable'));
     const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1', modes: ['byo'],
@@ -241,12 +244,13 @@ describe('RealtimeProviderFields', () => {
     }));
     await act(async () => {
       screen.tree.findByProps({ testID: 'voice-realtime-forget-provider-conversation' }).props.onPress();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledWith(
+      await alertPresented.promise;
+      expect(nativeAlert).toHaveBeenCalledWith(
         t('common.error'),
         tLoose('settingsVoice.realtimeProviders.resumption.failed'),
         expect.arrayContaining([expect.objectContaining({ text: t('common.ok'), onPress: expect.any(Function) })]),
         { cancelable: false },
-      ));
+      );
     });
   });
 

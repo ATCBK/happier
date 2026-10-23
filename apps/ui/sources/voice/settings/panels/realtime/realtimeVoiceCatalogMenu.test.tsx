@@ -1,7 +1,7 @@
 import type * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderHook, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { createElevenLabsSettingsRuntimeTestHarness, createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -67,13 +67,15 @@ describe('the shared realtime voice catalog', () => {
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: false } } } }));
     await act(async () => picker.getCurrent().requestCatalog());
-    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).not.toBe('loading'));
+    await waitForTestEvent(picker.subscribe, picker.getCurrent, value => value.catalog.phase !== 'loading');
+    expect(picker.getCurrent().catalog.phase).not.toBe('loading');
     expect(runtime.fetch).not.toHaveBeenCalled();
     expect(picker.getCurrent().catalog.phase).toBe('error');
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: true } } } }));
     await act(async () => picker.getCurrent().requestCatalog());
-    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).toBe('ready'));
+    await waitForTestEvent(picker.subscribe, picker.getCurrent, value => value.catalog.phase === 'ready');
+    expect(picker.getCurrent().catalog.phase).toBe('ready');
     expect(picker.getCurrent().lastKnownRows?.[0]?.name).toBe('Happier voice');
   });
   it('honors Settings Action admission for picker Preview and Stop while cleanup always releases playback', async () => {
@@ -84,6 +86,8 @@ describe('the shared realtime voice catalog', () => {
       { voice_id: row.id, name: row.name, preview_url: row.previewUrl },
     ] }));
     audio.play.mockClear(); audio.remove.mockClear();
+    const playbackStarted = createDeferred<void>();
+    audio.play.mockImplementationOnce(() => playbackStarted.resolve());
     const picker = await renderHook(() => useRealtimeCatalogPreview(providerId));
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: false } } } }));
@@ -92,7 +96,8 @@ describe('the shared realtime voice catalog', () => {
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: true } }, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } }));
     await act(async () => picker.getCurrent().playPreview(row));
-    await vi.waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+    await playbackStarted.promise;
+    expect(audio.play).toHaveBeenCalledOnce();
     expect(picker.getCurrent().previewingId).toBe(row.id);
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: false } } } }));
@@ -156,7 +161,8 @@ describe('the shared realtime voice catalog', () => {
     const picker = await renderHook(() => useRealtimeVoiceCatalog(params));
     expect(runtime.fetch).not.toHaveBeenCalled();
     await act(async () => picker.getCurrent().requestCatalog());
-    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).toBe('ready'));
+    await waitForTestEvent(picker.subscribe, picker.getCurrent, value => value.catalog.phase === 'ready');
+    expect(picker.getCurrent().catalog.phase).toBe('ready');
     await picker.unmount();
 
     const closed = await renderHook((targetKey: string) => useRealtimeVoiceCatalog({ ...params, targetKey }), {
@@ -177,10 +183,12 @@ describe('the shared realtime voice catalog', () => {
     const closed = await renderHook(() => useRealtimeVoiceCatalog(params));
     const picker = await renderHook(() => useRealtimeVoiceCatalog(params));
     await act(async () => picker.getCurrent().requestCatalog());
-    await vi.waitFor(() => expect(closed.getCurrent().lastKnownRows?.[0]?.name).toBe('Marin'));
+    await waitForTestEvent(closed.subscribe, closed.getCurrent, value => value.lastKnownRows?.[0]?.name === 'Marin');
+    expect(closed.getCurrent().lastKnownRows?.[0]?.name).toBe('Marin');
     runtime.fetch.mockRejectedValueOnce(new Error('catalog transport unavailable'));
     await act(async () => picker.getCurrent().requestCatalog());
-    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).toBe('error'));
+    await waitForTestEvent(picker.subscribe, picker.getCurrent, value => value.catalog.phase === 'error');
+    expect(picker.getCurrent().catalog.phase).toBe('error');
     expect(closed.getCurrent().lastKnownRows?.[0]?.name).toBe('Marin');
     expect(picker.getCurrent().lastKnownRows?.[0]?.name).toBe('Marin');
     await act(async () => picker.getCurrent().resetCatalog());

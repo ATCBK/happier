@@ -17,9 +17,9 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { PluginPermissionGrantListActionOutputV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
-import { createDeferred, findAllHostTestInstances, findTestInstanceByTypeWithProps, pressTestInstanceAsync, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { createDeferred, findAllHostTestInstances, findTestInstanceByTypeWithProps, pressTestInstanceAsync, renderScreen as renderTestScreen, waitForTestEvent } from '@/dev/testkit';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedAccountAuthentication, subscribeConnectedServiceRegistry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { AppShellPluginUiProjectionProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -158,6 +158,11 @@ const passiveSetupBoundary = {
     ),
 };
 const rawCredentialReadiness = vi.fn((contribution: Readonly<{ pluginId: string; localId: string }>) => contribution);
+const rawReadinessListeners = new Set<() => void>();
+const subscribeRawReadiness = (notify: () => void) => {
+    rawReadinessListeners.add(notify);
+    return () => { rawReadinessListeners.delete(notify); };
+};
 installSessionActionRpcBoundary(async request => {
     const separator = request.method.indexOf(':');
     const machineId = request.method.slice(0, separator);
@@ -185,6 +190,7 @@ installSessionActionRpcBoundary(async request => {
     if (method === RPC_METHODS.DAEMON_VOICE_CLIENT_RAW_CREDENTIAL_AUTHORIZATION_INSPECT) {
         const input = request.params as { contribution: { pluginId: string; localId: string }; rawGrant: { realm: string; phase: string; request: { origin: string; headerNames: string[] } } };
         const contribution = rawCredentialReadiness(input.contribution);
+        for (const notify of rawReadinessListeners) notify();
         return DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema.parse({ ok: true,
             authorization: { pluginId: contribution.pluginId, capability: 'credentials.materialize.raw',
                 targetScope: { kind: 'account' }, subject: { kind: 'credential_access_disclosure', contribution,
@@ -323,9 +329,10 @@ async function installCodexConnectedAccountDescriptor(external?: Readonly<{
     passiveSetupBoundary.machineTarget = machineTarget;
     const projection = await renderTestScreen(<AppShellPluginUiProjectionProvider><></></AppShellPluginUiProjectionProvider>);
     onTestFinished(projection.unmount);
-    await vi.waitFor(() => expect(getConnectedAccountAuthentication({
+    await waitForTestEvent(subscribeConnectedServiceRegistry, () => getConnectedAccountAuthentication({
         pluginId: 'happier.agent.codex', localId: 'openai-codex',
-    })).not.toBeNull());
+    }), authentication => authentication !== null);
+    expect(getConnectedAccountAuthentication({ pluginId: 'happier.agent.codex', localId: 'openai-codex' })).not.toBeNull();
 }
 
 /** The actual polite region's published announcement, not a synthetic readiness row. */
@@ -420,10 +427,12 @@ describe('VoiceProviderSection', () => {
             active: online, activeAt: online ? Date.now() : Date.now() - presenceGraceMs - 1, daemonStateVersion: 1,
         });
         let freshRead = false;
+        const freshReadEntered = createDeferred<void>();
         accountFixture.request.mockImplementation((url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/machines') {
                 freshRead = true;
+                freshReadEntered.resolve();
                 return response.promise;
             }
             // Adjacent exact reads must observe the same Home fact as its census.
@@ -444,7 +453,8 @@ describe('VoiceProviderSection', () => {
             && node.props.testID.endsWith('.recover') && typeof node.props.onPress === 'function')[0];
         expect(retry).toBeDefined();
         await act(async () => { retry!.props.onPress(); });
-        await vi.waitFor(() => expect(freshRead).toBe(true));
+        await freshReadEntered.promise;
+        expect(freshRead).toBe(true);
         await act(async () => {
             const otherScope = { ...accountFixture.scope, accountId: 'another-account' };
             withdrawMachinePresenceForScope(otherScope);
@@ -459,7 +469,9 @@ describe('VoiceProviderSection', () => {
             vi.setSystemTime(Date.now() + presenceGraceMs * 2 + 2);
         }
         await act(async () => { response.resolve(Response.json([freshMachine('machine-1')])); });
-        await vi.waitFor(() => expect(selectionKind).toBe(online ? 'resolved' : 'selected_unreachable'));
+        await waitForTestEvent(screen.subscribe, () => selectionKind,
+            kind => kind === (online ? 'resolved' : 'selected_unreachable'));
+        expect(selectionKind).toBe(online ? 'resolved' : 'selected_unreachable');
         if (!online) expect(screen.getTextContent()).toContain(tLoose('voice.readiness.execution_machine_incompatible'));
         expect(navigate).not.toHaveBeenCalled();
         expect(setVoice).not.toHaveBeenCalled();
@@ -581,15 +593,20 @@ describe('VoiceProviderSection', () => {
             });
         }
         const screen = await renderScreen(React.createElement(SettingsConsumers));
-        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe(accountFixture.scope.accountId));
+        const currentAccount = () => screen.root.findByType('CredentialNavigationProbe').props.accountId;
+        await waitForTestEvent(screen.subscribe, currentAccount, accountId => accountId === accountFixture.scope.accountId);
+        expect(currentAccount()).toBe(accountFixture.scope.accountId);
         await act(async () => { await createActiveAccountLifetime('account-navigation-next'); });
-        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-next'));
+        await waitForTestEvent(screen.subscribe, currentAccount, accountId => accountId === 'account-navigation-next');
+        expect(currentAccount()).toBe('account-navigation-next');
         await act(async () => { await createActiveAccountLifetime('account-navigation-other-home', 'https://voice-navigation-other.example.test'); });
-        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-other-home'));
+        await waitForTestEvent(screen.subscribe, currentAccount, accountId => accountId === 'account-navigation-other-home');
+        expect(currentAccount()).toBe('account-navigation-other-home');
         expect(screen.root.findByType('CredentialNavigationProbe').props.serverId).not.toBe(accountFixture.scope.serverId);
         await screen.update(React.createElement('WorkspaceNavigationProbe'));
         await screen.update(React.createElement(SettingsConsumers));
-        await vi.waitFor(() => expect(screen.root.findByType('CredentialNavigationProbe').props.accountId).toBe('account-navigation-other-home'));
+        await waitForTestEvent(screen.subscribe, currentAccount, accountId => accountId === 'account-navigation-other-home');
+        expect(currentAccount()).toBe('account-navigation-other-home');
         const settledRenders = observedAccounts.length;
         await act(async () => {});
         await act(async () => {});
@@ -703,7 +720,8 @@ describe('VoiceProviderSection', () => {
         }
         const screen = await renderScreen(<><VoiceProviderSection {...sectionProps} /><ReadinessAuthorityProbe /></>);
         await act(async () => {});
-        await vi.waitFor(() => expect(transitions.some(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId)).toBe(true));
+        await waitForTestEvent(screen.subscribe, () => transitions.some(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId), ready => ready);
+        expect(transitions.some(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId)).toBe(true);
         const cold = transitions.find(frame => !frame.online && frame.scope === null);
         const warm = transitions.find(frame => frame.online && frame.scope?.accountId === accountFixture.scope.accountId);
         expect(cold?.daemonVersion).toBe(7);
@@ -1031,22 +1049,25 @@ describe('VoiceProviderSection', () => {
         expect(checkedReadinessRow(screen.tree)?.props.announcement).toContain(tLoose('voice.readiness.ready'));
 
         const freshCheck = createDeferred<unknown>();
+        const freshCheckEntered = createDeferred<void>();
         passiveSetupBoundary.invoke.mockClear();
-        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck.promise);
+        passiveSetupBoundary.invoke.mockImplementation(async () => { freshCheckEntered.resolve(); return freshCheck.promise; });
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
             await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        await vi.waitFor(() => expect(passiveSetupBoundary.invoke).toHaveBeenCalled());
+        await freshCheckEntered.promise;
+        expect(passiveSetupBoundary.invoke).toHaveBeenCalled();
         expect(checkedReadinessRow(screen.tree)?.props.announcement).toBe(tLoose('settings.updates.checking'));
         expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         await act(async () => {
             freshCheck.resolve({ ok: true, result: { v: 1, status: 'unavailable' } });
         });
-        await vi.waitFor(() => expect(checkedReadinessRow(screen.tree)?.props.announcement)
-            .toContain(tLoose('voice.readiness.runtime_unknown')));
+        await waitForTestEvent(screen.subscribe, () => checkedReadinessRow(screen.tree)?.props.announcement,
+            announcement => typeof announcement === 'string' && announcement.includes(tLoose('voice.readiness.runtime_unknown')));
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).toContain(tLoose('voice.readiness.runtime_unknown'));
     }, 120_000);
 
     it('does not commit a stale passive result after the active Account lifetime restarts', async () => {
@@ -1101,14 +1122,16 @@ describe('VoiceProviderSection', () => {
 
         await act(async () => {});
         const freshCheck = createDeferred<unknown>();
+        const freshCheckEntered = createDeferred<void>();
         passiveSetupBoundary.invoke.mockClear();
-        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck.promise);
+        passiveSetupBoundary.invoke.mockImplementation(async () => { freshCheckEntered.resolve(); return freshCheck.promise; });
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
             await screen.update(render());
         });
-        await vi.waitFor(() => expect(passiveSetupBoundary.invoke).toHaveBeenCalled());
+        await freshCheckEntered.promise;
+        expect(passiveSetupBoundary.invoke).toHaveBeenCalled();
         await act(async () => {
             settlePassiveCheck?.({ ok: true, result: { v: 1, status: 'ready' } });
             await Promise.resolve();
@@ -1119,8 +1142,9 @@ describe('VoiceProviderSection', () => {
         await act(async () => {
             freshCheck.resolve({ ok: true, result: { v: 1, status: 'unavailable' } });
         });
-        await vi.waitFor(() => expect(checkedReadinessRow(screen.tree)?.props.announcement)
-            .toContain(tLoose('voice.readiness.runtime_unknown')));
+        await waitForTestEvent(screen.subscribe, () => checkedReadinessRow(screen.tree)?.props.announcement,
+            announcement => typeof announcement === 'string' && announcement.includes(tLoose('voice.readiness.runtime_unknown')));
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).toContain(tLoose('voice.readiness.runtime_unknown'));
     }, 120_000);
 
     it('does not commit a delayed passive result after the selected daemon restarts', async () => {
@@ -2881,18 +2905,22 @@ describe('VoiceProviderSection', () => {
         // The real foreground catalog materializes the current resource fixtures.
         const { getSavedSecretCatalogSnapshot } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
         await refreshSavedSecretCatalog(accountFixture.scope);
-        await vi.waitFor(() => expect(accountFixture.resources, JSON.stringify({
+        expect(accountFixture.resources, JSON.stringify({
             catalogStatus: getSavedSecretCatalogSnapshot(accountFixture.scope)?.status,
             legacyImportStatus: getSavedSecretCatalogSnapshot(accountFixture.scope)?.legacyImport?.status,
             routes: accountFixture.request.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
-        })).toHaveLength(2));
+        })).toHaveLength(2);
         const screen = await renderScreen(render(ready.voice));
         const { tree } = screen;
 
         await act(async () => {});
-        await vi.waitFor(() => expect(new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId)),
+        await waitForTestEvent(subscribeRawReadiness,
+            () => new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId)),
+            checked => checked.size === 2 && checked.has('gemini-stt') && checked.has('google-cloud-tts'));
+        expect(new Set(rawCredentialReadiness.mock.calls.map(([contribution]) => contribution.localId)),
             JSON.stringify(frames.map(({ key, ...frame }) => ({ ...frame, sameKeyAsInitial: key === frames[0]?.key }))))
-            .toEqual(new Set(['gemini-stt', 'google-cloud-tts'])));
+            .toEqual(new Set(['gemini-stt', 'google-cloud-tts']));
+        await waitForTestEvent(screen.subscribe, () => expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.ready')));
         expect(checkedReadinessRow(tree)?.props.announcement).toContain(tLoose('voice.readiness.ready'));
 
         const hydrated = storage.getState().settings;
@@ -3018,7 +3046,8 @@ describe('VoiceProviderSection', () => {
         accountFixture.replaceVoice(withHear('happier.voice.google/gemini-stt'));
         const geminiHear = storage.getState().settings;
         await act(async () => { await screen.update(render(geminiHear.voice)); });
-        await vi.waitFor(() => expect(checkedContributions()).toContain('gemini-stt'));
+        await waitForTestEvent(subscribeRawReadiness, checkedContributions, checked => checked.includes('gemini-stt'));
+        expect(checkedContributions()).toContain('gemini-stt');
         await screen.unmount();
     }, 120_000);
 

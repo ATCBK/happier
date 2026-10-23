@@ -5,11 +5,12 @@ import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { invokeVoiceDeviceModelPackOperation } from './voiceDeviceModelPackOperation.native';
 import * as React from 'react';
-import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
 import { useLocalNeuralModelPackState } from './panels/localTts/useLocalNeuralModelPackState.native';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import * as backgroundTasks from '@/utils/system/fireAndForget';
 
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
@@ -63,6 +64,18 @@ async function ensureModelAccount() {
 async function mountModelState(props: Parameters<typeof useLocalNeuralModelPackState>[0]) {
     await ensureModelAccount();
     return renderHook(useLocalNeuralModelPackState, { initialProps: props });
+}
+
+function startRemoval(invoke: () => void) {
+    // Retain the UI's real operation and original fire-and-forget error handling.
+    const dispatched = vi.spyOn(backgroundTasks, 'fireAndForget');
+    try {
+        invoke();
+        const operation = dispatched.mock.calls.find(([, options]) =>
+            options?.tag === 'useLocalNeuralModelPackState.clearAssets')?.[0];
+        if (!operation) throw new Error('Expected the native removal operation');
+        return operation;
+    } finally { dispatched.mockRestore(); }
 }
 
 describe('native device model operations through the real installer', () => {
@@ -125,17 +138,21 @@ describe('native device model operations through the real installer', () => {
         let operation!: Promise<void>;
         await act(async () => { operation = starter.getCurrent().prepareModel(); });
         const signal = await artifactStarted.promise;
-        let follower: { getCurrent: () => ReturnType<typeof useLocalNeuralModelPackState> } | undefined;
+        let follower: Awaited<ReturnType<typeof mountModelState>> | undefined;
         try {
             await starter.unmount();
             expect(signal.aborted).toBe(false);
             follower = await mountModelState(props);
-            await vi.waitFor(() => expect(follower?.getCurrent().modelStatus).toBe('downloading'));
+            await waitForTestEvent(follower.subscribe, follower.getCurrent,
+                state => state.modelStatus === 'downloading');
+            expect(follower.getCurrent().modelStatus).toBe('downloading');
         } finally {
             response.resolve(new Response(new Uint8Array([1])));
             await act(async () => { await operation; });
         }
-        await vi.waitFor(() => expect(follower?.getCurrent().modelStatus).toBe('ready'));
+        await waitForTestEvent(follower!.subscribe, follower!.getCurrent,
+            state => state.modelStatus === 'ready');
+        expect(follower?.getCurrent().modelStatus).toBe('ready');
         expect(filesystem.files.has(modelUri())).toBe(true);
         expect(nativeDialogs.alert).not.toHaveBeenCalled();
     });
@@ -157,7 +174,9 @@ describe('native device model operations through the real installer', () => {
         await starter.unmount();
         const follower = await mountModelState(props);
         try {
-            await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
+            await waitForTestEvent(follower.subscribe, follower.getCurrent,
+                state => state.modelStatus === 'downloading');
+            expect(follower.getCurrent().modelStatus).toBe('downloading');
             await follower.rerender({ ...props, packId: 'other-pack' });
             expect(signal.aborted).toBe(true);
         } finally {
@@ -242,10 +261,13 @@ describe('native device model operations through the real installer', () => {
             // advance time once there is a manifest request to keep pending.
             await manifestRequested.promise;
             await vi.advanceTimersByTimeAsync(300_000);
+            // Only the held manifest's elapsed-time contract uses a fake clock;
+            // real filesystem/SDK completion must run on the real scheduler.
+            vi.useRealTimers();
             finishManifest?.(Response.json(manifest));
-            await vi.waitFor(() => expect(nativeDownload, 'Native transfer admitted after manifest release').toHaveBeenCalled());
-            await vi.waitFor(() => expect(nativeTransferReplies, 'Native SDK transfer settled').toContain(manifest.files[0]!.url));
             expect(await outcome).toBe('completed');
+            expect(nativeDownload, 'Native transfer admitted after manifest release').toHaveBeenCalled();
+            expect(nativeTransferReplies, 'Native SDK transfer settled').toContain(manifest.files[0]!.url);
             expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([1]));
         } finally {
             vi.useRealTimers();
@@ -282,8 +304,8 @@ describe('native device model operations through the real installer', () => {
         let operation!: Promise<void>;
         await act(async () => { operation = hook.getCurrent().prepareModel(); });
         try {
-            await started.promise;
-            await vi.waitFor(() => expect(hook.getCurrent().downloadProgress).toMatchObject({ loaded: 1, total: 1 }));
+            await act(async () => { await started.promise; });
+            expect(hook.getCurrent().downloadProgress).toMatchObject({ loaded: 1, total: 1 });
             expect(hook.getCurrent().modelStatus).toBe('downloading');
         } finally {
             response.resolve(new Response(new Uint8Array([1])));
@@ -325,17 +347,21 @@ describe('native device model operations through the real installer', () => {
 
     it('does not remove the old UI selection after the pack changes during consent', async () => {
         filesystem.files.set(modelUri(), new Uint8Array([9]));
+        const consent = createDeferred<void>();
         let answer!: (confirmed: boolean) => void;
         nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
             answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+            consent.resolve();
         });
         const props = { packId,
             role: 'stt_sherpa' as const };
         const hook = await mountModelState(props);
-        await act(async () => { hook.getCurrent().clearAssets(); });
-        await vi.waitFor(() => expect(answer).toEqual(expect.any(Function)));
+        let removal!: Promise<unknown>;
+        await act(async () => { removal = startRemoval(() => hook.getCurrent().clearAssets()); });
+        await consent.promise;
+        expect(answer).toEqual(expect.any(Function));
         await hook.rerender({ ...props, packId: 'other-pack' });
-        await act(async () => { answer(true); });
+        await act(async () => { answer(true); await removal; });
         expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([9]));
         expect(hook.getCurrent().modelStatus).toBe('idle');
     });
@@ -360,17 +386,19 @@ describe('native device model operations through the real installer', () => {
     });
 
     it('aborts admitted UI work when device execution is deselected', async () => {
+        const entered = createDeferred<void>();
         let fetchSignal: AbortSignal | null = null;
         vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
             fetchSignal = options.signal ?? null;
             fetchSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+            entered.resolve();
         })));
         const props = { ...input, enabled: true };
         const hook = await mountModelState(props);
         let operation!: Promise<void>;
         await act(async () => { operation = hook.getCurrent().prepareModel(); });
-        await vi.waitFor(() => expect(fetchSignal).not.toBeNull());
-        await act(async () => {});
+        await act(async () => { await entered.promise; });
+        expect(fetchSignal).not.toBeNull();
         expect(hook.getCurrent().modelStatus).toBe('downloading');
         await hook.rerender({ ...props, enabled: false });
         await act(async () => { await operation; });
@@ -382,9 +410,11 @@ describe('native device model operations through the real installer', () => {
     it('keeps committed removal custody when a replacement selection suspends without committing', async () => {
         await ensureModelAccount();
         filesystem.files.set(modelUri(), new Uint8Array([9]));
+        const consent = createDeferred<void>();
         let answer!: (confirmed: boolean) => void;
         nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
             answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+            consent.resolve();
         });
         const neverCommits = new Promise<never>(() => undefined);
         function Harness(props: { packId: string; suspend?: Promise<never> }) {
@@ -395,8 +425,10 @@ describe('native device model operations through the real installer', () => {
         const screen = await renderScreen(React.createElement(React.Suspense, { fallback: React.createElement('Fallback') },
             React.createElement(Harness, { packId })));
         const { tree } = screen;
-        await act(async () => { tree.root.findByType('Remove').props.onPress(); });
-        await vi.waitFor(() => expect(answer).toEqual(expect.any(Function)));
+        let removal!: Promise<unknown>;
+        await act(async () => { removal = startRemoval(() => tree.root.findByType('Remove').props.onPress()); });
+        await consent.promise;
+        expect(answer).toEqual(expect.any(Function));
         let replacement!: Promise<void>;
         React.startTransition(() => {
             replacement = screen.update(React.createElement(React.Suspense, { fallback: React.createElement('Fallback') },
@@ -404,7 +436,7 @@ describe('native device model operations through the real installer', () => {
         });
         await replacement;
         expect(tree.root.findAllByType('Fallback')).toHaveLength(0);
-        await act(async () => { answer(true); });
+        await act(async () => { answer(true); await removal; });
         expect(filesystem.files.has(modelUri())).toBe(false);
     });
 
@@ -413,13 +445,17 @@ describe('native device model operations through the real installer', () => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         expect(lifetime?.isCurrent()).toBe(true);
         filesystem.files.set(modelUri(), new Uint8Array([9]));
+        const consent = createDeferred<void>();
         let answer!: (confirmed: boolean) => void;
         nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
             answer = confirmed => buttons?.find(button => (button.style === 'cancel') === !confirmed)?.onPress?.();
+            consent.resolve();
         });
         const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
-        await act(async () => { hook.getCurrent().clearAssets(); });
-        await vi.waitFor(() => expect(answer).toEqual(expect.any(Function)));
+        let removal!: Promise<unknown>;
+        await act(async () => { removal = startRemoval(() => hook.getCurrent().clearAssets()); });
+        await consent.promise;
+        expect(answer).toEqual(expect.any(Function));
         await act(async () => { retireActiveServerAccountScopeLifetime(); });
         expect(lifetime?.isCurrent()).toBe(false);
         expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([9]));
@@ -428,11 +464,11 @@ describe('native device model operations through the real installer', () => {
         modelAccount = null;
         await ensureModelAccount();
         // A retired consent prompt must not keep the new Account's UI busy.
-        await act(async () => { hook.getCurrent().clearAssets(); });
-        await vi.waitFor(() => expect(filesystem.files.has(modelUri())).toBe(false));
+        await act(async () => { await startRemoval(() => hook.getCurrent().clearAssets()); });
+        expect(filesystem.files.has(modelUri())).toBe(false);
         // New Account work can install bytes while the old dialog is still open.
         filesystem.files.set(modelUri(), new Uint8Array([7]));
-        await act(async () => { answer(true); });
+        await act(async () => { answer(true); await removal; });
         expect(filesystem.files.get(modelUri())).toEqual(new Uint8Array([7]));
         await hook.unmount();
     });

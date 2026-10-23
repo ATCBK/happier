@@ -10,7 +10,7 @@ import {
     DaemonVoiceInferenceModelLicenseAcceptResponseSchema,
     DaemonVoiceInferenceModelLicenseAcceptRequestSchema, type DaemonVoiceInferenceModelStatus,
 } from '@happier-dev/protocol/daemon/voiceInference';
-import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { answerVoiceModelCatalogRpcRequest } from '@/dev/testkit/harness/voiceModelCatalogRpcBoundary';
@@ -176,15 +176,22 @@ describe('useDaemonVoiceModelCatalogState', () => {
 
     it('retires unanswered catalog reads on unmount and can load the same Machine again', async () => {
         const signals: AbortSignal[] = [];
+        const requested = createDeferred<void>();
         respond = (_request, context) => {
             signals.push(context.signal);
+            requested.resolve();
             return new Promise(() => {});
         };
         const first = await mount({ refreshKey: 'machine-a' });
         expect(state(first).loading).toBe(true);
-        await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+        await requested.promise;
+        expect(signals.length).toBeGreaterThan(0);
         await act(async () => { first.unmount(); });
-        await vi.waitFor(() => expect(signals.every(signal => signal.aborted)).toBe(true));
+        await Promise.all(signals.map(signal => waitForTestEvent(notify => {
+            signal.addEventListener('abort', notify);
+            return () => signal.removeEventListener('abort', notify);
+        }, () => signal.aborted, aborted => aborted)));
+        expect(signals.every(signal => signal.aborted)).toBe(true);
         catalogReply();
         const retry = await mount({ refreshKey: 'machine-a' });
         expect(state(retry)).toMatchObject({ loading: false, errorCode: null, count: 1 });
@@ -283,8 +290,14 @@ describe('useDaemonVoiceModelCatalogState', () => {
         const owners = () => screen.tree.root.findAllByType('State').map(node => node.props);
         const actions: Promise<void>[] = [];
         for (const [index, owner] of owners().entries()) {
+            const entered = createDeferred<void>();
+            respond = (request, context) => {
+                if (request.method.endsWith('.install')) { entered.resolve(); return pending.promise; }
+                return defaultReply(request, context);
+            };
             await act(async () => { actions.push(owner.install(STT_PACK)); });
-            await vi.waitFor(() => expect(observedSignals).toHaveLength(index + 1));
+            await entered.promise;
+            expect(observedSignals).toHaveLength(index + 1);
         }
         await settle();
         const executor = createDefaultActionExecutor();

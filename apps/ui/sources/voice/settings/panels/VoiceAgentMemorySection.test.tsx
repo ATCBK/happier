@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { Modal } from '@/modal';
 
@@ -61,7 +61,8 @@ describe('VoiceAgentMemorySection', () => {
     const screen = await render(voice);
     let pending!: Promise<void>;
     await act(async () => { pending = screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
-    await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+    await waitForTestEvent(account.subscribe, () => account.artifacts.list(), artifacts => artifacts.length === 1);
+    expect(account.artifacts.list()).toHaveLength(1);
     await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
     await act(async () => { await pending; });
     expect(Modal.confirm).not.toHaveBeenCalled();

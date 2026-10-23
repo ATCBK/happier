@@ -5,7 +5,7 @@ import 'fake-indexeddb/auto';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readLocalConversationVoiceSettings, voiceSettingsParse, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { DaemonVoiceModelCatalogProvider } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
 import { DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsListResponseSchema,
   DaemonVoiceInferenceModelsStatusResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
@@ -75,7 +75,8 @@ async function mountPreviewPicker() {
     }>;
     return accessory.props.children;
   };
-  await vi.waitFor(() => expect(menu().props.items).toHaveLength(1));
+  await waitForTestEvent(screen.subscribe, () => menu().props.items, items => items.length === 1);
+  expect(menu().props.items).toHaveLength(1);
   return { screen, menu, sampleButton };
 }
 
@@ -112,13 +113,18 @@ describe('LocalNeuralTtsSettings (native)', () => {
   it.each(['pending', 'active'] as const)('leaves another caller’s %s sample current with the menu closed and after unmount', async phase => {
     const { screen, menu } = await mountPreviewPicker();
     const initialization = createDeferred<void>();
-    if (phase === 'pending') sherpa.initialize.mockImplementationOnce(() => initialization.promise);
+    const initializationStarted = createDeferred<void>();
+    if (phase === 'pending') sherpa.initialize.mockImplementationOnce(() => {
+      initializationStarted.resolve();
+      return initialization.promise;
+    });
     const finishPlayback = boundary.holdNextPlayback('encoded');
     let operation!: ReturnType<typeof invokeVoiceSettingsOperation>;
     await act(async () => {
       operation = startActionPreview();
-      await vi.waitFor(() => expect(phase === 'pending' ? sherpa.initialize : boundary.encodedAudio.start).toHaveBeenCalledOnce());
+      await (phase === 'pending' ? initializationStarted.promise : finishPlayback.started);
     });
+    expect(phase === 'pending' ? sherpa.initialize : boundary.encodedAudio.start).toHaveBeenCalledOnce();
     expect(menu().props.open).toBe(false);
     expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
     await screen.unmount();
@@ -127,7 +133,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
     expect(boundary.encodedAudio.stop).not.toHaveBeenCalled();
     if (phase === 'pending') {
       initialization.resolve();
-      await vi.waitFor(() => expect(boundary.encodedAudio.start).toHaveBeenCalledOnce());
+      await finishPlayback.started;
+      expect(boundary.encodedAudio.start).toHaveBeenCalledOnce();
     }
     await finishPlayback.started;
     finishPlayback();
@@ -139,10 +146,19 @@ describe('LocalNeuralTtsSettings (native)', () => {
 
   it.each(['close', 'unmount'] as const)('retires only its own pending sample on picker %s, including late playback', async retirement => {
     const synthesis = createDeferred<void>();
+    const synthesisStarted = createDeferred<void>();
+    const outputRemoved = createDeferred<void>();
     let outputUri = '';
     let heldJobId = '';
+    const deleteFile = filesystem.files.delete.bind(filesystem.files);
+    const deletion = vi.spyOn(filesystem.files, 'delete').mockImplementation(uri => {
+      const result = deleteFile(uri);
+      if (uri === outputUri) outputRemoved.resolve();
+      return result;
+    });
     sherpa.synthesizeToWavFile.mockImplementationOnce(async input => {
       heldJobId = input.jobId;
+      synthesisStarted.resolve();
       await synthesis.promise;
       if (!input.outWavPath) throw new Error('Expected native output path');
       outputUri = `file://${input.outWavPath}`;
@@ -153,21 +169,26 @@ describe('LocalNeuralTtsSettings (native)', () => {
     await act(async () => { menu().props.onOpenChange(true); });
     await act(async () => { sampleButton().props.onPress(); });
     expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
-    await vi.waitFor(() => expect(heldJobId).not.toBe(''));
+    await synthesisStarted.promise;
+    expect(heldJobId).not.toBe('');
     if (retirement === 'close') await act(async () => { menu().props.onOpenChange(false); });
     else await screen.unmount();
     expect(sherpa.cancel).toHaveBeenCalledWith({ jobId: heldJobId });
     expect(localNeuralTtsPreviewController.read()).toBeNull();
     await act(async () => { synthesis.resolve(); });
-    await vi.waitFor(() => expect(filesystem.files.has(outputUri)).toBe(false));
+    await outputRemoved.promise;
+    expect(filesystem.files.has(outputUri)).toBe(false);
+    deletion.mockRestore();
     expect(boundary.encodedAudio.start).not.toHaveBeenCalled();
   });
 
   it('preserves a replacement Action sample when the picker closes and its old sample settles late', async () => {
     const synthesis = createDeferred<void>();
+    const synthesisStarted = createDeferred<void>();
     let heldJobId = '';
     sherpa.synthesizeToWavFile.mockImplementationOnce(async input => {
       heldJobId = input.jobId;
+      synthesisStarted.resolve();
       await synthesis.promise;
       if (!input.outWavPath) throw new Error('Expected native output path');
       filesystem.files.set(`file://${input.outWavPath}`, new Uint8Array([1, 2]));
@@ -176,12 +197,14 @@ describe('LocalNeuralTtsSettings (native)', () => {
     const { screen, menu, sampleButton } = await mountPreviewPicker();
     await act(async () => { menu().props.onOpenChange(true); });
     await act(async () => { sampleButton().props.onPress(); });
-    await vi.waitFor(() => expect(heldJobId).not.toBe(''));
+    await synthesisStarted.promise;
+    expect(heldJobId).not.toBe('');
     const finishPlayback = boundary.holdNextPlayback('encoded');
     let replacement!: ReturnType<typeof invokeVoiceSettingsOperation>;
     await act(async () => {
       replacement = startActionPreview();
-      await vi.waitFor(() => expect(boundary.encodedAudio.start).toHaveBeenCalledOnce());
+      await finishPlayback.started;
+      expect(boundary.encodedAudio.start).toHaveBeenCalledOnce();
       menu().props.onOpenChange(false);
     });
     await screen.unmount();
@@ -214,7 +237,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
     let operation!: ReturnType<typeof invokeVoiceSettingsOperation>;
     await act(async () => {
       operation = startActionPreview();
-      await vi.waitFor(() => expect(boundary.encodedAudio.start).toHaveBeenCalledOnce());
+      await finishPlayback.started;
+      expect(boundary.encodedAudio.start).toHaveBeenCalledOnce();
     });
     await finishPlayback.started;
     const voiceMenu = () => tree.root.findAll((node) => node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.title')
@@ -282,8 +306,11 @@ describe('LocalNeuralTtsSettings (native)', () => {
       expect(nativeAlert).not.toHaveBeenCalled();
       await act(async () => { account!.replaceSettings(settingsParse({ ...account!.settings, actionsSettingsV1: { v: 1,
         approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } })); });
+      const alerted = createDeferred<void>();
+      nativeAlert.mockImplementationOnce(() => alerted.resolve());
       await act(async () => { await pressTestInstanceAsync(modelItem!); });
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await alerted.promise;
+      expect(nativeAlert).toHaveBeenCalled();
 
       expect(fetch).not.toHaveBeenCalled();
       expect(sherpa.initialize).not.toHaveBeenCalled();
@@ -397,7 +424,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
     expect(stopPropagation).toHaveBeenCalledOnce();
     expect(signal.aborted).toBe(true);
     await act(async () => { await preparing; });
-    await vi.waitFor(() => expect(modelRow()?.props.rightElementOutsidePressable).toBe(false));
+    await waitForTestEvent(tree.subscribe, () => modelRow()?.props.rightElementOutsidePressable, outside => outside === false);
+    expect(modelRow()?.props.rightElementOutsidePressable).toBe(false);
     expect(filesystem.files.size).toBe(0);
     expect(sherpa.initialize).not.toHaveBeenCalled();
     expect(setKokoro).not.toHaveBeenCalled();
@@ -415,7 +443,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
 
     const voiceMenu = tree.root.findAllByType(DropdownMenu)
       .find((node) => node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.title'));
-    await vi.waitFor(() => expect(voiceMenu?.props.items).toHaveLength(1));
+    await waitForTestEvent(tree.subscribe, () => voiceMenu?.props.items, items => items?.length === 1);
+    expect(voiceMenu?.props.items).toHaveLength(1);
     expect(voiceMenu?.props.itemRowProps).toEqual(expect.objectContaining({
       rightElementOutsidePressable: true,
     }));
@@ -480,7 +509,9 @@ describe('LocalNeuralTtsSettings (native)', () => {
 
     const voiceMenu = () => tree.root.findAllByType(DropdownMenu)
       .find((node) => node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.title'));
-    await vi.waitFor(() => expect(voiceMenu()?.props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']));
+    await waitForTestEvent(tree.subscribe, () => voiceMenu()?.props.items.map((item: { id: string }) => item.id),
+      ids => ids?.length === 2 && ids[0] === 'calm' && ids[1] === 'bright');
+    expect(voiceMenu()?.props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']);
     expect(voiceMenu()?.props.selectedId).toBe('bright');
     expect(voiceMenu()?.props.items.every((item: { rightElement?: React.ReactNode }) => item.rightElement === undefined)).toBe(true);
   });

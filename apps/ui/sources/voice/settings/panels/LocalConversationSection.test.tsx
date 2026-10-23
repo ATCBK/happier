@@ -14,7 +14,7 @@ import {
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 import { createDeferred, flushHookEffects, pressTestInstanceAsync, renderSettingsView as renderSettingsViewWithProviders,
-  standardCleanup, type SettingsViewHarness } from '@/dev/testkit';
+  standardCleanup, waitForTestEvent, type SettingsViewHarness } from '@/dev/testkit';
 import { sync } from '@/sync/sync';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { t } from '@/text';
@@ -110,6 +110,7 @@ vi.mock('react-native-unistyles', async () => {
 
 // Model discovery crosses the daemon RPC boundary; model/preflight owners remain real.
 const capabilitiesInvoke = vi.hoisted(() => vi.fn<typeof import('@/sync/ops/capabilities').machineCapabilitiesInvoke>());
+let capabilitiesCompleted = createDeferred<void>();
 installSessionActionRpcBoundary(async request => {
   const separator = request.method.indexOf(':');
   const machineId = request.method.slice(0, separator);
@@ -120,6 +121,7 @@ installSessionActionRpcBoundary(async request => {
   }
   if (method === RPC_METHODS.CAPABILITIES_INVOKE) {
     const response = await capabilitiesInvoke(machineId, request.params as Parameters<typeof capabilitiesInvoke>[1]);
+    capabilitiesCompleted.resolve();
     return response.supported ? response.response : { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
   }
   return providerTransport.machineRpc({ machineId, serverId: account?.home.id ?? null,
@@ -160,7 +162,7 @@ async function openDropdown(screen: SettingsViewHarness, title: string) {
   expect(triggers).toHaveLength(1);
   await pressTestInstanceAsync(triggers[0]!);
   await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
-  await act(async () => { await vi.waitFor(() => expect(measureInWindow).toHaveBeenCalled()); });
+  await waitForTestEvent(screen.subscribe, () => expect(measureInWindow).toHaveBeenCalled());
   expect(dropdown.props.open).toBe(true);
   return dropdown;
 }
@@ -237,6 +239,7 @@ function openAdvancedAgent(screen: Pick<SettingsViewHarness, 'findAll'>) {
 }
 
 beforeEach(async () => {
+  capabilitiesCompleted = createDeferred<void>();
   measureInWindow.mockClear();
   account = undefined;
   routeParams.value = {};
@@ -358,7 +361,8 @@ describe('LocalConversationSection', () => {
       launch: { kind: 'command' as const, command: 'review', args: [] }, createdAt: 1, updatedAt: 1 })];
     await refreshAcpCatalog({ serverId: account!.home.id, accountId: 'voice-account' });
     const LocalConversationSection = await loadLocalConversationSection();
-    const setVoice = vi.fn();
+    const changed = createDeferred<void>();
+    const setVoice = vi.fn<(voice: VoiceSettings) => void>(() => { changed.resolve(); });
     const voice = createLocalConversationVoice({ conversationMode: 'agent', agent: { agentSource: 'agent', agentId: 'codex' } });
     const screen = await renderSettingsView(<LocalConversationSection voice={voice} setVoice={setVoice} />);
     const picker = findDropdownByItemTriggerTitle(screen, t('settingsVoice.local.mediatorAgentId'));
@@ -366,7 +370,8 @@ describe('LocalConversationSection', () => {
     expect(picker?.props.items.find((item: { id: string }) => item.id === rowTargetKey)).toMatchObject({ title: 'Row review' });
     await selectDropdownOption(screen, t('settingsVoice.local.mediatorAgentId'),
       'dropdown-option-agent_happier_agent_custom-acp_custom-acp_definition_row-review');
-    await vi.waitFor(() => expect(setVoice).toHaveBeenCalledOnce());
+    await changed.promise;
+    expect(setVoice).toHaveBeenCalledOnce();
     expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]![0]).agent).toMatchObject({
       agentId: 'custom-acp', agentTargetKey: rowTargetKey,
     });
@@ -504,8 +509,10 @@ describe('LocalConversationSection', () => {
       expect(capabilitiesInvoke).not.toHaveBeenCalled();
       expect(setVoice).not.toHaveBeenCalled();
     } else {
-      await vi.waitFor(() => expect(picker?.props.items.map((item: { id: string }) => item.id)).toContain('agent:com.a.voice/agent'));
-      await vi.waitFor(() => expect(models?.props.items.map((item: { id: string }) => item.id)).toContain('model-a'));
+      await waitForTestEvent(screen.subscribe, () => picker?.props.items, items => items?.some((item: { id: string }) => item.id === 'agent:com.a.voice/agent') === true);
+      expect(picker?.props.items.map((item: { id: string }) => item.id)).toContain('agent:com.a.voice/agent');
+      await waitForTestEvent(screen.subscribe, () => models?.props.items, items => items?.some((item: { id: string }) => item.id === 'model-a') === true);
+      expect(models?.props.items.map((item: { id: string }) => item.id)).toContain('model-a');
       act(() => picker?.props.onSelect('agent:com.a.voice/agent'));
       expect(readLocalConversationVoiceSettings(setVoice.mock.calls[0]?.[0]).agent).toMatchObject({
         agentIdentity: { pluginId: 'com.a.voice', localId: 'agent' }, agentProjectionGeneration: 10,
@@ -568,11 +575,12 @@ describe('LocalConversationSection', () => {
     const findExternalEntry = () => agentPicker?.props.items.find(
       (item: DropdownMenuItem) => item.id === 'agent:com.acme.voice/agent',
     );
-    await vi.waitFor(() => expect(findExternalEntry()).toMatchObject({
+    await waitForTestEvent(screen.subscribe, findExternalEntry, entry => entry !== undefined);
+    expect(findExternalEntry()).toMatchObject({
       id: 'agent:com.acme.voice/agent',
       title: 'Acme Voice',
       subtitle: 'External conversation Agent',
-    }));
+    });
     const externalEntry = findExternalEntry();
     expect(externalEntry.icon.props.entry).toMatchObject({
       qualifiedId: 'com.acme.voice.agent',
@@ -756,7 +764,8 @@ describe('LocalConversationSection', () => {
 
   it('asks once for the compatible Agent and commits both Provider tuples together', async () => {
     const LocalConversationSection = await loadLocalConversationSection();
-    const setVoice = vi.fn();
+    const changed = createDeferred<void>();
+    const setVoice = vi.fn<(voice: VoiceSettings) => void>(() => { changed.resolve(); });
     const voice = createLocalConversationVoice({
       conversationMode: 'agent',
       agent: {
@@ -794,11 +803,14 @@ describe('LocalConversationSection', () => {
       && node.props?.selectedId === ''
     ));
     expect(prompts).toHaveLength(1);
-    await vi.waitFor(() => expect(providerTransport.state.requests.some(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toBe(true));
+    await waitForTestEvent(providerTransport.subscribe, () => providerTransport.state.requests,
+      requests => requests.some(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION));
+    expect(providerTransport.state.requests.some(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toBe(true);
     await act(async () => {
       prompts[0]!.props.onSelect('opencode');
     });
-    await vi.waitFor(() => expect(setVoice).toHaveBeenCalled());
+    await changed.promise;
+    expect(setVoice).toHaveBeenCalled();
     const nextVoice = setVoice.mock.calls[0]?.[0] as VoiceSettings;
     expect(readLocalConversationVoiceSettings(nextVoice).agent).toMatchObject({
       agentSource: 'agent',
@@ -933,10 +945,12 @@ describe('LocalConversationSection', () => {
       t('settingsVoice.local.conversation.chatModelId.title'),
     );
 
-    await vi.waitFor(() => expect(chatModel?.props.items).toEqual(expect.arrayContaining([
+    await waitForTestEvent(screen.subscribe, () => chatModel?.props.items,
+      items => items?.some((item: { id: string }) => item.id === 'm1') === true);
+    expect(chatModel?.props.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'm1' }),
       expect.objectContaining({ id: '__custom__' }),
-    ])));
+    ]));
   });
 
   it('does not crash when providerId toggles away from local_conversation', async () => {
@@ -1092,9 +1106,10 @@ describe('LocalConversationSection', () => {
 
     await renderSettingsView(<LocalConversationSection voice={voice} setVoice={() => {}} />);
 
-    await vi.waitFor(() => expect(capabilitiesInvoke).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+    await capabilitiesCompleted.promise;
+    expect(capabilitiesInvoke).toHaveBeenCalledWith('machine-1', expect.objectContaining({
       params: expect.objectContaining({ backendTarget: { kind: 'backend', backendId: 'acme-agent', sourceKind: 'built_in' } }),
-    })));
+    }));
   });
 
   it('uses the fixed voice agent machine id when preflighting models', async () => {
@@ -1114,7 +1129,8 @@ describe('LocalConversationSection', () => {
 
     await renderSettingsView(<LocalConversationSection voice={voice} setVoice={setVoice} />);
 
-    await vi.waitFor(() => expect(capabilitiesInvoke.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']));
+    await capabilitiesCompleted.promise;
+    expect(capabilitiesInvoke.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']);
   });
 
   it('uses the resolved auto machine id when preflighting models', async () => {
@@ -1133,7 +1149,8 @@ describe('LocalConversationSection', () => {
 
     await renderSettingsView(<LocalConversationSection voice={voice} setVoice={() => {}} />);
 
-    await vi.waitFor(() => expect(capabilitiesInvoke.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']));
+    await capabilitiesCompleted.promise;
+    expect(capabilitiesInvoke.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']);
   });
 
   it('does not render a second agent-only execution-machine owner', async () => {

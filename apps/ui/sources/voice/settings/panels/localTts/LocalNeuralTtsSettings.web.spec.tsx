@@ -3,7 +3,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createMachineFixture, createPlainMachineRowFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -142,7 +142,9 @@ describe('LocalNeuralTtsSettings (web)', () => {
             const screen = await renderScreen(<DaemonSettings voiceId={voiceId} />);
             const menu = () => screen.tree.root.findAllByType(DropdownMenu).find(node =>
                 node.props.itemTrigger?.title === t('settingsVoice.local.kokoro.voice.titleWeb'))!;
-            await vi.waitFor(() => expect(menu().props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']));
+            await waitForTestEvent(screen.subscribe, () => menu().props.items.map((item: { id: string }) => item.id),
+                ids => ids.length === 2 && ids[0] === 'calm' && ids[1] === 'bright');
+            expect(menu().props.items.map((item: { id: string }) => item.id)).toEqual(['calm', 'bright']);
             return menu();
         };
 

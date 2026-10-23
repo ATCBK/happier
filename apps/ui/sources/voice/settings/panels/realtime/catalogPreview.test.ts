@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import { createDeferred } from '@/dev/testkit';
 
 const audio = vi.hoisted(() => ({ play: vi.fn(), remove: vi.fn(), detach: vi.fn(),
   onStatus: null as ((status: Readonly<{ didJustFinish?: boolean }>) => void) | null }));
@@ -16,8 +17,13 @@ const boundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
   throw new Error('Installed device preview must not dispatch a daemon RPC');
 } });
 const { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } = await import('./catalogPreview');
+let restored = createDeferred<void>();
 beforeEach(() => {
-  boundary.reset();
+  const { audioSession } = boundary.reset();
+  restored = createDeferred<void>();
+  const restoreAudio = audioSession.nativeModule.restoreAudioSession.getMockImplementation();
+  if (!restoreAudio) throw new Error('Native audio restore boundary missing');
+  audioSession.nativeModule.restoreAudioSession.mockImplementationOnce(async () => { await restoreAudio(); restored.resolve(); });
   boundary.platform.value = 'ios';
   audio.play.mockClear(); audio.remove.mockClear(); audio.detach.mockClear();
 });
@@ -45,15 +51,18 @@ describe('the shared catalog preview owner', () => {
     expect(audio.remove).toHaveBeenCalled();
     expect(audio.detach).toHaveBeenCalled();
     expect(readRealtimeCatalogPreview()).toBeNull();
-    await vi.waitFor(() => expect(boundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0));
+    await restored.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(boundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
   });
   it('releases the catalog playback lease when the OS reports completion', async () => {
     await playRealtimeCatalogPreview({ providerId: 'preview-completion', row: { id: 'calm', name: 'Calm',
       previewUrl: 'https://preview.example.test/calm.wav' }, isCurrent: () => true });
     audio.onStatus?.({ didJustFinish: true });
     expect(readRealtimeCatalogPreview()).toBeNull();
-    await vi.waitFor(() => expect(boundary.getAudioSessionCoordinator().getSnapshot()).toMatchObject({
-      leaseCount: 0, pendingReleaseCount: 0, configuration: null,
-    }));
+    const coordinator = boundary.getAudioSessionCoordinator();
+    await restored.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(coordinator.getSnapshot()).toMatchObject({ leaseCount: 0, pendingReleaseCount: 0, configuration: null });
   });
 });

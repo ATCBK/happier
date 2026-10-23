@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
-import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { getDefaultModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import { createMemFs } from '@/voice/modelPacks/installerTestFs';
 import { t } from '@/text';
@@ -126,7 +126,8 @@ describe('LocalNeuralSttSettings native model download accessory', () => {
     });
     expect(stopPropagation).toHaveBeenCalledOnce();
     expect(signal.aborted).toBe(true);
-    await vi.waitFor(() => expect(findModelRow()?.props.rightElementOutsidePressable).toBe(false));
+    await waitForTestEvent(tree.subscribe, () => findModelRow()?.props.rightElementOutsidePressable, outside => outside === false);
+    expect(findModelRow()?.props.rightElementOutsidePressable).toBe(false);
     expect(filesystem.files.size).toBe(0);
     expect(setCfg).not.toHaveBeenCalled();
   });
@@ -170,9 +171,11 @@ describe('LocalNeuralSttSettings native model download accessory', () => {
     const removeRow = () => tree.root.findAll(node =>
       node.props.title === t('settingsVoice.local.localNeuralStt.removeModelFiles.title'))
       .find(node => typeof node.props.onPress === 'function');
-    await vi.waitFor(() => expect(removeRow()).toBeDefined());
+    await waitForTestEvent(tree.subscribe, removeRow, row => row !== undefined);
+    expect(removeRow()).toBeDefined();
     await act(async () => { removeRow()!.props.onPress(); });
-    await vi.waitFor(() => expect(filesystem.files.has(scratch)).toBe(false));
-    await vi.waitFor(() => expect(removeRow()).toBeUndefined());
+    await waitForTestEvent(tree.subscribe, removeRow, row => row === undefined);
+    expect(removeRow()).toBeUndefined();
+    expect(filesystem.files.has(scratch)).toBe(false);
   });
 });

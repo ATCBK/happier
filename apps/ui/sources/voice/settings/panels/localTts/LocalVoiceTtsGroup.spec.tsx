@@ -1,7 +1,7 @@
 import React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { findAllHostTestInstances, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
@@ -11,9 +11,11 @@ import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTe
 import { createDeferred } from '@/dev/testkit';
 import { t } from '@/text';
 import { Modal } from '@/modal';
+import { Alert } from 'react-native';
 import { LocalVoiceTtsGroup } from './LocalVoiceTtsGroup';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { KOKORO_DEFAULT_TTS_PACK_ID } from '@happier-dev/protocol/voice/modelPacks/catalog';
+const presentModalAlert = Modal.alert.bind(Modal);
 
 // The device speech SDK and authenticated speech/RPC transports are external
 // boundaries; provider catalog, settings controls and playback custody stay real.
@@ -116,14 +118,19 @@ describe('LocalVoiceTtsGroup', () => {
     ({ filesystem: speechFilesystem } = speechBoundary.reset());
     speechBoundary.platform.value = 'ios';
     const synthesis = createDeferred<{ wavPath: string; sampleRate: number }>();
+    const started = createDeferred<void>();
+    const cancelled = createDeferred<void>();
+    speechBoundary.nativeCancel.mockImplementationOnce(async () => { cancelled.resolve(); });
     let jobId = '';
     speechBoundary.nativeSynthesize.mockImplementationOnce(async (input) => {
       jobId = input.jobId;
+      started.resolve();
       return synthesis.promise;
     });
     const fixture = neuralSampleFixture();
     storeVoiceForTest(fixture.voice);
-    const alert = vi.spyOn(Modal, 'alert');
+    const alert = vi.spyOn(Modal, 'alert').mockImplementation(presentModalAlert);
+    onTestFinished(() => alert.mockRestore());
     const screen = await renderScreen(<LocalVoiceTtsGroup
       cfgTts={fixture.cfgTts}
       setTts={vi.fn()}
@@ -134,7 +141,8 @@ describe('LocalVoiceTtsGroup', () => {
     />);
 
     await screen.pressByTestIdAsync('settings.voice.local.testTts');
-    await vi.waitFor(() => expect(jobId).not.toBe(''));
+    await started.promise;
+    expect(jobId).not.toBe('');
     expect(localNeuralTtsPreviewController.read()).toBe('af_heart');
 
     await act(async () => {
@@ -146,7 +154,8 @@ describe('LocalVoiceTtsGroup', () => {
       expect(stopped).toMatchObject({ status: 'completed', value: { stopped: true } });
     });
     synthesis.resolve({ wavPath: `${speechFilesystem.root}/late.wav`, sampleRate: 24_000 });
-    await act(async () => { await vi.waitFor(() => expect(speechBoundary.nativeCancel).toHaveBeenCalledWith({ jobId })); });
+    await cancelled.promise;
+    expect(speechBoundary.nativeCancel).toHaveBeenCalledWith({ jobId });
     expect(alert).not.toHaveBeenCalled();
     expect([...speechFilesystem.files.keys()]).not.toContain(`${speechFilesystem.root}/late.wav`);
   });
@@ -156,7 +165,13 @@ describe('LocalVoiceTtsGroup', () => {
       localNeural: { ...local.tts.localNeural, execution: 'daemon' as const } };
     const voice = writeLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }), { ...local, tts });
     storeVoiceForTest(voice);
-    const alert = vi.spyOn(Modal, 'alert').mockResolvedValue(undefined);
+    const alerted = createDeferred<void>();
+    const nativeAlert = vi.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      alerted.resolve();
+      buttons?.[0]?.onPress?.();
+    });
+    const alert = vi.spyOn(Modal, 'alert').mockImplementation(presentModalAlert);
+    onTestFinished(() => { nativeAlert.mockRestore(); alert.mockRestore(); });
     const screen = await renderScreen(<LocalVoiceTtsGroup
       cfgTts={tts}
       setTts={vi.fn()}
@@ -167,7 +182,8 @@ describe('LocalVoiceTtsGroup', () => {
     />);
 
     await screen.pressByTestIdAsync('settings.voice.local.testTts');
-    await vi.waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
+    await alerted.promise;
+    expect(alert).toHaveBeenCalledTimes(1);
     const body = String(alert.mock.calls[0]?.[1]);
     expect(body).not.toMatch(/_/);
     expect(body).not.toBe(t('settingsVoice.local.testTtsFailed'));

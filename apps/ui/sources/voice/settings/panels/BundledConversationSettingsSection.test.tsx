@@ -3,7 +3,7 @@ import { Alert } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { createDeferred, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { ModalProvider } from '@/modal';
@@ -55,6 +55,14 @@ vi.mock('@expo/vector-icons', async () => {
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vi.fn() } }));
 await loadSyncSingletonForTests();
 const nativeAlert = vi.spyOn(Alert, 'alert');
+const alertListeners = new Set<() => void>();
+async function waitForAlert(title: string) {
+  await waitForTestEvent(notify => {
+    alertListeners.add(notify);
+    return () => { alertListeners.delete(notify); };
+  }, () => nativeAlert.mock.calls.at(-1), call => call?.[0] === title);
+  expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(title);
+}
 afterAll(() => nativeAlert.mockRestore());
 function ConversationProviders({ children }: React.PropsWithChildren) {
   return <ModalProvider>{children}</ModalProvider>;
@@ -87,6 +95,7 @@ describe('BundledConversationSettingsSection', () => {
     provider = createElevenLabsSettingsRuntimeTestHarness();
     await provider.register();
     nativeAlert.mockReset();
+    nativeAlert.mockImplementation(() => { for (const notify of alertListeners) notify(); });
     setPreferredLanguageFromSettings('en');
   });
   afterEach(async () => {
@@ -106,15 +115,16 @@ describe('BundledConversationSettingsSection', () => {
     }));
     await refreshSavedSecretCatalog(account.scope);
     // Capture action authority from the real current material catalog.
-    await vi.waitFor(() => {
-      expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({
-        status: 'ready', stale: false, legacyImport: { status: 'complete' },
-      });
-      const reference = resolveAccountVoiceCredential(account.settings, contribution, 'api_key', null);
-      expect(reference?.secretId).toMatch(/^happier:shared-secret:v1:/u);
-      expect(resolveSavedSecretReference(account.scope, account.settings.secrets, reference?.secretId ?? ''))
-        .toMatchObject({ status: 'ready', ref: reference?.secretId });
+    await waitForTestEvent(subscribeSavedSecretCatalogSnapshots,
+      () => getSavedSecretCatalogSnapshot(account.scope),
+      snapshot => snapshot?.status === 'ready' && !snapshot.stale && snapshot.legacyImport?.status === 'complete');
+    expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({
+      status: 'ready', stale: false, legacyImport: { status: 'complete' },
     });
+    const reference = resolveAccountVoiceCredential(account.settings, contribution, 'api_key', null);
+    expect(reference?.secretId).toMatch(/^happier:shared-secret:v1:/u);
+    expect(resolveSavedSecretReference(account.scope, account.settings.secrets, reference?.secretId ?? ''))
+      .toMatchObject({ status: 'ready', ref: reference?.secretId });
   }
   async function render(voice = account.settings.voice) {
     return await renderScreen(<BundledConversationSettingsSection voice={voice} />, {
@@ -205,7 +215,7 @@ describe('BundledConversationSettingsSection', () => {
   }
   async function requestAgentCreation(screen: Awaited<ReturnType<typeof render>>) {
     await screen.pressByTestIdAsync('voice-settings-action-create-agent');
-    await vi.waitFor(() => expect(screen.findHostByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findHostByTestId('app-shell-confirmation-confirm')).not.toBeNull());
     await screen.pressByTestIdAsync('app-shell-confirmation-confirm');
   }
 
@@ -257,8 +267,8 @@ describe('BundledConversationSettingsSection', () => {
     expect(triggers).toHaveLength(1);
     await act(async () => triggers![0].props.onPress());
     await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
-    await vi.waitFor(() => expect(screen.tree.findAllByType(DropdownMenu).find((node) => node.props.testID === 'voice-realtime-field-tts-voiceId')?.props.open).toBe(true));
-    await vi.waitFor(() => expect(screen.tree.findAllByType(OverlayPortalHost).some(host =>
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAllByType(DropdownMenu).find((node) => node.props.testID === 'voice-realtime-field-tts-voiceId')?.props.open).toBe(true));
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAllByType(OverlayPortalHost).some(host =>
       host.findAll(node => typeof node.type === 'string' && node.props.testID === 'dropdown-option-__status__').length > 0,
     )).toBe(true));
     expect(provider.fetch.mock.calls.some(([input, init]) => matchesVendorRequest(input, init, 'GET', '/v1/voices'))).toBe(false);
@@ -278,32 +288,34 @@ describe('BundledConversationSettingsSection', () => {
     const enterNew = () => credential.findAll((node) => node.props.title === tLoose('settingsVoice.byo.apiKeyTitle')
       && typeof node.props.onPress === 'function')[0]!.props.onPress();
     await act(async () => enterNew());
-    await vi.waitFor(() => expect(screen.findByTestId('web-prompt-input')).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('web-prompt-input')).not.toBeNull());
     act(() => screen.changeTextByTestId('web-prompt-input', 'test-only-entered-key'));
     await screen.pressByTestIdAsync('web-prompt-confirm');
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+    await waitForAlert(t('settingsVoice.local.voiceCredential.plainStorageTitle'));
+    expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2)).toEqual([
       t('settingsVoice.local.voiceCredential.plainStorageTitle'), t('settingsVoice.local.voiceCredential.plainStorageBody'),
-    ]));
+    ]);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style === 'cancel')?.onPress?.());
     await flushHookEffects();
     expect(screen.tree.findAllByType(WebPromptModal).filter(node => node.props.visible !== false)).toHaveLength(0);
     expect(account.settings.secrets).toHaveLength(0);
     expect(account.writes).toHaveLength(0);
     await act(async () => enterNew());
-    await vi.waitFor(() => expect(screen.findByTestId('web-prompt-input')).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('web-prompt-input')).not.toBeNull());
     act(() => screen.changeTextByTestId('web-prompt-input', 'test-only-entered-key'));
     nativeAlert.mockClear();
     await screen.pressByTestIdAsync('web-prompt-confirm');
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(t('settingsVoice.local.voiceCredential.plainStorageTitle')));
+    await waitForAlert(t('settingsVoice.local.voiceCredential.plainStorageTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(t('settingsVoice.externalCredentials.recipientApprovalTitle')));
+    await waitForAlert(t('settingsVoice.externalCredentials.recipientApprovalTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(getActionSpec('secrets.shared.promote').title));
+    await waitForAlert(getActionSpec('secrets.shared.promote').title);
     expect(account.resources).toHaveLength(0);
     expect(account.promotions).toHaveLength(0);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    await vi.waitFor(() => expect(account.resources).toHaveLength(1));
+    await waitForTestEvent(account.subscribe, () => account.resources.length, count => count === 1);
+    expect(account.resources).toHaveLength(1);
     expect(account.promotions).toHaveLength(1);
     expect(account.persistedSettings.secrets).toHaveLength(0);
     const resource = account.resources[0]!;
@@ -325,7 +337,8 @@ describe('BundledConversationSettingsSection', () => {
       expect(resolveVoiceWelcomeSelection(account.settings.voice.welcome)).toBe('off');
       expect(account.writes).toEqual([]);
     } else {
-      await vi.waitFor(() => expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn'));
+      await waitForTestEvent(account.subscribe, () => resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome), value => value === 'on_first_turn');
+      expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn');
       expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
     }
   });
@@ -336,27 +349,36 @@ describe('BundledConversationSettingsSection', () => {
       ? provider.response({ providerPrivateValue: 'must-not-reach-alert' }, 400) : originalFetch(input, init));
     const screen = await render();
     await requestAgentCreation(screen);
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2)).toEqual([t('common.error'),
-      `${tLoose('settingsVoice.realtimeProviders.operationFailedUnsaved')}\n\n${t('settingsVoice.realtimeProviders.operationFailedStage', { stage: 'create_tool' })}\n${t('settingsVoice.realtimeProviders.operationFailedStatus', { status: 400 })}`]));
+    await waitForAlert(t('common.error'));
+    expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2)).toEqual([t('common.error'),
+      `${tLoose('settingsVoice.realtimeProviders.operationFailedUnsaved')}\n\n${t('settingsVoice.realtimeProviders.operationFailedStage', { stage: 'create_tool' })}\n${t('settingsVoice.realtimeProviders.operationFailedStatus', { status: 400 })}`]);
     expect(config()).toMatchObject({ agentId: '' });
     expect(account.writes).toHaveLength(0);
     expect(JSON.stringify(nativeAlert.mock.calls)).not.toContain('must-not-reach-alert');
     expect(screen.findHostByTestId('voice-settings-action-create-agent')?.props.disabled).toBe(true);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.[0]?.onPress?.());
-    await vi.waitFor(() => expect(screen.findHostByTestId('voice-settings-action-create-agent')?.props.disabled).toBe(false));
+    await waitForTestEvent(screen.subscribe, () => screen.findHostByTestId('voice-settings-action-create-agent')?.props.disabled,
+      disabled => disabled === false);
+    expect(screen.findHostByTestId('voice-settings-action-create-agent')?.props.disabled).toBe(false);
   });
   it('keeps client-executed autoprovision independent of daemon selection changes', async () => {
     await saveCredential();
     const metadata = observeAdmissionMetadata();
     const existing = createDeferred<Response>();
+    const requested = createDeferred<void>();
     const originalFetch = provider.fetch.getMockImplementation()!;
     provider.fetch.mockImplementation(async (input, init) => {
       metadata.capture('vendor:' + (init?.method ?? 'GET') + ':' + new URL(input instanceof Request ? input.url : String(input)).pathname, init?.signal);
-      return matchesVendorRequest(input, init, 'GET', '/v1/convai/agents') ? existing.promise : originalFetch(input, init);
+      if (matchesVendorRequest(input, init, 'GET', '/v1/convai/agents')) {
+        requested.resolve();
+        return existing.promise;
+      }
+      return originalFetch(input, init);
     });
     const screen = await render();
     await requestAgentCreation(screen);
-    await vi.waitFor(() => expect(provider.fetch.mock.calls.some(([input, init]) => matchesVendorRequest(input, init, 'GET', '/v1/convai/agents'))).toBe(true));
+    await requested.promise;
+    expect(provider.fetch.mock.calls.some(([input, init]) => matchesVendorRequest(input, init, 'GET', '/v1/convai/agents'))).toBe(true);
     const next = voiceSettingsParse({ ...account.settings.voice, executionMachine: { kind: 'machine', machineId: 'machine-b' } });
     const version = storage.getState().settingsVersion;
     if (version === null) throw new Error('Expected hydrated Account Settings revision');
@@ -365,22 +387,28 @@ describe('BundledConversationSettingsSection', () => {
     metadata.capture('daemon-selection-published');
     await screen.update(<BundledConversationSettingsSection voice={next} />);
     await act(async () => { metadata.capture('agents-response-resolved'); existing.resolve(provider.response({ agents: [], has_more: false, next_cursor: null })); });
-    await vi.waitFor(() => expect(config(), metadata.describe()).toMatchObject({ agentId: 'agent_created' }));
+    await waitForTestEvent(account.subscribe, () => account.persistedSettings.voice.providers[providerId]?.config,
+      value => configField({ config: value }, 'agentId') === 'agent_created');
+    await waitForTestEvent(storage.subscribe, config, value => configField({ config: value }, 'agentId') === 'agent_created');
+    expect(config(), metadata.describe()).toMatchObject({ agentId: 'agent_created' });
     expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: 'agent_created' });
   });
   it('aborts a deferred autoprovision when its provider target retires without publishing stale work', async () => {
     await saveCredential();
     const existing = createDeferred<Response>();
+    const requested = createDeferred<void>();
     let signal: AbortSignal | undefined;
     const originalFetch = provider.fetch.getMockImplementation()!;
     provider.fetch.mockImplementation(async (input, init) => {
       if (!matchesVendorRequest(input, init, 'GET', '/v1/convai/agents')) return originalFetch(input, init);
       signal = init?.signal ?? undefined;
+      requested.resolve();
       return existing.promise;
     });
     const screen = await render();
     await requestAgentCreation(screen);
-    await vi.waitFor(() => expect(signal).toBeDefined());
+    await requested.promise;
+    expect(signal).toBeDefined();
     const next = voiceSettingsParse({ ...account.settings.voice, providerId: null });
     account.replaceVoice(next);
     await screen.update(<BundledConversationSettingsSection voice={next} />);
@@ -405,16 +433,19 @@ describe('BundledConversationSettingsSection', () => {
     await saveCredential();
     const metadata = observeAdmissionMetadata();
     const created = createDeferred<Response>();
+    const requested = createDeferred<void>();
     const originalFetch = provider.fetch.getMockImplementation()!;
     provider.fetch.mockImplementation(async (input, init) => {
       metadata.capture('vendor:' + (init?.method ?? 'GET') + ':' + new URL(input instanceof Request ? input.url : String(input)).pathname, init?.signal);
       if (!matchesVendorRequest(input, init, 'POST', '/v1/convai/agents/create')) return originalFetch(input, init);
       await originalFetch(input, init);
+      requested.resolve();
       return created.promise;
     });
     const screen = await render();
     await requestAgentCreation(screen);
-    await vi.waitFor(() => expect(provider.fetch.mock.calls.some(([input, init]) => matchesVendorRequest(input, init, 'POST', '/v1/convai/agents/create')), metadata.describe()).toBe(true));
+    await requested.promise;
+    expect(provider.fetch.mock.calls.some(([input, init]) => matchesVendorRequest(input, init, 'POST', '/v1/convai/agents/create')), metadata.describe()).toBe(true);
     const next = voiceSettingsParse({ ...account.settings.voice,
       providers: voiceWith({ tts: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts, voiceId: 'voice-new' } }).providers });
     const version = storage.getState().settingsVersion;
@@ -423,9 +454,10 @@ describe('BundledConversationSettingsSection', () => {
       ...normalizeVoiceSettingsLocalDelta({ voice: next }, account.settings) }), { version: version + 1 });
     metadata.capture('same-provider-config-published');
     await act(async () => { metadata.capture('agent-response-resolved'); created.resolve(provider.response({ agent_id: 'agent-new' })); });
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2), metadata.describe()).toEqual([
+    await waitForAlert(t('common.error'));
+    expect(nativeAlert.mock.calls.at(-1)?.slice(0, 2), metadata.describe()).toEqual([
       t('common.error'), t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
-    ]));
+    ]);
     expect(config()).toMatchObject({ agentId: '', tts: { voiceId: 'voice-new' } });
     expect(account.writes).toHaveLength(0);
     expect(account.persistedSettings.voice.providers[providerId]?.config).toMatchObject({ agentId: '', tts: { voiceId: 'voice-new' } });

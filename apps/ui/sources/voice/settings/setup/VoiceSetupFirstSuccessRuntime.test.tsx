@@ -15,7 +15,7 @@ import { pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusV1 
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { VoiceAgentTurnV1Schema } from '@happier-dev/protocol/messages/structured/voiceAgentTurnV1';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -208,10 +208,14 @@ it.each([
                     initialContext: '', textOnly: true });
                 expect(adapter.getSnapshot()).toMatchObject({ status: 'connected' });
                 expect(getVoiceSessionPresentedAttemptId()).not.toBeNull();
-                await vi.waitFor(() => expect(readStoredSessionMessages(storage.getState(), conversation.sessionId))
+                await waitForTestEvent(storage.subscribe,
+                    () => readStoredSessionMessages(storage.getState(), conversation.sessionId),
+                    rows => rows.some(row => row.localId === transcriptWrites[0]?.localId
+                        && row.realID === 'completion-message-11' && row.seq === 11));
+                expect(readStoredSessionMessages(storage.getState(), conversation.sessionId))
                     .toEqual(expect.arrayContaining([expect.objectContaining({
                         localId: transcriptWrites[0]?.localId, realID: 'completion-message-11', seq: 11,
-                    })])));
+                    })]));
                 expect(transcriptWrites).toEqual([expect.objectContaining({ messageRole: 'agent',
                     content: { t: 'plain', v: expect.objectContaining({ meta: expect.objectContaining({
                         happier: expect.objectContaining({ kind: 'voice_note.v1' }),
@@ -286,7 +290,7 @@ it.each([
         const lifecycle = source === 'durable' ? getVoiceSessionLifecycleController() : null;
         await screen?.unmount();
         await lifecycle?.dispose();
-        if (lifecycle) await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).not.toBe(lifecycle));
+        if (lifecycle) await waitForTestEvent(getVoiceAdapterRegistry().subscribe!, () => expect(getVoiceSessionLifecycleController()).not.toBe(lifecycle));
         registerVoiceAdapters(initialAdapters);
         if (canonicalAttempt) await releaseCanonicalVoiceTranscriptConversation({
             conversationSessionId: conversation.sessionId, attemptIdentity: canonicalAttempt.attemptIdentity,

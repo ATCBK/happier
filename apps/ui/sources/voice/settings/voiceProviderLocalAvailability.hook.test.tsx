@@ -8,6 +8,7 @@ import {
     flushHookEffects,
     renderHook,
     standardCleanup,
+    waitForTestEvent,
 } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
@@ -342,7 +343,8 @@ describe('useVoiceProviderLocalAvailability', () => {
             });
             await flushHookEffects({ cycles: 4, turns: 2 });
         });
-        await vi.waitFor(() => expect(hook.getCurrent().daemon?.route).toBe('relay_disabled'));
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.daemon?.route === 'relay_disabled');
+        expect(hook.getCurrent().daemon?.route).toBe('relay_disabled');
 
         await act(async () => {
             expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, target, credentials)).toBe(true);
@@ -354,6 +356,7 @@ describe('useVoiceProviderLocalAvailability', () => {
             await flushHookEffects({ cycles: 4, turns: 2 });
         });
         // Credential restoration resumes the real asynchronous Account bootstrap.
-        await vi.waitFor(() => expect(hook.getCurrent().daemon?.route).toBe('direct'));
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.daemon?.route === 'direct');
+        expect(hook.getCurrent().daemon?.route).toBe('direct');
     });
 });

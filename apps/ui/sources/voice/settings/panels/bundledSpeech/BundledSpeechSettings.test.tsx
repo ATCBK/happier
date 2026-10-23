@@ -14,7 +14,7 @@ import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } fr
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 
-import { createDeferred, createMachineFixture, flushHookEffects, renderScreen as renderAppScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, flushHookEffects, renderScreen as renderAppScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { getStorage as getActualStorage, storage } from '@/sync/domains/state/storageStore';
 import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '../voiceSettingsAccountTestHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -397,14 +397,17 @@ describe('BundledSpeechSettings', () => {
       cfgTts: VoiceLocalTtsSchema.parse({ provider: OPENAI_COMPAT_TTS_ID }), setTts: vi.fn(), voice, setVoice, popoverBoundaryRef: null, networkTimeoutMs: 15_000,
     }));
     let approveEndpoint: (() => void) | undefined;
+    const endpointApprovalPresented = createDeferred<void>();
     nativeAlert.mockImplementationOnce((_title, _message, buttons) => {
       approveEndpoint = buttons?.find(button => button.style !== 'cancel')?.onPress;
+      endpointApprovalPresented.resolve();
     });
     expect(rendered.tree.root.findAllByType(CredentialComponent)[0]?.props.machineId).toBe('machine-a');
     await act(async () => { rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.onChangeText('http://localhost:11434/v1'); });
     expect(rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.value).toBe('http://localhost:11434/v1');
     await act(async () => { rowField(rendered, 'settingsVoice.local.ttsBaseUrl').props.onBlur(); });
-    await vi.waitFor(() => expect(approveEndpoint).toBeTypeOf('function'));
+    await endpointApprovalPresented.promise;
+    expect(approveEndpoint).toBeTypeOf('function');
     if (change === 'execution machine') {
       executionMachine.machineId = 'machine-b';
       executionMachine.machineLabel = 'Machine B';
@@ -503,11 +506,15 @@ describe('BundledSpeechSettings', () => {
     expect(fetchCatalog).not.toHaveBeenCalled();
     const voiceMenu = () => rendered.tree.root.findAllByType(DropdownMenu)
       .find(row => row.props.items.some((item: { id: string }) => item.id === '__retry__'))!;
-    await vi.waitFor(() => expect(voiceMenu()).toBeDefined());
+    await waitForTestEvent(rendered.tree.subscribe, voiceMenu, menu => menu !== undefined);
+    expect(voiceMenu()).toBeDefined();
     account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
       actions: { 'settings.invoke': { enabled: true } } } }));
     await act(async () => voiceMenu().props.onSelect('__retry__'));
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    await waitForTestEvent(rendered.tree.subscribe,
+      () => rendered.tree.root.findAllByType(DropdownMenu).flatMap(row => row.props.items),
+      items => items.some((item: { id: string }) => item.id === 'en-US-Test-A'));
+    expect(fetchCatalog).toHaveBeenCalled();
     expect(rendered.tree.root.findAllByType(DropdownMenu).flatMap(row => row.props.items))
       .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'en-US-Test-A', title: 'English Test' })]));
   });
@@ -633,6 +640,7 @@ describe('BundledSpeechSettings', () => {
     });
 
     const actionResponse = createDeferred<{ patch: { model: string } }>();
+    const actionEntered = createDeferred<void>();
     const patchApplied = createDeferred<void>();
     const unsubscribe = storage.subscribe(snapshot => {
       if (readVoiceProviderSettingsConfig(snapshot.settings.voice, providerId)?.model === 'speech-2') {
@@ -641,21 +649,30 @@ describe('BundledSpeechSettings', () => {
       }
     });
     onTestFinished(unsubscribe);
-    executeSettingsAction.mockImplementationOnce(() => actionResponse.promise);
+    executeSettingsAction.mockImplementationOnce(() => {
+      actionEntered.resolve();
+      return actionResponse.promise;
+    });
     await act(async () => action.props.onPress());
-    await vi.waitFor(() => expect(action.props.loading).toBe(true));
-    await vi.waitFor(() => expect(rendered.tree.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+    await waitForTestEvent(rendered.tree.subscribe, () => action.props.loading, loading => loading === true);
+    expect(action.props.loading).toBe(true);
+    await waitForTestEvent(rendered.tree.subscribe,
+      () => rendered.tree.findByTestId('app-shell-confirmation-confirm'), button => button !== null);
+    expect(rendered.tree.findByTestId('app-shell-confirmation-confirm')).not.toBeNull();
     await rendered.tree.pressByTestIdAsync('app-shell-confirmation-confirm');
-    await vi.waitFor(() => expect(executeSettingsAction).toHaveBeenCalledOnce());
+    await actionEntered.promise;
+    expect(executeSettingsAction).toHaveBeenCalledOnce();
     await act(async () => {
       actionResponse.resolve({ patch: { model: 'speech-2' } });
     });
     await patchApplied.promise;
+    await waitForTestEvent(account.subscribe,
+      () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.model,
+      model => model === 'speech-2');
     await flushHookEffects();
-    await vi.waitFor(() => {
-      expect(action.props.loading).toBe(false);
-      expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)).toEqual({ model: 'speech-2' });
-    });
+    await waitForTestEvent(rendered.tree.subscribe, () => action.props.loading, loading => loading === false);
+    expect(action.props.loading).toBe(false);
+    expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)).toEqual({ model: 'speech-2' });
     expect(executeSettingsAction).toHaveBeenCalledWith({
       entry,
       actionId: 'refresh-model',
@@ -800,7 +817,7 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
     await typeIntoRow(rendered, 'settingsVoice.local.sttBaseUrl', ' https://speech.example/v1 ');
-    await vi.waitFor(() => expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
+    expect(setVoice).toHaveBeenCalledWith(expect.objectContaining({
       providers: {
         ...voiceSettings.providers,
         [providerId]: {
@@ -808,7 +825,7 @@ describe('BundledSpeechSettings', () => {
           config: { endpointUrl: 'https://speech.example/v1', model: 'whisper-1' },
         },
       },
-    })));
+    }));
 
     await typeIntoRow(rendered, 'settingsVoice.local.sttModel', '');
     expect(nativeAlert.mock.calls[0]?.[0]).toBe(tLoose('common.error'));
@@ -1410,8 +1427,10 @@ describe('BundledSpeechSettings', () => {
         contribution: { pluginId: 'acme.speech', localId: 'multi-source-stt' },
         credentials: { slot: { id: 'api_key', purpose: 'voice.speech.transcribe' } },
     });
-    await vi.waitFor(() => expect(rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose)
-      .toBe(expectedPurpose));
+    await waitForTestEvent(rendered.tree.subscribe,
+      () => rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose,
+      purpose => purpose === expectedPurpose);
+    expect(rendered.tree.root.findByType(CredentialComponent).props.credentialSourcePurpose).toBe(expectedPurpose);
   });
 
   it('renders only the canonical source selector for Connected Account-only speech', async () => {
@@ -1481,11 +1500,14 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    await vi.waitFor(() => expect({
+    const sourceControls = () => ({
       sourceSelectors: rendered.tree.root.findAllByType(VoiceCredentialSourceField).length,
       savedSecretEditors: rendered.tree.root.findAllByType(CredentialComponent).length,
       rawAccessReviews: rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview).length,
-    }).toEqual({ sourceSelectors: 1, savedSecretEditors: 0, rawAccessReviews: 1 }));
+    });
+    await waitForTestEvent(rendered.tree.subscribe, sourceControls,
+      controls => controls.sourceSelectors === 1 && controls.savedSecretEditors === 0 && controls.rawAccessReviews === 1);
+    expect(sourceControls()).toEqual({ sourceSelectors: 1, savedSecretEditors: 0, rawAccessReviews: 1 });
   });
 
   it('passes the exact selected SavedSecret speech grant through the canonical credential item', async () => {
@@ -1517,7 +1539,9 @@ describe('BundledSpeechSettings', () => {
           request: { kind: 'environment', keys: ['VOICE_API_KEY'] },
         }],
       });
-    await vi.waitFor(() => expect(rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview)).toHaveLength(1));
+    await waitForTestEvent(rendered.tree.subscribe,
+      () => rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview), reviews => reviews.length === 1);
+    expect(rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview)).toHaveLength(1);
     const credential = rendered.tree.root.findByType(CredentialComponent);
     const reviews = rendered.tree.root.findAllByType(VoiceRawCredentialAccessReview);
     expect(reviews).toHaveLength(1);
@@ -1532,8 +1556,13 @@ describe('BundledSpeechSettings', () => {
     const credentialRequest = createDeferred<CatalogRows>();
     const machineRequest = createDeferred<CatalogRows>();
     const accountRequest = createDeferred<CatalogRows>();
+    const firstRequestEntered = createDeferred<void>();
     let currentRequest = firstRequest;
-    fetchCatalog.mockImplementation(async () => await currentRequest.promise);
+    fetchCatalog.mockImplementation(async () => {
+      const request = currentRequest;
+      firstRequestEntered.resolve();
+      return await request.promise;
+    });
     const { createBundledLocalSttProviderSpec } = await import('./BundledSpeechSettings');
     const spec = createBundledLocalSttProviderSpec(createDefaultVoiceProviderRegistry().get(GOOGLE_GEMINI_STT_ID)!);
     const voiceSettings = voiceWithRootProviderConfig(
@@ -1556,7 +1585,8 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     });
     const rendered = await renderScreen(renderSettings());
-    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    await firstRequestEntered.promise;
+    expect(fetchCatalog).toHaveBeenCalled();
     const modelItems = () => rendered.tree.root.findAllByType(DropdownMenu)
       .find(row => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'))?.props.items;
 
@@ -1568,18 +1598,22 @@ describe('BundledSpeechSettings', () => {
     await act(async () => credentialRequest.resolve([
       { id: 'credential-model', name: 'Credential model', metadata: {} },
     ]));
-    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+    await waitForTestEvent(rendered.tree.subscribe, modelItems,
+      items => items?.some((item: { id: string }) => item.id === 'credential-model') === true);
+    expect(modelItems()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'credential-model' }),
-    ])));
+    ]));
 
     currentRequest = accountRequest;
     await act(async () => await saveCredential(GOOGLE_GEMINI_STT_ID, 'account-secret-b'));
     await act(async () => accountRequest.resolve([
       { id: 'account-model', name: 'Account model', metadata: {} },
     ]));
-    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+    await waitForTestEvent(rendered.tree.subscribe, modelItems,
+      items => items?.some((item: { id: string }) => item.id === 'account-model') === true);
+    expect(modelItems()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'account-model' }),
-    ])));
+    ]));
 
     currentRequest = machineRequest;
     await act(async () => {
@@ -1590,9 +1624,11 @@ describe('BundledSpeechSettings', () => {
     await act(async () => machineRequest.resolve([
       { id: 'machine-model', name: 'Machine model', metadata: {} },
     ]));
-    await vi.waitFor(() => expect(modelItems()).toEqual(expect.arrayContaining([
+    await waitForTestEvent(rendered.tree.subscribe, modelItems,
+      items => items?.some((item: { id: string }) => item.id === 'machine-model') === true);
+    expect(modelItems()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'machine-model' }),
-    ])));
+    ]));
     await act(async () => firstRequest.resolve([
       { id: 'stale-model', name: 'Stale model', metadata: {} },
     ]));
@@ -1621,24 +1657,22 @@ describe('BundledSpeechSettings', () => {
       popoverBoundaryRef: null,
     }));
 
-    await vi.waitFor(() => {
-      const model = rendered.tree.root.findAllByType(DropdownMenu)
-        .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
-      expect(model?.props.items).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: '__retry__' }),
-      ]));
-    });
+    const modelItems = () => rendered.tree.root.findAllByType(DropdownMenu)
+      .find(row => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'))?.props.items;
+    await waitForTestEvent(rendered.tree.subscribe, modelItems,
+      items => items?.some((item: { id: string }) => item.id === '__retry__') === true);
+    expect(modelItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: '__retry__' }),
+    ]));
     const model = rendered.tree.root.findAllByType(DropdownMenu)
       .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
     fetchCatalog.mockResolvedValue([{ id: 'retry-model', name: 'Retry model', metadata: {} }]);
     await act(async () => model?.props.onSelect('__retry__'));
 
-    await vi.waitFor(() => {
-      const refreshed = rendered.tree.root.findAllByType(DropdownMenu)
-        .find((row) => row.props.searchPlaceholder === tLoose('settingsVoice.local.googleGeminiStt.model.searchPlaceholder'));
-      expect(refreshed?.props.items).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'retry-model' }),
-      ]));
-    });
+    await waitForTestEvent(rendered.tree.subscribe, modelItems,
+      items => items?.some((item: { id: string }) => item.id === 'retry-model') === true);
+    expect(modelItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'retry-model' }),
+    ]));
   });
 });

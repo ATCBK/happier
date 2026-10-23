@@ -9,6 +9,7 @@ vi.mock('socket.io-client', async original =>
 
 import { renderScreen as renderAppScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
@@ -41,6 +42,7 @@ installDisconnectedServerSocketBoundary();
 
 const originalState = storage.getState();
 const nativeAlert = vi.spyOn(Alert, 'alert');
+let nextNativeAlert = createDeferred<Parameters<typeof Alert.alert>>();
 afterAll(() => nativeAlert.mockRestore());
 let modalHostActive = true;
 function AdmissionProviders({ children }: React.PropsWithChildren) {
@@ -53,6 +55,8 @@ beforeEach(() => {
     modalHostActive = true;
     platform.value = 'ios';
     nativeAlert.mockReset();
+    nextNativeAlert = createDeferred<Parameters<typeof Alert.alert>>();
+    nativeAlert.mockImplementation((...args) => { nextNativeAlert.resolve(args); });
     setPreferredLanguageFromSettings('en');
 });
 afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
@@ -101,7 +105,7 @@ describe('declared Voice field Action admission', () => {
             if (!picker) throw new Error('Voice field missing');
             act(() => account.replaceVoice({ ...account.settings.voice, assistantLanguage: 'fr' }));
             await act(async () => picker.props.onSelect('sage'));
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)).toMatchObject(expected));
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)).toMatchObject(expected);
             expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
         } finally { standardCleanup(); await account.dispose(); }
     });
@@ -134,13 +138,17 @@ describe('declared Voice field Action admission', () => {
             act(() => account.replaceVoice({ ...account.settings.voice, providers: { ...account.settings.voice.providers,
                 [providerId]: { schemaVersion: descriptor.schemaVersion, config: { ...current, voice: 'sage' } } } }));
             await act(async () => { custom.props.onCommit('gpt-realtime-custom'); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.model)
-                .toEqual({ kind: 'pinned', id: 'gpt-realtime-custom' }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.model,
+                value => typeof value === 'object' && value !== null && 'id' in value && value.id === 'gpt-realtime-custom');
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.model)
+                .toEqual({ kind: 'pinned', id: 'gpt-realtime-custom' });
             const instructions = screen.findAllByType(FieldValueItem).find(node => node.props.testID === 'voice-realtime-field-instructions');
             if (!instructions) throw new Error('Instructions field missing');
             await act(async () => { instructions.props.onCommit('Be concise'); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId))
-                .toMatchObject({ instructions: 'Be concise', voice: 'sage', model: { id: 'gpt-realtime-custom' } }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)?.instructions,
+                value => value === 'Be concise');
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId))
+                .toMatchObject({ instructions: 'Be concise', voice: 'sage', model: { id: 'gpt-realtime-custom' } });
         } finally { standardCleanup(); await account.dispose(); }
     });
     it.each([
@@ -157,16 +165,24 @@ describe('declared Voice field Action admission', () => {
             const slider = screen.findAllByType(Slider)[0];
             if (!slider) throw new Error('Declared Voice range missing');
             await act(async () => { slider.props.onValueChange(value); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ tts: { voiceSettings: { [key]: value } } }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.tts,
+                tts => typeof tts === 'object' && tts !== null && 'voiceSettings' in tts
+                    && typeof tts.voiceSettings === 'object' && tts.voiceSettings !== null
+                    && key in tts.voiceSettings && Reflect.get(tts.voiceSettings, key) === value);
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
+                .toMatchObject({ tts: { voiceSettings: { [key]: value } } });
             const writes = account.writes.length;
             await act(async () => { slider.props.onValueChange(offStep); });
             expect(account.writes).toHaveLength(writes);
             const reset = screen.findByTestId(`voice-realtime-field-tts-voiceSettings-${key}.default`);
             if (!reset) throw new Error('Service default control missing');
             await act(async () => { reset.props.onPress(); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ tts: { voiceSettings: { [key]: null } } }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.tts,
+                tts => typeof tts === 'object' && tts !== null && 'voiceSettings' in tts
+                    && typeof tts.voiceSettings === 'object' && tts.voiceSettings !== null
+                    && key in tts.voiceSettings && Reflect.get(tts.voiceSettings, key) === null);
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
+                .toMatchObject({ tts: { voiceSettings: { [key]: null } } });
         } finally { standardCleanup(); await account.dispose(); }
     });
     it.each([
@@ -189,7 +205,7 @@ describe('declared Voice field Action admission', () => {
                 expect(resolveVoiceWelcomeSelection(account.settings.voice.welcome)).toBe('off');
                 expect(account.writes).toEqual([]);
             } else {
-                await vi.waitFor(() => expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn'));
+                expect(resolveVoiceWelcomeSelection(account.persistedSettings.voice.welcome)).toBe('on_first_turn');
                 expect(account.persistedSettings.voice.assistantLanguage).toBe('fr');
             }
         } finally { standardCleanup(); await account.dispose(); }
@@ -204,16 +220,21 @@ describe('declared Voice field Action admission', () => {
             const terms = screen.findAllByType(FieldValueItem).find(node => node.props.testID === 'voice-realtime-field-transcription-keyterms');
             if (!terms) throw new Error('Keyterms missing');
             await act(async () => { terms.props.onCommit('Happier, daemon ,happier'); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ transcription: { keyterms: ['happier', 'daemon'] } }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.transcription,
+                value => typeof value === 'object' && value !== null && 'keyterms' in value
+                    && JSON.stringify(value.keyterms) === JSON.stringify(['happier', 'daemon']));
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
+                .toMatchObject({ transcription: { keyterms: ['happier', 'daemon'] } });
             const picker = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'voice-realtime-field-voice');
             if (!picker) throw new Error('Voice picker missing');
             await act(async () => picker.props.onSelect('__custom__'));
             const custom = screen.findAllByType(FieldValueItem).find(node => node.props.testID === 'voice-realtime-field-voice.custom');
             if (!custom) throw new Error('Custom voice missing');
             await act(async () => { custom.props.onCommit('my-cloned-voice'); });
-            await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
-                .toMatchObject({ voice: { kind: 'custom', id: 'my-cloned-voice' }, transcription: { keyterms: ['happier', 'daemon'] } }));
+            await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.voice,
+                value => typeof value === 'object' && value !== null && 'id' in value && value.id === 'my-cloned-voice');
+            expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id))
+                .toMatchObject({ voice: { kind: 'custom', id: 'my-cloned-voice' }, transcription: { keyterms: ['happier', 'daemon'] } });
         } finally { standardCleanup(); await account.dispose(); }
     });
     it.each(['approved', 'rejected', 'unavailable'] as const)('settles real provider consent without a duplicate UI writer (%s)', async consent => {
@@ -228,6 +249,12 @@ describe('declared Voice field Action admission', () => {
         // Keep the real absence diagnostic: no fabricated confirm rejection or
         // modal state. The inactive canonical host cannot approve this write.
         const unavailableErrors = consent === 'unavailable' ? vi.spyOn(console, 'error') : null;
+        const unavailableReported = createDeferred<void>();
+        const reportError = unavailableErrors?.getMockImplementation();
+        unavailableErrors?.mockImplementation((...args: unknown[]) => {
+            reportError?.(...args);
+            if (args.some(arg => typeof arg === 'string' && arg.includes('ModalManager not initialized'))) unavailableReported.resolve();
+        });
         try {
             const screen = await renderScreen(<VoiceFields paths={['resumptionEnabled']} />);
             const toggle = screen.findAllByType(Switch)[0];
@@ -236,19 +263,27 @@ describe('declared Voice field Action admission', () => {
             await act(async () => { eventResult = toggle.props.onValueChange(true); });
             expect(eventResult).toBeUndefined();
             if (consent === 'unavailable') {
-                await vi.waitFor(() => expect(unavailableErrors).toHaveBeenCalledWith(expect.stringContaining('ModalManager not initialized')));
+                await unavailableReported.promise;
+                expect(unavailableErrors).toHaveBeenCalledWith(expect.stringContaining('ModalManager not initialized'));
                 // After this actual host refusal, the remaining path consists
                 // of promise continuations and the synchronous failure alert.
                 await flushHookEffects();
             } else {
-                await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[2]?.some(button => button.style === 'cancel')).toBe(true));
+                await nextNativeAlert.promise;
+                expect(nativeAlert.mock.calls.at(-1)?.[2]?.some(button => button.style === 'cancel')).toBe(true);
                 const buttons = nativeAlert.mock.calls.at(-1)?.[2];
+                nextNativeAlert = createDeferred<Parameters<typeof Alert.alert>>();
                 await act(async () => buttons?.find(button => (button.style === 'cancel') === (consent === 'rejected'))?.onPress?.());
             }
-            if (consent === 'approved') await vi.waitFor(() => expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled).toBe(true));
+            if (consent === 'approved') {
+                await waitForTestEvent(account.subscribe, () => readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled,
+                    value => value === true);
+                expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled).toBe(true);
+            }
             else {
                 if (consent === 'rejected') {
-                    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[1]).toBe(tLoose('settingsVoice.realtimeProviders.operationFailed')));
+                    await nextNativeAlert.promise;
+                    expect(nativeAlert.mock.calls.at(-1)?.[1]).toBe(tLoose('settingsVoice.realtimeProviders.operationFailed'));
                 }
                 expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, id)?.resumptionEnabled).toBe(false);
                 expect(account.writes).toEqual([]);

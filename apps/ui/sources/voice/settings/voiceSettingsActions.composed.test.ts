@@ -7,6 +7,7 @@ import { AccountSettingsStoredContentEnvelopeSchema } from '@happier-dev/protoco
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SpeechOptions } from 'expo-speech';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
+import * as backgroundTasks from '@/utils/system/fireAndForget';
 
 // Install the canonical transport boundary before the real Sync/Action graph.
 vi.mock('socket.io-client', async original =>
@@ -20,6 +21,19 @@ afterAll(() => speech.disposeAudioSession());
 const { createVoiceSettingsAccountTestHarness } = await import('./panels/voiceSettingsAccountTestHarness');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+
+async function pressTtsSample(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    // Observe the real dispatched operation, preserving its original error sink.
+    const dispatched = vi.spyOn(backgroundTasks, 'fireAndForget');
+    try {
+        await act(async () => {
+            screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress();
+            const operation = dispatched.mock.calls.find(([, options]) => options?.tag === 'LocalVoiceTtsGroup.testTts')?.[0];
+            expect(operation).toBeInstanceOf(Promise);
+            await operation;
+        });
+    } finally { dispatched.mockRestore(); }
+}
 
 describe('Voice declarations through the default Settings Action and Account persistence', () => {
     it('does not prime the browser audio graph for a refused TTS sample', async () => {
@@ -47,8 +61,8 @@ describe('Voice declarations through the default Settings Action and Account per
         const screen = await renderScreen(React.createElement(LocalVoiceTtsGroup, { cfgTts: cfg.tts,
             voice: account.settings.voice, setVoice: () => {}, setTts: () => {}, networkTimeoutMs: cfg.networkTimeoutMs }));
         onTestFinished(screen.unmount);
-        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
-        await vi.waitFor(() => expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false));
+        await pressTtsSample(screen);
+        expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false);
         expect(createContext).not.toHaveBeenCalled();
         expect(start).not.toHaveBeenCalled();
     });
@@ -64,8 +78,8 @@ describe('Voice declarations through the default Settings Action and Account per
         const screen = await renderScreen(React.createElement(LocalVoiceTtsGroup, { cfgTts: cfg.tts,
             voice: account.settings.voice, setVoice: () => {}, setTts: () => {}, networkTimeoutMs: cfg.networkTimeoutMs }));
         onTestFinished(screen.unmount);
-        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
-        await vi.waitFor(() => expect(screen.findByTestId('settings.voice.local.testTts')?.props.disabled).toBe(false));
+        await pressTtsSample(screen);
+        expect(screen.findByTestId('settings.voice.local.testTts')?.props.disabled).toBe(false);
         expect(speech.expoSpeechSpeak).not.toHaveBeenCalled();
         expect(speech.nativeSynthesize).not.toHaveBeenCalled();
         expect(speech.encodedAudio.start).not.toHaveBeenCalled();
@@ -76,9 +90,9 @@ describe('Voice declarations through the default Settings Action and Account per
         expect(account.persistedSettings.voice.privacy.recentMessagesCount).toBe(9);
         account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1, actions: {} } }));
         speech.expoSpeechSpeak.mockImplementation((_text, options) => options.onDone?.());
-        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
-        await vi.waitFor(() => expect(speech.expoSpeechSpeak).toHaveBeenCalledOnce());
-        await vi.waitFor(() => expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false));
+        await pressTtsSample(screen);
+        expect(speech.expoSpeechSpeak).toHaveBeenCalledOnce();
+        expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false);
     });
     it('lists and retries the selected local-neural voice catalog for Agents without starting playback', async () => {
         const { filesystem } = speech.reset();

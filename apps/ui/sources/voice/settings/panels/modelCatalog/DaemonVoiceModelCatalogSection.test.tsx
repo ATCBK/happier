@@ -10,7 +10,7 @@ import {
     DaemonVoiceInferenceModelsRemoveResponseSchema, DaemonVoiceInferenceModelLicenseAcceptResponseSchema,
     DaemonVoiceInferenceModelLicenseAcceptRequestSchema, type DaemonVoiceInferenceModelStatus,
 } from '@happier-dev/protocol/daemon/voiceInference';
-import { pressTestInstanceAsync, renderScreen, createDeferred } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { answerVoiceModelCatalogRpcRequest } from '@/dev/testkit/harness/voiceModelCatalogRpcBoundary';
@@ -120,6 +120,7 @@ describe('DaemonVoiceModelCatalogSection', () => {
             approvalWaivedSurfaces: { 'settings.set': ['ui'] } } });
         storage.setState({ settings });
         let persisted = settings;
+        const defaultSelected = createDeferred<void>();
         const http = createAccountSettingsHttpBoundary({ serverUrl: 'https://provider-settings-account.test',
             initialAccounts: [{ accountId: scope.accountId, snapshot: { version: storage.getState().settingsVersion!,
                 content: { t: 'plain', v: settings } } }] });
@@ -131,6 +132,9 @@ describe('DaemonVoiceModelCatalogSection', () => {
                 const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
                 if (!mutation.content || mutation.content.t !== 'plain') throw new Error('Expected Plain Account Settings');
                 persisted = settingsParse(mutation.content.v);
+                if (parseLocalVoiceSttSettings(readLocalConversationVoiceSettings(persisted.voice).stt).localNeural.assetId === packId) {
+                    defaultSelected.resolve();
+                }
             }
             return { status: response.status, body };
         } });
@@ -141,7 +145,8 @@ describe('DaemonVoiceModelCatalogSection', () => {
             return <VoiceSpeechModelsSection voice={current} setVoice={next => { pendingEdit = applyEdit(current, next); }} />;
         }
         const screen = await renderScreen(<MountedSection />);
-        await vi.waitFor(() => expect(modelRows(screen.tree).some(row => row.props.testID === `voice-model-row-${packId}`)).toBe(true));
+        await waitForTestEvent(screen.subscribe, () => modelRows(screen.tree), rows => rows.some(row => row.props.testID === `voice-model-row-${packId}`));
+        expect(modelRows(screen.tree).some(row => row.props.testID === `voice-model-row-${packId}`)).toBe(true);
         expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
             surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId,
         })).toMatchObject({ ok: true });
@@ -157,9 +162,8 @@ describe('DaemonVoiceModelCatalogSection', () => {
         await act(async () => { storage.setState({ settings: allowed }); });
         http.replaceAccountSettings(scope.accountId, { version: storage.getState().settingsVersion!, content: { t: 'plain', v: allowed } });
         await act(async () => { await row.props.onPress(); });
-        await vi.waitFor(() => expect(parseLocalVoiceSttSettings(
-            readLocalConversationVoiceSettings(persisted.voice).stt,
-        ).localNeural.assetId).toBe(packId));
+        await defaultSelected.promise;
+        expect(parseLocalVoiceSttSettings(readLocalConversationVoiceSettings(persisted.voice).stt).localNeural.assetId).toBe(packId);
     });
 
     it('shows a loading status row before the daemon status resolves', async () => {
@@ -170,19 +174,22 @@ describe('DaemonVoiceModelCatalogSection', () => {
         expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).toBe('loading');
         expect(modelRows(tree)).toHaveLength(0);
         await act(async () => pending.resolve(DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [] })));
-        await vi.waitFor(() => expect(tree.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: 'voice-model-catalog-status' }), rows => rows.length === 0);
+        expect(tree.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0);
     });
 
     it('leaves loading and renders unavailable when the selected daemon does not serve speech RPCs', async () => {
         respond = () => { throw createRpcCallError({ error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }); };
         const tree = await renderSection();
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).toBe('unavailable'));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: 'voice-model-catalog-status' })[0]?.props.kind, kind => kind === 'unavailable');
+        expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).toBe('unavailable');
         expect(modelRows(tree)).toHaveLength(0);
 
         catalogReply([]);
         // Reopening after an owner-managed daemon reload uses the normal status path.
         const recovered = await renderSection();
-        await vi.waitFor(() => expect(recovered.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0));
+        await waitForTestEvent(recovered.subscribe, () => recovered.root.findAllByProps({ testID: 'voice-model-catalog-status' }), rows => rows.length === 0);
+        expect(recovered.root.findAllByProps({ testID: 'voice-model-catalog-status' })).toHaveLength(0);
         expect(modelRows(recovered).length).toBeGreaterThan(0);
     });
 
@@ -201,15 +208,23 @@ describe('DaemonVoiceModelCatalogSection', () => {
                 : DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
         }
         const tree = await renderSection();
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).not.toBe('loading'));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: 'voice-model-catalog-status' })[0]?.props.kind, kind => kind !== undefined && kind !== 'loading');
+        expect(tree.root.findByProps({ testID: 'voice-model-catalog-status' }).props.kind).not.toBe('loading');
         const line = tree.root.findByProps({ testID: 'voice-model-catalog-status' });
         expect(line.props.title).toBe(message);
         expect(modelRows(tree)).toHaveLength(0);
         expect(requests.some(request => request.method.endsWith('.install'))).toBe(false);
         if (!retryable) { expect(line.props.action).toBeUndefined(); return; }
         const before = requests.filter(request => request.method.endsWith('.list')).length;
+        const retried = createDeferred<void>();
+        const previousReply = respond;
+        respond = (request, context) => {
+            if (request.method.endsWith('.list')) retried.resolve();
+            return previousReply(request, context);
+        };
         await act(async () => line.props.action.onPress());
-        await vi.waitFor(() => expect(requests.filter(request => request.method.endsWith('.list')).length).toBeGreaterThan(before));
+        await retried.promise;
+        expect(requests.filter(request => request.method.endsWith('.list')).length).toBeGreaterThan(before);
     });
 
     it('can render from an already-created catalog controller without opening a second status request', async () => {
@@ -221,7 +236,8 @@ describe('DaemonVoiceModelCatalogSection', () => {
                 onSelectDefault={() => undefined} catalogController={controller} />;
         }
         const { tree } = await renderScreen(<SharedOwner />);
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${packId}` }).props.detail).toBe('Ready'));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${packId}` })[0]?.props.detail, detail => detail === 'Ready');
+        expect(tree.root.findByProps({ testID: `voice-model-row-${packId}` }).props.detail).toBe('Ready');
         expect(requests.filter(request => request.method.endsWith('.list'))).toHaveLength(1);
         expect(requests.filter(request => request.method.endsWith('.status'))).toHaveLength(1);
     });
@@ -232,7 +248,8 @@ describe('DaemonVoiceModelCatalogSection', () => {
         catalogReply([status(ttsDefault), status(unavailable.packId)]);
         const onSelectDefault = vi.fn();
         const tree = await renderSection({ selectedTtsPackId: ttsDefault, onSelectDefault });
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${unavailable.packId}` })).toBeTruthy());
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${unavailable.packId}` }), rows => rows.length > 0);
+        expect(tree.root.findByProps({ testID: `voice-model-row-${unavailable.packId}` })).toBeTruthy();
         const row = tree.root.findByProps({ testID: `voice-model-row-${unavailable.packId}` });
         expect(row.props.onPress ?? row.props.onClick).toBeUndefined();
         expect(onSelectDefault).not.toHaveBeenCalled();
@@ -244,7 +261,8 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const entry = listModelPackCatalogEntries('stt_sherpa').find(entry => entry.runtimeFamily === 'sherpa_parakeet_offline')!;
         catalogReply([status(entry.packId, { runtimeSupported: false })]);
         const tree = await renderSection({ selectedSttPackId: entry.packId });
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` })).toBeTruthy());
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${entry.packId}` }), rows => rows.length > 0);
+        expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` })).toBeTruthy();
         expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.onPress).toBeUndefined();
         expect(tree.root.findByProps({ testID: `voice-model-remove-${entry.packId}` })).toBeTruthy();
     });
@@ -262,20 +280,29 @@ describe('DaemonVoiceModelCatalogSection', () => {
             installState: 'not_installed', licenseReview: review });
         catalogReply([model]);
         const defaultReply = respond;
+        const installRequested = createDeferred<void>();
         respond = (request, context) => {
             if (request.method.endsWith('.license.accept')) return DaemonVoiceInferenceModelLicenseAcceptResponseSchema.parse({ ok: true, model });
-            if (request.method.endsWith('.install')) return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: true, model: { ...model, installState: 'installed' } });
+            if (request.method.endsWith('.install')) {
+                installRequested.resolve();
+                return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: true, model: { ...model, installState: 'installed' } });
+            }
             return defaultReply(request, context);
         };
         const tree = await renderSection();
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${packId}` }).props.onPress).toBeTypeOf('function'));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${packId}` })[0]?.props.onPress, onPress => typeof onPress === 'function');
+        expect(tree.root.findByProps({ testID: `voice-model-row-${packId}` }).props.onPress).toBeTypeOf('function');
+        const confirmationOpened = createDeferred<void>();
+        nativeAlert.mockImplementationOnce(() => confirmationOpened.resolve());
         await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-row-${packId}` }));
-        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
+        await confirmationOpened.promise;
+        expect(nativeAlert).toHaveBeenCalledOnce();
         expect(nativeAlert).toHaveBeenCalledWith(review.licenseTitle, review.licenseText,
             expect.arrayContaining([expect.objectContaining({ style: 'cancel' }), expect.objectContaining({ style: 'default', text: expect.any(String) })]),
             { cancelable: false });
         await act(async () => chooseNativeConfirmation(true));
-        await vi.waitFor(() => expect(requests.some(request => request.method.endsWith('.install'))).toBe(true));
+        await installRequested.promise;
+        expect(requests.some(request => request.method.endsWith('.install'))).toBe(true);
         const accepted = requests.find(request => request.method.endsWith('.license.accept'))!;
         expect(DaemonVoiceInferenceModelLicenseAcceptRequestSchema.parse(accepted.params)).toEqual({
             qualifiedPackId: packId, pluginId: review.pluginId, packId: review.packId, pluginVersion: review.pluginVersion,
@@ -289,13 +316,26 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const packId = getDefaultModelPackId('stt_sherpa')!;
         catalogReply([status(packId)]);
         const tree = await renderSection({ selectedSttPackId: packId });
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-remove-${packId}` })).toBeTruthy());
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-remove-${packId}` }), rows => rows.length > 0);
+        expect(tree.root.findByProps({ testID: `voice-model-remove-${packId}` })).toBeTruthy();
+        const confirmationOpened = createDeferred<void>();
+        nativeAlert.mockImplementationOnce(() => confirmationOpened.resolve());
+        const removeRequested = createDeferred<void>();
+        const previousReply = respond;
+        respond = (request, context) => {
+            if (request.method.endsWith('.remove')) removeRequested.resolve();
+            return previousReply(request, context);
+        };
         await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-remove-${packId}` }));
-        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
+        await confirmationOpened.promise;
+        expect(nativeAlert).toHaveBeenCalledOnce();
         expect(nativeAlert).toHaveBeenCalledWith(expect.any(String), expect.any(String),
             expect.arrayContaining([expect.objectContaining({ style: 'destructive' })]), { cancelable: false });
         await act(async () => chooseNativeConfirmation(accepted));
-        if (accepted) await vi.waitFor(() => expect(requests.filter(request => request.method.endsWith('.remove'))).toHaveLength(1));
+        if (accepted) {
+            await removeRequested.promise;
+            expect(requests.filter(request => request.method.endsWith('.remove'))).toHaveLength(1);
+        }
         expect(requests.filter(request => request.method.endsWith('.remove')).map(request => request.params)).toEqual(accepted ? [{ packId }] : []);
     });
 
@@ -304,9 +344,13 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const ttsPack = getDefaultModelPackId('tts_sherpa')!;
         catalogReply([status(sttPack), status(ttsPack)]);
         const tree = await renderSection();
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-remove-${sttPack}` })).toBeTruthy());
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-remove-${sttPack}` }), rows => rows.length > 0);
+        expect(tree.root.findByProps({ testID: `voice-model-remove-${sttPack}` })).toBeTruthy();
+        const confirmationOpened = createDeferred<void>();
+        nativeAlert.mockImplementationOnce(() => confirmationOpened.resolve());
         await act(async () => { void tree.root.findByProps({ testID: `voice-model-remove-${sttPack}` }).props.onPress(); });
-        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
+        await confirmationOpened.promise;
+        expect(nativeAlert).toHaveBeenCalledOnce();
         const row = tree.root.findByProps({ testID: `voice-model-row-${ttsPack}` });
         const remove = tree.root.findByProps({ testID: `voice-model-remove-${ttsPack}` });
         expect(row.props.onPress ?? row.props.onClick).toBeUndefined();

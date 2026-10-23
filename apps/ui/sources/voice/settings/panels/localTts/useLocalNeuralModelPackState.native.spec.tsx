@@ -195,12 +195,15 @@ describe('useLocalNeuralModelPackState (native)', () => {
     filesystem.files.set(`${filesystem.root}/${input.packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
     filesystem.files.set(`${filesystem.root}/${input.packId}/model.bin`, new Uint8Array([1]));
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network_offline'); }));
+    const alerted = createDeferred<void>();
+    alert.mockImplementationOnce(() => alerted.resolve());
     const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: {
       ...input, role,
     } });
     expect(hook.getCurrent().modelStatus).toBe('ready');
     await act(async () => { hook.getCurrent().checkForUpdates(); });
-    await vi.waitFor(() => expect(alert).toHaveBeenCalled());
+    await alerted.promise;
+    expect(alert).toHaveBeenCalled();
     expect(hook.getCurrent().modelStatus).toBe('ready');
     expect(hook.getCurrent().installed).toBe(true);
   });

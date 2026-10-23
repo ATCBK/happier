@@ -4,7 +4,7 @@ import 'fake-indexeddb/auto';
 import { PluginContributesV2Schema, createVoiceProviderRecipientContractFromCredentialsV1 } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen, waitForTestEvent } from '@/dev/testkit';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
@@ -44,11 +44,20 @@ vi.mock('socket.io-client', async (importOriginal) => (
 installDisconnectedServerSocketBoundary();
 beforeEach(async () => {
   nativeAlert.mockClear();
+  nativeAlert.mockImplementation(() => { for (const notify of nativeAlertListeners) notify(); });
   account = await createVoiceSettingsAccountTestHarness(settingsDefaults);
   onTestFinished(account.dispose);
 });
 
 const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native').Alert.alert>());
+const nativeAlertListeners = new Set<() => void>();
+async function waitForNativeAlert(title: string) {
+  await waitForTestEvent(notify => {
+    nativeAlertListeners.add(notify);
+    return () => { nativeAlertListeners.delete(notify); };
+  }, () => nativeAlert.mock.calls.at(-1)?.[0], value => value === title);
+  expect(nativeAlert.mock.calls.at(-1)?.[0]).toBe(title);
+}
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
   { platformOS: 'ios' }, { Alert: { alert: nativeAlert },
     useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }) },
@@ -249,28 +258,28 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     const enter = credential.findAll(node => node.props.title === t('settingsVoice.externalCredentials.apiKeyTitle')
       && typeof node.props.onPress === 'function')[0]!;
     await act(async () => enter.props.onPress());
-    await vi.waitFor(() => expect(screen.findHostByTestId('web-prompt-input')).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findHostByTestId('web-prompt-input')).not.toBeNull());
     act(() => screen.changeTextByTestId('web-prompt-input', 'test-only-recipient-key'));
     await screen.pressByTestIdAsync('web-prompt-confirm');
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
-      .toBe(t('settingsVoice.local.voiceCredential.plainStorageTitle')));
+    await waitForNativeAlert(t('settingsVoice.local.voiceCredential.plainStorageTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
-      .toBe(t('settingsVoice.externalCredentials.recipientApprovalTitle')));
+    await waitForNativeAlert(t('settingsVoice.externalCredentials.recipientApprovalTitle'));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     // Plain-storage and recipient consent precede the shared resource Action's
     // own present-user confirmation. It must still have no effect before that tap.
     const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
-      .toBe(getActionSpec('secrets.shared.promote').title));
+    await waitForNativeAlert(getActionSpec('secrets.shared.promote').title);
     expect(account.resources).toHaveLength(0);
     expect(account.promotions).toHaveLength(0);
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
-    await vi.waitFor(() => expect(account.resources, JSON.stringify({
+    await waitForTestEvent(account.subscribe, () => account.resources.length, count => count === 1);
+    expect(account.resources, JSON.stringify({
       alerts: nativeAlert.mock.calls.map(([title, message]) => ({ title, message })),
       routes: account.request.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
-    })).toHaveLength(1));
-    await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount')));
+    })).toHaveLength(1);
+    await waitForTestEvent(screen.subscribe, screen.getTextContent,
+      text => text.includes(t('settingsVoice.local.voiceCredential.setOnAccount')));
+    expect(screen.getTextContent()).toContain(t('settingsVoice.local.voiceCredential.setOnAccount'));
     expect(account.promotions).toHaveLength(1);
     const retainedEntry = account.resources[0]!.entry;
     if (!('ref' in retainedEntry)) throw new Error('Expected acknowledged SavedSecret Resource');

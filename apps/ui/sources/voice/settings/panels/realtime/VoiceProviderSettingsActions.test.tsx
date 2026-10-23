@@ -1,14 +1,15 @@
 import * as React from 'react';
 import { Alert } from 'react-native';
 import 'fake-indexeddb/auto';
-import { createDeferred, flushHookEffects } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderScreen, waitForTestEvent } from '@/dev/testkit';
+import * as gestureDispatch from '@/utils/system/fireAndForget';
 import { ModalProvider } from '@/modal';
 import { log } from '@/log';
 import { CustomModal } from '@/modal/components/CustomModal';
 import { t, setPreferredLanguageFromSettings } from '@/text';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { getSavedSecretCatalogSnapshot, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { getSavedSecretCatalogSnapshot, resolveSavedSecretReference, subscribeSavedSecretCatalogSnapshots } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -49,13 +50,22 @@ async function replaceProviderRegistration() {
   registration = provider.registration;
 }
 const humanConfirmations: Array<() => void> = [];
+const gestureObservation = vi.spyOn(gestureDispatch, 'fireAndForget');
+function mountedOperation() {
+  const call = gestureObservation.mock.calls.filter(([, options]) => options?.tag?.startsWith('VoiceProviderSettingsActions.')).at(-1);
+  if (!call) throw new Error('Expected the real mounted provider operation promise');
+  return call[0];
+}
+async function settleMountedOperation() {
+  await mountedOperation();
+}
 async function waitForConfirmation(count: number) {
-  await vi.waitFor(() => {
-    const control = modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-confirmation-confirm').at(-1);
-    expect(control).toBeTruthy();
-    if (humanConfirmations.length < count) humanConfirmations.push(control!.props.onPress);
-    expect(humanConfirmations).toHaveLength(count);
-  });
+  await waitForTestEvent(modalTree.subscribe, () => modalTree.root.findAll(node => typeof node.type === 'string'
+    && node.props.testID === 'app-shell-confirmation-confirm').at(-1), control => Boolean(control));
+  const control = modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-confirmation-confirm').at(-1);
+  expect(control).toBeTruthy();
+  if (humanConfirmations.length < count) humanConfirmations.push(control!.props.onPress);
+  expect(humanConfirmations).toHaveLength(count);
 }
 function hasConfirmation() {
   return modalTree.root.findAllByType(CustomModal).some(node => node.props.visible === true
@@ -71,7 +81,7 @@ async function saveCredential() {
   }));
   await refreshSavedSecretCatalog(accountFixture.scope);
   // Admit the operation only after the real material catalog is current.
-  await vi.waitFor(() => {
+  await waitForTestEvent(subscribeSavedSecretCatalogSnapshots, () => {
     expect(getSavedSecretCatalogSnapshot(accountFixture.scope)).toMatchObject({
       status: 'ready', stale: false, legacyImport: { status: 'complete' },
     });
@@ -122,10 +132,17 @@ vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
-function mountActionView(element: React.ReactElement) {
-  const tree = renderer.create(element);
-  onTestFinished(async () => { await act(async () => { tree.unmount(); }); });
-  return tree;
+const actionScreens = new WeakMap<renderer.ReactTestRenderer, Awaited<ReturnType<typeof renderScreen>>>();
+async function mountActionView(element: React.ReactElement) {
+  const screen = await renderScreen(element);
+  onTestFinished(screen.unmount);
+  actionScreens.set(screen.tree, screen);
+  return screen.tree;
+}
+async function updateActionView(tree: renderer.ReactTestRenderer, element: React.ReactElement) {
+  const screen = actionScreens.get(tree);
+  if (!screen) throw new Error('Expected mounted Action screen');
+  await screen.update(element);
 }
 
 const PROVIDER_ID = vi.hoisted(() => 'happier.voice.elevenlabs/realtime-elevenlabs');
@@ -181,11 +198,11 @@ describe('VoiceProviderSettingsActions', () => {
     const render = (agentId: string) => <VoiceProviderSettingsActions providerId={PROVIDER_ID} owner={owner}
       actions={actions} config={{ ...state.config, agentId }} agentAction={agentAction}
       placement={{ kind: 'afterField', fieldId: 'agentId' }} />;
-    await act(async () => { tree = mountActionView(render('')); });
+    await act(async () => { tree = await mountActionView(render('')); });
     const buttons = () => [...new Set(tree.root.findAll((node) => typeof node.props.testID === 'string'
       && node.props.testID.startsWith('voice-settings-action-')).map((node) => node.props.testID))];
     expect(buttons()).toEqual(['voice-settings-action-create-agent']);
-    await act(async () => { tree.update(render('existing-agent')); });
+    await act(async () => { await updateActionView(tree, render('existing-agent')); });
     expect(buttons()).toEqual(['voice-settings-action-update-agent']);
     await act(async () => { tree.unmount(); });
   });
@@ -234,6 +251,7 @@ describe('VoiceProviderSettingsActions', () => {
     state.advanceDuringPreparation = false;
     state.selectedProviderId = PROVIDER_ID;
     humanConfirmations.length = 0;
+    gestureObservation.mockClear();
     nativeAlert.mockReset();
     nativeAlert.mockImplementation((_title, _body, buttons) => { buttons?.find(button => button.style !== 'cancel')?.onPress?.(); });
     log.clear();
@@ -242,7 +260,7 @@ describe('VoiceProviderSettingsActions', () => {
     await provider.register();
     registration = provider.registration;
     setPreferredLanguageFromSettings('en');
-    await act(async () => { modalTree = renderer.create(<ModalProvider><></></ModalProvider>); });
+    modalTree = (await renderScreen(<ModalProvider><></></ModalProvider>)).tree;
     onTestFinished(async () => { await act(async () => modalTree.unmount()); await provider.dispose(); });
   });
 
@@ -256,12 +274,12 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => humanConfirmations[0]!());
     expect(await pending).toEqual({ status: 'completed' });
     expect(accountFixture.persistedSettings.voice.providers[PROVIDER_ID]?.config).toMatchObject({ agentId: 'agent_created' });
-    await vi.waitFor(() => expect(state.config.agentId, JSON.stringify({
+    expect(state.config.agentId, JSON.stringify({
       persistedConfig: accountFixture.persistedSettings.voice.providers[PROVIDER_ID]?.config,
       canonicalConfig: accountFixture.settings.voiceSettingsV1.providers[PROVIDER_ID]?.config,
       runtimeConfig: state.config,
       mutationAttempts: state.mutationAttempts,
-    })).toBe('agent_created'));
+    })).toBe('agent_created');
   });
 
   it('refuses a mounted contributed operation before provider confirmation or effects while adjacent settings writes remain allowed', async () => {
@@ -270,7 +288,7 @@ describe('VoiceProviderSettingsActions', () => {
     } }));
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = mountActionView(<VoiceProviderSettingsActions providerId={PROVIDER_ID}
+    await act(async () => { tree = await mountActionView(<VoiceProviderSettingsActions providerId={PROVIDER_ID}
       owner={owner} actions={[action]} placement={{ kind: 'afterField', fieldId: 'agentId' }} />); });
     const before = accountFixture.writes.length;
     await act(async () => { tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress(); });
@@ -286,7 +304,8 @@ describe('VoiceProviderSettingsActions', () => {
     await flushHookEffects();
     await act(async () => { tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress(); });
     await waitForConfirmation(1);
-    await act(async () => { humanConfirmations[0]!(); await vi.waitFor(() => expect(state.mutationApplied).toBe(true)); });
+    await act(async () => { humanConfirmations[0]!(); await settleMountedOperation(); });
+    expect(state.mutationApplied).toBe(true);
   });
 
   it('leaves the provider and settings untouched when the human declines an agent operation', async () => {
@@ -357,7 +376,7 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions {...props} />);
+      tree = await mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -366,12 +385,13 @@ describe('VoiceProviderSettingsActions', () => {
 
     await act(async () => replaceProviderRegistration());
     await act(async () => {
-      tree.update(<VoiceProviderSettingsActions {...props} />);
+      await updateActionView(tree, <VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
-      await vi.waitFor(() => expect(tree.root.findByProps({
+      await settleMountedOperation();
+      expect(tree.root.findByProps({
         testID: 'voice-settings-action-create-agent',
-      }).props.loading).toBe(false));
+      }).props.loading).toBe(false);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -383,7 +403,8 @@ describe('VoiceProviderSettingsActions', () => {
     expect(provider.fetch).not.toHaveBeenCalled();
     await act(async () => {
       humanConfirmations[1]!();
-      await vi.waitFor(() => expect(state.config.agentId).toBe('agent_created'));
+      await settleMountedOperation();
+      expect(state.config.agentId).toBe('agent_created');
     });
     await act(async () => {
       tree.unmount();
@@ -399,7 +420,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -413,7 +434,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[conditionalUpdateAction]}
@@ -428,7 +449,7 @@ describe('VoiceProviderSettingsActions', () => {
 
     const configured = { ...state.config, agentId: 'agent-existing' };
     await act(async () => {
-      tree.update(<VoiceProviderSettingsActions
+      await updateActionView(tree, <VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[conditionalUpdateAction]}
@@ -455,7 +476,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -479,7 +500,8 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
+      await settleMountedOperation();
+      expect(state.mutationApplied).toBe(true);
     });
     const created = provider.fetch.mock.calls.find(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST');
     expect(await providerBody(created?.[1])).toMatchObject({ conversation_config: expect.any(Object) });
@@ -514,7 +536,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -527,12 +549,13 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(state.mutationApplied, JSON.stringify({
+      await settleMountedOperation();
+      expect(state.mutationApplied, JSON.stringify({
         settingsVersion: state.settingsVersion, mutationAttempts: state.mutationAttempts,
         requests: provider.fetch.mock.calls.map(([input]) => providerUrl(input).pathname),
         failures: log.getLogs().filter(line => line.includes('voiceRuntimeFailure')),
         alerts: nativeAlert.mock.calls.map(([title, body]) => ({ title, body })),
-      })).toBe(true));
+      })).toBe(true);
     });
 
     const created = provider.fetch.mock.calls.find(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST');
@@ -549,7 +572,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -562,7 +585,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
+      await settleMountedOperation();
+      expect(state.mutationApplied).toBe(true);
     });
     expect(state.mutationAttempts).toBe(2);
     expect(state.config.agentId).toBe('agent_created');
@@ -574,7 +598,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -587,7 +611,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');
@@ -604,7 +629,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -619,7 +644,8 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => {
       humanConfirmations[0]!();
     });
-    await vi.waitFor(() => expect(nativeAlert.mock.calls.map(call => call.slice(0, 2)), JSON.stringify({
+    await act(async () => { await settleMountedOperation(); });
+    expect(nativeAlert.mock.calls.map(call => call.slice(0, 2)), JSON.stringify({
       mutationAttempts: state.mutationAttempts,
       providerRequests: provider.fetch.mock.calls.map(([input, init]) => `${init?.method ?? 'GET'} ${providerUrl(input).pathname}`),
       settingsRequests: accountFixture.request.mock.calls.filter(([input]) => providerUrl(input).pathname === '/v2/account/settings')
@@ -628,7 +654,7 @@ describe('VoiceProviderSettingsActions', () => {
     })).toContainEqual([
       t('common.error'),
       t('settingsProviders.errors.mutationOutcomeUnknownDescription'),
-    ]));
+    ]);
 
     expect(state.mutationApplied).toBe(false);
     expect(state.config.agentId).toBe('');
@@ -650,7 +676,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -664,7 +690,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
 
     expect(log.getLogs().filter(message => message.startsWith('[VoiceProviderSettingsActions]'))).toHaveLength(1);
@@ -746,7 +773,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[conditionalUpdateAction]}
@@ -760,7 +787,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
 
     expect(log.getLogs()).toContain(
@@ -794,7 +822,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -808,7 +836,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
 
     expect(state.mutationApplied).toBe(false);
@@ -836,7 +865,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -850,12 +879,14 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => {
       humanConfirmations[0]!();
     });
-    await vi.waitFor(() => expect(modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-question-cancel')).toHaveLength(1));
+    await waitForTestEvent(modalTree.subscribe, () => modalTree.root.findAll(node => typeof node.type === 'string'
+      && node.props.testID === 'app-shell-question-cancel'), controls => controls.length === 1);
+    expect(modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-question-cancel')).toHaveLength(1);
     await act(async () => {
       modalTree.root.findAll(node => typeof node.type === 'string' && node.props.testID === 'app-shell-question-cancel')[0]!.props.onPress();
     });
-    await flushHookEffects();
-    await vi.waitFor(() => expect(tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.loading).toBe(false));
+    await act(async () => { await settleMountedOperation(); });
+    expect(tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.loading).toBe(false);
     expect(state.mutationApplied).toBe(false);
     expect(nativeAlert).not.toHaveBeenCalled();
   });
@@ -865,7 +896,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -874,7 +905,8 @@ describe('VoiceProviderSettingsActions', () => {
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
     expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
@@ -892,7 +924,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -908,7 +940,8 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => replaceProviderRegistration());
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+      await settleMountedOperation();
+      expect(nativeAlert).toHaveBeenCalled();
     });
     expect(provider.fetch).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
@@ -926,7 +959,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -940,7 +973,8 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => { state.selectedProviderId = 'happier.voice.openai/realtime-openai'; });
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(log.getLogs().length).toBeGreaterThan(0));
+      await settleMountedOperation();
+      expect(log.getLogs().length).toBeGreaterThan(0);
     });
     expect(nativeAlert).not.toHaveBeenCalled();
     expect(state.mutationApplied).toBe(false);
@@ -960,7 +994,7 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions {...props} />);
+      tree = await mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -969,7 +1003,7 @@ describe('VoiceProviderSettingsActions', () => {
 
     await act(async () => replaceProviderRegistration());
     await act(async () => {
-      tree.update(<VoiceProviderSettingsActions {...props} />);
+      await updateActionView(tree, <VoiceProviderSettingsActions {...props} />);
     });
     await flushHookEffects({ cycles: 1, turns: 4, frames: 1 });
     expect(hasConfirmation()).toBe(false);
@@ -977,9 +1011,10 @@ describe('VoiceProviderSettingsActions', () => {
     expect(state.mutationApplied).toBe(false);
 
     await act(async () => {
-      await vi.waitFor(() => expect(tree.root.findByProps({
+      await settleMountedOperation();
+      expect(tree.root.findByProps({
         testID: 'voice-settings-action-create-agent',
-      }).props.loading).toBe(false));
+      }).props.loading).toBe(false);
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -987,7 +1022,8 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(2);
     await act(async () => {
       humanConfirmations[1]!();
-      await vi.waitFor(() => expect(state.mutationApplied).toBe(true));
+      await settleMountedOperation();
+      expect(state.mutationApplied).toBe(true);
     });
     expect(provider.fetch.mock.calls.filter(([input, init]) => providerUrl(input).pathname === '/v1/convai/agents/create' && init?.method === 'POST')).toHaveLength(1);
   });
@@ -996,7 +1032,7 @@ describe('VoiceProviderSettingsActions', () => {
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
-      tree = mountActionView(<VoiceProviderSettingsActions
+      tree = await mountActionView(<VoiceProviderSettingsActions
         providerId={PROVIDER_ID}
         owner={owner}
         actions={[action]}
@@ -1019,6 +1055,8 @@ describe('VoiceProviderSettingsActions', () => {
   it('allows a remounted action lifecycle to replace an abort-ignoring invocation under the same registration token', async () => {
     const stale = createDeferred<ReturnType<typeof provider.response>>();
     const replacement = createDeferred<ReturnType<typeof provider.response>>();
+    const staleCreationEntered = createDeferred<void>();
+    const replacementCreationEntered = createDeferred<void>();
     const http = provider.fetch.getMockImplementation()!;
     let creations = 0;
     provider.fetch.mockImplementation(async (input, init) => {
@@ -1030,7 +1068,9 @@ describe('VoiceProviderSettingsActions', () => {
         return provider.response({ ...body, agent_id: url.pathname.split('/').at(-1) });
       }
       if (providerUrl(input).pathname !== '/v1/convai/agents/create') return await http(input, init);
-      const response = await (++creations === 1 ? stale.promise : replacement.promise);
+      creations += 1;
+      (creations === 1 ? staleCreationEntered : replacementCreationEntered).resolve();
+      const response = await (creations === 1 ? stale.promise : replacement.promise);
       await http(input, init);
       return response;
     });
@@ -1043,7 +1083,7 @@ describe('VoiceProviderSettingsActions', () => {
     };
     let staleTree!: renderer.ReactTestRenderer;
     await act(async () => {
-      staleTree = mountActionView(<VoiceProviderSettingsActions {...props} />);
+      staleTree = await mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       staleTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -1051,15 +1091,17 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(1);
     await act(async () => {
       humanConfirmations[0]!();
-      await vi.waitFor(() => expect(creations).toBe(1));
+      await staleCreationEntered.promise;
+      expect(creations).toBe(1);
     });
+    const staleOperation = mountedOperation();
     await act(async () => {
       staleTree.unmount();
     });
 
     let replacementTree!: renderer.ReactTestRenderer;
     await act(async () => {
-      replacementTree = mountActionView(<VoiceProviderSettingsActions {...props} />);
+      replacementTree = await mountActionView(<VoiceProviderSettingsActions {...props} />);
     });
     await act(async () => {
       replacementTree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress();
@@ -1067,16 +1109,18 @@ describe('VoiceProviderSettingsActions', () => {
     await waitForConfirmation(2);
     await act(async () => {
       humanConfirmations[1]!();
-      await vi.waitFor(() => expect(creations).toBe(2));
+      await replacementCreationEntered.promise;
+      expect(creations).toBe(2);
     });
 
     replacement.resolve(provider.response({ agent_id: 'replacement-agent' }));
     await act(async () => {
-      await vi.waitFor(() => expect(state.config.agentId).toBe('replacement-agent'));
+      await settleMountedOperation();
+      expect(state.config.agentId).toBe('replacement-agent');
     });
     stale.resolve(provider.response({ agent_id: 'stale-agent' }));
     await act(async () => {
-      await Promise.resolve();
+      await staleOperation;
     });
     expect(state.config.agentId).toBe('replacement-agent');
     expect(nativeAlert).not.toHaveBeenCalled();

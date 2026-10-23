@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -149,7 +150,7 @@ describe('VoiceGlobalConnectedServicesBindingField', () => {
     const options = () => screen.tree.findAll(node => typeof node.type === 'string'
       && typeof node.props.onPress === 'function'
       && node.props.testID?.endsWith(`:option:${optionId}`));
-    await vi.waitFor(() => expect(options(), JSON.stringify(screen.tree.findAll(node => typeof node.type === 'string'
+    await waitForTestEvent(screen.subscribe, () => expect(options(), JSON.stringify(screen.tree.findAll(node => typeof node.type === 'string'
       && node.props.testID).map(node => node.props.testID))).toHaveLength(1));
     await act(async () => options()[0]!.props.onPress());
     const qualifiedServiceId = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);

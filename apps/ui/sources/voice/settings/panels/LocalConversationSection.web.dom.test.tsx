@@ -3,6 +3,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitForTestEvent } from '@/dev/testkit';
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness,
     createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
@@ -92,6 +93,24 @@ function press(node: HTMLElement) {
     node.dispatchEvent(new MouseEvent('mousedown', { ...event, buttons: 1 }));
     node.dispatchEvent(new MouseEvent('mouseup', { ...event, buttons: 0 }));
     node.dispatchEvent(new MouseEvent('click', { ...event, buttons: 0 }));
+}
+
+function subscribeDom(notify: () => void) {
+    const observer = new MutationObserver(notify);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+    return () => observer.disconnect();
+}
+
+function subscribeHomeOrDom(notify: () => void) {
+    const stopHome = account.home.subscribe(notify);
+    const stopDom = subscribeDom(notify);
+    return () => { stopHome(); stopDom(); };
+}
+
+async function waitForSaveError() {
+    await waitForTestEvent(subscribeDom, () => document.body.textContent,
+        text => text?.includes(t('common.saveError')) === true);
+    expect(document.body.textContent).toContain(t('common.saveError'));
 }
 
 describe('imported Voice Chat Agent selection through the real settings gesture', () => {
@@ -261,12 +280,13 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                 .find(node => node.textContent?.includes(t('settingsVoice.local.mediatorAgentId')));
             if (!trigger) throw new Error('missing actual pending Chat Agent dropdown');
             await act(async () => press(trigger));
-            await vi.waitFor(() => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());
+            await waitForTestEvent(subscribeDom, () => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());
             await act(async () => press(document.querySelector<HTMLElement>('[data-testid="dropdown-option-opencode"]')!));
             if (usesPersonalApproval) {
                 const artifacts = account.home.artifacts(scope.serverId);
-                await vi.waitFor(() => expect(artifacts.list().length > 0
-                    || document.body.textContent?.includes(t('common.saveError'))).toBe(true), { timeout: 180_000 });
+                await waitForTestEvent(subscribeHomeOrDom, () => artifacts.list().length > 0
+                    || document.body.textContent?.includes(t('common.saveError')), Boolean);
+                expect(artifacts.list().length > 0 || document.body.textContent?.includes(t('common.saveError'))).toBe(true);
                 expect(artifacts.list(), JSON.stringify({
                     paths: account.home.requests.map(request => request.path),
                     ui: document.body.textContent,
@@ -301,15 +321,17 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
                     return;
                 }
                 if (outcome === 'personal-approval-canceled') {
-                    await vi.waitFor(() => expect(document.body.textContent).toContain(t('common.saveError')));
+                    await waitForSaveError();
                     expect(stored).toEqual(original);
                     expect(providerWrites).toBe(0);
                     expect(artifacts.list()).toHaveLength(1);
                     return;
                 }
             }
-            await vi.waitFor(() => expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
-                .some(request => request.input !== undefined) || document.body.textContent?.includes(t('common.saveError'))).toBe(true), { timeout: 180_000 });
+            await waitForTestEvent(subscribeHomeOrDom, () => account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
+                .some(request => request.input !== undefined) || document.body.textContent?.includes(t('common.saveError')), Boolean);
+            expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
+                .some(request => request.input !== undefined) || document.body.textContent?.includes(t('common.saveError'))).toBe(true);
             expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1)
                 .some(request => request.input !== undefined)).toBe(true);
             expect(stored).toEqual(original);
@@ -322,15 +344,18 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             }
             acknowledge();
             if (outcome === 'provider-conflict' || outcome === 'settings-conflict') {
-                await vi.waitFor(() => expect(document.body.textContent).toContain(t('common.saveError')), { timeout: 180_000 });
+                await waitForSaveError();
                 expect(stored.voice).toEqual(original.voice);
                 expect(readLocalConversationVoiceSettings(settingsParse(stored).voice).agent.providerChat)
                     .toEqual({ status: 'migration_required', reason: 'provider_catalog_import_required' });
                 return;
             }
-            await vi.waitFor(() => expect(readLocalConversationVoiceSettings(settingsParse(stored).voice).agent.providerChat)
+            await waitForTestEvent(account.home.subscribe,
+                () => readLocalConversationVoiceSettings(settingsParse(stored).voice).agent.providerChat,
+                value => value?.status === 'needs_selection');
+            expect(readLocalConversationVoiceSettings(settingsParse(stored).voice).agent.providerChat)
                 .toMatchObject({ status: 'needs_selection', providerConnectionId: 'voice-openai-compatible-chat',
-                    chatModelId: 'legacy-chat', commitModelId: 'legacy-commit' }), { timeout: 180_000 });
+                    chatModelId: 'legacy-chat', commitModelId: 'legacy-commit' });
             expect(stored).toMatchObject({ voice: { adapters: { local_conversation: {
                 agent: expect.not.objectContaining({ openaiCompat: expect.anything() }),
             } } } });
@@ -420,10 +445,16 @@ describe('imported Voice Chat Agent selection through the real settings gesture'
             .find(node => node.textContent?.includes(t('settingsVoice.local.mediatorAgentId')));
         if (!trigger) throw new Error('missing actual imported Chat Agent dropdown trigger');
         await act(async () => press(trigger));
-        await vi.waitFor(() => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());
+        await waitForTestEvent(subscribeDom, () => expect(document.querySelector('[data-testid="dropdown-option-opencode"]')).not.toBeNull());
         await act(async () => press(document.querySelector<HTMLElement>('[data-testid="dropdown-option-opencode"]')!));
-        await vi.waitFor(() => expect(transport.projectionReads).toContainEqual(expect.objectContaining({ agentTargetKey, mode: 'picker' })), { timeout: 180_000 });
-        await vi.waitFor(() => expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).agent.providerChat?.status)
-            .toBe(authorized ? 'configured' : 'needs_selection'), { timeout: 180_000 });
+        await waitForTestEvent(daemon.subscribe, () => transport.projectionReads,
+            reads => reads.some(read => !!read && typeof read === 'object'
+                && 'agentTargetKey' in read && read.agentTargetKey === agentTargetKey && 'mode' in read && read.mode === 'picker'));
+        expect(transport.projectionReads).toContainEqual(expect.objectContaining({ agentTargetKey, mode: 'picker' }));
+        await waitForTestEvent(storage.subscribe,
+            () => readLocalConversationVoiceSettings(storage.getState().settings.voice).agent.providerChat?.status,
+            status => status === (authorized ? 'configured' : 'needs_selection'));
+        expect(readLocalConversationVoiceSettings(storage.getState().settings.voice).agent.providerChat?.status)
+            .toBe(authorized ? 'configured' : 'needs_selection');
     }, 180_000);
 });

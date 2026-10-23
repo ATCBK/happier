@@ -3,7 +3,7 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, waitForTestEvent } from '@/dev/testkit';
 import { t } from '@/text';
 import { listModelPackCatalogEntries } from '@happier-dev/protocol';
 import { DaemonVoiceInferenceModelStatusSchema,
@@ -209,9 +209,11 @@ describe('DaemonModelPackRow', () => {
             throw new Error(`Unexpected model RPC: ${request.method}`);
         };
         const { tree } = await renderScreen(<SelectedRowOwner packId={entry.packId} kind="stt_sherpa" />);
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.onPress).toBeTypeOf('function'));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${entry.packId}` })[0]?.props.onPress, onPress => typeof onPress === 'function');
+        expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.onPress).toBeTypeOf('function');
         await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }));
-        await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.destructive).toBe(true));
+        await waitForTestEvent(tree.subscribe, () => tree.root.findAllByProps({ testID: `voice-model-row-${entry.packId}` })[0]?.props.destructive, destructive => destructive === true);
+        expect(tree.root.findByProps({ testID: `voice-model-row-${entry.packId}` }).props.destructive).toBe(true);
     });
 
     it('renders the selected-provider row for the exact published q8 pack id', async () => {
@@ -230,7 +232,9 @@ describe('DaemonModelPackRow', () => {
         };
         const screen = await renderScreen(<SelectedRowOwner packId={canonicalPackId} kind="tts_sherpa" anchored />);
         const anchor = `setting-${VOICE_CONVERSATIONS_SETTINGS.settings.ttsAssetId.anchor}`;
-        await vi.waitFor(() => expect(screen.tree.root.findByProps({ testID: `voice-model-row-${canonicalPackId}` }).props.detail).toBe(t('settingsVoice.local.models.state.installed')));
+        await waitForTestEvent(screen.subscribe, () => screen.tree.root.findAllByProps({ testID: `voice-model-row-${canonicalPackId}` })[0]?.props.detail,
+            detail => detail === t('settingsVoice.local.models.state.installed'));
+        expect(screen.tree.root.findByProps({ testID: `voice-model-row-${canonicalPackId}` }).props.detail).toBe(t('settingsVoice.local.models.state.installed'));
         expect(screen.tree.root.findAllByProps({ nativeID: anchor }).length).toBeGreaterThan(0);
         await act(async () => screen.update(
             <DaemonVoiceModelCatalogProvider value={null}>
