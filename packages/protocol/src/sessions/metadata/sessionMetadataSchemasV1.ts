@@ -293,6 +293,7 @@ export type SessionMetadataPublisherPreconditionV1 = z.infer<
 
 export const SessionMetadataOwnerPatchV1Schema = lazyZodSchema(() => z.strictObject({
   mode: z.literal('owner'),
+  projectKey: z.optional(NonBlankOpaqueIdentifierSchema),
   activitySummaryV1: z.optional(SessionAgentStateActivitySummaryV1Schema),
   sharedActionConfirmationSummaryV1: z.optional(SessionSharedActionConfirmationSummaryV1Schema),
   metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1),
@@ -312,6 +313,7 @@ export type SessionMetadataOwnerPatchV1 = z.infer<
 
 export const SessionMetadataInactiveModelIntentOwnerPatchV1Schema =
   lazyZodSchema(() => z.extend(z.omit(SessionMetadataOwnerPatchV1Schema, {
+    projectKey: true,
     publisherPrecondition: true,
     activitySummaryV1: true,
     sharedActionConfirmationSummaryV1: true,
@@ -525,6 +527,8 @@ const SessionOwnerWorkspaceV1Schema = lazyZodSchema(() => z.strictObject({
   workspaceId: z.optional(OptionalOwnerIdentifierSchema),
   workspaceLocationId: z.optional(OptionalOwnerIdentifierSchema),
   workspaceCheckoutId: z.optional(OptionalOwnerIdentifierSchema),
+  /** Last observed actual checkout branch; absent is unavailable and null is detached. */
+  branch: z.optional(OptionalOwnerStringSchema),
   sessionWorkspaceLocationV1: z.optional(SessionWorkspaceLocationV1Schema),
   sessionDirectoryV1: z.optional(SessionDirectoryV1Schema),
 }));
@@ -1956,6 +1960,7 @@ const WORKSPACE_OWNER_KEYS = [
   'workspaceId',
   'workspaceLocationId',
   'workspaceCheckoutId',
+  'branch',
   'sessionWorkspaceLocationV1',
   'sessionDirectoryV1',
 ] as const;

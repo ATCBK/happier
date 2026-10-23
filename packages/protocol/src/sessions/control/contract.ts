@@ -421,6 +421,8 @@ export const V2SessionRecordSchema = lazyZodSchema(() => z.looseObject({
     id: z.string().check(z.minLength(1)),
     /** Canonical immutable Session owner, absent on Homes predating this projection. */
     ownerAccountId: z.optional(z.string().check(z.minLength(1))),
+    /** Home-local accepted Project identity; absent/null means not yet published. */
+    projectKey: z.optional(z.nullable(z.string())),
     origin: z.optional(SessionAwarenessOriginV1Schema),
     workDepth: z.optional(SessionWorkDepthV1Schema),
     manager: z.optional(SessionManagerV1Schema),

@@ -1360,6 +1360,13 @@ describe('session metadata privacy envelopes v1', () => {
     } as const;
     expect(SessionMetadataTuplePatchV1Schema.parse(ownerPatch))
       .toEqual(ownerPatch);
+    expect(SessionMetadataTuplePatchV1Schema.parse({ ...ownerPatch, projectKey: 'accepted-project' }))
+      .toEqual({ ...ownerPatch, projectKey: 'accepted-project' });
+    for (const projectKey of ['', '  ', null]) {
+      expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...ownerPatch, projectKey }).success).toBe(false);
+    }
+    expect(SessionMetadataTuplePatchV1Schema.safeParse({ ...sharedEditorPatch, projectKey: 'accepted-project' }).success)
+      .toBe(false);
     const activitySummaryV1 = {
       pendingPermissionRequestCount: 1,
       pendingUserActionRequestCount: 1,

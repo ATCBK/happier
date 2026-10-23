@@ -75,6 +75,10 @@ describe('Session team credential binding contract', () => {
     expect(SessionTeamCredentialBindingMetadataPatchV1Schema.parse(patch)).toEqual(patch);
     expect(SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse({
       ...patch,
+      projectKey: 'accepted-project',
+    }).success).toBe(false);
+    expect(SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse({
+      ...patch,
       operation: 'session.connected_service.switch',
     }).success).toBe(false);
     expect(SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse({
