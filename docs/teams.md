@@ -93,10 +93,12 @@ identities, including for co-hosted daemons, and refuses self-custodian Team use
 The development New Session catalog qualifies entitled model reads with the selected
 Agent's admitted Provider applications. Generic resource discovery and each application
 retain separate snapshots under the same Home/Account/Team loader; changing Agents
-cannot reuse another application's model rows. The HTTP adapter gathers admitted
-snapshot demand once per Account/application and drains one shared discovery page
-sequence, while the server qualifies every Team independently. Each read retains
-the original Action's settings, approval and provenance admission. A Home that
+cannot reuse another application's model rows. The snapshot loader gathers ready
+demand once per Account/application before asynchronous Action admission and drains
+one shared discovery page sequence, while the server qualifies every Team independently.
+Each set-shaped page retains the original `teams.credentials.entitled.list` Action's
+settings, approval and provenance admission, including one Ask-first request for the
+whole Team set. A Home that
 does not serve discovery returns the existing unsupported condition. Finite exact-resource
 probes keep their own per-Team page walk. Model controls come from the exact
 source descriptor through the shared picker, including Team rows. Catalog visibility
