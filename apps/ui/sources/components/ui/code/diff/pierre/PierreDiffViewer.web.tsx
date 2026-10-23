@@ -679,6 +679,14 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         // Avoid calling Pierre's parser for known non-unified placeholders (binary diffs)
         // and for empty diff strings. Some versions log diagnostics before throwing.
         if (!looksLikeUnifiedDiff(sanitizedPatch)) return null;
+        if (props.mode === 'unified') {
+            // The provider or a Markdown author can supply an incomplete hunk. Pierre logs
+            // a global diagnostic before throwing, so admit its declared line counts here
+            // through the canonical hunk reader and keep unavailable evidence in this file.
+            const hunks = parseUnifiedDiffHunks(sanitizedPatch);
+            if (hunks.some((hunk) => hunk.lines.filter((line) => line.kind !== 'add').length !== hunk.oldLines
+                || hunk.lines.filter((line) => line.kind !== 'remove').length !== hunk.newLines)) return null;
+        }
         try {
             if (props.mode === 'text') {
                 const name = props.filePath ?? 'diff';

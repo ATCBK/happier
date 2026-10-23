@@ -8,6 +8,8 @@ import { renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
+import { buildDiffBlocks, buildDiffFileEntries } from '@/components/ui/code/model/diff/diffViewModel';
+import { parseMarkdown } from '@/components/markdown/parseMarkdown';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -692,6 +694,26 @@ describe('PierreDiffViewer (web)', () => {
             error.mockRestore();
         }
     });
+    it('preserves a review-comment diff from Markdown through the file model to Pierre', async () => {
+        fileDiffSpy.mockClear();
+        const screen = await renderScreen(<React.Fragment />);
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+            // Same shape as PR #657 discussion_r4359357458: the final context row is blank.
+            const markdown = '```diff\n--- "a/routing.mdx"\n+++ "b/routing.mdx"\n'
+                + '@@ -47,3 +47,3 @@\n-Automatic permission responses require an updated CLI.\n'
+                + '+Older actions open the session for review.\n User-action requests include cases such as:\n \n```';
+            const block = parseMarkdown(markdown).find((entry) => entry.type === 'code-block');
+            if (block?.type !== 'code-block') throw new Error('Expected fenced review evidence');
+            const [file] = buildDiffFileEntries(buildDiffBlocks({ unified_diff: block.content }));
+            await screen.update(<PierreDiffViewer mode="unified" unifiedDiff={file!.unifiedDiff!} />);
+            expect(fileDiffSpy.mock.calls.at(-1)?.[0].fileDiff).toBeTruthy();
+            expect(error).not.toHaveBeenCalled();
+        } finally {
+            error.mockRestore();
+        }
+    });
     it('renders a hunk-only snippet without logging a parser diagnostic', async () => {
         fileDiffSpy.mockClear();
         // Renderer creation reports its SDK deprecation; observe the actual diff update separately.
@@ -704,6 +726,29 @@ describe('PierreDiffViewer (web)', () => {
             const snippet = screen.findByProps({ 'data-testid': 'pierre-diff-fallback' });
             expect(snippet.children.join('')).toContain('-before\n+after');
             expect(error).not.toHaveBeenCalled();
+        } finally {
+            error.mockRestore();
+        }
+    });
+    it('keeps an incomplete hunk local without a parser diagnostic, then recovers on complete evidence', async () => {
+        fileDiffSpy.mockClear();
+        const screen = await renderScreen(<React.Fragment />);
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+            // PR #657's first API hunk, with its final context row missing.
+            const partial = '--- a/activityNotificationEvent.ts\n+++ b/activityNotificationEvent.ts\n'
+                + '@@ -12,6 +12,7 @@ export type ActivityNotificationEvent =\n'
+                + '     sessionTitle?: string | null;\n     agentDisplayName?: string | null;\n'
+                + '     requestId: string;\n+    occurrenceId?: string;\n     toolName: string;\n     toolInput?: unknown;\n';
+            await screen.update(<PierreDiffViewer mode="unified" filePath="activityNotificationEvent.ts"
+                errorFallback={<div data-testid="evidence-unavailable">Evidence unavailable</div>} unifiedDiff={partial} />);
+            expect(screen.findAllByProps({ 'data-testid': 'evidence-unavailable' })).toHaveLength(1);
+            expect(error).not.toHaveBeenCalled();
+            expect(fileDiffSpy).not.toHaveBeenCalled();
+            await screen.update(<PierreDiffViewer mode="unified" filePath="activityNotificationEvent.ts"
+                unifiedDiff={partial + '     toolDetails?: string | null;\n'} />);
+            expect(fileDiffSpy.mock.calls.at(-1)?.[0].fileDiff).toBeTruthy();
         } finally {
             error.mockRestore();
         }
