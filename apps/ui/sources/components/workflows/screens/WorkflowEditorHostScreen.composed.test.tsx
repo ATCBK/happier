@@ -150,6 +150,7 @@ let corruptStoredHeader = false;
 let refuseArtifactRead = false;
 let missingStoredArtifact = false;
 let refuseArtifactCreate = false;
+let loseArtifactCreateAcknowledgement = false;
 const artifactReads: string[] = [];
 const artifactMutationSchema = z.looseObject({ id: z.optional(z.string()), header: z.string(), body: z.string(),
     expectedHeaderVersion: z.optional(z.number().check(z.int())), expectedBodyVersion: z.optional(z.number().check(z.int())) });
@@ -438,6 +439,7 @@ beforeEach(async () => {
     refuseArtifactRead = false;
     missingStoredArtifact = false;
     refuseArtifactCreate = false;
+    loseArtifactCreateAcknowledgement = false;
     artifactReads.length = 0;
     clearDaemonMergedProjectionCacheForTests();
     restoreActionExecutorLoader = await installRealActionExecutorModuleLoader();
@@ -473,7 +475,13 @@ beforeEach(async () => {
                 const { request } = readArtifactMutation(JSON.parse(String(init?.body)));
                 await definitionActions.create(WorkflowDefinitionCreateRequestV1Schema.parse(request));
                 if (refuseArtifactCreate) return Response.json({ error: 'Artifact write denied' }, { status: 403 });
-                return (await editorArtifacts.handle(path, init))!;
+                const response = (await editorArtifacts.handle(path, init))!;
+                if (loseArtifactCreateAcknowledgement) {
+                    loseArtifactCreateAcknowledgement = false;
+                    refuseArtifactRead = true;
+                    return Response.json({ error: 'Committed create acknowledgement unavailable' }, { status: 400 });
+                }
+                return response;
             }
             if (artifactId && method === 'POST') {
                 const { mutation, request } = readArtifactMutation(JSON.parse(String(init?.body)), artifactId);
@@ -563,6 +571,142 @@ afterEach(async () => {
     restoreWebGlobals?.();
     restoreWebGlobals = undefined;
     if (nativeRouteBoundary.platform === 'ios') resetServerFeaturesClientForTests();
+});
+
+describe('unresolved editor create identity (FIX194)', () => {
+    const definition = () => createWorkflowDefinitionFixture({ defaults: {
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    } });
+    const newSource = (name = 'Unresolved first Save') => ({ kind: 'new' as const,
+        definitionDraftSeedId: storeWorkflowDefinitionDraftSeed({ name, definition: definition() }) });
+    const createdRows = () => editorArtifacts.list().filter(row => row.id.startsWith('00000000-0000-4000-8000-100'));
+    async function save() {
+        let result: unknown;
+        await act(async () => { result = await readBodyProps()!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        return result;
+    }
+    async function copy() {
+        await act(async () => { readBodyProps()!.onSaveAsCopy!(); });
+        await vi.waitFor(() => expect(readBodyProps()!.savePending).toBe(false));
+    }
+    async function expectStored(id: string, title: string) {
+        const { getWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        const stored = await getWorkflowDefinition({ definitionId: id });
+        expect(stored.metadata.title).toBe(title);
+        return stored;
+    }
+
+    it.each(['Save', 'Copy'] as const)('%s retries a committed POST after failed recovery reads with exactly one new Artifact', async kind => {
+        await renderScreen(<WorkflowEditorHostScreen source={kind === 'Copy'
+            ? { kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID } : newSource()} />);
+        loseArtifactCreateAcknowledgement = true;
+        if (kind === 'Copy') await copy();
+        else expect(await save()).toMatchObject({ status: 'refused', reason: 'save_failed' });
+        expect(readBodyProps()!.saveStatus).toMatchObject({ kind: 'failed' });
+        const id = createdDefinitionId();
+        expect(createdRows().map(row => row.id)).toEqual([id]);
+        expect(artifactReads.filter(value => value === id).length).toBeGreaterThan(1);
+        refuseArtifactRead = false;
+        if (kind === 'Copy') await copy();
+        else expect(await save()).toMatchObject({ status: 'applied' });
+        expect(createdRows().map(row => row.id)).toEqual([id]);
+        expect(readBodyProps()!.currentWorkflowRef).toBe(id);
+        expect(readBodyProps()!.saveStatus).toMatchObject({ kind: 'saved' });
+        await expectStored(id, kind === 'Copy' ? 'Saved workflow' : 'Unresolved first Save');
+    });
+
+    it.each(['Save', 'Copy'] as const)('%s retains a pre-effect refusal identity and saves later edits to that same Artifact', async kind => {
+        await renderScreen(<WorkflowEditorHostScreen source={kind === 'Copy'
+            ? { kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID } : newSource()} />);
+        refuseArtifactCreate = true;
+        if (kind === 'Copy') await copy();
+        else expect(await save()).toMatchObject({ status: 'refused', reason: 'save_failed' });
+        expect(readBodyProps()!.saveStatus).toMatchObject({ kind: 'failed' });
+        const id = createdDefinitionId();
+        expect(createdRows()).toHaveLength(0);
+        await act(async () => { readBodyProps()!.onChange({ ...readBodyProps()!.draft, name: 'Edited after refusal' }); });
+        refuseArtifactCreate = false;
+        expect(await save()).toMatchObject({ status: 'applied' });
+        expect(createdRows().map(row => row.id)).toEqual([id]);
+        await expectStored(id, 'Edited after refusal');
+        expect(readBodyProps()!.mountedDraftActions!.getSnapshot()!.dirty).toBe(false);
+    });
+
+    it.each(['Save', 'Copy'] as const)('%s reconciles its original content before updating edits made during uncertainty', async kind => {
+        await renderScreen(<WorkflowEditorHostScreen source={kind === 'Copy'
+            ? { kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID } : newSource()} />);
+        loseArtifactCreateAcknowledgement = true;
+        if (kind === 'Copy') await copy(); else await save();
+        const id = createdDefinitionId();
+        const original = readBodyProps()!.draft;
+        await act(async () => {
+            readBodyProps()!.onChange({ ...original, name: 'Edited while uncertain', blocks: original.blocks.map(block => block.kind === 'step'
+                ? { ...block, document: { ...block.document, text: 'New prompt after uncertain save' } } : block) });
+            readBodyProps()!.onChangeDescription!('New description after uncertain save');
+        });
+        refuseArtifactRead = false;
+        expect(await save()).toMatchObject({ status: 'applied' });
+        expect(createdRows().map(row => row.id)).toEqual([id]);
+        const stored = await expectStored(id, 'Edited while uncertain');
+        expect(stored.metadata.description).toBe('New description after uncertain save');
+        expect(stored.definition.blocks[0]).toMatchObject({ document: { text: 'New prompt after uncertain save' } });
+        expect(readBodyProps()!.mountedDraftActions!.getSnapshot()!.dirty).toBe(false);
+    });
+
+    it('a deliberate Copy has a separate retained create identity from an unresolved first Save', async () => {
+        await renderScreen(<WorkflowEditorHostScreen source={newSource()} />);
+        loseArtifactCreateAcknowledgement = true;
+        await save();
+        const firstId = createdDefinitionId();
+        refuseArtifactRead = false;
+        loseArtifactCreateAcknowledgement = true;
+        await copy();
+        const copyId = createdDefinitionId();
+        expect(copyId).not.toBe(firstId);
+        refuseArtifactRead = false;
+        expect(await save()).toMatchObject({ status: 'applied' });
+        expect(createdRows().map(row => row.id)).toEqual([firstId, copyId]);
+        await expectStored(copyId, 'Unresolved first Save');
+        // Once acknowledged, another deliberate Copy is a new user intent.
+        await copy();
+        expect(createdRows()).toHaveLength(3);
+        expect(createdDefinitionId()).not.toBe(copyId);
+    });
+
+    it.each(['source', 'Account'] as const)('retires unresolved create custody on %s replacement', async replacement => {
+        const source = newSource();
+        const screen = await renderScreen(<WorkflowEditorHostScreen source={source} />);
+        loseArtifactCreateAcknowledgement = true;
+        await save();
+        const firstId = createdDefinitionId();
+        if (replacement === 'Account') {
+            await act(async () => { switchEditorAccountScope({ serverId: 'server-a', accountId: 'account-b' }); });
+            expect(readBodyProps()).toBeNull();
+            await act(async () => { switchEditorAccountScope({ serverId: 'server-a', accountId: 'account-a' }); });
+        }
+        refuseArtifactRead = false;
+        await screen.update(<WorkflowEditorHostScreen source={newSource('Replacement document')} />);
+        expect(await save()).toMatchObject({ status: 'applied' });
+        const replacementId = createdDefinitionId();
+        expect(replacementId).not.toBe(firstId);
+        expect(createdRows().map(row => row.id)).toEqual([firstId, replacementId]);
+        await expectStored(firstId, 'Unresolved first Save');
+        await expectStored(replacementId, 'Replacement document');
+    });
+
+    it('the real owner/storage seam distinguishes recovery with the wrong id', async () => {
+        await renderScreen(<WorkflowEditorHostScreen source={newSource()} />);
+        loseArtifactCreateAcknowledgement = true;
+        await save();
+        const original = definitionActions.create.mock.calls.at(-1)![0];
+        refuseArtifactRead = false;
+        const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        const wrongId = '00000000-0000-4000-8000-100999999999';
+        await act(async () => { await createWorkflowDefinition({ ...original, definitionId: wrongId }); });
+        expect(createdRows().map(row => row.id)).toEqual([original.definitionId, wrongId]);
+        expect(await save()).toMatchObject({ status: 'applied' });
+        expect(createdRows().map(row => row.id)).toEqual([original.definitionId, wrongId]);
+    });
 });
 
 it('opens an editor-local workflow seed without waiting for the Session draft collection', async () => {
