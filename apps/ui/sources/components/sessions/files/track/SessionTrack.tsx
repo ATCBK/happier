@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import type { Href } from 'expo-router';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { unsavedWorkspaceFilePaths } from '@/components/appShell/panes/details/workspace/detailsTabChrome';
@@ -21,6 +22,11 @@ import { CORE_CAPSULE_HOST, useCoreCapsuleColors } from '@/components/ui/status/
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { usePanePresentation } from '@/components/appShell/panes/panePresentation';
+import { useDestinationInstanceKey, useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
+import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 
 import { TrackPauseSignalProvider, type TrackPresence, type TrackReveal } from './TrackPauseSignal';
 import {
@@ -243,16 +249,29 @@ export function PhoneTrackWatchCapsule(props: Readonly<{ sessionAddress: Session
   const target = selectTrackTarget(writes, props.sessionAddress.sessionId);
   const [, setTrackEnabled] = useLocalSettingMutable('filesTrackAgentEdits');
   const opener = useWorkspaceFileOpener();
+  const presentPane = usePanePresentation();
+  const instanceKey = useDestinationInstanceKey();
+  const router = useDestinationRouter();
+  const scopeId = createSessionPaneScopeId(props.sessionAddress.sessionId, props.sessionAddress.serverId, instanceKey);
   const colors = useCoreCapsuleColors();
   const path = target?.path ?? null;
   const watch = React.useCallback(() => {
     if (!path) return;
     setTrackEnabled(true);
+    const anchor = target?.region ? { kind: 'fileLine' as const, startLine: target.region.startLine } : undefined;
+    // Watch reveals the same File scene Track positions. A new resource destination has a different
+    // pane scope, so it would discard the user's mode (including Edit) and other tab memory.
     void opener.open({ kind: 'session', ...props.sessionAddress, path }, {
       intent: 'preview',
-      ...(target?.region ? { anchor: { kind: 'fileLine' as const, startLine: target.region.startLine }, anchorSource: 'file' as const } : {}),
+      present: false,
+      ...(anchor ? { anchor, anchorSource: 'file' as const } : {}),
+      onOpened: () => {
+        if (presentPane) presentPane({ scopeId, pane: 'details', tab: createWorkspaceFileDetailsTab(path, anchor, 'file') });
+        else router.replace(buildWorkspaceFileLink({ target: { kind: 'session', ...props.sessionAddress }, path,
+          ...(anchor ? { anchor, anchorSource: 'file' } : {}) }) as Href);
+      },
     });
-  }, [opener, path, props.sessionAddress, setTrackEnabled, target?.region]);
+  }, [opener, path, presentPane, props.sessionAddress, router, scopeId, setTrackEnabled, target?.region]);
   if (!path) return null;
   const fileName = path.split(/[\\/]/).pop() ?? path;
   return (
