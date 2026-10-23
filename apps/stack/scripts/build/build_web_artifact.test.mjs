@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
 
 import {
   buildWebArtifact,
@@ -15,6 +16,8 @@ import {
 import { readReusableArtifactManifest } from '../runtime/shared/artifact_manifest.mjs';
 import { resolveLatestComponentArtifact } from './resolve_latest_component_artifact.mjs';
 import { pruneComponentArtifacts } from './runtime_retention.mjs';
+import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { prepareFiniteSourceWebFixture } from '../testkit/core/source_web_fixture.mjs';
 
 test('web reuse requires a non-empty entrypoint and its local referenced assets', async (t) => {
   const root = createTempDir('stack-web-reuse-');
@@ -68,10 +71,17 @@ test('latest component lookup selects only complete artifacts for the requested 
   assert.equal((await resolveLatestComponentArtifact({ stackBaseDir: root, component: 'web', target })).manifest.artifactFingerprint, 'matching');
 });
 
-test('web publication compiles authored plugin inputs privately and records the consumer target', async (t) => {
-  const root = createTempDir('stack-web-target-');
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const repoDir = fileURLToPath(new URL('../../../../', import.meta.url));
+test('web publication refreshes authored inputs at a stable captured Metro root and records the consumer target', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'stack-web-target-' });
+  const root = fixture.root;
+  const repoDir = fixture.path('source');
+  const { uiInput, uiSource, pluginInput } = await prepareFiniteSourceWebFixture({
+    sourceRepo: fileURLToPath(new URL('../../../../', import.meta.url)), repoDir,
+  });
+  const uiPackagePath = join(repoDir, 'apps/ui/package.json');
+  const uiPackage = JSON.parse(readFileSync(uiPackagePath, 'utf8'));
+  delete uiPackage.type; // The production Metro config is CommonJS.
+  writeFileSync(uiPackagePath, JSON.stringify(uiPackage));
   const priorRepoDir = process.env.HAPPIER_STACK_REPO_DIR;
   process.env.HAPPIER_STACK_REPO_DIR = join(root, 'ambient-checkout');
   t.after(() => {
@@ -80,10 +90,16 @@ test('web publication compiles authored plugin inputs privately and records the 
   });
   const target = { platform: 'linux', arch: process.arch === 'arm64' ? 'x64' : 'arm64' };
   const artifactDir = join(root, 'artifacts', 'web', 'target-web');
-  const result = await buildWebArtifact({
+  const captureRoots = [];
+  const inventories = [];
+  let expectedUiSource = uiSource;
+  let expectedPluginValue = 'captured-plugin-input';
+  let expectedPayload = 'browser payload';
+  const buildOptions = {
     rootDir: repoDir, artifactDir, artifactFingerprint: 'target-web', target,
     sourceMetadata: { repoDir, sourceFingerprint: 'source', builtAt: '2026-10-05T00:00:00Z' },
-    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_STACK_HOME_DIR: join(root, 'home'),
+      HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), HAPPIER_STACK_STACK: 'artifact-fixture' },
     // Package installation/postinstall and Expo are external tool boundaries;
     // export staging, payload validation, atomic publication and manifests stay real.
     ensureDepsInstalledImpl: async (dir, _label, { onDependenciesReady }) => {
@@ -92,9 +108,17 @@ test('web publication compiles authored plugin inputs privately and records the 
     },
     runUiPostinstallImpl: () => {},
     expoExecImpl: async ({ dir, args, env }) => {
+      if (captureRoots.length) assert.equal(dir, captureRoots[0], 'changed artifacts must retain their Router-bound Metro project root');
+      captureRoots.push(dir);
+      inventories.push(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY);
+      assert.equal(readFileSync(join(dir, 'sources/app/_layout.tsx'), 'utf8'), expectedUiSource);
       assert.equal(typeof env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'string', 'native export must consume its private authored-source inventory');
       const inventory = readFileSync(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8');
-      assert.match(inventory, /happier\.channels/);
+      assert.match(inventory, /happier\.admission-fixture/);
+      const artifacts = runInNewContext(`${inventory.replaceAll('export const ', 'const ')}\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS`, { require: path => path });
+      const module = { exports: {} };
+      runInNewContext(readFileSync(artifacts[0].files[0].asset, 'utf8'), { module, exports: module.exports });
+      assert.equal(module.exports.renderSurface(), expectedPluginValue, 'changed plugin source must rebuild its real compiled artifact');
       assert.ok(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY.startsWith(root));
       const inventoryBlocked = execFileSync(process.execPath, ['-e', `
         const config = require(${JSON.stringify(join(dir, 'metro.config.js'))});
@@ -107,26 +131,42 @@ test('web publication compiles authored plugin inputs privately and records the 
       assert.equal(existsSync(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY), true, 'artifact retention must not reclaim inputs consumed by an active export');
       assert.equal(env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
       const output = args[args.indexOf('--output-dir') + 1];
+      assert.ok(output.startsWith(resolveWebExportStagingRootDir(dir)), 'Expo output keeps its project-local staging boundary');
+      if (captureRoots.length > 1) assert.equal(readFileSync(join(artifactDir, 'payload/chunk.js'), 'utf8'), 'browser payload', 'the previous artifact remains published throughout the next export');
       writeFileSync(join(output, 'index.html'), '<script src="./chunk.js"></script>');
-      writeFileSync(join(output, 'chunk.js'), 'browser payload');
+      writeFileSync(join(output, 'chunk.js'), expectedPayload);
     },
-  });
+  };
+  const result = await buildWebArtifact(buildOptions);
   assert.deepEqual(result.manifest.target, target);
   assert.deepEqual(JSON.parse(readFileSync(join(artifactDir, 'manifest.json'), 'utf8')).target, target);
   assert.equal(readFileSync(join(artifactDir, 'payload', 'chunk.js'), 'utf8'), 'browser payload');
   assert.deepEqual(readdirSync(artifactDir).sort(), ['manifest.json', 'payload']);
   assert.deepEqual(readdirSync(join(root, 'artifacts', 'web')), ['target-web'], 'private source inputs must not remain after publication');
   assert.deepEqual(readdirSync(join(root, 'artifacts')), ['web']);
+  assert.equal(existsSync(captureRoots[0]), false, 'captured source is retired after Metro consumes it');
+  expectedUiSource = 'export const admissionInput = "changed-ui-input";';
+  expectedPluginValue = 'changed-plugin-input';
+  expectedPayload = 'browser payload changed';
+  writeFileSync(uiInput, expectedUiSource);
+  writeFileSync(pluginInput, 'export function renderSurface() { return "changed-plugin-input"; }');
+  const refreshed = await buildWebArtifact({ ...buildOptions, artifactFingerprint: 'refreshed-web',
+    sourceMetadata: { repoDir, sourceFingerprint: 'changed-source', builtAt: '2026-10-05T00:00:01Z' } });
+  assert.equal(refreshed.manifest.artifactFingerprint, 'refreshed-web');
+  assert.equal(readFileSync(join(artifactDir, 'payload/chunk.js'), 'utf8'), expectedPayload);
+  assert.equal(inventories[0], inventories[1], 'one context retains the canonical compiler inventory across changed artifacts');
+  assert.equal(existsSync(captureRoots[1]), false);
+  assert.equal(existsSync(inventories[1]), true, 'validated compiler candidates remain available outside published artifact payloads');
   const exportFailure = new Error('external export failed');
   await assert.rejects(buildWebArtifact({
     rootDir: repoDir, artifactDir, artifactFingerprint: 'failed-web', target,
     sourceMetadata: { repoDir, sourceFingerprint: 'changed-source', builtAt: '2026-10-05T00:00:01Z' },
-    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
+    env: buildOptions.env,
     ensureDepsInstalledImpl: async (_dir, _label, { onDependenciesReady }) => await onDependenciesReady(),
     runUiPostinstallImpl: () => {},
     expoExecImpl: async () => { throw exportFailure; },
   }), exportFailure);
-  assert.equal(readFileSync(join(artifactDir, 'payload', 'chunk.js'), 'utf8'), 'browser payload', 'a failed export preserves the existing artifact');
+  assert.equal(readFileSync(join(artifactDir, 'payload', 'chunk.js'), 'utf8'), expectedPayload, 'a failed export preserves the existing artifact');
   assert.deepEqual(readdirSync(join(root, 'artifacts', 'web')), ['target-web'], 'failed export must retire only its private inputs');
   assert.deepEqual(readdirSync(join(root, 'artifacts')), ['web']);
 });

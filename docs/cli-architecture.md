@@ -5374,7 +5374,8 @@ the source build owner reuses workspace input capture before preparation, so
 the plugin compiler, QA export, web artifact and entry-size measurement consume
 one copied authored-input view. Later checkout edits affect the next build;
 interactive Expo retains live source and installed external tools retain their
-own lifecycle. In 0.3 development, finite source exports reuse one captured
+own lifecycle. In 0.3 development, finite source exports, built web artifacts and
+entry-size measurements consume `withSourceWebUiInputs` and reuse one captured
 project-root path per export context, preserving Metro's Router-bound transform
 cache keys. The existing owner-file lock protects capture replacement through
 Metro's final read. Each attempt recaptures authored inputs and removes that
@@ -5387,6 +5388,27 @@ preparation retain their separate package-output inputs.
 Metro reads explicit authored workspace exports, preferring nested `browser` or
 `react-native` source targets before the portable `happier-source` target. It
 preserves platform implementations without inferring source paths from dist.
+
+Noninteractive finite Expo exports in current development source take their
+default transform concurrency from the executor's `GOMAXPROCS` CPU allowance.
+The launcher owns that allowance; export code does not choose a fixed count.
+Without an executor allowance, it leaves Metro's default in effect, as it does
+for interactive commands. An explicit `HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS`
+or caller `--max-workers` retains precedence, including the existing `0` opt-out.
+Transform concurrency is execution policy and does not invalidate an otherwise
+identical completed source export.
+Finite web exports use the admission owner's separately measured
+`source-web-export` envelope. On Linux, that owner fits the executor's thread
+allowance to currently admissible memory and reserves the fitted thread count's
+measured tree estimate plus the existing headroom, rounded up to whole GiB.
+The estimate interpolates piecewise through the measured one-, eight-, and
+47-thread points; the eight-thread knot retains the larger observed cold/warm
+tree RSS. It is a measured admission estimate, not a process memory limit.
+Peers and nested export processes consume the count recorded by that owner.
+Explicit worker overrides keep their precedence and reserve their requested
+count; opting out of injection retains the prior conservative envelope.
+Runtime source bundles retain their smaller `source-bundle` envelope.
+Re-measure the export tree when changing its workload or concurrency model.
 
 Runtime snapshots are manifests plus managed references to canonical producer artifact payloads. A consumer selects a valid target-compatible published snapshot and retains only its own mutable state, process lifecycle, and selection pointer; it does not build or copy a payload. Snapshot validation checks component support references, and retention protects support artifacts transitively while a retained snapshot or external consumer selection needs them. Selecting a newer snapshot is non-disruptive: `selectedSnapshotId` can differ from `loadedSnapshotId` until an explicit restart, which is the proof boundary for newly loaded server or daemon bytes.
 

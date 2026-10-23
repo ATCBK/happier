@@ -1,4 +1,4 @@
-import { applyExpoExportMaxWorkersArgs } from '../utils/expo/command.mjs';
+import { applyExpoExportMaxWorkersArgs } from '../utils/expo/exportWorkers.mjs';
 
 // Only non-secret export diagnostics and the explicit worker override cross
 // the remote builder boundary.

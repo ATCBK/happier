@@ -555,7 +555,7 @@ scripts from running before the tool starts. Dotenv policy remains separate.
 Server typechecking and public npm/SDK declaration tasks remain separate.
 
 Explicit web artifact construction and source QA share
-`build_source_web_ui.mjs#prepareSourceWebUi`. It compiles authored plugin UI
+`build_source_web_ui.mjs#withSourceWebUiInputs`. It compiles authored plugin UI
 through the SDK compiler and existing inventory generator into private inputs.
 Preparation first captures the authored UI, workspace and build-tool inputs via
 the source build owner and existing `captureBuildInputFiles` primitive. Plugin

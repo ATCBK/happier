@@ -123,7 +123,7 @@ resolve_self_publisher_policy() {
   if [ "${policy_selfPublisher-0}" != 1 ]; then
     case "$policy_command" in
       corepack|yarn|npm|npx|pnpm) ;;
-      node|nodejs) [ "${explicit_relative_cwd_set-0}" = 1 ] || return 0 ;;
+      node|nodejs) [ "${explicit_relative_cwd_set-0}" = 1 ] || [ "$policy_kind" = typecheck ] || return 0 ;;
       *) return 0 ;;
     esac
   fi
@@ -188,10 +188,103 @@ resolve_heavyweight_admission_root() {
   resolve_native_host_admission_root
 }
 
+resolve_worker_cpu_budget() {
+  awk -v cpu="$1" -v platform="$2" -v active="$3" -v run_queue="$4" \
+    -v cpu_psi="$5" -v memory_psi="$6" '
+    BEGIN {
+      if (cpu !~ /^[0-9]+$/ || cpu < 1) exit
+      if (active !~ /^[0-9]+$/ || active < 0) active = 0
+      if (run_queue !~ /^[0-9]+$/ || run_queue < 0) run_queue = 0
+      if (cpu_psi !~ /^[0-9]+([.][0-9]+)?$/ || cpu_psi < 0) cpu_psi = 0
+      if (memory_psi !~ /^[0-9]+([.][0-9]+)?$/ || memory_psi < 0) memory_psi = 0
+      # Runnable pressure, rather than waiting reservations, owns Linux CPU
+      # demand. Darwin retains the existing reservation-based sharing policy.
+      denominator = (platform == "linux" ? 1 : active + 1) + (cpu_psi / 100) + (memory_psi / 100)
+      if (run_queue > cpu) denominator += (run_queue - cpu) / cpu
+      workers = int(cpu / denominator)
+      if (workers < 1) workers = 1
+      if (workers > cpu) workers = cpu
+      print workers
+    }'
+}
+
+ensure_native_job_cpu_budget() {
+  [ -z "${GOMAXPROCS+x}" ] || return 0
+  [ "$(uname -s 2>/dev/null || true)" = Linux ] || return 0
+  native_job_cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+  native_job_run_queue=$(awk '{split($4, queue, "/"); print queue[1]}' /proc/loadavg 2>/dev/null || true)
+  native_job_cpu_psi=$(awk '/^some / {for (field = 1; field <= NF; field += 1) if ($field ~ /^avg10=/) {sub(/^avg10=/, "", $field); print $field; exit}}' /proc/pressure/cpu 2>/dev/null || true)
+  native_job_memory_psi=$(awk '/^some / {for (field = 1; field <= NF; field += 1) if ($field ~ /^avg10=/) {sub(/^avg10=/, "", $field); print $field; exit}}' /proc/pressure/memory 2>/dev/null || true)
+  native_job_workers=$(resolve_worker_cpu_budget "$native_job_cpu" linux 0 "$native_job_run_queue" "$native_job_cpu_psi" "$native_job_memory_psi")
+  if [ -n "$native_job_workers" ]; then
+    export GOMAXPROCS=$native_job_workers
+  fi
+}
+
+heavyweight_owner_memory_floor_kib() {
+  heavyweight_owner_workers=
+  if [ "$2" = source-web-export ] && [ -r "$1/workers" ]; then
+    IFS= read -r heavyweight_owner_workers < "$1/workers" || true
+  fi
+  heavyweight_memory_floor_kib "$2" "${3-}" "$heavyweight_owner_workers"
+}
+
+heavyweight_prepare_export_request() {
+  [ "$heavyweight_admission_class" = source-web-export ] || return 0
+  heavyweight_export_interactive=0
+  if [ -t 0 ] && [ -t 1 ]; then heavyweight_export_interactive=1; fi
+  # Command substitution pipes the metadata child's stdout. Forward the real
+  # payload's TTY observation instead of mistaking that pipe for its boundary.
+  heavyweight_export_request=$(node "$projection_command_policy" --source-web-export-workers "$heavyweight_export_interactive" "$@") || exit 1
+  IFS=' ' read -r heavyweight_export_worker_mode heavyweight_export_requested_workers <<EOF
+$heavyweight_export_request
+EOF
+}
+
+heavyweight_request_memory_floor_kib() {
+  if [ "$heavyweight_admission_class" = source-web-export ]; then
+    heavyweight_request_workers=${heavyweight_export_workers:-$heavyweight_export_requested_workers}
+    if [ "$heavyweight_export_worker_mode" = explicit ]; then heavyweight_request_workers=$heavyweight_export_requested_workers; fi
+    heavyweight_memory_floor_kib "$heavyweight_admission_class" "${heavyweight_admission_placement-}" "$heavyweight_request_workers"
+  else
+    heavyweight_memory_floor_kib "$heavyweight_admission_class" "${heavyweight_admission_placement-}"
+  fi
+}
+
+heavyweight_publish_export_workers() {
+  if [ "$heavyweight_admission_class" = source-web-export ]; then
+    heavyweight_published_workers=${heavyweight_export_workers:-$heavyweight_export_requested_workers}
+    if [ "$heavyweight_export_worker_mode" = explicit ]; then heavyweight_published_workers=$heavyweight_export_requested_workers; fi
+    if [ "$heavyweight_published_workers" = 0 ]; then
+      # A Metro-owned default has no admitted thread count. Its missing count
+      # retains the conservative class envelope, including after escalation.
+      rm -f -- "$heavyweight_owner_path/workers" || exit 1
+    else
+      printf '%s\n' "$heavyweight_published_workers" > "$heavyweight_owner_path/workers" || exit 1
+    fi
+  fi
+}
+
+heavyweight_apply_export_workers() {
+  # Explicit Metro flags do not reduce the containing job's compiler budget.
+  [ "$heavyweight_export_worker_mode" = managed ] || return 0
+  if [ "$heavyweight_admission_class" = source-web-export ]; then
+    heavyweight_export_workers=
+    if [ -r "$heavyweight_owner_path/workers" ]; then
+      IFS= read -r heavyweight_export_workers < "$heavyweight_owner_path/workers" || true
+    fi
+    case "$heavyweight_export_workers" in ''|*[!0-9]*|0) return 0 ;; esac
+    if [ "$heavyweight_export_worker_mode" = managed ] && [ "$heavyweight_export_requested_workers" -lt "$heavyweight_export_workers" ]; then
+      heavyweight_export_workers=$heavyweight_export_requested_workers
+    fi
+    export GOMAXPROCS=$heavyweight_export_workers
+  fi
+}
+
 heavyweight_try_reentrant_admission() {
-  heavyweight_inherited_token=${HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN-}
-  heavyweight_inherited_root=${HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT-}
-  heavyweight_inherited_machine=${HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE-}
+  heavyweight_inherited_token=${1-${HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN-}}
+  heavyweight_inherited_root=${2-${HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT-}}
+  heavyweight_inherited_machine=${3-${HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE-}}
   [ -n "$heavyweight_inherited_token" ] || return 1
 
   # The inherited value identifies the original owner as PID plus Linux
@@ -264,6 +357,29 @@ heavyweight_try_reentrant_admission() {
   return 0
 }
 
+heavyweight_try_ancestor_admission() {
+  # Lifecycle/process adapters may lose environment context. Kernel ancestry
+  # plus the existing live owner record still identifies the containing job;
+  # it must not join a second capacity queue behind itself.
+  heavyweight_candidate_pid=$$
+  while :; do
+    heavyweight_candidate_pid=$(awk '/^PPid:/ {print $2; exit}' "/proc/$heavyweight_candidate_pid/status" 2>/dev/null || true)
+    case "$heavyweight_candidate_pid" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    for heavyweight_candidate_path in "$heavyweight_admission_root/owners/$heavyweight_candidate_pid-"*; do
+      [ -d "$heavyweight_candidate_path" ] || continue
+      IFS=' ' read -r heavyweight_candidate_recorded_pid heavyweight_candidate_token 2>/dev/null < "$heavyweight_candidate_path/process" || continue
+      [ "$heavyweight_candidate_recorded_pid" = "$heavyweight_candidate_pid" ] || continue
+      heavyweight_candidate_machine=$(sed -n '1p' "$heavyweight_candidate_path/machine" 2>/dev/null || true)
+      if heavyweight_try_reentrant_admission "$heavyweight_candidate_pid:$heavyweight_candidate_token" "$heavyweight_admission_root" "$heavyweight_candidate_machine"; then
+        export HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN="$heavyweight_inherited_token"
+        export HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT="$heavyweight_inherited_root"
+        export HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE="$heavyweight_inherited_machine"
+        return 0
+      fi
+    done
+  done
+}
+
 read_host_memory_kib() {
   host_memory=$(awk '/MemTotal:/ {total=$2} /MemAvailable:/ {available=$2} END {if(total>0) print available, total}' /proc/meminfo 2>/dev/null || true)
   if [ -z "$host_memory" ]; then
@@ -324,7 +440,7 @@ heavyweight_count_reserved_memory() {
     # inherited envelope a second time.
     [ "$heavyweight_reserved_entry" != "${heavyweight_owner_path-}" ] || continue
     heavyweight_reserved_class=$(sed -n '1p' "$heavyweight_reserved_entry/class" 2>/dev/null || true)
-    heavyweight_reserved_floor=$(heavyweight_memory_floor_kib "$heavyweight_reserved_class")
+    heavyweight_reserved_floor=$(heavyweight_owner_memory_floor_kib "$heavyweight_reserved_entry" "$heavyweight_reserved_class")
     heavyweight_unused_owner_reservation "$heavyweight_reserved_pid" "$heavyweight_reserved_token" "$heavyweight_reserved_floor"
     heavyweight_reserved_memory=$((heavyweight_reserved_memory + heavyweight_unused_memory))
   done
@@ -392,7 +508,7 @@ heavyweight_cleanup_records() {
     [ -d "$heavyweight_entry" ] || continue
     if ! IFS=' ' read -r heavyweight_entry_pid heavyweight_entry_token 2>/dev/null < "$heavyweight_entry/process" \
       || ! heavyweight_reservation_is_live "$heavyweight_entry_pid" "$heavyweight_entry_token"; then
-      rm -f -- "$heavyweight_entry/process" "$heavyweight_entry/class" "$heavyweight_entry/machine" "$heavyweight_entry/phase" "$heavyweight_entry/disk" 2>/dev/null || true
+      rm -f -- "$heavyweight_entry/process" "$heavyweight_entry/class" "$heavyweight_entry/machine" "$heavyweight_entry/phase" "$heavyweight_entry/disk" "$heavyweight_entry/workers" 2>/dev/null || true
       if rmdir -- "$heavyweight_entry" 2>/dev/null; then
         printf '[preferred-execution] reclaimed heavyweight owner %s on %s (process terminal, absent or identity stale)\n' \
           "${heavyweight_entry##*/}" "${heavyweight_admission_machine-unknown}" >&2
@@ -432,7 +548,12 @@ heavyweight_resource_is_ready() {
   # wrappers; a read-only placement sample never mutates their records.
   heavyweight_resource_reason=ready
   if heavyweight_observe_memory_budget reclaim; then
-      heavyweight_memory_floor=$(heavyweight_memory_floor_kib "$heavyweight_admission_class" "${heavyweight_admission_placement-}")
+      if [ "$heavyweight_admission_class" = source-web-export ] && [ "$heavyweight_export_worker_mode" = managed ]; then
+        # The same capacity observation admits both threads and their complete
+        # tree. Round memory before accepting it, so the GiB ceiling also fits.
+        heavyweight_export_workers=$(source_web_export_workers_for_memory_kib "$heavyweight_export_requested_workers" "$heavyweight_unreserved_memory")
+      fi
+      heavyweight_memory_floor=$(heavyweight_request_memory_floor_kib)
       heavyweight_required_memory=$heavyweight_memory_floor
       while IFS=' ' read -r heavyweight_own_kind heavyweight_own_pid heavyweight_own_token heavyweight_own_rss heavyweight_own_tail; do
         [ "$heavyweight_own_kind" = admitted ] || continue
@@ -559,9 +680,17 @@ heavyweight_queue_is_eligible() {
   fi
   [ -n "$heavyweight_head_class" ] || return 1
   case "$heavyweight_head_backfilled" in ''|*[!0-9]*) return 1 ;; esac
-  heavyweight_head_floor=$(heavyweight_memory_floor_kib "$heavyweight_head_class")
+  # An unadmitted export can shrink to the measured serial envelope. Its
+  # final fitted reservation is decided with current memory under this lock.
+  heavyweight_head_workers=
+  [ "$heavyweight_head_class" != source-web-export ] || heavyweight_head_workers=1
+  heavyweight_head_floor=$(heavyweight_memory_floor_kib "$heavyweight_head_class" worker "$heavyweight_head_workers")
   heavyweight_queue_reason="queue-ahead pid=$heavyweight_head_pid class=$heavyweight_head_class requires=$heavyweight_head_floor KiB"
-  heavyweight_candidate_floor=$(heavyweight_memory_floor_kib "$heavyweight_admission_class")
+  if [ "${1-}" = before-resource-observation ] && [ "$heavyweight_admission_class" = source-web-export ]; then
+    heavyweight_candidate_floor=$(heavyweight_memory_floor_kib source-web-export worker 1)
+  else
+    heavyweight_candidate_floor=$(heavyweight_request_memory_floor_kib)
+  fi
   # An equal-or-larger candidate can never satisfy the existing backfill gap.
   # Reject it before the expensive OS observation so only the head (or a
   # potentially fitting smaller job) spends time in the capacity decision.
@@ -594,7 +723,9 @@ heavyweight_queue_is_eligible() {
       [ "$heavyweight_entry_workspace_state" != workspace-busy ] || continue
       [ -n "$heavyweight_entry_class" ] || continue
       case "$heavyweight_entry_registered_at" in ''|*[!0-9]*) heavyweight_entry_registered_at=0 ;; esac
-      heavyweight_entry_floor=$(heavyweight_memory_floor_kib "$heavyweight_entry_class")
+      heavyweight_entry_workers=
+      [ "$heavyweight_entry_class" != source-web-export ] || heavyweight_entry_workers=1
+      heavyweight_entry_floor=$(heavyweight_memory_floor_kib "$heavyweight_entry_class" worker "$heavyweight_entry_workers")
       [ "$heavyweight_entry_floor" -le "$heavyweight_unreserved_memory" ] || continue
       [ $((heavyweight_unreserved_memory + heavyweight_entry_floor)) -lt "$heavyweight_head_floor" ] || continue
       [ $((heavyweight_head_backfilled + heavyweight_entry_floor)) -le "$heavyweight_head_floor" ] || continue
@@ -785,48 +916,45 @@ heavyweight_run_reentrant_workspace_admission() {
   trap 'heavyweight_workspace_interrupt' HUP INT TERM
   exec 6<&0
   exec 9>>"$heavyweight_admission_root/lock" || exit 1
-  heavyweight_last_wait_state=
-  while :; do
+  # An admitted tree cannot wait for an enlargement while peers retain the
+  # capacity it needs. Covered work is lock-free; upgrades get one immediate
+  # decision and otherwise fail so the containing job can unwind normally.
+  heavyweight_recorded_class=$(sed -n '1p' "$heavyweight_owner_path/class" 2>/dev/null || true)
+  heavyweight_inherited_floor=$(heavyweight_owner_memory_floor_kib "$heavyweight_owner_path" "$heavyweight_recorded_class")
+  heavyweight_requested_floor=$(heavyweight_request_memory_floor_kib)
+  if [ "$heavyweight_requested_floor" -le "$heavyweight_inherited_floor" ]; then
+    # Existing authenticated capacity is already owned by this ancestor and
+    # its running siblings. Matching descendants need no capacity mutex.
+    heavyweight_prepare_workspace_worker "$@" || exit 1
+    heavyweight_disk_is_ready
+    heavyweight_run_workspace_worker
+  fi
+  heavyweight_workspace_admitted=0
+  if flock -n 9; then
+    heavyweight_prepare_workspace_worker "$@" || exit 1
+    # Re-read beneath the mutex: concurrent authenticated siblings may have
+    # already raised this same owner. A smaller request cannot lower it.
     heavyweight_recorded_class=$(sed -n '1p' "$heavyweight_owner_path/class" 2>/dev/null || true)
-    heavyweight_inherited_floor=$(heavyweight_memory_floor_kib "$heavyweight_recorded_class")
-    heavyweight_requested_floor=$(heavyweight_memory_floor_kib "$heavyweight_admission_class")
+    heavyweight_inherited_floor=$(heavyweight_owner_memory_floor_kib "$heavyweight_owner_path" "$heavyweight_recorded_class")
+    heavyweight_requested_floor=$(heavyweight_request_memory_floor_kib)
     if [ "$heavyweight_requested_floor" -le "$heavyweight_inherited_floor" ]; then
-      # Existing authenticated capacity is already owned by this ancestor and
-      # its running siblings. Matching descendants need no capacity mutex.
-      heavyweight_prepare_workspace_worker "$@" || exit 1
       heavyweight_disk_is_ready
-      heavyweight_run_workspace_worker
+      heavyweight_workspace_admitted=1
+    elif heavyweight_resource_is_ready; then
+      printf '%s\n' "$heavyweight_admission_class" > "$heavyweight_owner_path/class" || exit 1
+      heavyweight_publish_export_workers
+      heavyweight_workspace_admitted=1
     fi
-    heavyweight_workspace_admitted=0
-    if heavyweight_acquire_lock; then
-      heavyweight_prepare_workspace_worker "$@" || exit 1
-      # Re-read beneath the mutex: concurrent authenticated siblings may have
-      # already raised this same owner. A smaller request cannot lower it.
-      heavyweight_recorded_class=$(sed -n '1p' "$heavyweight_owner_path/class" 2>/dev/null || true)
-      heavyweight_inherited_floor=$(heavyweight_memory_floor_kib "$heavyweight_recorded_class")
-      heavyweight_requested_floor=$(heavyweight_memory_floor_kib "$heavyweight_admission_class")
-      if [ "$heavyweight_requested_floor" -le "$heavyweight_inherited_floor" ]; then
-        heavyweight_disk_is_ready
-        heavyweight_workspace_admitted=1
-      elif heavyweight_resource_is_ready; then
-        printf '%s\n' "$heavyweight_admission_class" > "$heavyweight_owner_path/class" || exit 1
-        heavyweight_workspace_admitted=1
-      fi
-      heavyweight_release_lock
-    else
-      heavyweight_resource_reason=admission-decision-in-progress
-    fi
-    if [ "$heavyweight_workspace_admitted" = 1 ]; then heavyweight_run_workspace_worker; fi
-    heavyweight_release_workspace_attempt
-    if [ "${heavyweight_prior_workspace_lease-0}" = 1 ]; then heavyweight_reject_workspace_order; fi
-    [ "${heavyweight_no_wait-0}" != 1 ] || heavyweight_decline_before_dispatch "$heavyweight_resource_reason"
-    if [ "$heavyweight_resource_reason $heavyweight_owner_diagnostics" != "$heavyweight_last_wait_state" ]; then
-      printf '[preferred-execution] waiting for heavyweight admission on %s (%s, inherited owner)\n' \
-        "$heavyweight_admission_machine" "$(heavyweight_format_admission_reason "$heavyweight_resource_reason")" >&2
-      heavyweight_last_wait_state="$heavyweight_resource_reason $heavyweight_owner_diagnostics"
-    fi
-    heavyweight_wait_for_admission_change "$heavyweight_pressure_retry_seconds"
-  done
+    heavyweight_release_lock
+  else
+    heavyweight_resource_reason=admission-decision-in-progress
+  fi
+  if [ "$heavyweight_workspace_admitted" = 1 ]; then heavyweight_run_workspace_worker; fi
+  heavyweight_release_workspace_attempt
+  if [ "${heavyweight_prior_workspace_lease-0}" = 1 ]; then heavyweight_reject_workspace_order; fi
+  printf '[preferred-execution] HSTACK_NESTED_ADMISSION_CAPACITY: containing %s reservation cannot immediately cover %s (%s); reserve the composed workload before starting its parent\n' \
+    "$heavyweight_recorded_class" "$heavyweight_admission_class" "$heavyweight_resource_reason" >&2
+  exit 1
 }
 
 run_heavyweight_admission() {
@@ -838,6 +966,10 @@ run_heavyweight_admission() {
     printf '%s\n' '[preferred-execution] heavyweight admission requires a command' >&2
     exit 1
   }
+  # Publish before the workspace custody child starts so finite preparation
+  # and Metro inherit the same job allowance.
+  ensure_native_job_cpu_budget
+  heavyweight_prepare_export_request "$@"
 
   case "$(uname -s 2>/dev/null || true)" in
     Linux) ;;
@@ -866,10 +998,26 @@ run_heavyweight_admission() {
       *) exit "$heavyweight_workspace_probe_status" ;;
     esac
   fi
-  if heavyweight_try_reentrant_admission; then
+  if heavyweight_try_reentrant_admission || { [ "${heavyweight_require_inherited-0}" != 1 ] && heavyweight_try_ancestor_admission; }; then
+    # A custody worker may have started before capacity was decided. Its real
+    # native reentry consumes the admitted owner's count before Metro starts.
+    heavyweight_apply_export_workers
+    if [ "$heavyweight_admission_class" = source-web-export ] && [ "$heavyweight_export_worker_mode" = managed ] && [ -n "$heavyweight_export_workers" ]; then
+      heavyweight_export_requested_workers=$heavyweight_export_workers
+    fi
     heavyweight_recorded_class=$(sed -n '1p' "$heavyweight_owner_path/class" 2>/dev/null || true)
-    heavyweight_inherited_floor=$(heavyweight_memory_floor_kib "$heavyweight_recorded_class")
-    heavyweight_requested_floor=$(heavyweight_memory_floor_kib "$heavyweight_admission_class")
+    heavyweight_inherited_floor=$(heavyweight_owner_memory_floor_kib "$heavyweight_owner_path" "$heavyweight_recorded_class")
+    heavyweight_requested_floor=$(heavyweight_request_memory_floor_kib)
+    if [ "${heavyweight_require_inherited-0}" = 1 ]; then
+      # A composed producer may only consume the envelope and resources its
+      # containing batch already owns. Never escalate or join another queue.
+      if [ -n "${heavyweight_workspace_locks-}" ] || [ "$heavyweight_requested_floor" -gt "$heavyweight_inherited_floor" ]; then
+        printf '%s\n' '[preferred-execution] inherited admission does not cover the requested producer resources or capacity' >&2
+        exit 1
+      fi
+      heavyweight_admission_class=$heavyweight_recorded_class
+      heavyweight_run_admitted_command "$@"
+    fi
     if [ -n "${heavyweight_workspace_locks-}" ] || [ "$heavyweight_requested_floor" -gt "$heavyweight_inherited_floor" ]; then
       # Lease and plain escalations share the same existing ancestor decision;
       # neither queues a second reservation behind its parent.
@@ -879,6 +1027,11 @@ run_heavyweight_admission() {
     # This wrapper is a descendant of the owner and therefore must not create
     # a waiter, acquire the capacity lock, or release the owner's reservation.
     heavyweight_run_admitted_command "$@"
+  fi
+
+  if [ "${heavyweight_require_inherited-0}" = 1 ]; then
+    printf '%s\n' '[preferred-execution] producer requires authenticated inherited native admission' >&2
+    exit 1
   fi
 
   umask 077
@@ -915,7 +1068,7 @@ run_heavyweight_admission() {
   heavyweight_release_admission() {
     heavyweight_cleanup_workspace_worker
     rm -f -- "$heavyweight_waiter_path" 2>/dev/null || true
-    rm -f -- "$heavyweight_owner_path/process" "$heavyweight_owner_path/class" "$heavyweight_owner_path/machine" "$heavyweight_owner_path/phase" "$heavyweight_owner_path/disk" 2>/dev/null || true
+    rm -f -- "$heavyweight_owner_path/process" "$heavyweight_owner_path/class" "$heavyweight_owner_path/machine" "$heavyweight_owner_path/phase" "$heavyweight_owner_path/disk" "$heavyweight_owner_path/workers" 2>/dev/null || true
     rmdir -- "$heavyweight_owner_path" 2>/dev/null || true
     heavyweight_release_lock
   }
@@ -990,6 +1143,7 @@ run_heavyweight_admission() {
       printf '%s\n' "$heavyweight_admission_class" > "$heavyweight_owner_path/class" || exit 1
       printf '%s\n' "$heavyweight_admission_machine" > "$heavyweight_owner_path/machine" || exit 1
       printf '%s\n' 'admitted' > "$heavyweight_owner_path/phase" || exit 1
+      heavyweight_publish_export_workers
       if ! heavyweight_charge_backfill; then
         printf '[preferred-execution] could not record heavyweight backfill on %s\n' "$heavyweight_admission_machine" >&2
         exit 1
@@ -1028,6 +1182,7 @@ run_heavyweight_admission() {
   export HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN="$heavyweight_pid:$heavyweight_token"
   export HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT="$heavyweight_admission_root"
   export HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE="$heavyweight_admission_machine"
+  heavyweight_apply_export_workers
   if [ -n "${heavyweight_workspace_locks-}" ]; then heavyweight_run_workspace_worker; fi
   heavyweight_cleanup_workspace_worker
   heavyweight_payload_started=1
@@ -1096,6 +1251,7 @@ if [ "${1-}" = --heavyweight-admission ] || [ "${1-}" = --heavyweight-admission-
   heavyweight_admission_machine=local
   heavyweight_no_wait=0
   heavyweight_exec_admitted=0
+  heavyweight_require_inherited=0
   heavyweight_failure_id=
   heavyweight_workspace_locks=
   while [ "$#" -gt 0 ]; do
@@ -1107,6 +1263,7 @@ if [ "${1-}" = --heavyweight-admission ] || [ "${1-}" = --heavyweight-admission-
       --workspace-locks=*) heavyweight_workspace_locks=${1#--workspace-locks=} ;;
       --no-wait) heavyweight_no_wait=1 ;;
       --exec-admitted) heavyweight_exec_admitted=1 ;;
+      --require-inherited) heavyweight_require_inherited=1 ;;
       --)
         shift
         break
@@ -1144,10 +1301,12 @@ if [ "${1-}" = --heavyweight-admission ] || [ "${1-}" = --heavyweight-admission-
     }
   fi
   if [ "$heavyweight_check_only" -eq 1 ]; then
+    ensure_native_job_cpu_budget
+    heavyweight_prepare_export_request "$@"
     check_heavyweight_admission
     exit $?
   fi
-  try_run_self_dispatching_package_command "$@"
+  if [ "$heavyweight_require_inherited" != 1 ]; then try_run_self_dispatching_package_command "$@"; fi
   run_heavyweight_admission "$heavyweight_admission_root" "$heavyweight_admission_class" "$heavyweight_admission_machine" "$@"
 fi
 
@@ -1490,7 +1649,6 @@ fi
 
 explicit_remote_environment=
 explicit_remote_vitest_environment=0
-explicit_remote_typescript_environment=0
 explicit_relative_cwd=
 explicit_relative_cwd_set=0
 # Resolve cwd against the chosen repository on whichever host is selected.
@@ -1524,7 +1682,6 @@ while [ "$#" -gt 0 ]; do
       explicit_remote_environment="$explicit_remote_environment export $remote_env_key=$(quote_remote "$remote_env_value");"
       case "$remote_env_key" in
         VITEST_MAX_THREADS|VITEST_MIN_THREADS|VITEST_MAX_FORKS|VITEST_MIN_FORKS|HAPPIER_VITEST_GOVERNOR_MAX_WORKERS) explicit_remote_vitest_environment=1 ;;
-        GOMAXPROCS) explicit_remote_typescript_environment=1 ;;
       esac
       ;;
     --cwd)
@@ -1910,7 +2067,15 @@ heavyweight_admission_required=0
 [ -n "$policy_heavyClass" ] && heavyweight_admission_required=1
 minimum_memory_capacity_kib=0
 if [ -n "$policy_heavyClass" ]; then
-  minimum_memory_capacity_kib=$(heavyweight_memory_floor_kib "$policy_heavyClass")
+  if [ "$policy_heavyClass" = source-web-export ]; then
+    heavyweight_admission_class=$policy_heavyClass
+    heavyweight_prepare_export_request "$@"
+    heavyweight_placement_workers=1
+    if [ "$heavyweight_export_worker_mode" = explicit ]; then heavyweight_placement_workers=$heavyweight_export_requested_workers; fi
+    minimum_memory_capacity_kib=$(heavyweight_memory_floor_kib "$policy_heavyClass" worker "$heavyweight_placement_workers")
+  else
+    minimum_memory_capacity_kib=$(heavyweight_memory_floor_kib "$policy_heavyClass")
+  fi
 fi
 heavyweight_remote_class=$policy_heavyClass
 typecheck_affinity_key=
@@ -2481,6 +2646,16 @@ fi
 IFS=' ' read -r selected_number selected_name _selected_available selected_score selected_cache selected_base_score selected_active selected_capacity selected_class_active _selected_native_preference <<EOF
 $selected
 EOF
+if [ "$_selected_available" = busy ]; then
+  # This worker is taking its queued attempt. A later sync/transport/state
+  # failure must keep its hard exclusion, not revive the old busy candidacy.
+  remaining_busy_targets=
+  for busy_target in ${HSTACK_EXEC_PRE_DISPATCH_BUSY_TARGETS-}; do
+    [ "$busy_target" = "$selected_name" ] || remaining_busy_targets="$remaining_busy_targets $busy_target"
+  done
+  HSTACK_EXEC_PRE_DISPATCH_BUSY_TARGETS=$remaining_busy_targets
+  export HSTACK_EXEC_PRE_DISPATCH_BUSY_TARGETS
+fi
 if [ -n "$runtime_build_target" ]; then printf 'HSTACK_RUNTIME_SELECTED:%s\n' "$selected_name" >&2; fi
 if [ "$selected_number" = 0 ]; then
   run_selected_local "$@"
@@ -2569,31 +2744,8 @@ if [ "$telemetry_platform" = linux ] || [ "$telemetry_platform" = darwin ]; then
   case "$command_class" in
     source-search|targeted-validation|full-validation|validation)
       resource_governor_priority=background
-      resource_governor_workers=$(awk \
-        -v cpu="$telemetry_cpu" \
-        -v platform="$telemetry_platform" \
-        -v active="$selected_active" \
-        -v run_queue="$telemetry_run_queue" \
-        -v cpu_psi="$telemetry_psi_cpu" \
-        -v memory_psi="$telemetry_psi_memory" '
-          BEGIN {
-            if (cpu !~ /^[0-9]+$/ || cpu < 1) exit
-            if (active !~ /^[0-9]+$/ || active < 0) active = 0
-            if (run_queue !~ /^[0-9]+$/ || run_queue < 0) run_queue = 0
-            if (cpu_psi !~ /^[0-9]+([.][0-9]+)?$/ || cpu_psi < 0) cpu_psi = 0
-            if (memory_psi !~ /^[0-9]+([.][0-9]+)?$/ || memory_psi < 0) memory_psi = 0
-            # Linux exposes the runnable queue and PSI. Reservations can be
-            # waiting on locks or I/O, so counting them as CPU demand leaves a
-            # quiet worker artificially single-threaded. Darwin lacks those
-            # pressure signals and retains reservation-based sharing.
-            denominator = (platform == "linux" ? 1 : active + 1) + (cpu_psi / 100) + (memory_psi / 100)
-            if (run_queue > cpu) denominator += (run_queue - cpu) / cpu
-            workers = int(cpu / denominator)
-            if (workers < 1) workers = 1
-            if (workers > cpu) workers = cpu
-            print workers
-          }
-        ')
+      resource_governor_workers=$(resolve_worker_cpu_budget "$telemetry_cpu" "$telemetry_platform" \
+        "$selected_active" "$telemetry_run_queue" "$telemetry_psi_cpu" "$telemetry_psi_memory")
       ;;
   esac
 fi
@@ -2601,16 +2753,13 @@ case "$resource_governor_workers" in ''|*[!0-9]*) resource_governor_workers= ;; 
 
 governor_inject_vitest_environment=0
 governor_inject_rg_threads=0
-governor_inject_typescript_gomaxprocs=0
 if [ "$resource_governor_priority" = background ] && [ -n "$resource_governor_workers" ]; then
   explicit_vitest_workers=0
   explicit_rg_threads=0
-  explicit_typescript_single_threaded=0
   for governed_argument in "$@"; do
     case "$governed_argument" in
       --maxWorkers|--maxWorkers=*|--max-workers|--max-workers=*|--minWorkers|--minWorkers=*|--min-workers|--min-workers=*|--poolOptions.*.maxThreads|--poolOptions.*.maxThreads=*|--poolOptions.*.minThreads|--poolOptions.*.minThreads=*|--poolOptions.*.maxForks|--poolOptions.*.maxForks=*|--poolOptions.*.minForks|--poolOptions.*.minForks=*) explicit_vitest_workers=1 ;;
       --threads|--threads=*|-j|-j[0-9]*) explicit_rg_threads=1 ;;
-      --singleThreaded) explicit_typescript_single_threaded=1 ;;
     esac
   done
   explicit_vitest_environment=$explicit_remote_vitest_environment
@@ -2618,8 +2767,6 @@ if [ "$resource_governor_priority" = background ] && [ -n "$resource_governor_wo
     || [ "${VITEST_MAX_FORKS+x}" = x ] || [ "${VITEST_MIN_FORKS+x}" = x ]; then
     explicit_vitest_environment=1
   fi
-  explicit_typescript_environment=$explicit_remote_typescript_environment
-  [ "${GOMAXPROCS+x}" = x ] && explicit_typescript_environment=1
   case "$nested_worker_tool" in
     vitest)
       if [ "$explicit_vitest_workers" -ne 1 ] \
@@ -2632,13 +2779,6 @@ if [ "$resource_governor_priority" = background ] && [ -n "$resource_governor_wo
       if [ "$explicit_rg_threads" -ne 1 ] \
         && [ "$resource_governor_workers" -lt "$telemetry_cpu" ]; then
         governor_inject_rg_threads=1
-      fi
-      ;;
-    typescript-native)
-      if [ "$explicit_typescript_single_threaded" -ne 1 ] \
-        && [ "$explicit_typescript_environment" -ne 1 ] \
-        && [ "$resource_governor_workers" -lt "$telemetry_cpu" ]; then
-        governor_inject_typescript_gomaxprocs=1
       fi
       ;;
   esac
@@ -2695,6 +2835,13 @@ fi
 if [ "${HAPPIER_TYPESCRIPT_COMPILER+x}" = x ]; then
   remote_command_environment="$remote_command_environment export HAPPIER_TYPESCRIPT_COMPILER=$(quote_remote "$HAPPIER_TYPESCRIPT_COMPILER");"
 fi
+# Build coordinators and finite source exports consume the same existing CPU
+# allowance as compiler leaves. Keep an explicit caller/guest budget intact.
+if [ "${GOMAXPROCS+x}" = x ]; then
+  remote_command_environment="$remote_command_environment export GOMAXPROCS=$(quote_remote "$GOMAXPROCS");"
+elif [ -n "$resource_governor_workers" ]; then
+  remote_command_environment="$remote_command_environment if [ -z \"\${GOMAXPROCS+x}\" ]; then export GOMAXPROCS=$resource_governor_workers; fi;"
+fi
 if [ "$resource_governor_priority" = background ]; then
   case "$nested_worker_tool" in
     vitest)
@@ -2723,14 +2870,6 @@ if [ "$resource_governor_priority" = background ]; then
       fi
       if [ "$governor_inject_vitest_environment" -eq 1 ]; then
         remote_command_environment="$remote_command_environment if [ -z \"\${HAPPIER_VITEST_GOVERNOR_MAX_WORKERS+x}\" ] && [ -z \"\${VITEST_MAX_THREADS+x}\" ] && [ -z \"\${VITEST_MIN_THREADS+x}\" ] && [ -z \"\${VITEST_MAX_FORKS+x}\" ] && [ -z \"\${VITEST_MIN_FORKS+x}\" ]; then export HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=$resource_governor_workers; fi;"
-      fi
-      ;;
-    typescript-native)
-      if [ "${GOMAXPROCS+x}" = x ]; then
-        remote_command_environment="$remote_command_environment export GOMAXPROCS=$(quote_remote "$GOMAXPROCS");"
-      fi
-      if [ "$governor_inject_typescript_gomaxprocs" -eq 1 ]; then
-        remote_command_environment="$remote_command_environment if [ -z \"\${GOMAXPROCS+x}\" ]; then export GOMAXPROCS=$resource_governor_workers; fi;"
       fi
       ;;
   esac

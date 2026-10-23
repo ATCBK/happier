@@ -4,7 +4,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { expoExec } from './command.mjs';
+import { applyExpoExportMaxWorkersArgs, expoExec } from './command.mjs';
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -77,7 +77,7 @@ async function writeMinimalRepo({ root }) {
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
 }
 
-async function runExportAndReadArgs({ t, maxWorkersEnv, extraArgs = [] }) {
+async function runExportAndReadArgs({ t, maxWorkersEnv, cpuBudget = '3', extraArgs = [] }) {
   const root = await mkdtemp(join(tmpdir(), 'hs-expo-export-max-workers-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -98,6 +98,7 @@ async function runExportAndReadArgs({ t, maxWorkersEnv, extraArgs = [] }) {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: maxWorkersEnv,
+    GOMAXPROCS: cpuBudget,
     HAPPIER_STACK_ENV_FILE: null,
   });
 
@@ -116,6 +117,24 @@ async function runExportAndReadArgs({ t, maxWorkersEnv, extraArgs = [] }) {
     .filter(Boolean);
   return { root, lines };
 }
+
+test('expoExec derives its noninteractive export worker default from the admitted CPU budget', async (t) => {
+  const { lines } = await runExportAndReadArgs({ t, cpuBudget: '3' });
+  assert.equal(lines[lines.indexOf('--max-workers') + 1], '3');
+});
+
+test('noninteractive exports leave Metro defaults intact without a valid executor CPU budget', async (t) => {
+  const { lines } = await runExportAndReadArgs({ t, cpuBudget: null });
+  assert.ok(!lines.includes('--max-workers'));
+  for (const budget of [undefined, '', '0', '-1', '1.5', '0x10', '1e3', 'invalid']) {
+    assert.deepEqual(applyExpoExportMaxWorkersArgs(['export'], { GOMAXPROCS: budget }), ['export']);
+  }
+  assert.deepEqual(applyExpoExportMaxWorkersArgs(['export'], {
+    HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: 'invalid',
+  }), ['export']);
+  assert.deepEqual(applyExpoExportMaxWorkersArgs(['export', '--max-workers=5'], {}),
+    ['export', '--max-workers=5']);
+});
 
 test('expoExec injects --max-workers from HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS', async (t) => {
   const { lines } = await runExportAndReadArgs({ t, maxWorkersEnv: '2' });

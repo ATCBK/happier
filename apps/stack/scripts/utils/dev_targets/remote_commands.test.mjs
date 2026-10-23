@@ -49,6 +49,131 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
+test('package binary invocations use payload placement instead of same-named scripts', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'package-binary-placement-' });
+  const root = fixture.root;
+  const cwd = fixture.path('apps/ui');
+  await mkdir(cwd, { recursive: true });
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({ scripts: {
+    vitest: '../stack/bin/hstack-exec --script=vitest:local',
+    exec: '../stack/bin/hstack-exec --script=exec:local',
+    dlx: '../stack/bin/hstack-exec --script=dlx:local',
+    x: '../stack/bin/hstack-exec --script=x:local',
+  } }));
+  const artifact = fixture.path('policy.sh');
+  await writeFile(artifact, renderNativeCommandPolicy());
+  const binaries = [
+    ['pnpm', 'exec'], ['pnpm', 'dlx'], ['pnpm', 'x'],
+    ['corepack', 'pnpm', 'exec'], ['npm', 'exec'], ['yarn', 'exec'], ['npx'],
+  ].map(prefix => ({ cwd, args: [...prefix, 'vitest', 'run', 'sample.test.ts'] }));
+  binaries.push({ cwd: root, args: ['pnpm', '--dir', 'apps/ui', 'exec', 'vitest', 'run', 'sample.test.ts'] });
+  binaries.push({ cwd, args: ['npm', 'exec', '--', 'vitest', 'run', 'sample.test.ts'] });
+  for (const payload of [['rg', '--files'], ['node', '--test', 'sample.test.mjs'], ['tsc', '--noEmit']]) {
+    binaries.push({ cwd, args: ['pnpm', 'exec', ...payload], payload });
+  }
+  for (const request of binaries) {
+    const expected = resolveRemoteCommandPolicy(request.payload ?? ['vitest', 'run', 'sample.test.ts'], { cwd, repoRoot: root });
+    await t.test(`JS ${request.args.join(' ')}`, async () => {
+      assert.equal(await isSelfDispatchingPackageCommand(request.args, { ...request, repoRoot: root }), false);
+      assert.deepEqual(resolveRemoteCommandPolicy(request.args, { cwd: request.cwd, repoRoot: root }), expected);
+    });
+    await t.test(`native ${request.args.join(' ')}`, () => {
+      if (process.platform === 'win32') return;
+      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s,%s,%s,%s,%s" "$policy_hasScript" "$policy_kind" "$policy_heavyClass" "$policy_placement" "$policy_workerTool" "$policy_component"',
+        'policy', artifact, root, request.cwd, ...request.args], { encoding: 'utf8' });
+      assert.equal(native.status, 0, native.stderr);
+      assert.equal(native.stdout, `0,${expected.kind},${expected.heavyClass},${expected.placement},${expected.workerTool},apps/ui`);
+    });
+  }
+  for (const args of [['pnpm', 'run', 'vitest'], ['pnpm', 'vitest'], ['corepack', 'pnpm', 'vitest'],
+    ['pnpm', 'run', 'exec'], ['pnpm', 'run', 'dlx'], ['pnpm', 'run', 'x']]) {
+    await t.test(args.join(' '), async () => {
+      assert.equal(await isSelfDispatchingPackageCommand(args, { cwd, repoRoot: root }), true);
+      if (process.platform === 'win32') return;
+      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$3; shift 3; resolve_native_command_policy "$@"; printf "%s" "$policy_hasScript"',
+        'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
+      assert.equal(native.status, 0, native.stderr);
+      assert.equal(native.stdout, '1');
+    });
+  }
+});
+
+test('composed CLI typecheck admission includes its referenced UI producer before reserving capacity', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-composed-typecheck-policy-' });
+  const cli = fixture.path('apps/cli');
+  const ui = fixture.path('apps/ui');
+  await Promise.all([mkdir(cli, { recursive: true }), mkdir(ui, { recursive: true })]);
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true }));
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(cli, 'package.json'), JSON.stringify({ name: '@happier-dev/cli', scripts: {
+    typecheck: '../stack/bin/hstack-exec --script=typecheck:local',
+    'typecheck:local': 'pnpm run typecheck:source:finite',
+    'typecheck:source:finite': 'node ../../scripts/workspaces/runTypeScriptCli.mjs --project tsconfig.test-ui.json --noEmit',
+  } }));
+  await writeFile(join(ui, 'package.json'), JSON.stringify({ name: '@happier-dev/app' }));
+  const project = join(cli, 'tsconfig.test-ui.json');
+  const direct = ['node', '../../scripts/workspaces/runTypeScriptCli.mjs', '--project', 'tsconfig.test-ui.json', '--noEmit'];
+  for (const referenced of [false, true]) {
+    await writeFile(project, JSON.stringify({ references: referenced ? [{ path: '../ui/tsconfig.source.json' }] : [] }));
+    const expected = referenced ? 'compilation-ui' : 'compilation-cli';
+    for (const args of [direct, ['pnpm', 'run', 'typecheck:local'], ['pnpm', 'run', 'typecheck']]) {
+      const policy = await commandPolicy.resolvePackageCommandPolicy(args, { repoRoot: fixture.root, cwd: cli });
+      assert.equal(policy.heavyClass, expected, 'the containing command must reserve its real producer envelope');
+    }
+  }
+});
+
+test('export admission preserves Metro-owned interactive concurrency', () => {
+  const entry = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
+  for (const [interactive, override, flags, expected] of [
+    ['1', '', [], 'explicit 0\n'],
+    ['0', '', [], 'managed 1\n'],
+    ['1', '8', [], 'explicit 8\n'],
+    ['0', '0', [], 'explicit 0\n'],
+    ['0', '8', ['--max-workers=4', '--max-workers', '47'], 'explicit 47\n'],
+  ]) {
+    const result = spawnSync(process.execPath, [entry, '--source-web-export-workers', interactive, ...flags], {
+      encoding: 'utf8', env: { ...process.env, GOMAXPROCS: '1', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: override },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, expected);
+  }
+});
+
+test('source web export classification reserves its measured process-tree envelope in both dispatchers', () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
+  for (const [cwd, entry] of ['build_source_web_ui.mjs', 'build_web_artifact.mjs'].flatMap(name => [
+    [root, `apps/stack/scripts/build/${name}`],
+    [join(root, 'apps/stack'), `scripts/build/${name}`],
+    [root, join(root, `apps/stack/scripts/build/${name}`)],
+  ])) {
+    const args = ['node', entry, '{}'];
+    const policy = resolveRemoteCommandPolicy(args, { repoRoot: root, cwd });
+    assert.equal(policy.validation, '1');
+    assert.equal(policy.heavyClass, commandPolicy.SOURCE_WEB_EXPORT_ADMISSION_CLASS);
+    assert.ok(policy.heavyClass, 'the finite export must have a declared envelope');
+    const required = commandPolicy.resolveHeavyweightMemoryFloorKiB(policy.heavyClass);
+    assert.ok(required > commandPolicy.resolveHeavyweightMemoryFloorKiB('validation'),
+      'the export must not inherit the unrelated 6 GiB suite budget');
+    // nl1 cold export at its admitted CPU allowance (47 transform threads),
+    // sampled from the enclosing process independently of Metro's event loop.
+    assert.equal(required, Math.ceil((32907788 + 1608848) / (1024 * 1024)) * 1024 * 1024);
+    assert.equal(commandPolicy.resolveHeavyweightMemoryFloorKiB('source-bundle'), 10 * 1024 * 1024,
+      'runtime source bundles retain their independently measured envelope');
+    if (process.platform !== 'win32') {
+      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_validation" "$policy_heavyClass"',
+        'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
+      assert.equal(native.status, 0, native.stderr);
+      assert.equal(native.stdout, `1,${policy.heavyClass}`);
+      const memory = spawnSync('/bin/sh', ['-c', '. "$1"; heavyweight_memory_floor_kib "$2"',
+        'policy', artifact, policy.heavyClass], { encoding: 'utf8' });
+      assert.equal(memory.status, 0);
+      assert.equal(Number(memory.stdout), required);
+    }
+  }
+});
+
 test('managed pnpm remains visible to remote commands without dependency bootstrap', {
   skip: process.platform === 'win32' ? 'Exercises the POSIX worker executable boundary' : false,
 }, async t => {
@@ -2627,4 +2752,12 @@ test('SSH reverse dynamic forwarding keeps canonical browser origins and resolve
   ] });
   assert.equal(args[args.indexOf('-R') + 1], '127.0.0.1:43005');
   assert.equal(args[args.indexOf('-L') + 1], '127.0.0.1:18081:127.0.0.1:48081');
+});
+
+test('policy CLI resolves a CLI package typecheck whose policy imports modules that import it back', () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const cli = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, '--package-policy', root, join(root, 'apps/cli'), 'pnpm', 'run', 'typecheck'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^policy_kind='typecheck'$/mu);
 });

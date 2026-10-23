@@ -96,8 +96,9 @@ never replayed elsewhere after failure, including when it exits with the admissi
 
 In current 0.3 development, AUTO also retries actual worker admission before bootstrap or payload
 execution. An execution-qualified busy result re-evaluates the remaining pool without an unavailable
-TTL. If every usable worker is busy, it waits and re-evaluates the pool; busy workers do not justify
-local fallback. Pins retain their observable worker admission wait. Already-loaded launchers are
+TTL. After one complete eligible-pool sweep, the existing candidate ranking chooses a busy worker
+and retains its native resource-aware queue and cancellation without repeating selection, sync or
+bootstrap. Busy workers do not justify local fallback. Pins retain their observable worker admission wait. Already-loaded launchers are
 not restarted or relocated by a source update.
 
 Use `./apps/stack/bin/hstack-exec --local -- <command> [args...]` only when that invocation must run

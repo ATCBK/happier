@@ -15,6 +15,7 @@ import { readNativeTestSourceInputs } from '../fs/workspaceBuildInputs.mjs';
 import { resolveWorkspaceTypeScriptCompilerArgs } from '../../../../../packages/cli-common/workspaceChildBuildEnv.mjs';
 import { resolveCliPublicationBuildSteps } from '../../../../cli/scripts/buildPublication.mjs';
 import { sourceWebExportDiagnosticEnv } from '../../build/sourceWebExportArgs.mjs';
+import { resolveExpoExportWorkers } from '../expo/exportWorkers.mjs';
 export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_pressure_cadence.mjs';
 
 // Both dispatchers evaluate this policy. The native artifact is generated once,
@@ -64,7 +65,18 @@ const validation = { validation: '1', bootstrap: '1', heavyClass: 'validation' }
 // declaration pass was OOM-killed on linux2 at 12,356,912 KiB anonymous RSS.
 // The larger current tree plus the existing 1,608,848 KiB measured headroom
 // is 10,269,176 KiB, rounded up to 10 GiB.
-// Web preparation/export retains the validation envelope.
+// 2026-10-23 nl1 Linux x64 cold source-web export, maxWorkers=1: whole-tree
+// VmRSS peak 7,699,992 KiB; live-descendant VmHWM sum 8,236,000 KiB, sampled
+// every second (largest interval 1,317 ms). Peak occurred in Metro's
+// serialization tail, with 75,349,720 KiB host MemAvailable. The larger
+// VmHWM sum + the same 1,608,848 KiB headroom = 9,844,848 KiB, rounded up
+// to 10 GiB; the serial export fit the source-bundle envelope.
+// 2026-10-23 nl1 Linux x64 export at the executor's observed GOMAXPROCS=47:
+// the enclosing sampler measured 32,907,788 KiB concurrent process-tree RSS
+// (2,139 samples, largest interval 1,012 ms, no unreadable processes).
+// Add the same 1,608,848 KiB headroom: 34,516,636 KiB, rounded up to 33 GiB.
+// Keep web export separate from the smaller measured runtime source bundles.
+// These observations do not certify a maximum for larger CPU allowances.
 const HEAVYWEIGHT_MEMORY_KIB = Object.freeze({
   validation: 6291456,
   // 2026-10-12 Linux native policy fixture: runner + test VmHWM sum 111,684
@@ -73,6 +85,7 @@ const HEAVYWEIGHT_MEMORY_KIB = Object.freeze({
   // emitted imports, loaders, subprocesses and whole suites keep their class.
   'native-source-test': 2 * 1024 * 1024,
   'source-bundle': 10 * 1024 * 1024,
+  'source-web-export': 33 * 1024 * 1024,
   'dependency-install': 6291456,
   'package-dist': 6291456,
   'runtime-build': 18874368,
@@ -82,14 +95,43 @@ const HEAVYWEIGHT_MEMORY_KIB = Object.freeze({
   'compilation-server': 16 * 1024 * 1024,
 });
 const HEAVYWEIGHT_COMPILE_CLASSES = ['compilation', 'compilation-ui', 'compilation-cli', 'compilation-server', 'package-dist', 'runtime-build'];
+export const SOURCE_WEB_EXPORT_ADMISSION_CLASS = 'source-web-export';
+
+// 2026-10-23 nl1 Linux x64 cold exports: one thread's conservative live-tree
+// VmHWM sum was 8,236,000 KiB; 47 threads' concurrent RSS peak was 32,907,788
+// KiB. The serial endpoint intentionally uses the larger HWM metric; the
+// 47-thread endpoint used the then-installed serializer correction.
+// Intermediate validation on 2026-10-23, upstream Expo55.0.13 at eight threads:
+// cold RSS 11,196,764 KiB (Metro 1,628,336 ms, zero transform hits); a separate
+// warm retry reached 12,711,296 KiB. Retain the larger observed eight-thread
+// RSS rather than assuming cold is always larger. Both are off the endpoint
+// line, so interpolate piecewise through that measured knot. Moving source
+// and CPU allowances differ; these are estimates, not certified maxima.
+// Retain exactly the existing headroom and rational slopes for GiB edges.
+const EXPORT_MEMORY = Object.freeze({ serialKiB: 8236000, parallelKiB: 32907788,
+  intermediateKiB: 12711296, intermediateThreads: 8, parallelThreads: 47,
+  headroomKiB: 1608848, gibKiB: 1024 * 1024 });
+function exportMemorySegment(startThreads, startKiB, endThreads, endKiB) {
+  const denominator = endThreads - startThreads;
+  const numerator = endKiB - startKiB;
+  return { numerator, denominator, baseNumerator: startKiB * denominator - startThreads * numerator };
+}
+const EXPORT_MEMORY_SEGMENTS = [
+  exportMemorySegment(1, EXPORT_MEMORY.serialKiB, EXPORT_MEMORY.intermediateThreads, EXPORT_MEMORY.intermediateKiB),
+  exportMemorySegment(EXPORT_MEMORY.intermediateThreads, EXPORT_MEMORY.intermediateKiB, EXPORT_MEMORY.parallelThreads, EXPORT_MEMORY.parallelKiB),
+];
 
 // The primary VM's browser/agent workloads pause below 8 GiB MemAvailable
 // (2026-10-06 observation). Worker envelopes remain class-owned; only local
 // admission raises smaller envelopes to this measured controller floor.
 const LOCAL_HEAVYWEIGHT_MEMORY_FLOOR_KIB = 8 * 1024 * 1024;
 
-export function resolveHeavyweightMemoryFloorKiB(className, { machine = 'worker' } = {}) {
-  const floor = HEAVYWEIGHT_MEMORY_KIB[className] ?? HEAVYWEIGHT_MEMORY_KIB.compilation;
+export function resolveHeavyweightMemoryFloorKiB(className, { machine = 'worker', workers } = {}) {
+  const segment = EXPORT_MEMORY_SEGMENTS[workers <= EXPORT_MEMORY.intermediateThreads ? 0 : 1];
+  const floor = className === SOURCE_WEB_EXPORT_ADMISSION_CLASS && Number.isSafeInteger(workers) && workers > 0
+    ? Math.ceil((segment.baseNumerator + segment.numerator * workers + EXPORT_MEMORY.headroomKiB * segment.denominator)
+      / (segment.denominator * EXPORT_MEMORY.gibKiB)) * EXPORT_MEMORY.gibKiB
+    : HEAVYWEIGHT_MEMORY_KIB[className] ?? HEAVYWEIGHT_MEMORY_KIB.compilation;
   return machine === 'local' ? Math.max(floor, LOCAL_HEAVYWEIGHT_MEMORY_FLOOR_KIB) : floor;
 }
 const COMMAND_RULES = [
@@ -173,6 +215,11 @@ const COMMAND_RULES = [
   ] }, set: { kind: 'source-test' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], workerRequest: ['1'], entryPath: ['apps/stack/scripts/build/remote_runtime_build.mjs'] }, set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], workerRequest: ['1'], entryPath: ['scripts/build/remote_runtime_build.mjs'], component: ['apps/stack'] }, set: { ...validation, kind: 'source-test' } },
+  // Both finite web entry points consume authored inputs and admit the same
+  // measured tree; they do not require emitted Stack workspace prerequisites.
+  { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: [
+    'apps/stack/scripts/build/build_source_web_ui.mjs', 'apps/stack/scripts/build/build_web_artifact.mjs',
+  ] }, set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack', heavyClass: SOURCE_WEB_EXPORT_ADMISSION_CLASS } },
   // Reload coordinates completed lookup, finite production and activation.
   // Its producers jointly admit their own leases; charging the coordinator
   // first makes ordinary foreign-lease contention an admission-order refusal.
@@ -326,6 +373,7 @@ function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROO
   const managerIndex = command === 'corepack' ? 1 : 0;
   const manager = commandBasename(args[managerIndex]);
   let script = '', entry = commandBasename(args[1]), managerCwd = '', managerNode = '0', workspace = '', managerEntryIndex = 1;
+  let managerRun = false;
   if (REMOTE_COMMAND_CLASSIFICATION.packageManagerCommands.includes(manager)) {
     for (let index = managerIndex + 1; index < args.length; index += 1) {
       const arg = args[index];
@@ -335,7 +383,15 @@ function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROO
       if (arg === 'workspace' && manager === 'yarn') { workspace = args[++index] ?? ''; continue; }
       if (manager === 'pnpm' && (arg === '--filter' || arg === '-F')) { workspace = args[++index] ?? ''; continue; }
       if (manager === 'pnpm' && arg.startsWith('--filter=')) { workspace = arg.slice(9); continue; }
-      if (arg === 'run' || arg === 'exec' || arg.startsWith('-')) continue;
+      if (arg.startsWith('-')) continue;
+      if (manager === 'npx' || (!managerRun && ['exec', 'dlx', 'x'].includes(arg))) {
+        // Binary launchers do not consult same-named package scripts. Reuse
+        // the payload policy, including its runner and preparation decisions.
+        const directory = managerCwd.replaceAll('\\', '/');
+        const payloadCwd = directory.startsWith('/') ? directory : posix.join(String(cwd).replaceAll('\\', '/'), directory);
+        return normalizeCommandArguments(args.slice(manager === 'npx' ? index : index + 1), payloadCwd, repoRoot);
+      }
+      if (arg === 'run') { managerRun = true; continue; }
       script = arg;
       if (arg === 'node') { managerNode = '1'; managerEntryIndex = index + 1; entry = commandBasename(args[managerEntryIndex]); }
       break;
@@ -599,7 +655,7 @@ async function resolveWorkspacePackageScriptPolicy({ packageJson, cwd = process.
       if (!commands) { include('compilation'); selfPublisher = false; continue; }
       for (const args of commands) {
         const facts = normalizeCommandArguments(args, packageDir, repoRoot);
-        const policy = resolveRemoteCommandPolicy(args, { cwd: packageDir, repoRoot, env });
+        const policy = await resolveComposedTypecheckPolicy(args, { cwd: packageDir, repoRoot, env });
         for (const tool of policy.requiredTools.split(/\s+/u).filter(Boolean)) requiredTools.add(tool);
         const dispatchedScript = facts.command === 'hstack-exec'
           ? args.find(arg => arg.startsWith('--script='))?.slice('--script='.length) : '';
@@ -654,11 +710,35 @@ export async function isSelfPublishingPackageCommand(commandArgs, options = {}) 
   return (await resolveWorkspacePackageScriptPolicy({ ...options, ...manifest, cwd: manifest.packageDir })).selfPublisher;
 }
 
+async function resolveComposedTypecheckPolicy(commandArgs, options) {
+  const policy = resolveRemoteCommandPolicy(commandArgs, options);
+  const facts = normalizeCommandArguments(commandArgs, options.cwd, options.repoRoot);
+  if (policy.kind !== 'typecheck' || policy.component !== 'apps/cli'
+    || facts.entry !== 'runTypeScriptCli.mjs') return policy;
+  const projects = [];
+  for (let index = 0; index < commandArgs.length; index++) {
+    const arg = commandArgs[index];
+    const project = arg === '-p' || arg === '--project' ? commandArgs[++index]
+      : arg.startsWith('--project=') ? arg.slice('--project='.length)
+      : arg.startsWith('-p') ? arg.slice(2) : null;
+    if (project && !project.startsWith('-')) projects.push({ project });
+  }
+  if (!projects.length) return policy;
+  const { readReferencedUiTypecheckProjects } = await import('../../../../../scripts/workspaces/deriveTypecheckProjects.mjs');
+  for (const project of readReferencedUiTypecheckProjects(projects, options.cwd ?? process.cwd())) {
+    const producer = resolveRemoteCommandPolicy(['node', 'scripts/workspaces/runTypeScriptCli.mjs', '--project', project], options);
+    if (resolveHeavyweightMemoryFloorKiB(producer.heavyClass) > resolveHeavyweightMemoryFloorKiB(policy.heavyClass)) {
+      policy.heavyClass = producer.heavyClass;
+    }
+  }
+  return policy;
+}
+
 /** Package manifests own workspace aliases and lifecycle expansion. Resolve
  * the selected package before deriving preparation and payload admission. */
 export async function resolvePackageCommandPolicy(commandArgs, options = {}) {
   const manifest = await resolvePackageCommandManifest(commandArgs, options);
-  const policy = resolveRemoteCommandPolicy(commandArgs, { ...options,
+  const policy = await resolveComposedTypecheckPolicy(commandArgs, { ...options,
     ...(manifest ? { packageDir: manifest.packageDir } : {}) });
   const requiredTools = new Set(policy.requiredTools.split(/\s+/u).filter(Boolean));
   let selfPublisher = policy.selfPublisher;
@@ -666,7 +746,11 @@ export async function resolvePackageCommandPolicy(commandArgs, options = {}) {
   if (manifest) {
     const resolved = await resolveWorkspacePackageScriptPolicy({ ...options, ...manifest, cwd: manifest.packageDir });
     for (const tool of resolved.requiredTools.split(/\s+/u).filter(Boolean)) requiredTools.add(tool);
-    if (resolved.selfPublisher) { selfPublisher = '1'; heavyClass = resolved.admissionClass; }
+    if (resolved.selfPublisher) selfPublisher = '1';
+    if (resolved.selfPublisher || (policy.kind === 'typecheck'
+      && resolveHeavyweightMemoryFloorKiB(resolved.admissionClass) > resolveHeavyweightMemoryFloorKiB(heavyClass))) {
+      heavyClass = resolved.admissionClass;
+    }
   }
   if (policy.selfPublisher === '1' && normalizeCommandArguments(commandArgs, options.cwd, options.repoRoot).entry === 'bundleWorkspaceDeps.mjs') {
     const cwd = options.cwd ?? process.cwd();
@@ -709,6 +793,8 @@ function renderShellCommandRules(rules) {
   }).join('\n');
 }
 export function renderNativeCommandPolicy() {
+  const [serialSegment, parallelSegment] = EXPORT_MEMORY_SEGMENTS.map(segment =>
+    `b=${segment.baseNumerator}; n=${segment.numerator}; d=${segment.denominator}`);
   return [
     '# Generated by native_execution_projection.mjs --write-command-policy.',
     '# Rule authority: remote_commands.mjs. Do not edit this projection.',
@@ -721,10 +807,18 @@ export function renderNativeCommandPolicy() {
     '    targeted-validation|full-validation) heavyweight_policy_floor=' + posixQuote(String(HEAVYWEIGHT_MEMORY_KIB.validation)) + ' ;;',
     '    *) heavyweight_policy_floor=' + posixQuote(String(HEAVYWEIGHT_MEMORY_KIB.compilation)) + ' ;;',
     '  esac',
+    '  if [ "$1" = source-web-export ]; then',
+    '    case "${3-}" in \'\'|*[!0-9]*|0) ;;',
+    `      *) heavyweight_policy_floor=$(awk -v threads="$3" 'BEGIN { if(threads<=${EXPORT_MEMORY.intermediateThreads}) {${serialSegment}} else {${parallelSegment}}; total=b+n*threads+${EXPORT_MEMORY.headroomKiB}*d; unit=d*${EXPORT_MEMORY.gibKiB}; printf "%.0f", (int(total/unit)+(total%unit>0))*${EXPORT_MEMORY.gibKiB} }') ;;`,
+    '    esac',
+    '  fi',
     '  if [ "${2-}" = local ] && [ "$heavyweight_policy_floor" -lt ' + LOCAL_HEAVYWEIGHT_MEMORY_FLOOR_KIB + ' ]; then',
     '    heavyweight_policy_floor=' + posixQuote(String(LOCAL_HEAVYWEIGHT_MEMORY_FLOOR_KIB)),
     '  fi',
     '  printf \'%s\' "$heavyweight_policy_floor"', '}',
+    'source_web_export_workers_for_memory_kib() {',
+    `  awk -v cpu="$1" -v memory="$2" 'BEGIN { memory=int(memory/${EXPORT_MEMORY.gibKiB})*${EXPORT_MEMORY.gibKiB}; if(memory<=${EXPORT_MEMORY.intermediateKiB + EXPORT_MEMORY.headroomKiB}) {${serialSegment}} else {${parallelSegment}}; workers=int((memory*d-b-${EXPORT_MEMORY.headroomKiB}*d)/n); if(workers<1) workers=1; if(workers>cpu) workers=cpu; printf "%.0f", workers }'`,
+    '}',
     'native_command_policy_base() {',
     ...Object.entries(DEFAULT_COMMAND_POLICY).map(([key, value]) => '  policy_' + key + '=' + posixQuote(value)),
     renderShellCommandRules(COMMAND_RULES), '}',
@@ -800,6 +894,10 @@ $native_project_path"
 }
 native_resolve_admission_payload() {
   shift
+  resolve_native_command_policy "$@"
+}
+native_resolve_binary_payload() {
+  shift 2
   resolve_native_command_policy "$@"
 }
 native_try_admission_payload() {
@@ -940,9 +1038,16 @@ resolve_native_command_policy() {
   if [ "$native_manager" = corepack ]; then shift; native_command_basename "\${1-}"; native_manager=$native_basename; fi
   if native_package_manager "$native_manager"; then
     [ "$#" -gt 0 ] && shift
+    native_manager_binary=0; native_manager_run=0
+    [ "$native_manager" != npx ] || native_manager_binary=1
     while [ "$#" -gt 0 ]; do
       case "$1" in
-        run|exec|-s|--silent) shift ;;
+        -s|--silent) shift ;;
+        run) if [ "$native_manager_binary" = 1 ]; then break; fi; native_manager_run=1; shift ;;
+        exec|dlx|x)
+          if [ "$native_manager_run" = 1 ]; then policy_script=$1; break; fi
+          [ "$native_manager_binary" != 1 ] || break
+          native_manager_binary=1; shift; break ;;
         --cwd|--dir|-C) shift; native_manager_cwd=\${1-.}; [ "$#" -gt 0 ] && shift ;;
         --cwd=*) native_manager_cwd=\${1#--cwd=}; shift ;;
         --dir=*) native_manager_cwd=\${1#--dir=}; shift ;;
@@ -950,9 +1055,22 @@ resolve_native_command_policy() {
         --filter=*) if [ "$native_manager" = pnpm ]; then policy_workspace=\${1#--filter=}; fi; shift ;;
         workspace) if [ "$native_manager" = yarn ]; then shift; policy_workspace=\${1-}; [ "$#" -gt 0 ] && shift; else policy_script=$1; break; fi ;;
         -*) shift ;;
-        *) policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=\${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; break ;;
+        *) if [ "$native_manager_binary" != 1 ]; then policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=\${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; fi; break ;;
       esac
     done
+    if [ "$native_manager_binary" = 1 ]; then
+      case "$native_manager_cwd" in
+        /*) native_normalize_path "$native_manager_cwd" ;;
+        *) native_normalize_path "$policy_component/$native_manager_cwd" ;;
+      esac
+      # Positional custody restores caller cwd overrides after recursion.
+      set -- "\${explicit_relative_cwd_set-0}" "\${explicit_relative_cwd-}" "$@"
+      explicit_relative_cwd_set=1; explicit_relative_cwd=$native_result
+      native_resolve_binary_payload "$@"
+      native_binary_status=$?
+      explicit_relative_cwd_set=$1; explicit_relative_cwd=$2
+      return "$native_binary_status"
+    fi
   fi
   [ -n "$policy_script" ] && policy_hasScript=1
   policy_family=\${policy_script%%:*}
@@ -2096,6 +2214,13 @@ export function buildSshWorkerArgs(
 
 export async function runRemoteCommandPolicyCli(argv = process.argv.slice(2)) {
   const args = [...argv];
+  if (args[0] === '--source-web-export-workers') {
+    const { explicit, workers } = resolveExpoExportWorkers(args.slice(2), process.env, { interactive: args[1] === '1' });
+    // Opt-outs and interactive/default-Metro commands do not consume a fitted
+    // injected count. Keep their prior conservative reservation instead.
+    process.stdout.write(`${explicit || workers === null ? 'explicit' : 'managed'} ${workers ?? 0}\n`);
+    return 0;
+  }
   if (args[0] === '--workspace-locks') {
     process.stdout.write(JSON.stringify(resolveCommandWorkspaceLocks({ workspaceLock: args[2] }, args[1])));
     return 0;
@@ -2132,6 +2257,8 @@ export async function runRemoteCommandPolicyCli(argv = process.argv.slice(2)) {
     return 2;
   }
 }
+// No top-level await: policy resolution lazily imports modules that import
+// this one back, and awaiting here would deadlock that cycle (Node exit 13).
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  process.exitCode = await runRemoteCommandPolicyCli();
+  runRemoteCommandPolicyCli().then((code) => { process.exitCode = code; });
 }

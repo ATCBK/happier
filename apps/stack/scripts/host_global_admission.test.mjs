@@ -322,11 +322,11 @@ test('joint workspace preparation rejects a foreign lease without charging an ad
   const ownerFile = fixture.path('owner.json');
   const completedFile = fixture.path('completed');
   await writeFile(script, `import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { writeJsonAtomic } from ${JSON.stringify(new URL('./utils/fs/json.mjs', import.meta.url).href)};
 import { once } from 'node:events';
 const [launcher, lock, ownerFile, completedFile] = process.argv.slice(2);
 const ownerPath = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT + '/owners/' + process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN.replace(':', '-');
-await writeFile(ownerFile, JSON.stringify({ ownerPath }));
+await writeJsonAtomic(ownerFile, { ownerPath });
 await once(process.stdin, 'data');
 const sibling = spawn('/bin/sh', ['-c', 'printf ready; read release']);
 await once(sibling.stdout, 'data');
@@ -335,7 +335,7 @@ const nested = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=c
 let output = '';
 nested.stdout.on('data', chunk => { output += chunk; });
 const [status] = await once(nested, 'exit');
-await writeFile(completedFile, JSON.stringify({status,output,siblingStatus:sibling.exitCode}));
+await writeJsonAtomic(completedFile, {status,output,siblingStatus:sibling.exitCode});
 await once(process.stdin, 'data');
 sibling.stdin.end('release\\n');
 await siblingExit;
@@ -449,6 +449,57 @@ await mutexExit;
   const run = fixture.start([{ path: lockPath }], [process.execPath, script, fixture.launcher, fixture.admissionRoot, lockPath]);
   assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
   assert.equal(run.stdout(), 'nested');
+  assert.deepEqual(await fixture.entries('owners'), []);
+  assert.deepEqual(await fixture.entries('waiters'), []);
+});
+
+for (const mode of ['covered', 'upgrade', 'lost-context']) test(`competing admitted parents make nested progress without another capacity wait (${mode})`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  // Both containing jobs fit. An undeclared UI upgrade, or a second install
+  // reservation after a lifecycle boundary loses context, does not fit.
+  const fixture = await createJointAdmissionFixture(t, (mode === 'upgrade' ? 24 : 27) * 1024 * 1024);
+  const script = fixture.path('competing-parents.mjs');
+  await writeFile(script, `import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {readdir,readFile} from 'node:fs/promises';
+const [launcher,requested,drop] = process.argv.slice(2);
+const env = {...process.env};
+if(drop==='yes') for(const key of Object.keys(env)) if(key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
+process.stdout.write('ready\\n');
+await once(process.stdin,'data');
+const child=spawn('/bin/sh',[launcher,'--heavyweight-admission','--class='+requested,'--machine=worker','--',process.execPath,'-e','process.stdout.write("nested")'],{env,stdio:['ignore','pipe','inherit']});
+let output='';child.stdout.on('data',value=>output+=value);
+const [status]=await once(child,'exit');
+const root=process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT;
+const identity=process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN.replace(':','-');
+process.stdout.write(JSON.stringify({status,output,owners:(await readdir(root+'/owners')).length,waiters:(await readdir(root+'/waiters')).length,ownerClass:(await readFile(root+'/owners/'+identity+'/class','utf8')).trim()})+'\\n');
+await once(process.stdin,'data');
+`);
+  const compilerClass = mode === 'upgrade' ? 'compilation-cli' : 'compilation-ui';
+  const parents = [
+    fixture.start(null, [process.execPath, script, fixture.launcher, 'compilation-ui', 'no'], compilerClass),
+    fixture.start(null, [process.execPath, script, fixture.launcher, 'validation', mode === 'lost-context' ? 'yes' : 'no'], 'dependency-install'),
+  ];
+  for (const run of parents) await waitForJointAdmission(() => run.stdout().includes('ready'), run.child, run.stderr);
+  assert.equal((await fixture.entries('owners')).length, 2);
+  const initialDiagnostics = parents.map(run => run.stderr().length);
+  const nestedDiagnostics = () => parents.map((run, index) => run.stderr().slice(initialDiagnostics[index]));
+  for (const run of parents) run.child.stdin.write('start\n');
+  await waitForJointAdmission(() => parents.every(run => run.stdout().includes('ownerClass'))
+    || nestedDiagnostics().some(value => value.includes('waiting for heavyweight admission')), null,
+  () => parents.map(run => run.stderr()).join('\n'));
+  const blocked = nestedDiagnostics().some(value => value.includes('waiting for heavyweight admission'));
+  // Drain the old implementation for a contract assertion rather than leaving
+  // a timeout and orphaned admitted trees as the only RED evidence.
+  if (blocked) await writeFile(fixture.memory, '67108864 73400320\n');
+  for (const run of parents) await waitForJointAdmission(() => run.stdout().includes('ownerClass'), run.child, run.stderr);
+  const results = parents.map(run => JSON.parse(run.stdout().trim().split('\n').at(-1)));
+  for (const run of parents) run.child.stdin.end('release\n');
+  for (const run of parents) assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(blocked, false, 'no descendant may wait for capacity held by the two containing jobs: ' + nestedDiagnostics().join('\n'));
+  assert.deepEqual(results, [
+    { status: mode === 'upgrade' ? 1 : 0, output: mode === 'upgrade' ? '' : 'nested', owners: 2, waiters: 0, ownerClass: compilerClass },
+    { status: 0, output: 'nested', owners: 2, waiters: 0, ownerClass: 'dependency-install' },
+  ]);
   assert.deepEqual(await fixture.entries('owners'), []);
   assert.deepEqual(await fixture.entries('waiters'), []);
 });

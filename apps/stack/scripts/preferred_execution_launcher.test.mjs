@@ -1704,7 +1704,7 @@ for (const { admissionClass, belowFloorKiB, floorKiB, nested = false } of [
   { admissionClass: 'compilation', belowFloorKiB: resolveHeavyweightMemoryFloorKiB('compilation') - 1, floorKiB: resolveHeavyweightMemoryFloorKiB('compilation') },
   { admissionClass: 'compilation', belowFloorKiB: resolveHeavyweightMemoryFloorKiB('compilation') - 1, floorKiB: resolveHeavyweightMemoryFloorKiB('compilation'), nested: true },
 ]) {
-test(`memory-aware ${admissionClass} target admission${nested ? ' beneath focused admission' : ''} waits below its measured floor`, { timeout: 30_000 }, async (t) => {
+test(`memory-aware ${admissionClass} target admission${nested ? ' beneath composed admission' : ''} waits below its measured floor`, { timeout: 30_000 }, async (t) => {
   const totalKiB = 50331648;
   const { invocation, samplePath } = await memoryRoutingFixture(t, { availableKiB: belowFloorKiB, totalKiB });
   const { launcher } = await installNativeAdmissionFixture({ root: invocation.env.HOME });
@@ -1724,7 +1724,7 @@ test(`memory-aware ${admissionClass} target admission${nested ? ' beneath focuse
   ].join('\n'));
   await executable(join(binDir, 'probe-command'), '#!/bin/sh\ncount=0; for owner in "$HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT"/owners/*; do [ ! -d "$owner" ] || count=$((count + 1)); done\n[ "$count" = 1 ] || exit 99\nprintf "admitted\\n"\n');
   const directArgs = [launcher, '--heavyweight-admission', `--class=${admissionClass}`, '--machine=fixture', '--', 'probe-command'];
-  const args = nested ? [launcher, '--heavyweight-admission', '--class=validation', '--machine=fixture', '--', '/bin/sh', ...directArgs] : directArgs;
+  const args = nested ? [launcher, '--heavyweight-admission', `--class=${admissionClass}`, '--machine=fixture', '--', '/bin/sh', ...directArgs] : directArgs;
   const child = spawn('/bin/sh', args, { ...invocation, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => { if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM'); });
   let stderr = '';
@@ -5055,6 +5055,11 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
     env,
     encoding: 'utf8',
   });
+  const sourceExport = spawnSync('/bin/sh', [launcher, '--', 'node', 'apps/stack/scripts/build/build_source_web_ui.mjs'], {
+    cwd: repoRoot,
+    env,
+    encoding: 'utf8',
+  });
   const scriptedVitest = spawnSync('/bin/sh', [launcher, '--script=test:local'], {
     cwd: repoRoot,
     env,
@@ -5122,6 +5127,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
     vitest,
     search,
     typecheck,
+    sourceExport,
     scriptedVitest,
     scriptedNonVitestTest,
     directNonVitestTest,
@@ -5142,6 +5148,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   assert.doesNotMatch(vitest.stdout, /fi;;/);
   assert.match(search.stdout, /nice -n 10.*rg.*--threads=1/s);
   assert.match(typecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*runTypeScriptCli\.mjs/s);
+  assert.match(sourceExport.stdout, /GOMAXPROCS=1.*nice -n 10.*build_source_web_ui\.mjs/s);
   assert.doesNotMatch(typecheck.stdout, /--singleThreaded/);
   assert.match(scriptedVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*pnpm.*run.*--silent.*test:local/s);
   assert.doesNotMatch(scriptedVitest.stdout, /--maxWorkers|--minWorkers/);
@@ -6784,19 +6791,121 @@ test('native admission uses the measured memory envelope without arbitrary press
     '',
   ].join('\n'));
   await executable(join(binDir, 'systemctl'), '#!/bin/sh\nexit 1\n');
-  for (const telemetry of [
-    { FIXTURE_RUN_QUEUE: '12', FIXTURE_CPU_PSI: '75' },
-    { FIXTURE_MEMORY_PSI: '11' },
-    { FIXTURE_TOTAL_MEMORY: '125829120' },
-    { FIXTURE_PLATFORM: 'Darwin' },
+  for (const [telemetry, expectedBudget] of [
+    [{ FIXTURE_RUN_QUEUE: '12', FIXTURE_CPU_PSI: '75' }, '1'],
+    [{ FIXTURE_MEMORY_PSI: '11' }, '3'],
+    [{ FIXTURE_TOTAL_MEMORY: '125829120' }, '4'],
+    [{ GOMAXPROCS: '2' }, '2'],
+    [{ FIXTURE_PLATFORM: 'Darwin' }, 'unset'],
   ]) {
-    const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=dedicated-worker', '--no-wait', '--', '/usr/bin/printf', 'admitted'], {
+    const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=dedicated-worker', '--no-wait', '--', '/bin/sh', '-c', 'printf "admitted:%s" "${GOMAXPROCS-unset}"'], {
       cwd: repoRoot, encoding: 'utf8',
       env: { ...executionNeutralEnv, HOME: root, PATH: `${binDir}:/usr/bin:/bin`, TMPDIR: root, ...telemetry },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, 'admitted');
+    assert.equal(result.stdout, `admitted:${expectedBudget}`);
   }
+});
+
+const exportEnvelopeCandidateSources = {
+  ...(process.env.HAPPIER_TEST_EXPORT_ENVELOPE_LAUNCHER ? { launcherSourcePath: resolve(repoRoot, process.env.HAPPIER_TEST_EXPORT_ENVELOPE_LAUNCHER) } : {}),
+  ...(process.env.HAPPIER_TEST_EXPORT_ENVELOPE_POLICY ? { commandPolicySourcePath: resolve(repoRoot, process.env.HAPPIER_TEST_EXPORT_ENVELOPE_POLICY) } : {}),
+};
+
+test('source web export admission fits measured memory to its admitted thread count', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-export-envelope-'));
+  const { launcher } = await installNativeAdmissionFixture({ root, ...exportEnvelopeCandidateSources });
+  const { resolveHeavyweightMemoryFloorKiB } = await import(exportEnvelopeCandidateSources.commandPolicySourcePath
+    ?? new URL('./utils/dev_targets/remote_commands.mjs', import.meta.url));
+  const binDir = join(root, 'bin');
+  t.after(async () => await rm(root, { recursive: true, force: true }));
+  await mkdir(binDir, { recursive: true });
+  await executable(join(binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
+  await executable(join(binDir, 'awk'), [
+    '#!/bin/sh',
+    'case "$*" in',
+    '  */proc/meminfo*) printf "%s %s\\n" "$FIXTURE_MEMORY_KIB" "$FIXTURE_MEMORY_KIB" ;;',
+    '  *) exec /usr/bin/awk "$@" ;;',
+    'esac', '',
+  ].join('\n'));
+  const payload = [
+    '. "$1"',
+    'for owner in "$HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT"/owners/*; do',
+    '  threads=unknown; if [ -r "$owner/workers" ]; then read -r threads < "$owner/workers" || exit 98; fi',
+    '  printf "%s,%s,%s" "$GOMAXPROCS" "$threads" "$(heavyweight_memory_floor_kib source-web-export worker "$threads")"',
+    'done',
+  ].join('\n');
+  for (const [memoryGiB, cpuBudget, override, expectedThreads, expectedGiB, custody, expectedStatus = 0] of [
+    [26, 47, '', 32, 26, false],
+    [125, 47, '', 47, 33, false],
+    [26, 8, '', 8, 14, false],
+    [26, 47, '8', 8, 14, false],
+    [26.7, 47, '', 32, 26, true],
+    [13, 47, '', 6, 13, false],
+    [10, 47, '', 2, 10, false],
+    [10, 1, '', 1, 10, false],
+    [9, 47, '', null, 10, false, 1],
+    [125, 2, '0', null, 33, false],
+  ]) {
+    const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--class=source-web-export',
+      '--machine=dedicated-worker', '--no-wait', ...(custody ? ['--workspace-locks=[]'] : []), '--', '/bin/sh', '-c', payload, 'probe',
+      join(root, 'native-owner/apps/stack/scripts/utils/dev_targets/native_command_policy.sh')], {
+      cwd: repoRoot, encoding: 'utf8',
+      env: { ...executionNeutralEnv, HOME: root, PATH: `${binDir}:/usr/bin:/bin`, TMPDIR: root,
+        GOMAXPROCS: String(cpuBudget), FIXTURE_MEMORY_KIB: String(Math.floor(memoryGiB * 1024 * 1024)),
+        HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: override },
+    });
+    assert.equal(result.status, expectedStatus, result.stderr);
+    if (expectedStatus !== 0) {
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /requires=10485760 KiB/);
+      continue;
+    }
+    const expectedCpuBudget = override ? cpuBudget : expectedThreads;
+    assert.equal(result.stdout, `${expectedCpuBudget},${expectedThreads ?? 'unknown'},${expectedGiB * 1024 * 1024}`);
+    assert.equal(resolveHeavyweightMemoryFloorKiB('source-web-export', { workers: expectedThreads ?? undefined }),
+      expectedGiB * 1024 * 1024);
+  }
+});
+
+test('source web export peers account their admitted thread envelopes once', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-export-envelope-peers-'));
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root, ...exportEnvelopeCandidateSources });
+  const binDir = join(root, 'bin');
+  const release = join(root, 'release');
+  await mkdir(binDir, { recursive: true });
+  await executable(join(binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
+  await executable(join(binDir, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "29360128 29360128\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
+  const env = { ...executionNeutralEnv, HOME: root, PATH: `${binDir}:/usr/bin:/bin`, TMPDIR: root,
+    GOMAXPROCS: '8', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '' };
+  const jobs = [];
+  t.after(async () => {
+    await writeFile(release, '');
+    await Promise.all(jobs.map(child => child.exitCode === null ? new Promise(resolveExit => child.once('close', resolveExit)) : null));
+    await rm(root, { recursive: true, force: true });
+  });
+  for (const index of [0, 1]) {
+    const marker = join(root, `started-${index}`);
+    const child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=source-web-export',
+      '--machine=dedicated-worker', '--no-wait', '--', '/bin/sh', '-c',
+      'printf "%s" "$GOMAXPROCS" > "$1"; while [ ! -e "$2" ]; do sleep 0.02; done', 'hold', marker, release],
+    { cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    jobs.push(child);
+    let stderr = '';
+    child.stderr.on('data', bytes => { stderr += bytes; });
+    let observed;
+    for (let attempt = 0; attempt < 250 && observed === undefined; attempt++) {
+      observed = await readFile(marker, 'utf8').catch(() => undefined);
+      if (observed === undefined) await new Promise(resolveWait => setTimeout(resolveWait, 20));
+    }
+    assert.equal(observed, '8', stderr);
+  }
+  assert.equal((await readdir(join(admissionRoot, 'owners'))).length, 2);
+  const third = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation',
+    '--machine=dedicated-worker', '--no-wait', '--', '/bin/sh', '-c', 'exit 99'],
+  { cwd: repoRoot, env, encoding: 'utf8' });
+  assert.equal(third.status, 75, third.stderr);
+  assert.match(third.stderr, /reserved-memory=29360128/);
 });
 
 test('native launcher does not derive a fixed heavyweight job count from the worker profile', async (t) => {

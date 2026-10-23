@@ -7,7 +7,15 @@ import { reapHistoricalTempRoots } from './historical_temp_roots.mjs';
 import { getHappierTempRootForUid, prepareHappierTempDirOwnerCleanup, readHappierTempDirOwnerForDirectory,
   readHappierTempDirOwnerLiveness } from '../../../../../packages/cli-common/tempDirOwnership.mjs';
 
-const classes = ['validation', 'dependency-install', 'package-dist', 'runtime-build', 'source-bundle', 'compilation'];
+const writeRootsByClass = {
+  validation: ['repoDir'],
+  'dependency-install': ['repoDir', 'cacheBaseDir'],
+  'package-dist': ['repoDir'],
+  'runtime-build': ['repoDir', 'cacheBaseDir', 'scratchRoot'],
+  'source-bundle': ['cacheBaseDir'],
+  'source-web-export': ['cacheBaseDir', 'scratchRoot'],
+  compilation: ['repoDir'],
+};
 
 function directory(path) {
   try { return lstatSync(path).isDirectory(); }
@@ -84,15 +92,11 @@ async function reapRuntimeBuildStaging(cacheBaseDir, scratchRoot, procRoot, owne
 export async function inspectWorkerDiskBudget({ repoDir, cacheBaseDir, commandClass = 'runtime-build', scratchRoot = tmpdir(), observeFilesystem = observeWorkerFilesystem }) {
   if (['targeted-validation', 'full-validation', 'native-source-test'].includes(commandClass)) commandClass = 'validation';
   if (['compilation-ui', 'compilation-cli', 'compilation-server'].includes(commandClass)) commandClass = 'compilation';
-  if (!classes.includes(commandClass)) throw new Error(`unknown worker disk class: ${commandClass}`);
+  if (!Object.hasOwn(writeRootsByClass, commandClass)) throw new Error(`unknown worker disk class: ${commandClass}`);
   const observations = new Map();
-  const paths = ['package-dist', 'compilation', 'validation'].includes(commandClass)
-    ? [repoDir]
-    : commandClass === 'dependency-install' ? [repoDir, cacheBaseDir]
-      // Shared source bundles and the configured cache live on the target home
-      // filesystem; source builds do not write native runtime staging.
-      : commandClass === 'source-bundle' ? [cacheBaseDir] : [repoDir, cacheBaseDir, scratchRoot];
-  for (const path of paths) {
+  const roots = { repoDir, cacheBaseDir, scratchRoot };
+  for (const root of writeRootsByClass[commandClass]) {
+    const path = roots[root];
     const fs = observeFilesystem(path);
     observations.set(fs.device, { ...fs, path });
   }

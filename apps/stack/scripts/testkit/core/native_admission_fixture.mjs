@@ -60,7 +60,9 @@ export function buildNativeAdmissionFixtureEnv(env = process.env) {
 /** Remap only the fixed OS-state filesystem boundary, never a production flag.
  * Real admission, kernel identity, locking and class policy remain unchanged.
  */
-export async function installNativeAdmissionFixture({ root, admissionRoot = join(root, 'host-admission'), observedPidsPath = null, prepareDependencies = false }) {
+export async function installNativeAdmissionFixture({ root, admissionRoot = join(root, 'host-admission'), observedPidsPath = null, prepareDependencies = false,
+  launcherSourcePath = join(sourceRoot, 'apps/stack/bin/hstack-exec'),
+  commandPolicySourcePath = join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/remote_commands.mjs') }) {
   const checkout = join(root, 'native-owner');
   const bin = join(checkout, 'apps/stack/bin');
   const proc = join(checkout, 'apps/stack/scripts/utils/proc');
@@ -108,13 +110,19 @@ esac
 ` });
   const launcher = join(bin, 'hstack-exec');
   await Promise.all([
-    copyFile(join(sourceRoot, 'apps/stack/bin/hstack-exec'), launcher),
+    copyFile(launcherSourcePath, launcher),
     copyFile(join(sourceRoot, 'apps/stack/bin/hstack-dev-target-control'), join(bin, 'hstack-dev-target-control')),
     copyFile(join(sourceRoot, 'apps/stack/scripts/utils/proc/native_process_identity.sh'), join(proc, 'native_process_identity.sh')),
     copyFile(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/native_command_policy.sh'), join(targets, 'native_command_policy.sh')),
     copyFile(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/native_sync_readiness.sh'), join(targets, 'native_sync_readiness.sh')),
     copyFile(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh'), join(targets, 'remote_execution_custody.sh')),
   ]);
+  // A live admission change can prove its exact sibling candidate before the
+  // atomic publication. Execute the real candidate policy, not a copied table.
+  if (commandPolicySourcePath !== join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/remote_commands.mjs')) {
+    const { renderNativeCommandPolicy } = await import(pathToFileURL(commandPolicySourcePath));
+    await writeFile(join(targets, 'native_command_policy.sh'), renderNativeCommandPolicy());
+  }
   // Native runtime dispatch consumes these real source preparation owners.
   // Forward the entry identity too: a plain symlink skips their CLI main guard
   // because Node resolves import.meta.url to the original module's real path.
@@ -133,7 +141,7 @@ esac
   // Replace only OS enumeration; real RSS/ancestry for explicitly included
   // fixture processes and the production observer's domain logic stay real.
   const observer = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/proc/service_memory.mjs')).href;
-  const commandPolicy = pathToFileURL(join(sourceRoot, 'apps/stack/scripts/utils/dev_targets/remote_commands.mjs')).href;
+  const commandPolicy = pathToFileURL(commandPolicySourcePath).href;
   await writeFile(join(targets, 'remote_commands.mjs'), `export * from ${JSON.stringify(commandPolicy)};
 import { runRemoteCommandPolicyCli } from ${JSON.stringify(commandPolicy)};
 import { resolve } from 'node:path';

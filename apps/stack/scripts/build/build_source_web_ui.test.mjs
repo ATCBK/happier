@@ -13,6 +13,7 @@ import { runInNewContext } from 'node:vm';
 import { run } from '../utils/proc/proc.mjs';
 import { exportSourceWebUi } from './build_source_web_ui.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
+import { prepareFiniteSourceWebFixture, relocateSourceOwnerImports } from '../testkit/core/source_web_fixture.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
 import { captureSourceWebBuildInputs, readWorkspacePackages, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
 import { ensureExpoWorkspacePrepared, hasUsableExpoWorkspaceLastGreen, withExpoPreparationEnv } from '../utils/expo/command.mjs';
@@ -22,6 +23,16 @@ import { recordStackRuntimeStart, readStackRuntimeStateFile } from '../utils/sta
 import { beginPendingSourceStart } from '../runtime/shared/pending_source_start.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
+import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('relocated source owners resolve multiline runtime imports', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-relocated-source-owner-' });
+  const owner = fixture.path('owner.mjs');
+  await writeFile(owner, relocateSourceOwnerImports(
+    "import { captureSourceWebBuildInputs,\n  readWorkspacePackages } from './build_source_runtime.mjs';\nexport const loaded = typeof captureSourceWebBuildInputs === 'function' && typeof readWorkspacePackages === 'function';",
+    new URL('./build_source_web_ui.mjs', import.meta.url)));
+  assert.equal((await import(pathToFileURL(owner))).loaded, true);
+});
 
 test('captured Metro crawls workspace-local installed dependencies', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-captured-metro-dependencies-', registerCleanup: false });
@@ -164,7 +175,7 @@ test('source stacks reuse completed web bytes while debug options and damaged ex
   const repoDir = fixture.path('repo');
   // The fixture owns its authored changes. Other lanes may keep editing the
   // shared checkout without turning this unchanged-input assertion into churn.
-  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
+  await prepareFiniteSourceWebFixture({ sourceRepo, repoDir });
   const stackBaseDir = fixture.path('stacks/consumer');
   const counter = fixture.path('exports');
   const expo = fixture.path(process.platform === 'win32' ? 'expo.cmd' : 'expo');
@@ -187,27 +198,34 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
   const commandBoundary = fixture.path('expo-command.mjs');
   await writeFile(commandBoundary, `export {prepareExpoCommandEnv,applyExpoExportMaxWorkersArgs} from ${JSON.stringify(new URL('../utils/expo/command.mjs', import.meta.url).href)};\nexport async function resolveExpoBin(){return ${JSON.stringify(expo)};}`);
   const sourceUrl = new URL('./build_source_web_ui.mjs', import.meta.url);
+  const artifactSource = new URL('./build_web_artifact.mjs', import.meta.url);
+  const runtimeSource = new URL('./build_source_runtime.mjs', import.meta.url);
+  const smokeSource = new URL('../runtime/launch/smokeSourceRuntimeReload.mjs', import.meta.url);
+  const reloadSource = new URL('../runtime/launch/prepareSourceRuntimeReload.mjs', import.meta.url);
+  // These test-owned adapters must consume the same owner interfaces even if
+  // another lane edits the shared checkout while repeated exports are running.
+  const [sourceOwnerText, artifactOwnerText, runtimeOwnerText, smokeOwnerText, reloadOwnerText] = await Promise.all(
+    [sourceUrl, artifactSource, runtimeSource, smokeSource, reloadSource].map(url => readFile(url, 'utf8')));
   const publicOwner = fixture.path('source-web.mjs');
   const native = process.platform === 'linux' ? await installNativeAdmissionFixture({ root: fixture.root }) : null;
   const adapterSource = new URL('../utils/proc/runSourceBuildCommand.mjs', import.meta.url);
   const adapter = native && fixture.path('native-owner/apps/stack/scripts/utils/proc/runSourceBuildCommand.mjs');
-  if (adapter) await writeFile(adapter, (await readFile(adapterSource, 'utf8')).replace(
-    "from '../dev/devReloadCoordinator.mjs'", `from ${JSON.stringify(new URL('../dev/devReloadCoordinator.mjs', adapterSource).href)}`));
+  if (adapter) await writeFile(adapter, relocateSourceOwnerImports(await readFile(adapterSource, 'utf8'), adapterSource,
+    new Map([['./workspace_build_admission.mjs', null]])));
   // Substitute only installed executable lookup. The subprocess producer,
   // capture, SDK preparation, admission, cache and publication remain real.
   // The isolated physical admission fixture lets independent cold producers
   // queue together, without inheriting the already-charged test runner host.
-  await writeFile(publicOwner, (await readFile(sourceUrl, 'utf8'))
-    .replace("fileURLToPath(new URL('../../bin/hstack-exec', import.meta.url))", JSON.stringify(native?.launcher ?? fileURLToPath(new URL('../../bin/hstack-exec', sourceUrl))))
-    .replace(/from '(\.[^']+)'/g, (_match, specifier) => {
-      const url = specifier === '../utils/expo/command.mjs' ? pathToFileURL(commandBoundary)
-        : adapter && specifier === '../utils/proc/runSourceBuildCommand.mjs' ? pathToFileURL(adapter) : new URL(specifier, sourceUrl);
-      return `from ${JSON.stringify(url.href)}`;
-    }));
+  const sourceBoundaries = new Map([['../utils/expo/command.mjs', pathToFileURL(commandBoundary)],
+    ...(adapter ? [['../utils/proc/runSourceBuildCommand.mjs', pathToFileURL(adapter)]] : [])]);
+  await writeFile(publicOwner, relocateSourceOwnerImports(sourceOwnerText
+    .replace("fileURLToPath(new URL('../../bin/hstack-exec', import.meta.url))", JSON.stringify(native?.launcher ?? fileURLToPath(new URL('../../bin/hstack-exec', sourceUrl)))),
+  sourceUrl, sourceBoundaries));
   const { exportSourceWebUi: exportShared, publishSourceWebUi: selectShared } = await import(pathToFileURL(publicOwner));
   pending = await beginPendingSourceStart({ stackBaseDir });
   const exports = async () => Number(await readFile(counter, 'utf8'));
-  const env = { ...(native ? buildNativeAdmissionFixtureEnv() : process.env), EXPO_PUBLIC_DEBUG: '0' };
+  const env = { ...(native ? buildNativeAdmissionFixtureEnv() : process.env), EXPO_PUBLIC_DEBUG: '0',
+    GOMAXPROCS: '2', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '' };
   const options = { repoDir, stackBaseDir, pending, baseDir: fixture.path('state'),
     env };
   const otherStackBaseDir = fixture.path('stacks/independent');
@@ -220,10 +238,18 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
     if (result.status === 'rejected') throw result.reason;
     return result.value;
   });
-  const repeat = await exportShared({ ...options, outputDir: fixture.path('second') });
-  assert.equal(await exports(), 1, 'an unchanged restart must skip Metro and plugin preparation');
+  const repeat = await exportShared({ ...options, outputDir: fixture.path('second'),
+    env: { ...env, GOMAXPROCS: '3' } });
+  assert.equal(await exports(), 1, 'changing the executor CPU budget must reuse unchanged completed bytes');
   assert.equal(repeat.uiDir, first.uiDir, 'restart selects the completed export without copying or mutating it');
   assert.equal(other.uiDir, first.uiDir, 'independent Stack homes share account-free completed bytes');
+  const withoutBudget = await exportShared({ ...options, env: { ...env, GOMAXPROCS: '' } });
+  assert.equal(withoutBudget.uiDir, first.uiDir, 'pre-admission lookup must reuse bytes without a CPU budget');
+  assert.equal(await exports(), 1);
+  const sourceMaps = await exportShared({ ...options, outputDir: fixture.path('source-maps'),
+    env: { ...env, HAPPIER_UI_EXPORT_SOURCE_MAPS: '1' } });
+  assert.notEqual(sourceMaps.uiDir, first.uiDir, 'semantic source-map options must invalidate completed bytes');
+  assert.equal(await exports(), 2);
   // Already-loaded source publishers nominate bundle-* allocations and do
   // not know serving web references. Their observed namespace must not include
   // a new completed web product, even after its own build lease has retired.
@@ -231,14 +257,14 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
     .filter(name => name.startsWith('bundle-')).map(name => fixture.path('stacks/source-bundles', name));
   assert.equal(legacyCandidates.includes(dirname(first.uiDir)), false,
     'an older loaded source retainer must not nominate shared serving web bytes');
-  assert.equal(await exports(), 1);
+  assert.equal(await exports(), 2);
   const firstServing = fixture.path('stacks/consumer/source-runtime/ui');
   const otherServing = fixture.path('stacks/independent/source-runtime/ui');
   await selectShared({ built: first, uiDir: firstServing, pending });
   await selectShared({ built: other, uiDir: otherServing, pending: otherPending });
   const debug = await exportShared({ ...options, outputDir: fixture.path('debug'),
     env: { ...options.env, EXPO_PUBLIC_DEBUG: '1' } });
-  assert.equal(await exports(), 2);
+  assert.equal(await exports(), 3);
   assert.notEqual(debug.uiDir, first.uiDir);
   assert.match(await readFile(join(debug.uiDir, 'app.js'), 'utf8'), /"1"/);
   await selectShared({ built: debug, uiDir: firstServing, pending });
@@ -248,25 +274,25 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
   await chmod(join(first.uiDir, 'app.js'), 0o644);
   await writeFile(join(first.uiDir, 'app.js'), 'damaged');
   const repaired = await exportShared({ ...options, outputDir: fixture.path('repair') });
-  assert.equal(await exports(), 3, 'a content-damaged completed export is not reusable');
+  assert.equal(await exports(), 4, 'a content-damaged completed export is not reusable');
   assert.match(await readFile(join(repaired.uiDir, 'app.js'), 'utf8'), /"0"/);
   await assert.rejects(exportShared({ ...options, outputDir: fixture.path('failure'),
     env: { ...options.env, EXPO_PUBLIC_DEBUG: '1', EXPO_PUBLIC_FEATURES: 'different' } }), /ENOSPC/);
   const afterFailure = await exportShared({ ...options, outputDir: fixture.path('after-failure') });
   assert.equal(afterFailure.uiDir, repaired.uiDir, 'a failed distinct export cannot replace the incumbent');
-  assert.equal(await exports(), 4);
+  assert.equal(await exports(), 5);
   const terminal = await exportShared({ ...options,
     env: { ...options.env, HAPPIER_TERMINAL_NATIVE_BUILD_EVIDENCE_ID: 'term-build-distinct-options' } });
   assert.notEqual(terminal.uiDir, repaired.uiDir, 'app configuration options participate in reuse');
-  assert.equal(await exports(), 5);
+  assert.equal(await exports(), 6);
   const member = join(repoDir, 'apps/ui/sources/completedWebMembership.ts');
   await writeFile(member, 'export const added = true;');
   const changed = await exportShared(options);
   assert.notEqual(changed.uiDir, repaired.uiDir, 'new authored membership invalidates a completed export');
-  assert.equal(await exports(), 6);
+  assert.equal(await exports(), 7);
   await rm(member);
   assert.equal((await exportShared(options)).uiDir, repaired.uiDir, 'Undo adopts matching captured bytes');
-  assert.equal(await exports(), 6);
+  assert.equal(await exports(), 7);
   const fault = fixture.path('completion-fault.mjs');
   // Fail only the real output-completion rename; no cache/publication logic
   // or domain owner is substituted beneath the filesystem boundary.
@@ -279,23 +305,16 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
     NODE_OPTIONS: [options.env.NODE_OPTIONS, `--import=${pathToFileURL(fault).href}`].filter(Boolean).join(' ') } }), /ENOSPC at web completion/);
   assert.equal(await readFile(join(firstServing, 'app.js'), 'utf8'), servingBytes);
   assert.equal((await exportShared(options)).uiDir, repaired.uiDir, 'failed completion keeps reusable incumbent bytes');
-  assert.equal(await exports(), 7);
+  assert.equal(await exports(), 8);
 
   const privateExport = await exportShared({ ...options, stackBaseDir: undefined, pending: undefined,
     outputDir: fixture.path('private-export') });
-  assert.equal(await exports(), 8, 'the private finite producer must execute its own Expo boundary');
+  assert.equal(await exports(), 9, 'the private finite producer must execute its own Expo boundary');
   assert.match(await readFile(join(privateExport.uiDir, 'app.js'), 'utf8'), /"0"/);
 
-  const artifactSource = new URL('./build_web_artifact.mjs', import.meta.url);
   const artifactOwnerPath = fixture.path('artifact.mjs');
-  await writeFile(artifactOwnerPath, (await readFile(artifactSource, 'utf8'))
-    .replace(/from '(\.[^']+)'/g, (_match, specifier) => {
-      const url = specifier === './build_source_web_ui.mjs' ? pathToFileURL(publicOwner)
-        : specifier === '../utils/expo/command.mjs' ? pathToFileURL(commandBoundary)
-          : adapter && specifier === '../utils/proc/runSourceBuildCommand.mjs' ? pathToFileURL(adapter)
-            : new URL(specifier, artifactSource);
-      return `from ${JSON.stringify(url.href)}`;
-    }));
+  await writeFile(artifactOwnerPath, relocateSourceOwnerImports(artifactOwnerText, artifactSource,
+    new Map([...sourceBoundaries, ['./build_source_web_ui.mjs', pathToFileURL(publicOwner)]])));
   const { buildWebArtifact } = await import(pathToFileURL(artifactOwnerPath));
   const artifact = await buildWebArtifact({ rootDir: repoDir, artifactDir: fixture.path('artifacts/web/finite'),
     artifactFingerprint: 'finite', sourceMetadata: { sourceFingerprint: 'fixture', builtAt: '2026-10-12T00:00:00Z' },
@@ -304,7 +323,7 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
     // finite admission, Expo execution and artifact publication remain real.
     ensureDepsInstalledImpl: async (_dir, _label, options) => await options.onDependenciesReady(),
     runUiPostinstallImpl: () => {} });
-  assert.equal(await exports(), 9);
+  assert.equal(await exports(), 10);
   assert.match(await readFile(join(artifact.artifactDir, 'payload/app.js'), 'utf8'), /"0"/);
   assert.deepEqual(await readdir(fixture.path('artifacts/web')), ['finite']);
 
@@ -334,25 +353,17 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
       catch {response.statusCode=404;response.end();}
     }).listen(Number(process.env.PORT),process.env.HOST);
   `);
-  const runtimeSource = new URL('./build_source_runtime.mjs', import.meta.url);
   const runtimePath = fixture.path('native-owner/apps/stack/scripts/build/build_source_runtime.mjs');
   await mkdir(dirname(runtimePath), { recursive: true });
-  await writeFile(runtimePath, (await readFile(runtimeSource, 'utf8')).replace(/^(import|export) ([^\n]*) from '(\.[^']+)'/gm, (match, declaration, clause, specifier) => {
-    if (['../utils/proc/runSourceBuildCommand.mjs', '../utils/proc/workspace_build_admission.mjs'].includes(specifier)) return match;
-    return `${declaration} ${clause} from ${JSON.stringify(new URL(specifier, runtimeSource).href)}`;
-  }));
-  const smokeSource = new URL('../runtime/launch/smokeSourceRuntimeReload.mjs', import.meta.url);
+  await writeFile(runtimePath, relocateSourceOwnerImports(runtimeOwnerText, runtimeSource,
+    new Map([['../utils/proc/runSourceBuildCommand.mjs', null], ['../utils/proc/workspace_build_admission.mjs', null]])));
   const smokePath = fixture.path('native-owner/apps/stack/scripts/runtime/launch/smokeSourceRuntimeReload.mjs');
   await mkdir(dirname(smokePath), { recursive: true });
-  await writeFile(smokePath, (await readFile(smokeSource, 'utf8')).replace(/from '(\.[^']+)'/g,
-    (_match, specifier) => `from ${JSON.stringify(new URL(specifier, smokeSource).href)}`));
-  const reloadSource = new URL('../runtime/launch/prepareSourceRuntimeReload.mjs', import.meta.url);
+  await writeFile(smokePath, relocateSourceOwnerImports(smokeOwnerText, smokeSource));
   const reloadPath = fixture.path('prepare-source-reload.mjs');
-  await writeFile(reloadPath, (await readFile(reloadSource, 'utf8')).replace(/from '(\.[^']+)'/g, (_match, specifier) => {
-    const url = specifier === '../../build/build_source_runtime.mjs' ? pathToFileURL(runtimePath)
-      : specifier === '../../build/build_source_web_ui.mjs' ? pathToFileURL(publicOwner) : new URL(specifier, reloadSource);
-    return `from ${JSON.stringify(url.href)}`;
-  }));
+  await writeFile(reloadPath, relocateSourceOwnerImports(reloadOwnerText, reloadSource,
+    new Map([['../../build/build_source_runtime.mjs', pathToFileURL(runtimePath)],
+      ['../../build/build_source_web_ui.mjs', pathToFileURL(publicOwner)]])));
   const { prepareSourceRuntimeReload } = await import(pathToFileURL(reloadPath));
   const reload = () => prepareSourceRuntimeReload({ stackName: 'independent', stackBaseDir: otherStackBaseDir,
     repoDir, args: ['--no-daemon', '--ui=export'], onHost: true,
@@ -661,36 +672,6 @@ test('cold Expo source preparation needs no workspace dist build or materializat
   await assert.rejects(access(join(repoDir, '.project/tmp/cli-source-dev-shared-deps-sync.json')), { code: 'ENOENT' });
 });
 
-async function prepareFiniteSourceWebFixture({ sourceRepo, repoDir }) {
-  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
-  // Keep the real captured compiler/tooling, but author one small app/plugin.
-  // The separate whole-app export case exercises the complete plugin census.
-  const pluginName = '@happier-dev/plugins-admission-fixture';
-  await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli',
-    type: 'module', bundledDependencies: [pluginName] }));
-  await writeFile(join(repoDir, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui',
-    type: 'module', dependencies: { [pluginName]: '0.0.0' } }));
-  await rm(join(repoDir, 'apps/ui/sources'), { recursive: true });
-  await mkdir(join(repoDir, 'apps/ui/sources/app'), { recursive: true });
-  const uiInput = join(repoDir, 'apps/ui/sources/app/_layout.tsx');
-  const uiSource = 'export const admissionInput = "captured-ui-input";';
-  await writeFile(uiInput, uiSource);
-  const pluginRoot = join(repoDir, 'packages/plugins/admission-fixture');
-  await mkdir(join(pluginRoot, 'src'), { recursive: true });
-  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: pluginName, version: '0.0.0',
-    type: 'module', exports: { './manifest': './src/manifest.ts', './happier-plugin-ui/panel': './src/panel.ts' } }));
-  await writeFile(join(pluginRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
-    id: 'happier.admission-fixture', contributes: { ui: {
-      renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }],
-    } },
-  })};`);
-  const pluginInput = join(pluginRoot, 'src/panel.ts');
-  await writeFile(pluginInput, 'export function renderSurface() { return "captured-plugin-input"; }');
-  const toolInput = 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs';
-  const toolDigest = createHash('sha256').update(await readFile(join(repoDir, toolInput))).digest('hex');
-  return { uiInput, uiSource, pluginInput, toolInput, toolDigest };
-}
-
 test('source web export retains captured UI and workspace inputs across live additions, removals and edits', async context => {
   const fixture = await createTempFixture(context, { prefix: 'happier-web-input-churn-' });
   const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -898,7 +879,8 @@ export async function resolveExpoBin() {
     });
     await writeFile(publicOwner, source);
     const { exportSourceWebUi: exportWithOsFixture } = await import(pathToFileURL(publicOwner));
-    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
+    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+      HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS: '1' };
     await mkdir(join(native.admissionRoot, 'waiters'), { recursive: true });
     await mkdir(join(native.admissionRoot, 'owners'), { recursive: true });
     const watcher = watch(join(native.admissionRoot, 'waiters'));
@@ -933,8 +915,11 @@ export async function resolveExpoBin() {
     await withDependencyRefreshLock({ installDir: repoDir, env, signal: context.signal }, async () => {});
     await writeFile(available, '16777216');
     await pending;
-    assert.deepEqual(JSON.parse(await readFile(executed, 'utf8')),
-      { className: 'validation', owners: 1, cwd: fixture.path('expo-state/source-web/workspace/apps/ui') });
+    const observed = JSON.parse(await readFile(executed, 'utf8'));
+    assert.ok(resolveHeavyweightMemoryFloorKiB(observed.className) > resolveHeavyweightMemoryFloorKiB('validation'),
+      'the real Expo tree must retain the measured export envelope rather than validation');
+    assert.deepEqual({ owners: observed.owners, cwd: observed.cwd },
+      { owners: 1, cwd: fixture.path('expo-state/source-web/workspace/apps/ui') });
     assert.deepEqual(await readdir(join(native.admissionRoot, 'owners')), []);
     assert.deepEqual(await readdir(join(native.admissionRoot, 'waiters')), []);
   });

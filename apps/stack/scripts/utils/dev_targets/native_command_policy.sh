@@ -6,6 +6,7 @@ heavyweight_memory_floor_kib() {
     validation) heavyweight_policy_floor='6291456' ;;
     native-source-test) heavyweight_policy_floor='2097152' ;;
     source-bundle) heavyweight_policy_floor='10485760' ;;
+    source-web-export) heavyweight_policy_floor='34603008' ;;
     dependency-install) heavyweight_policy_floor='6291456' ;;
     package-dist) heavyweight_policy_floor='6291456' ;;
     runtime-build) heavyweight_policy_floor='18874368' ;;
@@ -16,10 +17,18 @@ heavyweight_memory_floor_kib() {
     targeted-validation|full-validation) heavyweight_policy_floor='6291456' ;;
     *) heavyweight_policy_floor='20971520' ;;
   esac
+  if [ "$1" = source-web-export ]; then
+    case "${3-}" in ''|*[!0-9]*|0) ;;
+      *) heavyweight_policy_floor=$(awk -v threads="$3" 'BEGIN { if(threads<=8) {b=53176704; n=4475296; d=7} else {b=334168608; n=20196492; d=39}; total=b+n*threads+1608848*d; unit=d*1048576; printf "%.0f", (int(total/unit)+(total%unit>0))*1048576 }') ;;
+    esac
+  fi
   if [ "${2-}" = local ] && [ "$heavyweight_policy_floor" -lt 8388608 ]; then
     heavyweight_policy_floor='8388608'
   fi
   printf '%s' "$heavyweight_policy_floor"
+}
+source_web_export_workers_for_memory_kib() {
+  awk -v cpu="$1" -v memory="$2" 'BEGIN { memory=int(memory/1048576)*1048576; if(memory<=14320144) {b=53176704; n=4475296; d=7} else {b=334168608; n=20196492; d=39}; workers=int((memory*d-b-1608848*d)/n); if(workers<1) workers=1; if(workers>cpu) workers=cpu; printf "%.0f", workers }'
 }
 native_command_policy_base() {
   policy_placement='worker-eligible'
@@ -218,6 +227,13 @@ native_command_policy_base() {
     policy_heavyClass='validation'
     policy_kind='source-test'
   fi
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '0' ]; } && { [ "$policy_entryRepositoryPath" = 'apps/stack/scripts/build/build_source_web_ui.mjs' ] || [ "$policy_entryRepositoryPath" = 'apps/stack/scripts/build/build_web_artifact.mjs' ]; }; then
+    policy_validation='1'
+    policy_bootstrap='1'
+    policy_heavyClass='source-web-export'
+    policy_kind='source-test'
+    policy_componentOverride='apps/stack'
+  fi
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '0' ]; } && { [ "$policy_entryRepositoryPath" = 'apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs' ]; }; then
     policy_validation='1'
     policy_bootstrap='1'
@@ -380,6 +396,9 @@ native_command_policy_finish() {
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'source-bundle' ]; }; then
     policy_heavyClass='source-bundle'
   fi
+  if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'source-web-export' ]; }; then
+    policy_heavyClass='source-web-export'
+  fi
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'dependency-install' ]; }; then
     policy_heavyClass='dependency-install'
   fi
@@ -496,6 +515,10 @@ $native_project_path"
 }
 native_resolve_admission_payload() {
   shift
+  resolve_native_command_policy "$@"
+}
+native_resolve_binary_payload() {
+  shift 2
   resolve_native_command_policy "$@"
 }
 native_try_admission_payload() {
@@ -636,9 +659,16 @@ resolve_native_command_policy() {
   if [ "$native_manager" = corepack ]; then shift; native_command_basename "${1-}"; native_manager=$native_basename; fi
   if native_package_manager "$native_manager"; then
     [ "$#" -gt 0 ] && shift
+    native_manager_binary=0; native_manager_run=0
+    [ "$native_manager" != npx ] || native_manager_binary=1
     while [ "$#" -gt 0 ]; do
       case "$1" in
-        run|exec|-s|--silent) shift ;;
+        -s|--silent) shift ;;
+        run) if [ "$native_manager_binary" = 1 ]; then break; fi; native_manager_run=1; shift ;;
+        exec|dlx|x)
+          if [ "$native_manager_run" = 1 ]; then policy_script=$1; break; fi
+          [ "$native_manager_binary" != 1 ] || break
+          native_manager_binary=1; shift; break ;;
         --cwd|--dir|-C) shift; native_manager_cwd=${1-.}; [ "$#" -gt 0 ] && shift ;;
         --cwd=*) native_manager_cwd=${1#--cwd=}; shift ;;
         --dir=*) native_manager_cwd=${1#--dir=}; shift ;;
@@ -646,9 +676,22 @@ resolve_native_command_policy() {
         --filter=*) if [ "$native_manager" = pnpm ]; then policy_workspace=${1#--filter=}; fi; shift ;;
         workspace) if [ "$native_manager" = yarn ]; then shift; policy_workspace=${1-}; [ "$#" -gt 0 ] && shift; else policy_script=$1; break; fi ;;
         -*) shift ;;
-        *) policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; break ;;
+        *) if [ "$native_manager_binary" != 1 ]; then policy_script=$1; if [ "$1" = node ]; then policy_managerNode=1; native_entry_path=${2-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi; fi; break ;;
       esac
     done
+    if [ "$native_manager_binary" = 1 ]; then
+      case "$native_manager_cwd" in
+        /*) native_normalize_path "$native_manager_cwd" ;;
+        *) native_normalize_path "$policy_component/$native_manager_cwd" ;;
+      esac
+      # Positional custody restores caller cwd overrides after recursion.
+      set -- "${explicit_relative_cwd_set-0}" "${explicit_relative_cwd-}" "$@"
+      explicit_relative_cwd_set=1; explicit_relative_cwd=$native_result
+      native_resolve_binary_payload "$@"
+      native_binary_status=$?
+      explicit_relative_cwd_set=$1; explicit_relative_cwd=$2
+      return "$native_binary_status"
+    fi
   fi
   [ -n "$policy_script" ] && policy_hasScript=1
   policy_family=${policy_script%%:*}

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { cp, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
+import { cp, mkdir, readdir, rename, rm } from 'node:fs/promises';
 
 import { execPnpm } from '../../../../scripts/workspaces/execPnpmCommand.mjs';
 import { buildIntoTempThenReplace } from '../utils/fs/atomic_dir_swap.mjs';
@@ -13,7 +13,8 @@ import { ensureExpoIsolationEnv, getExpoStatePaths, resolveExpoTmpDir, wantsExpo
 import { resolveExpoBin, applyExpoExportMaxWorkersArgs } from '../utils/expo/command.mjs';
 import { applyExpoNodeHeapEnv } from '../utils/expo/expoNodeHeapEnv.mjs';
 import { runSourceBuildCommand } from '../utils/proc/runSourceBuildCommand.mjs';
-import { prepareSourceWebUi } from './build_source_web_ui.mjs';
+import { SOURCE_WEB_EXPORT_ADMISSION_CLASS } from '../utils/dev_targets/remote_commands.mjs';
+import { withSourceWebUiInputs } from './build_source_web_ui.mjs';
 import { precompressUiWebAssets } from './precompress_ui_web_assets.mjs';
 import { pathExists } from '../utils/fs/fs.mjs';
 import { buildStackWebExportEnv } from '../utils/ui/ui_export_env.mjs';
@@ -32,7 +33,7 @@ async function runPreparedWebExport({ dir, args, env, repoDir = join(dir, '../..
   const exportEnv = applyExpoNodeHeapEnv({ ...env, CI: '1', EXPO_UNSTABLE_WEB_MODAL: '1' });
   await runSourceBuildCommand({ repoDir, cwd: dir,
     command: await resolveExpoBin(dir), args: applyExpoExportMaxWorkersArgs(args, exportEnv),
-    env: exportEnv, captureStdout: false, stdoutStream: process.stderr });
+    env: exportEnv, admissionClass: SOURCE_WEB_EXPORT_ADMISSION_CLASS, captureStdout: false, stdoutStream: process.stderr });
 }
 
 export async function ensureWebUiDependencies({
@@ -219,21 +220,12 @@ export async function buildWebArtifact({
 
   await buildIntoTempThenReplace(artifactDir, async (tmpArtifactDir) => {
     const payloadDir = artifactPayloadDir(tmpArtifactDir);
-    // Metro excludes atomic .tmp.* trees; component retention reclaims invalid
-    // artifact siblings. Keep consumed inputs outside both, unlike the payload.
-    const sourceInputsRoot = await mkdtemp(join(dirname(dirname(tmpArtifactDir)), 'web-source-inputs-'));
     const repoDir = join(uiDir, '../..');
-    let entrypoint;
-    try {
-      entrypoint = expoExecImpl === runPreparedWebExport
-        ? JSON.parse(await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
-          args: [JSON.stringify({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint })], env, captureStderr: true }))
-        : await consumeWebArtifactInputs({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint, env, expoExecImpl });
-    } finally {
-      // Also retire the parent's allocation if dispatch failed before the
-      // finite child entered its own capture/cleanup scope.
-      await rm(sourceInputsRoot, { recursive: true, force: true });
-    }
+    const entrypoint = expoExecImpl === runPreparedWebExport
+      ? JSON.parse(await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
+        args: [JSON.stringify({ uiDir, payloadDir, artifactFingerprint })], env,
+        admissionClass: SOURCE_WEB_EXPORT_ADMISSION_CLASS, captureStderr: true }))
+      : await consumeWebArtifactInputs({ uiDir, payloadDir, artifactFingerprint, env, expoExecImpl });
 
     await writeArtifactManifest({
       artifactDir: tmpArtifactDir,
@@ -256,26 +248,23 @@ export async function buildWebArtifact({
   return { artifactDir, manifest };
 }
 
-async function consumeWebArtifactInputs({ uiDir, payloadDir, sourceInputsRoot, artifactFingerprint, env, expoExecImpl = runPreparedWebExport }) {
+async function consumeWebArtifactInputs({ uiDir, payloadDir, artifactFingerprint, env, expoExecImpl = runPreparedWebExport }) {
   const repoDir = join(uiDir, '../..');
-  return await withBuildInputDependencies({ sourceDir: repoDir, env }, async env => { try {
-      const { inventoryPath, uiProjectDir } = await prepareSourceWebUi({ repoDir, outputDir: join(sourceInputsRoot, 'prepared'), env,
-        stdoutStream: process.stderr });
+  const paths = getExpoStatePaths({
+    baseDir: getDefaultAutostartPaths(env).baseDir,
+    kind: 'ui-export-runtime-artifact',
+    projectDir: uiDir,
+    stateFileName: 'ui.export.runtime.state.json',
+  });
+  return await withBuildInputDependencies({ sourceDir: repoDir, env }, env =>
+    withSourceWebUiInputs({ repoDir, baseDir: paths.stateDir, env, stdoutStream: process.stderr }, async ({ inventoryPath, uiProjectDir }) => {
       const exportEnv = buildStackWebExportEnv({ baseEnv: {
         ...env, HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
       } });
-      const paths = getExpoStatePaths({
-        baseDir: getDefaultAutostartPaths(env).baseDir,
-        kind: 'ui-export-runtime-artifact',
-        projectDir: uiDir,
-        stateFileName: 'ui.export.runtime.state.json',
-      });
       const tmpDir = resolveExpoTmpDir({ env: exportEnv, defaultTmpDir: paths.tmpDir, kind: 'ui-export-runtime-artifact', projectDir: uiDir });
       await ensureExpoIsolationEnv({ env: exportEnv, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir });
       return await exportWebPayloadToArtifactPayloadDir({ uiDir: uiProjectDir, repoDir, payloadDir, env: exportEnv, artifactFingerprint, expoExecImpl });
-    } finally {
-      await rm(sourceInputsRoot, { recursive: true, force: true });
-    } });
+    }));
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

@@ -12,6 +12,8 @@ import { ensureExpoIsolationEnv, getExpoStatePaths, resolveExpoTmpDir, wantsExpo
 import { coerceHappyMonorepoRootFromPath } from '../paths/paths.mjs';
 import { pathExists } from '../fs/fs.mjs';
 import { applyExpoNodeHeapEnv } from './expoNodeHeapEnv.mjs';
+import { applyExpoExportMaxWorkersArgs } from './exportWorkers.mjs';
+export { applyExpoExportMaxWorkersArgs } from './exportWorkers.mjs';
 import { repairExpoYarnPackageBinShims } from './expoPackageBinShims.mjs';
 import { ensureReactNativeLibsodiumNativeBuild } from './libsodiumNativeBuild.mjs';
 import {
@@ -20,7 +22,6 @@ import {
   resolveReactNativeSkiaAndroidArchitecturesFromEnv,
 } from './skiaPrebuiltBinaries.mjs';
 
-const DEFAULT_EXPO_EXPORT_MAX_WORKERS_NONINTERACTIVE = 1;
 const CANONICAL_UI_PREFLIGHT_ERROR_CODE = 'HAPPIER_EXPO_CANONICAL_UI_PREFLIGHT_FAILED';
 
 export async function withExpoPreparationEnv(envIn, action) {
@@ -100,56 +101,6 @@ export async function resolveExpoBin(runnerDir) {
   }
 
   return workspaceBin;
-}
-
-function hasFlag(args, name) {
-  const needle = String(name ?? '').trim();
-  if (!needle) return false;
-  for (const a of args ?? []) {
-    if (a === needle) return true;
-    if (typeof a === 'string' && a.startsWith(`${needle}=`)) return true;
-  }
-  return false;
-}
-
-function coerceNonNegativeInt(v) {
-  const n = Number(String(v ?? '').trim());
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
-}
-
-function parseExpoExportMaxWorkers(env) {
-  const raw = (env?.HAPPIER_STACK_EXPO_EXPORT_MAX_WORKERS ?? '').toString().trim();
-  if (!raw) return { explicit: false, value: null };
-  if (raw === '0') return { explicit: true, value: 0 };
-  const n = coerceNonNegativeInt(raw);
-  return { explicit: true, value: n };
-}
-
-function resolveDefaultExpoExportMaxWorkers() {
-  // Only apply a conservative default in non-interactive contexts, where Expo/Metro
-  // can be more sensitive to high worker fan-out (e.g. in Docker/CI).
-  const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  if (isInteractive) return null;
-  return DEFAULT_EXPO_EXPORT_MAX_WORKERS_NONINTERACTIVE;
-}
-
-export function applyExpoExportMaxWorkersArgs(args, env) {
-  const a = Array.isArray(args) ? [...args] : [];
-  if (a[0] !== 'export') return a;
-  if (hasFlag(a, '--max-workers')) return a;
-
-  const { explicit, value } = parseExpoExportMaxWorkers(env);
-  if (explicit) {
-    // Explicit disable (0) or invalid value: do not inject a default.
-    if (value === 0 || value == null) return a;
-    a.push('--max-workers', String(value));
-    return a;
-  }
-
-  const def = resolveDefaultExpoExportMaxWorkers();
-  if (def == null) return a;
-  a.push('--max-workers', String(def));
-  return a;
 }
 
 export async function prepareExpoCommandEnv({

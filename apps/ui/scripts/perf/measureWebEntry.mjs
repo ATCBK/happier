@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,9 @@ import { applyExpoExportMaxWorkersArgs, prepareExpoCommandEnv, resolveExpoBin } 
 import { applyExpoNodeHeapEnv } from '../../../stack/scripts/utils/expo/expoNodeHeapEnv.mjs';
 import { runSourceBuildCommand } from '../../../stack/scripts/utils/proc/runSourceBuildCommand.mjs';
 import { buildStackWebExportEnv } from '../../../stack/scripts/utils/ui/ui_export_env.mjs';
-import { prepareSourceWebUi } from '../../../stack/scripts/build/build_source_web_ui.mjs';
+import { withSourceWebUiInputs } from '../../../stack/scripts/build/build_source_web_ui.mjs';
+import { getDefaultAutostartPaths } from '../../../stack/scripts/utils/paths/paths.mjs';
+import { SOURCE_WEB_EXPORT_ADMISSION_CLASS } from '../../../stack/scripts/utils/dev_targets/remote_commands.mjs';
 import { withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 
 // Use Expo's real export driver and Metro's own source-map consumer. This is
@@ -29,32 +31,29 @@ if (!fromExport && !exportWorkerDir) {
     // One admitted finite producer contains capture, preparation and Metro;
     // dependency custody is never held by the parent across admission waits.
     await runSourceBuildCommand({ repoDir: repoRoot, scriptPath: fileURLToPath(import.meta.url),
-        args: [`--export-worker=${outputDir}`], captureStdout: false });
+        args: [`--export-worker=${outputDir}`], admissionClass: SOURCE_WEB_EXPORT_ADMISSION_CLASS, captureStdout: false });
 } else if (exportWorkerDir) {
     const workerOutputDir = resolve(exportWorkerDir);
     const workerWebOutputDir = join(workerOutputDir, 'web');
-    await withBuildInputDependencies({ sourceDir: repoRoot }, async dependencyEnv => { try {
+    await withBuildInputDependencies({ sourceDir: repoRoot }, async dependencyEnv => {
         console.log(JSON.stringify({ phase: 'source-preparation', outputDir: workerOutputDir }));
-        let uiProjectDir;
-        ({ inventoryPath, uiProjectDir } = await prepareSourceWebUi({
-            repoDir: repoRoot, outputDir: join(workerOutputDir, 'source-inputs'), env: dependencyEnv,
-        }));
-        const { env: isolatedEnv } = await prepareExpoCommandEnv({
-            baseDir: workerOutputDir, kind: 'source-web-export', projectDir: uiRoot,
+        const { env: isolatedEnv, paths } = await prepareExpoCommandEnv({
+            baseDir: getDefaultAutostartPaths(dependencyEnv).baseDir, kind: 'source-web-export', projectDir: uiRoot,
             baseEnv: buildStackWebExportEnv({ baseEnv: dependencyEnv }),
         });
-        const env = applyExpoNodeHeapEnv({ ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath });
-        console.log(JSON.stringify({ phase: 'expo-export', outputDir: workerOutputDir }));
-        await runSourceBuildCommand({
-            repoDir: repoRoot, command: await resolveExpoBin(uiRoot),
-            args: applyExpoExportMaxWorkersArgs([
-                'export', '--platform', 'web', '--source-maps', '--output-dir', workerWebOutputDir,
-            ], env),
-            cwd: uiProjectDir, env, captureStdout: false,
+        return await withSourceWebUiInputs({ repoDir: repoRoot, baseDir: paths.stateDir, env: dependencyEnv }, async inputs => {
+            inventoryPath = inputs.inventoryPath;
+            const env = applyExpoNodeHeapEnv({ ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath });
+            console.log(JSON.stringify({ phase: 'expo-export', outputDir: workerOutputDir }));
+            await runSourceBuildCommand({
+                repoDir: repoRoot, command: await resolveExpoBin(uiRoot),
+                args: applyExpoExportMaxWorkersArgs([
+                    'export', '--platform', 'web', '--source-maps', '--output-dir', workerWebOutputDir,
+                ], env),
+                cwd: inputs.uiProjectDir, env, admissionClass: SOURCE_WEB_EXPORT_ADMISSION_CLASS, captureStdout: false,
+            });
         });
-    } finally {
-        await rm(join(workerOutputDir, 'source-inputs/workspace'), { recursive: true, force: true });
-    } });
+    });
     process.exit(0);
 }
 

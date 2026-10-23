@@ -5,8 +5,8 @@ import { runWorkspaceBuildAdmission } from './workspace_build_admission.mjs';
 
 /** Run finite source preparation in the existing host memory-admission tree.
  * Admission classes and measured envelopes, queueing, reservations and pressure
- * cadence remain owned by hstack-exec. Web preparation/export keeps validation;
- * runtime bundle callers select source-bundle.
+ * cadence remain owned by hstack-exec. Runtime and web export callers select
+ * their measured class; preparation-only callers retain validation.
  */
 export async function runSourceBuildCommand({ repoDir, scriptPath, command, cwd = repoDir, args = [], env = process.env,
   signal, captureStdout = true, captureStderr = false, admissionClass = 'validation', stdoutStream = process.stdout, devStartup = false }) {

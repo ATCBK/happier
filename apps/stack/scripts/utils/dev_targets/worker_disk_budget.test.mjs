@@ -189,17 +189,22 @@ test('unknown same-user visibility retains scratch, but other-user processes do 
 
 test('available filesystem space admits work without resident dependency or cache sizing', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-disk-free-' });
-  const repoDir = join(root, 'repo'), cacheBaseDir = join(root, 'cli/cache');
+  const repoDir = join(root, 'repo'), cacheBaseDir = join(root, 'cli/cache'), scratchRoot = join(root, 'scratch');
   await mkdir(repoDir);
   const { inspectWorkerDiskBudget } = await import('./worker_disk_budget.mjs');
-  const options = { repoDir, cacheBaseDir, observeFilesystem: path => ({ device: path, availableBytes: 1, totalBytes: 2000000 }) };
-  for (const commandClass of ['dependency-install', 'runtime-build', 'source-bundle', 'package-dist', 'compilation', 'validation']) {
+  const options = { repoDir, cacheBaseDir, scratchRoot, observeFilesystem: path => ({ device: path, availableBytes: 1, totalBytes: 2000000 }) };
+  for (const commandClass of ['dependency-install', 'runtime-build', 'source-bundle', 'source-web-export', 'package-dist', 'compilation', 'validation']) {
     assert.equal((await inspectWorkerDiskBudget({ ...options, commandClass })).admitted, true, `${commandClass} must not reserve an unmeasured resident closure`);
   }
   const separateFilesystems = { ...options, observeFilesystem: path => ({ device: path, availableBytes: path === repoDir ? 1 : 0, totalBytes: 2000000 }) };
   assert.equal((await inspectWorkerDiskBudget({ ...separateFilesystems, commandClass: 'dependency-install' })).admitted, false, 'install writes must fit the cache filesystem too');
   assert.equal((await inspectWorkerDiskBudget({ ...separateFilesystems, commandClass: 'runtime-build' })).admitted, false, 'runtime writes use the staging filesystem');
   assert.equal((await inspectWorkerDiskBudget({ ...separateFilesystems, commandClass: 'source-bundle' })).admitted, false, 'shared source bundles write to the target home filesystem containing its cache');
+  for (const exhausted of [cacheBaseDir, scratchRoot]) {
+    assert.equal((await inspectWorkerDiskBudget({ ...options, commandClass: 'source-web-export',
+      observeFilesystem: path => ({ device: path, availableBytes: path === exhausted ? 0 : 1, totalBytes: 2000000 }),
+    })).admitted, false, 'web exports require free space for both retained inputs/cache and private scratch outputs');
+  }
   assert.equal((await inspectWorkerDiskBudget({ ...separateFilesystems, commandClass: 'compilation' })).admitted, true, 'in-place compilation does not copy retained staging or caches');
 });
 
