@@ -508,16 +508,20 @@ describe('shared Account workflow run owner', () => {
     })).resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
     expect(admitted).toBe(false);
   });
-  it.each(['admitted', 'originless', 'retry', 'wrong_attempt', 'other_slot', 'different', 'revoked', 'miswired', 'foreign_home', 'session_caller', 'untyped', 'unreadable', 'no_witness', 'other_action'] as const)(
+  it.each(['admitted', 'scale', 'originless', 'retry', 'wrong_attempt', 'other_slot', 'different', 'revoked', 'miswired', 'foreign_home', 'session_caller', 'untyped', 'unreadable', 'no_witness', 'other_action'] as const)(
     'restricts Workflow Action scope to the current accepted typed reviewSession: %s', async scenario => {
       const address = { serverId: 'home', sessionId: 'review-target' };
       const scopedActionId = scenario === 'other_action' ? 'session.stop' : 'reviews.comments.list';
+      const action = {
+        kind: 'action' as const, id: 'read', actionId: scopedActionId, input: {
+          sessionId: { kind: 'input' as const, name: 'reviewSession', path: ['sessionId'] },
+        },
+      };
+      const unrelated = scenario === 'scale' ? Array.from({ length: 500 }, (_, index) => ({ ...action, id: `unrelated-${index}` })) : [];
       const scopedDefinition = { ...definition, inputs: [{ name: 'reviewSession', valueType: 'json' as const, required: true,
         ...(scenario === 'untyped' ? {} : { inputType: { hostType: 'session' as const } }) }], blocks: [{
-          kind: 'action' as const, id: 'read', actionId: scopedActionId, input: {
-            sessionId: { kind: 'input' as const, name: 'reviewSession', path: ['sessionId'] },
-          },
-        }] };
+          ...action,
+        }, ...unrelated] };
       const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: scopedDefinition,
         context: { source: { kind: 'inline' }, inputs: { reviewSession: address }, machineId: 'machine-a',
           executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
@@ -551,6 +555,19 @@ describe('shared Account workflow run owner', () => {
             recordId: id, sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress,
         })) };
       });
+      for (let ordinal = 0; ordinal < unrelated.length; ordinal += 1) {
+        const id = `55555555-5555-4555-8555-${String(ordinal).padStart(12, '0')}`;
+        const index = WorkflowRunInvocationIndexV1Schema.parse({ ...invocations[1]!.index,
+          id, sequence: String(ordinal + 2), memberOrdinal: String(ordinal + 1), lifecycle: 'completed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+          blockKind: 'action', invocationPath: { blockId: unrelated[ordinal]!.id, scope: [] },
+          attempt: '0', logicalInvocationRecordId: id });
+        invocations.push({ index, parentRevision: 0, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+          mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId,
+            recordId: id, sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress,
+        })) });
+      }
+      const cost = { pages: 0, historyPages: 0, envelopes: 0, bytes: 0 };
       const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async operation => {
         if (scenario === 'unreadable') throw new Error('storage_unavailable');
         if (operation.operation === 'get') return snapshot;
@@ -558,9 +575,20 @@ describe('shared Account workflow run owner', () => {
         // across pages; scope admission must not reopen the Run per ancestor.
         if (operation.operation === 'invocations.get') throw new Error('individual_scope_detail_read');
         if (operation.operation === 'invocations.list') {
-          const rows = operation.cursor === 'action-page' ? invocations.slice(1) : invocations.slice(0, 1);
+          const selected = invocations.filter(row =>
+            (operation.invocationId === undefined || row.index.id === operation.invocationId)
+            && (operation.parentRecordId === undefined || row.index.parentRecordId === operation.parentRecordId)
+            && (operation.memberOrdinal === undefined || row.index.memberOrdinal === operation.memberOrdinal));
+          const exact = operation.invocationId !== undefined || operation.parentRecordId !== undefined;
+          const rows = exact ? selected : operation.cursor === 'action-page' ? selected.slice(1) : selected.slice(0, 1);
+          cost.pages += 1;
+          if (!exact) cost.historyPages += 1;
+          if (operation.progressEnvelopes === true) {
+            cost.envelopes += rows.length;
+            cost.bytes += rows.reduce((sum, row) => sum + Buffer.byteLength(row.contentEnvelope), 0);
+          }
           return { invocations: rows.map(row => row.index), parentRevision: 0,
-            ...(operation.cursor === undefined ? { nextCursor: 'action-page' } : {}),
+            ...(!exact && operation.cursor === undefined ? { nextCursor: 'action-page' } : {}),
             ...(operation.progressEnvelopes === true ? { keyCensus: snapshot.keyCensus,
               progressEnvelopesByInvocationId: Object.fromEntries(rows.map(row => [row.index.id, row.contentEnvelope])) } : {}) };
         }
@@ -585,10 +613,14 @@ describe('shared Account workflow run owner', () => {
         sessionId: scenario === 'different' ? 'other' : address.sessionId,
         ...(scenario === 'foreign_home' ? { serverId: 'other-home' } : {}),
       }, context, { sessionId: 'current_session' }, deps);
-      if (scenario === 'admitted' || scenario === 'originless' || scenario === 'retry') {
+      if (scenario === 'admitted' || scenario === 'scale' || scenario === 'originless' || scenario === 'retry') {
         expect(failure).toBeNull();
         expect(reads).toEqual([address.sessionId]);
       } else expect(failure).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      if (scenario === 'scale') {
+        expect(cost.historyPages).toBe(0);
+        expect(cost.envelopes).toBe(2);
+      }
     });
 
   it.each(['source', 'explicit', 'originless'] as const)('admits the exact %s reviewSession through the public start owner and rejoins it', async scenario => {
