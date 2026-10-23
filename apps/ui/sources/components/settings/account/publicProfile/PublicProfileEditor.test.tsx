@@ -288,6 +288,30 @@ describe('PublicProfileReview', () => {
     expect(screen.getTextContent()).toContain('87654321');
   });
 
+  it('pins Cancel and Publish in the card footer while the long review scrolls between header and footer', async () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const published: Array<{ scrollHost?: string; bodyScroll?: string; footer?: React.ReactNode }> = [];
+    const body = await renderScreen(
+      review({
+        onConfirm,
+        onCancel,
+        setChrome: (chrome) => {
+          if (chrome?.kind === 'card') published.push(chrome);
+        },
+      }),
+    );
+    // The body holds the disclosures only; the actions never scroll away with it.
+    expect(body.findByTestId('public-profile-review-confirm')).toBeNull();
+    const chrome = published.at(-1);
+    expect(chrome).toMatchObject({ scrollHost: 'bounded', bodyScroll: 'auto' });
+    const footer = await renderScreen(<>{chrome?.footer}</>);
+    await footer.pressByTestIdAsync('public-profile-review-confirm');
+    await footer.pressByTestIdAsync('public-profile-review-cancel');
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('explains the typed preparation cause in review when there is no disclosure to inspect', async () => {
     const screen = await renderScreen(review({ disclosure: null, preparationReason: 'no_eligible_personal_usage' }));
     expect(screen.getTextContent()).toContain(t('publicIdentity.profile.reasons.no_eligible_personal_usage'));

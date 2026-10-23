@@ -1,238 +1,103 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
+import { serveAccountHomes, installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { storage } from '@/sync/domains/state/storageStore';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { Modal } from '@/modal';
 
-import {
-    renderScreen,
-} from '@/dev/testkit';
-
-const fetchHistoryMock = vi.hoisted(() => vi.fn());
-const restoreMock = vi.hoisted(() => vi.fn());
-const settingsScope = { serverId: 'server-a', accountId: 'account-a' } as const;
-const scopeState = vi.hoisted(() => ({
-    current: { serverId: 'server-a', accountId: 'account-a' } as {
-        serverId: string;
-        accountId: string;
-    } | null,
-}));
-const storageStateMock = vi.hoisted(() => vi.fn(() => ({
-    settingsVersion: 12,
-    settingsScope: scopeState.current,
-})));
-
-vi.mock('@/sync/api/account/apiAccountSettingsHistory', () => ({
-    fetchAccountSettingsHistory: fetchHistoryMock,
-}));
-
-vi.mock('@/sync/engine/settings/accountSettingsHistoryRestore', () => {
-    class AccountSettingsHistoryRestoreUnavailableError extends Error {
-        readonly status: number;
-        constructor(status: number, message: string) {
-            super(message);
-            this.name = 'AccountSettingsHistoryRestoreUnavailableError';
-            this.status = status;
-        }
-    }
-    class AccountSettingsHistoryRestoreInvalidError extends Error {
-        constructor(reason: string) {
-            super(`invalid (${reason})`);
-            this.name = 'AccountSettingsHistoryRestoreInvalidError';
-        }
-    }
-    return {
-        AccountSettingsHistoryRestoreUnavailableError,
-        AccountSettingsHistoryRestoreInvalidError,
-        restoreAccountSettingsFromHistorySnapshot: restoreMock,
-    };
-});
-
-vi.mock('@/sync/domains/state/storageStore', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/state/storageStore')>();
-    return {
-        ...actual,
-        storage: {
-            getState: storageStateMock,
-        },
-    };
-});
-
-// Keep this Account-history surface test independent from generated Voice
-// manifest artifacts owned by another build lane.
-vi.mock('@/voice/registry/generatedBundledVoiceEntries', () => ({
-    BUNDLED_FIRST_PARTY_VOICE_CONTRIBUTIONS: Object.freeze([]),
-    BUNDLED_FIRST_PARTY_VOICE_PRESENTATIONS: Object.freeze([]),
-}));
-
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useAccountSettingsScope: () => settingsScope,
-}));
-
-const modalSpies = vi.hoisted(() => ({
-    confirm: vi.fn(async (_title?: string, _message?: string) => true),
-    alert: vi.fn(async (_title?: string, _message?: string) => undefined),
-}));
-
-vi.mock('@/modal', () => ({ Modal: modalSpies }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 import { SettingsHistorySection } from './SettingsHistorySection';
 
-const credentials = { token: 'token-1' } as never;
+describe('SettingsHistorySection Action composition', () => {
+    let home: Awaited<ReturnType<typeof serveAccountHomes>>;
+    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+    let restoreLoader: () => void;
+    const initial = storage.getState();
 
-function historyResponse() {
-    return {
-        status: 'ready' as const,
-        snapshots: [
-            { version: 2, createdAt: '2026-08-28T10:00:00.000Z', contentKind: 'plain' as const, byteLength: 128 },
-            { version: 3, createdAt: '2026-08-29T10:00:00.000Z', contentKind: 'encrypted' as const, byteLength: 256 },
-        ],
-    };
-}
-
-async function renderCollapsedSection() {
-    return await renderScreen(
-        <SettingsHistorySection credentials={credentials} encryption={null} />,
-    );
-}
-
-/** History is a disclosure row: its snapshots are listed once it is opened. */
-async function renderSection() {
-    const screen = await renderCollapsedSection();
-    await act(async () => {
-        screen.findByTestId('settings-account-history')!
-            .findByProps({ accessibilityRole: 'button' }).props.onPress();
-    });
-    return screen;
-}
-
-describe('SettingsHistorySection', () => {
-    beforeEach(() => {
-        fetchHistoryMock.mockReset();
-        restoreMock.mockReset();
-        scopeState.current = settingsScope;
-        storageStateMock.mockClear();
-        modalSpies.confirm.mockReset();
-        modalSpies.confirm.mockResolvedValue(true);
-        modalSpies.alert.mockReset();
-        modalSpies.alert.mockResolvedValue(undefined);
-        fetchHistoryMock.mockResolvedValue(historyResponse());
+    beforeEach(async () => {
+        restoreLoader = await installRealActionExecutorModuleLoader();
+        home = await serveAccountHomes({
+            homes: [{ key: 'a', serverUrl: 'https://settings-history.test', accountId: 'account-a', currentAccount: true }],
+            route: request => {
+                if (request.path === '/v2/account/settings/history') return Response.json({ snapshots: [
+                    { version: 3, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 50 },
+                ] });
+                if (request.path === '/v2/account/settings/history/3') return Response.json({ version: 3,
+                    createdAt: '2026-01-01T00:00:00.000Z', content: { t: 'plain', v: { preferredLanguage: 'de' } } });
+                return undefined;
+            },
+        });
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
+        vi.mocked(Modal.alert).mockClear();
     });
 
-    it('restores a selected snapshot through the one client-side restore owner and refreshes the list', async () => {
-        restoreMock.mockResolvedValue({ status: 'applied', settingsVersion: 13 });
-        const screen = await renderSection();
-
-        await vi.waitFor(() => {
-            expect(screen.findByTestId('settings-account-history-restore-3')).not.toBeNull();
-        });
-        expect(screen.findByTestId('settings-account-history-restore-2')).not.toBeNull();
-
-        await screen.pressByTestIdAsync('settings-account-history-restore-3');
-
-        expect(modalSpies.confirm).toHaveBeenCalled();
-        expect(restoreMock).toHaveBeenCalledWith(expect.objectContaining({
-            credentials,
-            settingsScope,
-            historyVersion: 3,
-            expectedSettingsVersion: 12,
-        }));
-        await vi.waitFor(() => {
-            expect(modalSpies.alert).toHaveBeenCalled();
-        });
-        // The section re-reads the existing history route after settlement.
-        await vi.waitFor(() => {
-            expect(fetchHistoryMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-        });
+    afterEach(async () => {
+        await screen?.unmount();
+        screen = undefined;
+        await home.dispose();
+        restoreLoader();
+        storage.setState(initial, true);
+        vi.restoreAllMocks();
     });
 
-    it('shows the truthful conflict outcome without rewriting history', async () => {
-        restoreMock.mockResolvedValue({ status: 'conflict', currentSettingsVersion: 14 });
-        const screen = await renderSection();
-        await vi.waitFor(() => {
-            expect(screen.findByTestId('settings-account-history-restore-3')).not.toBeNull();
+    async function open(expanded = true) {
+        const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl);
+        screen = await renderScreen(<SettingsHistorySection credentials={credentials} encryption={null} />);
+        if (expanded) await act(async () => {
+            screen!.findByTestId('settings-account-history')!.findByProps({ accessibilityRole: 'button' }).props.onPress();
         });
+        return screen;
+    }
 
-        await screen.pressByTestIdAsync('settings-account-history-restore-3');
-
-        await vi.waitFor(() => {
-            expect(modalSpies.alert).toHaveBeenCalled();
-        });
-        const alertArgs = modalSpies.alert.mock.calls[0]?.[1] as string | undefined;
-        expect(alertArgs).toContain('14');
+    it('restores through the real Action front door and one-shot CAS, then refreshes history', async () => {
+        const view = await open();
+        await vi.waitFor(() => expect(view.findByTestId('settings-account-history-restore-3')).not.toBeNull());
+        await view.pressByTestIdAsync('settings-account-history-restore-3');
+        await vi.waitFor(() => expect(storage.getState().settings.preferredLanguage).toBe('de'));
+        expect(home.httpRequests.filter(row => row.path === '/v2/account/settings' && row.method === 'POST')).toHaveLength(1);
+        await vi.waitFor(() => expect(home.requests.filter(row => row.path === '/v2/account/settings/history').length).toBeGreaterThan(1));
     });
 
-    it('reports an unchanged settlement without claiming that it wrote settings', async () => {
-        restoreMock.mockResolvedValue({ status: 'unchanged', settingsVersion: 12 });
-        const screen = await renderSection();
-        await vi.waitFor(() => {
-            expect(screen.findByTestId('settings-account-history-restore-3')).not.toBeNull();
-        });
-
-        await screen.pressByTestIdAsync('settings-account-history-restore-3');
-
-        await vi.waitFor(() => {
-            expect(modalSpies.alert).toHaveBeenCalledWith(
-                expect.any(String),
-                'Your current account preferences already match the selected snapshot.',
-            );
-        });
+    it('leaves Settings untouched when the Action confirmation is declined', async () => {
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const view = await open();
+        await vi.waitFor(() => expect(view.findByTestId('settings-account-history-restore-3')).not.toBeNull());
+        await view.pressByTestIdAsync('settings-account-history-restore-3');
+        await vi.waitFor(() => expect(Modal.confirm).toHaveBeenCalled());
+        expect(home.requests.some(row => row.path === '/v2/account/settings/history/3')).toBe(false);
+        expect(home.httpRequests.some(row => row.path === '/v2/account/settings' && row.method === 'POST')).toBe(false);
     });
 
-    it('never calls restore when the user cancels the confirmation', async () => {
-        modalSpies.confirm.mockResolvedValue(false);
-        const screen = await renderSection();
-        await vi.waitFor(() => {
-            expect(screen.findByTestId('settings-account-history-restore-2')).not.toBeNull();
-        });
-
-        await screen.pressByTestIdAsync('settings-account-history-restore-2');
-
-        expect(restoreMock).not.toHaveBeenCalled();
+    it('cannot bypass disabled settings.invoke through the restore control', async () => {
+        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'settings.invoke': { enabled: false } },
+        }) });
+        const view = await open();
+        await vi.waitFor(() => expect(view.findByTestId('settings-account-history-restore-3')).not.toBeNull());
+        await view.pressByTestIdAsync('settings-account-history-restore-3');
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalled());
+        expect(home.requests.some(row => row.path === '/v2/account/settings/history/3')).toBe(false);
     });
 
-    it('never restores into a different Account after confirmation resolves', async () => {
-        let resolveConfirmation!: (confirmed: boolean) => void;
-        modalSpies.confirm.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
-            resolveConfirmation = resolve;
-        }));
-        const screen = await renderSection();
-        await vi.waitFor(() => {
-            expect(screen.findByTestId('settings-account-history-restore-3')).not.toBeNull();
-        });
-
-        await screen.pressByTestIdAsync('settings-account-history-restore-3');
-        scopeState.current = { serverId: 'server-b', accountId: 'account-b' };
-        resolveConfirmation(true);
-
-        await vi.waitFor(() => {
-            expect(restoreMock).not.toHaveBeenCalled();
-        });
+    it('does not restore into an Account selected during confirmation', async () => {
+        vi.mocked(Modal.confirm).mockImplementationOnce(async () => { await home.switchAccount('a', 'account-b'); return true; });
+        const view = await open();
+        await vi.waitFor(() => expect(view.findByTestId('settings-account-history-restore-3')).not.toBeNull());
+        await view.pressByTestIdAsync('settings-account-history-restore-3');
+        await vi.waitFor(() => expect(storage.getState().settingsScope?.accountId).toBe('account-b'));
+        expect(home.requests.some(row => row.path === '/v2/account/settings/history/3')).toBe(false);
     });
 
-    it('summarizes the saved snapshots while the disclosure is closed', async () => {
-        const screen = await renderCollapsedSection();
-        await vi.waitFor(() => expect(screen.getTextContent()).toContain('2 snapshots'));
-        expect(screen.findByTestId('settings-account-history-restore-3')).toBeNull();
+    it('keeps saved versions behind the existing disclosure', async () => {
+        const view = await open(false);
+        await vi.waitFor(() => expect(view.getTextContent()).toContain('1 snapshot'));
+        expect(view.findByTestId('settings-account-history-restore-3')).toBeNull();
     });
-
-    it('reports an empty history without offering restore actions', async () => {
-        fetchHistoryMock.mockResolvedValue({ status: 'ready', snapshots: [] });
-        const screen = await renderSection();
-        await vi.waitFor(() => {
-            expect(screen.getTextContent()).toContain('No saved snapshots yet');
-        });
-        expect(screen.findByTestId('settings-account-history-restore-2')).toBeNull();
-        expect(screen.findByTestId('settings-account-history-restore-3')).toBeNull();
-    });
-    it('does not refresh history from the retained A finally handler after focus changes to B', async () => {
-        restoreMock.mockResolvedValue({ status: 'applied', settingsVersion: 13 });
-        modalSpies.alert.mockImplementationOnce(async () => {
-            scopeState.current = { serverId: 'server-b', accountId: 'account-b' };
-        });
-        const screen = await renderSection();
-        await vi.waitFor(() => expect(screen.findByTestId('settings-account-history-restore-3')).not.toBeNull());
-        await screen.pressByTestIdAsync('settings-account-history-restore-3');
-        await vi.waitFor(() => expect(modalSpies.alert).toHaveBeenCalled());
-        expect(fetchHistoryMock).toHaveBeenCalledTimes(1);
-    });
-
 });

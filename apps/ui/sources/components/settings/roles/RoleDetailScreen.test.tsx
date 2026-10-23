@@ -18,13 +18,6 @@ const shared = vi.hoisted(() => ({
     items: [] as unknown[],
     rolesV1: { overrides: {} as Record<string, Record<string, string>> },
     shown: [] as unknown[],
-    savedFiles: [] as Array<{ fileName: string; json: string }>,
-}));
-
-// The document file boundary (web download / native share sheet) is the platform edge of "Send a copy".
-vi.mock('@/sync/domains/workflows/workflowDocumentFile', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/workflows/workflowDocumentFile')>()),
-    saveWorkflowDocument: async (file: { fileName: string; json: string }) => { shared.savedFiles.push(file); },
 }));
 
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
@@ -214,7 +207,6 @@ describe('Settings › Roles detail', () => {
         storage.setState({ profileScope: { serverId: 'server-1', accountId: 'account-1' } });
         shared.calls = [];
         shared.shown = [];
-        shared.savedFiles = [];
         const { roleId: _orchestratorId, ...orchestratorDocument } = orchestrator;
         const { roleId: _ownId, ...ownDocument } = ownRole;
         shared.items = [
@@ -416,12 +408,10 @@ describe('Settings › Roles detail', () => {
         const sheet = shared.shown[0] as { props: { onSendCopy?: () => unknown } };
         expect(typeof sheet.props.onSendCopy).toBe('function');
         await sheet.props.onSendCopy!();
-        await vi.waitFor(() => expect(shared.savedFiles).toHaveLength(1));
-        const { RoleArtifactV1Schema } = await import('@happier-dev/protocol');
         const { roleId: _roleId, ...document } = ownRole;
-        expect(RoleArtifactV1Schema.parse(JSON.parse(shared.savedFiles[0]!.json))).toEqual(document);
-        expect(shared.savedFiles[0]!.fileName).toBe('UI-builder.role.json');
-        expect(writes()).toEqual([]);
+        await vi.waitFor(() => expect(writes()).toEqual([{
+            actionId: 'artifact.export', input: { portable: { kind: 'role', document } },
+        }]));
     });
     it('opens the role it just created, not whichever role was visited last', async () => {
         navigation.replaced.length = 0;
