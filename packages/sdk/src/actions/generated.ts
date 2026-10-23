@@ -3180,6 +3180,7 @@ export type GeneratedActions = Readonly<{
       }> ;
     }> ;
     readonly definition: Readonly<{
+      readonly capture: (input: PublicActionInputById["workflow.definition.capture"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.capture">>;
       readonly create: (input: PublicActionInputById["workflow.definition.create"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.create">>;
       readonly delete: (input: PublicActionInputById["workflow.definition.delete"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.delete">>;
       readonly edit: (input: PublicActionInputById["workflow.definition.edit"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workflow.definition.edit">>;
@@ -5622,6 +5623,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         },
       },
       definition: {
+        capture: (input: PublicActionInputById["workflow.definition.capture"], options?: ActionExecutionOptions) => execute("workflow.definition.capture", input, options),
         create: (input: PublicActionInputById["workflow.definition.create"], options?: ActionExecutionOptions) => execute("workflow.definition.create", input, options),
         delete: (input: PublicActionInputById["workflow.definition.delete"], options?: ActionExecutionOptions) => execute("workflow.definition.delete", input, options),
         edit: (input: PublicActionInputById["workflow.definition.edit"], options?: ActionExecutionOptions) => execute("workflow.definition.edit", input, options),
