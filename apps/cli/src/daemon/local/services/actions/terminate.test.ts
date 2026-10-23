@@ -36,10 +36,16 @@ async function harness(input: Readonly<{ resistantChild?: boolean; survive?: boo
     const boundary = {
         readdir: async (path: string) => {
             if (input.readFailure) throw new Error('procfs unavailable');
-            if (input.finalVerificationFailure && live.size === 0 && ++emptyReads > 1) throw new Error('final procfs verification unavailable');
             return fixture().readdir(path);
         },
-        readFile: async (path: string) => fixture().readFile(path),
+        readFile: async (path: string) => {
+            if (input.readFailure) throw new Error('procfs unavailable');
+            // Targeted census proves self identity without enumerating the whole process table.
+            if (input.finalVerificationFailure && live.size === 0 && path === `/proc/${process.pid}/stat` && ++emptyReads > 1) {
+                throw new Error('final procfs verification unavailable');
+            }
+            return fixture().readFile(path);
+        },
         readlink: async (path: string) => fixture().readlink(path),
     };
     const initial = await readLinuxCensus({ boundary: localServiceProcfsFixture([{ pid: PID }]), selfPid: process.pid, capturedAtMs: 0, logicalCpus: 4 });

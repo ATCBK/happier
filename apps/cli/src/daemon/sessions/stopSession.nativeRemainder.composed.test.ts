@@ -6,6 +6,7 @@ const native = vi.hoisted(() => ({
   rows: new Map<number, { parent: number; ticks: number; tag?: string; unit?: string; uid?: number }>(),
   unavailable: false,
   read(path: string): string {
+    if (this.unavailable) throw Object.assign(new Error('Census unavailable'), { code: 'EACCES' });
     const pid = Number(path.split('/')[2]);
     const row = this.rows.get(pid);
     if (!row) throw Object.assign(new Error('Absent native generation'), { code: 'ENOENT' });
@@ -16,6 +17,7 @@ const native = vi.hoisted(() => ({
       fields[19] = String(row.ticks);
       return `${pid} (fixture) ${fields.join(' ')}`;
     }
+    if (path.endsWith('/children')) return [...this.rows].filter(([, child]) => child.parent === pid).map(([childPid]) => childPid).join(' ');
     if (path.endsWith('/environ')) return row.tag ? `HAPPIER_PROCESS_OWNER=${row.tag}\0` : '';
     if (path.endsWith('/cgroup')) return row.unit ? `0::${row.unit}\n` : '';
     if (path.endsWith('/cmdline')) return 'fixture\0';
@@ -26,9 +28,15 @@ vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
-    readdir: (...args: Parameters<typeof actual.readdir>) => String(args[0]) === '/proc'
-      ? native.unavailable ? Promise.reject(Object.assign(new Error('Census unavailable'), { code: 'EACCES' }))
-        : Promise.resolve([...native.rows.keys()].map(String)) : actual.readdir(...args),
+    readdir: (...args: Parameters<typeof actual.readdir>) => {
+      const path = String(args[0]);
+      const task = /^\/proc\/(\d+)\/task$/.exec(path);
+      if (task) return native.rows.has(Number(task[1])) ? Promise.resolve([task[1]])
+        : Promise.reject(Object.assign(new Error('Absent native generation'), { code: 'ENOENT' }));
+      return path === '/proc'
+        ? native.unavailable ? Promise.reject(Object.assign(new Error('Census unavailable'), { code: 'EACCES' }))
+          : Promise.resolve([...native.rows.keys()].map(String)) : actual.readdir(...args);
+    },
     readlink: (...args: Parameters<typeof actual.readlink>) => String(args[0]).startsWith('/proc/')
       ? Promise.resolve('/fixture') : actual.readlink(...args),
     open: async (...args: Parameters<typeof actual.open>) => {

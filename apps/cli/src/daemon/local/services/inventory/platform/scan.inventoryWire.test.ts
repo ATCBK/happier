@@ -36,11 +36,14 @@ const uiSource = new URL('../../../../../../../ui/sources/', import.meta.url);
 await import(new URL('dev/vitestSetup.ts', uiSource).href);
 const rpcBoundary: Readonly<{ installSessionActionRpcBoundary(respond: (request: SocketRpcRequestPayload) => Promise<unknown>): unknown }> =
     await import(new URL('dev/testkit/harness/sessionActionRpcBoundary.ts', uiSource).href);
-const machineFixtures: Readonly<{ createPlainMachineRowFixture(input: Readonly<{ id: string; accountId: string }>): unknown }> =
+const machineFixtures: Readonly<{
+    createPlainMachineRowFixture(input: Readonly<{ id: string; accountId: string }>): unknown;
+    createMachineReadBatchResponseFixture(body: unknown, readMachine: (machineId: string) => unknown | null): Response;
+}> =
     await import(new URL('dev/testkit/fixtures/machineFixtures.ts', uiSource).href);
 const homesBoundary: Readonly<{ serveAccountHomes(input: Readonly<{
     homes: readonly Readonly<{ key: string; serverUrl: string; accountId: string }>[];
-    route(request: Readonly<{ path: string; accountId: string | null }>): Response | undefined;
+    route(request: Readonly<{ path: string; accountId: string | null; body: unknown }>): Response | undefined;
 }>): Promise<Readonly<{ homes: Record<string, Readonly<{ id: string }>>; dispose(): void }>> }> =
     await import(new URL('dev/testkit/harness/actionHomesHttpHarness.ts', uiSource).href);
 let dispatchMachineRpc: (request: SocketRpcRequestPayload) => Promise<unknown>;
@@ -141,6 +144,11 @@ describe('Linux inventory scan to Inventory V1 RPC', () => {
             const homes = await homesBoundary.serveAccountHomes({
                 homes: [{ key: workspace.serverId, serverUrl: 'https://inventory-wire.example.test', accountId: 'account-a' }],
                 route: request => {
+                    if (request.path === '/v1/machines/read-batch') {
+                        expect(request.accountId).toBe('account-a');
+                        return machineFixtures.createMachineReadBatchResponseFixture(request.body, id => id === workspace.machineId
+                            ? machineFixtures.createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
+                    }
                     if (request.path === `/v1/machines/${workspace.machineId}`) {
                         expect(request.accountId).toBe('account-a');
                         return Response.json({ machine: machineFixtures.createPlainMachineRowFixture({ id: workspace.machineId, accountId: 'account-a' }) });
