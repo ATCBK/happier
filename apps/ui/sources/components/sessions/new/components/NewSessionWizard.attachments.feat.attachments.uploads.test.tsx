@@ -339,7 +339,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         expect(screen.findAllByType('AutomationSection' as any)).toHaveLength(0);
     });
 
-    it('shows an inline warning when the selected machine is offline', async () => {
+    it('does not infer an offline warning from a retained machine without a Home scope', async () => {
         const { NewSessionWizard } = await import('./NewSessionWizard');
 
         const screen = await renderScreen(React.createElement(NewSessionWizard, {
@@ -464,8 +464,10 @@ describe('NewSessionWizard (attachments.uploads)', () => {
 
         const textValues = screen.getTextContent();
 
-        expect(textValues).toContain('newSession.machineOfflineInlineTitle');
-        expect(textValues).toContain('newSession.machineOfflineInlineBody');
+        // serverId is null: canonical reachability is Unknown, even for an inactive retained row.
+        // The real-scope expiry/withdrawal/re-observation flow lives in agentInputChips.test.tsx.
+        expect(textValues).not.toContain('newSession.machineOfflineInlineTitle');
+        expect(textValues).not.toContain('newSession.machineOfflineInlineBody');
     });
 
     it('does not leave raw string children under non-Text host views', async () => {
