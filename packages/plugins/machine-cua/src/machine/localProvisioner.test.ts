@@ -45,9 +45,11 @@ function harness(createReplyLost = false, observedRuntime: 'qemu' | 'gvisor' | '
             const content = await readFile(args[args.indexOf('cp') + 1]);
             return result({ direction: 'upload', size: content.length, sha256: createHash('sha256').update(content).digest('hex') });
         }
+        // A runc guest shell runs as the image's `cua` user, whose home is /home/cua (observed with `cua sandbox shell`).
         if (args.includes('shell')) return { ...result(null), stdout: args.at(-1)?.startsWith('mktemp -d')
             ? new TextEncoder().encode(`/tmp/happier-cua.action-${++temporaryId}\n`) : args.at(-1)?.includes("'cat'")
-                ? new Uint8Array([255, 0, 128]) : new Uint8Array() };
+                ? new Uint8Array([255, 0, 128]) : args.at(-1)?.includes("'printenv' 'HOME'")
+                    ? new TextEncoder().encode('/home/cua\n') : new Uint8Array() };
         throw new Error('unexpected native effect');
     };
     return { requests, run, provider: createCuaLocalProvisioner(createCuaNativeClient({ exec: { run }, executable: { kind: 'systemTool', id: 'cua' } }), 'local-sandbox', 10) };
@@ -268,7 +270,7 @@ describe('consumed Cua local provisioner roles', () => {
     it('qualifies only the observed runc foreground hold while leaving QEMU on its system service path', async () => {
         const runc = harness(false, 'runc');
         await expect(runc.provider.bootstrap({ ...resource, runtimeId: 'runc' })).resolves.toMatchObject({ kind: 'native',
-            guestHome: { homeDir: '/root', happyHomeDir: '/root/.happier', daemonStartup: 'native-process' } });
+            guestHome: { homeDir: '/home/cua', happyHomeDir: '/home/cua/.happier', daemonStartup: 'native-process' } });
         const h = harness();
         await expect(h.provider.bootstrap(resource)).resolves.not.toHaveProperty('guestHome');
         const gvisor = harness(false, 'gvisor');
@@ -279,8 +281,8 @@ describe('consumed Cua local provisioner roles', () => {
         const specs: ManagedServiceSpec[] = [];
         const supervise = async (spec: ManagedServiceSpec) => { specs.push(spec); return {}; };
         const runc = { ...resource, runtimeId: 'runc' as const };
-        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
-        const argv = ['sh', '-c', "exec env '/root/.happier/cli/current/happier' 'daemon' 'start-sync'"];
+        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' } };
+        const argv = ['sh', '-c', "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start-sync'"];
         const shellCommand = argv.map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
         const first = await activated(true, undefined, new AbortController().signal, '0.5.0', supervise, 'runc');
         await expect(first.action('sandbox-exec')({ resource: runc, argv, processConfig }, first.context))
@@ -295,9 +297,15 @@ describe('consumed Cua local provisioner roles', () => {
             env: { HOME: expect.any(String) },
         }, endpoint: { kind: 'none' } } });
     });
+    it('refuses a foreground hold whose home is not the home the guest shell actually runs in', async () => {
+        const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'runc');
+        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
+        await expect(h.action('sandbox-exec')({ resource: { ...resource, runtimeId: 'runc' }, argv: ['true'], processConfig }, h.context))
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
+    });
     it('returns a typed unavailable reason when an unqualified guest asks for a foreground hold', async () => {
         const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'gvisor');
-        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
+        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' } };
         await expect(h.action('sandbox-exec')({ resource: { ...resource, runtimeId: 'gvisor' }, argv: ['true'], processConfig }, h.context))
             .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
     });

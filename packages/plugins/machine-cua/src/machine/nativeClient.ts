@@ -139,6 +139,9 @@ export function createCuaNativeClient(options: {
             const qualified = qualifiedSandboxId(sandboxId);
             if (!argv.length || argv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');
             const [, name] = qualified.split(':');
+            // This managed process is the operation-scoped start carrier. Cua's
+            // noninteractive shell submits the guest process to cua-spacesd;
+            // the guest process is not owned by the host-side CLI lifetime.
             const spec = {
                 id: `guest-daemon/local/${name}`,
                 mode: { kind: 'spawn', launch: { executable: options.executable,

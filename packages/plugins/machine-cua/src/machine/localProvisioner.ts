@@ -37,6 +37,19 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
         if (observation.existence !== 'present' || observation.power !== 'running') throw new Error('cua_guest_unavailable');
         return value;
     }
+    // The guest daemon is started through `cua sandbox shell`, which runs as the image's own user, so its home is read
+    // from that shell rather than assumed (the runc image's user is `cua`, not root). Cua owns the started guest
+    // process after this operation-scoped carrier exits; suspend/remove remain the guest-process lifetime boundary.
+    async function guestShellHome(sandboxId: string) {
+        const read = await native.execGuest(sandboxId, ['printenv', 'HOME'], undefined, signal);
+        const home = new TextDecoder().decode(read.stdout).trim();
+        if (read.termination.observed.kind !== 'exit' || read.termination.observed.exitCode !== 0
+            || read.termination.requestedBy.kind !== 'none' || read.stdoutTruncated || !/^(\/[\w.-]+)+$/.test(home)) {
+            throw new PluginError({ code: 'cua_guest_daemon_hold_unavailable',
+                message: 'Cua could not read the home the guest daemon would run in.' });
+        }
+        return home;
+    }
     async function inspect(input: unknown): Promise<MachineProvisionerObservationV1> {
         const value = resource(input);
         const observed = await leaf.inspect(value, signal);
@@ -85,9 +98,10 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
                 throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
                     message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
             }
+            if (value.runtimeId !== 'runc') return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 } };
+            const homeDir = await guestShellHome(value.sandboxId);
             return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 },
-                ...(value.runtimeId === 'runc' ? { guestHome: { homeDir: '/root', happyHomeDir: '/root/.happier',
-                    daemonStartup: 'native-process' as const } } : {}) };
+                guestHome: { homeDir, happyHomeDir: `${homeDir}/.happier`, daemonStartup: 'native-process' as const } };
         },
         inspect,
         async inspectStored(input: unknown) {
@@ -121,9 +135,10 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
             processConfig?: Readonly<{ environment: Readonly<Record<string, string>> }>, managedServices?: ManagedServices) {
             const value = await running(input);
             if (processConfig) {
-                if (inputBytes !== undefined || value.runtimeId !== 'runc' || managedServices === undefined
-                    || processConfig.environment.HOME !== '/root'
-                    || processConfig.environment.HAPPIER_HOME_DIR !== '/root/.happier') {
+                const homeDir = inputBytes === undefined && value.runtimeId === 'runc' && managedServices !== undefined
+                    ? await guestShellHome(value.sandboxId) : undefined;
+                if (homeDir === undefined || managedServices === undefined || processConfig.environment.HOME !== homeDir
+                    || processConfig.environment.HAPPIER_HOME_DIR !== `${homeDir}/.happier`) {
                     throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
                         message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
                 }
