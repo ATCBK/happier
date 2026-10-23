@@ -123,13 +123,22 @@ export const ArtifactReadBatchInputV1Schema = lazyZodSchema(() => z.strictObject
     message: 'Duplicate Artifact identity',
   })),
 }));
+/** Explicit narrow read in the undeployed 0.3 HTTP contract. Full reads retain their V1 shape. */
+export const ArtifactReadHeadersBatchInputV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactIds: ArtifactReadBatchInputV1Schema.shape.artifactIds,
+  projection: z.literal('headers'),
+}));
+export const ArtifactHttpHeaderReadV1Schema = lazyZodSchema(() => z.omit(ArtifactHttpReadV1Schema, { body: true }));
+const ArtifactReadBatchRefusalV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactId: z.string().check(z.minLength(1)), ok: z.literal(false), error: ArtifactAccessErrorCodeV1Schema,
+  status: z.union([z.literal(400), z.literal(403), z.literal(404), z.literal(409), z.literal(500)]),
+  retryable: z.boolean(),
+}));
 export const ArtifactReadBatchResponseV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(z.discriminatedUnion('ok', [
     z.strictObject({ artifactId: z.string().check(z.minLength(1)), ok: z.literal(true), artifact: ArtifactHttpReadV1Schema,
       recipientCensus: z.nullable(ArtifactAccessRecipientCensusResponseV1Schema) }),
-    z.strictObject({ artifactId: z.string().check(z.minLength(1)), ok: z.literal(false), error: ArtifactAccessErrorCodeV1Schema,
-      status: z.union([z.literal(400), z.literal(403), z.literal(404), z.literal(409), z.literal(500)]),
-      retryable: z.boolean() }),
+    ArtifactReadBatchRefusalV1Schema,
   ])).check(z.refine(items => items.every(item => !item.ok || (item.artifactId === item.artifact.id
     && (item.artifact.encryptionMode === 'plain' ? item.recipientCensus === null
       : item.recipientCensus !== null && item.recipientCensus.artifactId === item.artifactId
@@ -140,3 +149,19 @@ export const ArtifactReadBatchResponseV1Schema = lazyZodSchema(() => z.strictObj
   })),
 }));
 export type ArtifactReadBatchResponseV1 = z.infer<typeof ArtifactReadBatchResponseV1Schema>;
+export const ArtifactReadHeadersBatchResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  projection: z.literal('headers'),
+  items: z.array(z.discriminatedUnion('ok', [
+    z.strictObject({ artifactId: z.string().check(z.minLength(1)), ok: z.literal(true), artifact: ArtifactHttpHeaderReadV1Schema }),
+    ArtifactReadBatchRefusalV1Schema,
+  ])).check(z.refine(items => items.every(item => !item.ok || item.artifactId === item.artifact.id), {
+    message: 'Artifact header does not match its addressed identity',
+  })),
+}));
+export type ArtifactReadHeadersBatchResponseV1 = z.infer<typeof ArtifactReadHeadersBatchResponseV1Schema>;
+export const ArtifactReadBatchHttpInputV1Schema = lazyZodSchema(() => z.union([
+  ArtifactReadBatchInputV1Schema, ArtifactReadHeadersBatchInputV1Schema,
+]));
+export const ArtifactReadBatchHttpResponseV1Schema = lazyZodSchema(() => z.union([
+  ArtifactReadBatchResponseV1Schema, ArtifactReadHeadersBatchResponseV1Schema,
+]));

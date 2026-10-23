@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { encodeBase64 } from '../crypto/base64.js';
 import { computeContentPublicKeyFingerprint } from '../machines/identity/contentPublicKeyFingerprint.js';
 import { ArtifactAccessActionOutputSchemasV1, ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessGrantRowV1Schema, ArtifactAccessGrantsListResponseV1Schema,
-  ArtifactRecipientKeyEnvelopeInputV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from './artifactAccessV1.js';
+  ArtifactRecipientKeyEnvelopeInputV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
+  ArtifactReadBatchHttpInputV1Schema, ArtifactReadHeadersBatchResponseV1Schema } from './artifactAccessV1.js';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '../storage/artifactStoredContent.js';
 
 describe('Artifact grant mutation contract', () => {
@@ -48,6 +49,22 @@ describe('Artifact recipient envelope contract', () => {
 });
 
 describe('Artifact selected HTTP read contract', () => {
+  it('keeps header-only disclosure distinct from full detail and census custody', () => {
+    const artifact = { id: 'artifact', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee',
+      header: 'opaque', headerVersion: 1, bodyVersion: 1, publicAudience: 'none',
+      dataEncryptionKey: 'opaque-envelope', seq: 1, createdAt: 1, updatedAt: 1 };
+    const item = { artifactId: artifact.id, ok: true, artifact };
+    const narrow = { projection: 'headers', items: [item] };
+    expect(ArtifactReadBatchHttpInputV1Schema.parse({ artifactIds: [artifact.id], projection: 'headers' }))
+      .toEqual({ artifactIds: [artifact.id], projection: 'headers' });
+    expect(ArtifactReadBatchInputV1Schema.safeParse({ artifactIds: [artifact.id], projection: 'headers' }).success).toBe(false);
+    expect(ArtifactReadHeadersBatchResponseV1Schema.parse(narrow)).toEqual(narrow);
+    expect(ArtifactReadBatchResponseV1Schema.safeParse(narrow).success).toBe(false);
+    expect(ArtifactReadHeadersBatchResponseV1Schema.safeParse({ ...narrow, items: [{ ...item, recipientCensus: null }] }).success).toBe(false);
+    expect(ArtifactReadHeadersBatchResponseV1Schema.safeParse({ ...narrow, items: [{ ...item, artifact: { ...artifact, body: 'not demanded' } }] }).success).toBe(false);
+    expect(ArtifactReadHeadersBatchResponseV1Schema.safeParse({ ...narrow, items: [{ ...item, artifactId: 'foreign' }] }).success).toBe(false);
+  });
+
   it('requires the read owner classification instead of guessing retryability from a refusal code', () => {
     const refusal = { artifactId: 'artifact', ok: false, error: 'artifact_content_unavailable' };
     expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [refusal] }).success).toBe(false);

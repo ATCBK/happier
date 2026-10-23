@@ -17,8 +17,8 @@ import {
     type ArtifactForCaller,
     type ArtifactListItemForCaller,
 } from "@/app/artifacts/artifactAccessService";
-import { ArtifactHttpReadV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
-    type ArtifactReadBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactHttpReadV1Schema, ArtifactReadBatchHttpInputV1Schema, ArtifactReadBatchHttpResponseV1Schema,
+    type ArtifactReadBatchResponseV1, type ArtifactReadHeadersBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { Fastify } from "../../types";
 import { z } from "zod/mini";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
@@ -272,11 +272,13 @@ export function artifactsRoutes(app: Fastify) {
     app.post('/v1/artifacts/read', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'artifacts') },
-        schema: { body: ArtifactReadBatchInputV1Schema, response: { 200: ArtifactReadBatchResponseV1Schema } },
+        schema: { body: ArtifactReadBatchHttpInputV1Schema, response: { 200: ArtifactReadBatchHttpResponseV1Schema } },
     }, async (request, reply) => {
-        const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId, artifactIds: request.body.artifactIds });
+        const projection = 'projection' in request.body ? request.body.projection : undefined;
+        const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId,
+            artifactIds: request.body.artifactIds, projection });
         const items = (() => {
-            const result: ArtifactReadBatchResponseV1['items'] = [];
+            const result: Array<ArtifactReadBatchResponseV1['items'][number] | ArtifactReadHeadersBatchResponseV1['items'][number]> = [];
             for (const { artifactId, read, census } of captured) {
                 if (!read.ok) {
                     const refusal = projectArtifactHttpReadFailure(read, request.userId);
@@ -290,12 +292,17 @@ export function artifactsRoutes(app: Fastify) {
                         status: artifactAccessHttpFailureStatus(census.error), retryable: true });
                     continue;
                 }
-                result.push({ artifactId, ok: true, artifact: projectArtifactHttpRead(read.artifact),
+                if (projection === 'headers') {
+                    result.push({ artifactId, ok: true, artifact: projectArtifactListItem(read.artifact) });
+                    continue;
+                }
+                if (read.artifact.body === undefined) throw new Error('Full Artifact read did not capture its body');
+                result.push({ artifactId, ok: true, artifact: projectArtifactHttpRead({ ...read.artifact, body: read.artifact.body }),
                     recipientCensus: census?.value ?? null });
             }
             return result;
         })();
-        return reply.send({ items });
+        return reply.send(projection === 'headers' ? { projection, items } : { items });
     });
 
     // GET /v1/artifacts/:id - Get single artifact with full body

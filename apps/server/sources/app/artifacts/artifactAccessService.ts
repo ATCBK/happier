@@ -394,14 +394,17 @@ export async function readArtifactRecipientCensus(input: Parameters<typeof readA
 
 type ArtifactBatchReadItem = Readonly<{
     artifactId: string;
-    read: Awaited<ReturnType<typeof readArtifactForCallerInTx>>;
+    read: Readonly<{ ok: true; artifact: ArtifactListItemForCaller }> | ArtifactReadFailure;
     census: Awaited<ReturnType<typeof readArtifactRecipientCensusInTx>> | null;
 }>;
 
 /** Capture the same admission and census facts for the whole request in one snapshot. */
-async function captureArtifactBatchInTx(tx: Tx, input: Readonly<{ actorAccountId: string; artifactIds: readonly string[] }>, includeContent: boolean) {
+async function captureArtifactBatchInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; artifactIds: readonly string[]; projection?: 'headers';
+}>, includeContent: boolean) {
     const readRows = (artifactIds: readonly string[]) => tx.artifact.findMany({ where: { id: { in: [...artifactIds] }, ...artifactVisibleWhere }, select: {
-        ...artifactReadAdmissionSelect(), body: includeContent, bodyVersion: true, provenance: includeContent,
+        ...artifactReadAdmissionSelect(input.projection === 'headers' ? input.actorAccountId : undefined),
+        body: includeContent && input.projection !== 'headers', bodyVersion: true, provenance: includeContent,
     } });
     const rows: Awaited<ReturnType<typeof readRows>> = [];
     // One id binding per row; Prisma's unbounded findMany also binds OFFSET.
@@ -409,7 +412,9 @@ async function captureArtifactBatchInTx(tx: Tx, input: Readonly<{ actorAccountId
     for (const ids of portableQueryChunks({ values: input.artifactIds, bindingsPerValue: 1, fixedBindings: 1 })) {
         rows.push(...await readRows(ids));
     }
-    const audienceByArtifact = new Map(rows.flatMap(row =>
+    // Header admission already carries the caller's envelope readiness. Only a
+    // full read needs the complete recipient roster for key preparation.
+    const audienceByArtifact = new Map(input.projection === 'headers' ? [] : rows.flatMap(row =>
         resolveArtifactAccessFromFacts(row, input.actorAccountId)?.encryptionMode === 'e2ee'
             ? [[row.id, resolveArtifactAudienceFromFacts(row)] as const] : []));
     const recipientIds = [...new Set([...audienceByArtifact.values()].flat())].sort();
@@ -448,7 +453,9 @@ function projectArtifactBatchCensus(captured: ArtifactBatchCapture, row: Artifac
         { content: header.dataEncryptionKey, provenance: header.provenanceDataEncryptionKey });
 }
 
-export async function readArtifactBatchForCaller(input: Readonly<{ actorAccountId: string; artifactIds: readonly string[] }>): Promise<ArtifactBatchReadItem[]> {
+export async function readArtifactBatchForCaller(input: Readonly<{
+    actorAccountId: string; artifactIds: readonly string[]; projection?: 'headers';
+}>): Promise<ArtifactBatchReadItem[]> {
     return await readSnapshotWithCurrentAdmission<ArtifactBatchReadItem[], ArtifactBatchCapture>({
         capture: tx => captureArtifactBatchInTx(tx, input, true),
         materialize: async captured => {
@@ -460,15 +467,17 @@ export async function readArtifactBatchForCaller(input: Readonly<{ actorAccountI
                 if (!row) return { artifactId, read: { ok: false, error: 'artifact_not_found' }, census: null };
                 const header = projectArtifactAdmittedHeader(row, input.actorAccountId, accounts.get(input.actorAccountId)?.readiness);
                 if (!header.ok) return { artifactId, read: header, census: null };
-                const content = projectArtifactBody(header.artifact, row);
+                const content = input.projection === 'headers' ? projectArtifactRevisionMetadata(header.artifact, row)
+                    : projectArtifactBody(header.artifact, row);
                 if (!content.ok) return { artifactId, read: content, census: null };
                 return { artifactId, read: { ok: true, artifact: { ...content.artifact,
                     publicAudience: isPublicSessionShareActive(publications.get(artifactId) ?? null) ? 'retained' : 'none' } },
-                    census: header.artifact.encryptionMode === 'e2ee' ? projectArtifactBatchCensus(captured, row, accounts, header.artifact) : null };
+                    census: input.projection !== 'headers' && header.artifact.encryptionMode === 'e2ee'
+                        ? projectArtifactBatchCensus(captured, row, accounts, header.artifact) : null };
             });
         },
     }, async (tx, captured) => {
-        const currentCapture = await captureArtifactBatchInTx(tx, { actorAccountId: input.actorAccountId,
+        const currentCapture = await captureArtifactBatchInTx(tx, { actorAccountId: input.actorAccountId, projection: input.projection,
             artifactIds: captured.filter(item => item.read.ok).map(item => item.artifactId) }, false);
         const byId = new Map(currentCapture.rows.map(row => [row.id, row]));
         const accounts = projectArtifactBatchAccounts(currentCapture);

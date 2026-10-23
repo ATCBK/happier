@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as privacyKit from 'privacy-kit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol';
+import { ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { applyPostgresMigrations } from '../../../scripts/prismaMigrations';
 import { openPgliteMigrationSession, type PgliteMigrationSession } from '../../../scripts/pgliteMigrationSession';
 import { db, initDbPostgres, shutdownDbClient } from '@/storage/db';
@@ -100,6 +101,14 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
             expect(items.slice(1, 35000).every((item: { artifact: { publicAudience: string } }) => item.artifact.publicAudience === 'none')).toBe(true);
             expect(items.map((item: { artifactId: string }) => item.artifactId)).toEqual([...retained.map(row => row.id), hidden.id]);
             expect(items[35000]).toMatchObject({ artifactId: hidden.id, ok: false, error: 'artifact_not_found' });
+            const headersOnly = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers,
+                payload: { artifactIds: [...retained.map(row => row.id), hidden.id], projection: 'headers' } });
+            expect(headersOnly.statusCode, headersOnly.body).toBe(200);
+            const narrow = ArtifactReadHeadersBatchResponseV1Schema.parse(headersOnly.json());
+            expect(narrow.items.map(item => item.artifactId)).toEqual([...retained.map(row => row.id), hidden.id]);
+            expect(narrow.items[0]).toMatchObject({ ok: true, artifact: { publicAudience: 'retained', bodyVersion: 1 } });
+            expect(narrow.items.slice(0, 35000).every(item => item.ok && !('body' in item.artifact) && !('recipientCensus' in item))).toBe(true);
+            expect(narrow.items[35000]).toMatchObject({ artifactId: hidden.id, ok: false, error: 'artifact_not_found' });
         });
     });
 

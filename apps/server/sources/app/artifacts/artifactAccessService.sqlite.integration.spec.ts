@@ -19,6 +19,7 @@ import { applyArtifactRecipientKeyEnvelopesInTx, readArtifactHeaderForCallerInTx
 import { observePrismaReads } from '@/testkit/observePrismaReads';
 import { withSqliteReadSnapshot } from '@/storage/prisma';
 import { buildWidgetSurfaceArtifactHeaderV1, buildWidgetSurfaceArtifactIdV1, readWidgetSurfaceArtifactHeaderV1 } from '@happier-dev/protocol/widgets';
+import { ArtifactReadHeadersBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 describe("Artifact document grants (real SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -44,6 +45,75 @@ describe("Artifact document grants (real SQLite)", () => {
     }
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+
+    it('projects selected headers with current audience and per-id revocation without opening bodies', async () => {
+        const owner = await plainAccount();
+        const reader = await plainAccount();
+        const granted = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: granted.id, accountId: reader.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        await db.publicSessionShare.create({ data: { artifactId: granted.id, createdByUserId: owner.id,
+            keyDerivation: 'fragment_v1', tokenHash: new Uint8Array(32) } });
+        // Header acquisition must survive an unreadable body; full reads remain refused.
+        await db.artifact.update({ where: { id: granted.id }, data: { body: new Uint8Array([0xff]) } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const read = () => app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': reader.id, ...protocolHeaders },
+                payload: { artifactIds: [granted.id, 'missing-header'], projection: 'headers' } });
+            const response = await read();
+            expect(response.statusCode, response.body).toBe(200);
+            expect(ArtifactReadHeadersBatchResponseV1Schema.parse(response.json())).toMatchObject({ projection: 'headers', items: [
+                { artifactId: granted.id, ok: true, artifact: { access: 'view', publicAudience: 'retained', bodyVersion: 1 } },
+                { artifactId: 'missing-header', ok: false, error: 'artifact_not_found', status: 404, retryable: false },
+            ] });
+            expect(response.json().items[0].artifact).not.toHaveProperty('body');
+            expect(response.json().items[0]).not.toHaveProperty('recipientCensus');
+            await db.artifactAccountGrant.deleteMany({ where: { artifactId: granted.id } });
+            expect((await read()).json().items[0]).toMatchObject({ artifactId: granted.id, ok: false, error: 'artifact_not_found' });
+        });
+    });
+
+    it('rechecks a selected header grant after capture and never selects its body', async () => {
+        const owner = await plainAccount();
+        const reader = await plainAccount();
+        const artifact = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.create({ data: { artifactId: artifact.id, accountId: reader.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
+            const original = delegate.findMany.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let reads = 0;
+            let bodyReads = 0;
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    if (args[0]?.select?.body === true) bodyReads++;
+                    const rows = await original(...args);
+                    reads++;
+                    if (reads === 1) { enter(); await release; }
+                    return rows;
+                } });
+            const response = app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': reader.id, ...protocolHeaders },
+                payload: { artifactIds: [artifact.id], projection: 'headers' } });
+            try {
+                expect(await Promise.race([reached.then(() => 'capture'), response.then(() => 'response')])).toBe('capture');
+                await db.artifactAccountGrant.deleteMany({ where: { artifactId: artifact.id, accountId: reader.id } });
+                resume();
+                const result = await response;
+                expect(result.statusCode, result.body).toBe(200);
+                expect(ArtifactReadHeadersBatchResponseV1Schema.parse(result.json()).items)
+                    .toEqual([{ artifactId: artifact.id, ok: false, error: 'artifact_not_found', status: 404, retryable: false }]);
+                expect(bodyReads).toBe(0);
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
 
     it('reads selected identities beyond the provider bind boundary without widening access', async () => {
         const owner = await plainAccount();
@@ -85,6 +155,12 @@ describe("Artifact document grants (real SQLite)", () => {
             artifactId: artifactIds[index < 500 ? 0 : 1], accountId, accessLevel: 'view' as const, createdByAccountId: owner.id,
         })) });
         await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headersOnly = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { artifactIds, projection: 'headers' } });
+            expect(headersOnly.statusCode, headersOnly.body).toBe(200);
+            const headerItems = ArtifactReadHeadersBatchResponseV1Schema.parse(headersOnly.json()).items;
+            expect(headerItems).toMatchObject(artifactIds.map(artifactId => ({ artifactId, ok: true,
+                artifact: { encryptionMode: 'e2ee', dataEncryptionKey: privacyKit.encodeBase64(envelope) } })));
             const response = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
                 headers: { 'x-test-user-id': owner.id, ...protocolHeaders }, payload: { artifactIds } });
             expect(response.statusCode, response.body).toBe(200);
