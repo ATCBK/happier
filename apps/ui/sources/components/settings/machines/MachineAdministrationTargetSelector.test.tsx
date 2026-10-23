@@ -134,7 +134,7 @@ describe('MachineAdministrationTargetSelector', () => {
         expect(chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded']).toBe(false);
     }));
 
-    it('keeps an offline machine disabled with its reason in the header chip list by default', () => withPopoverWebGlobals(async () => {
+    it('keeps a domain-offline machine disabled without inventing presence for an unbound Home', () => withPopoverWebGlobals(async () => {
         const { MachineAdministrationTargetSelector } = await import('./MachineAdministrationTargetSelector');
         const offline = createSelection('offline');
         const screen = await renderScreen(
@@ -145,7 +145,10 @@ describe('MachineAdministrationTargetSelector', () => {
         const option = 'header.target.picker-option:machine-b';
         const row = screen.findHostByTestId(option);
         expect(row?.props.disabled ?? row?.props.accessibilityState?.disabled ?? row?.props['aria-disabled']).toBe(true);
-        expect(screen.getTextContent()).toContain('settingsOverview.machineOffline');
+        // The candidate supplies administration admission, but this fixture has no authenticated
+        // Home scope. The shared presence owner must report Unknown rather than infer Offline.
+        expect(screen.getTextContent()).toContain('common.unknown');
+        expect(screen.getTextContent()).not.toContain('settingsOverview.machineOffline');
         expect(screen.getTextContent()).not.toContain('settingsProviders.detail.machineOffline');
         await screen.pressByTestIdAsync(option).catch(() => undefined);
         expect(offline.selectTarget).not.toHaveBeenCalled();

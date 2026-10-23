@@ -10,6 +10,7 @@ import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDi
 
 import type { MachineAdministrationCandidateV1 } from './targetSelection';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { captureServerProfileScopeResolver, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 /**
  * One Administration candidate together with the device-local routing row
@@ -58,6 +59,11 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
     nowMs?: number;
 }>): readonly MachineAdministrationCandidateInventoryRowV1<MachineDisplayRenderable>[] {
     const rows: MachineAdministrationCandidateInventoryRowV1<MachineDisplayRenderable>[] = [];
+    let capturedScopeResolver: ProfileScopeResolver | undefined;
+    const resolveScopeId: ProfileScopeResolver = id => {
+        capturedScopeResolver ??= captureServerProfileScopeResolver();
+        return capturedScopeResolver(id);
+    };
     for (const snapshot of params.snapshots) {
         if (snapshot.kind !== 'resolved') continue;
         const displayNameParts = resolveMachineDisplayNameParts(snapshot.machines);
@@ -68,7 +74,7 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
             });
             if (!parsedTarget.success) continue;
             const machineNameParts = displayNameParts.get(machine.id)!;
-            const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine, params.nowMs);
+            const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine, params.nowMs, resolveScopeId);
             const replacementTarget = availability === 'replaced'
                 ? buildReplacementTarget(snapshot.serverIdentityId, machine)
                 : undefined;

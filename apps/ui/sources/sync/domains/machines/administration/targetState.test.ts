@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { adoptHomeProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { resolveAllProfileMachineInventorySnapshots } from '../machineInventorySnapshots';
@@ -52,6 +52,48 @@ beforeEach(async () => {
 });
 
 describe('snapshot Administration candidates', () => {
+    it('does not read profile storage for empty inventories or locked-only rows', async () => {
+        const { MMKV } = await import('react-native-mmkv');
+        const reads = vi.spyOn(MMKV.prototype, 'getString');
+        try {
+            expect(buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots: [] })).toEqual([]);
+            const read = (machines: readonly Machine[]) => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({
+                snapshots: [{ kind: 'resolved', profileId: profile.id, accountId: 'account-b',
+                    serverIdentityId: profile.serverIdentityId!, serverName: 'Server B', observation: 'live', machines }],
+            });
+            expect(read([])).toEqual([]);
+            expect(read([machine({ id: 'locked-only', locked: true })]).map(row => row.candidate.availability)).toEqual(['locked']);
+            expect(reads.mock.calls.filter(([key]) => key === 'server-state-v1')).toHaveLength(0);
+        } finally { reads.mockRestore(); }
+    });
+    it('reads profile identity once for the full candidate inventory without retaining reachability', async () => {
+        const { MMKV } = await import('react-native-mmkv');
+        const machines = Array.from({ length: 138 }, (_, index) => machine({ id: `bulk-candidate-${index}`, active: true }));
+        const read = (rows: readonly Machine[]) => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({
+            snapshots: [{ kind: 'resolved', profileId: profile.id, accountId: 'account-b',
+                serverIdentityId: profile.serverIdentityId!, serverName: 'Server B', observation: 'live', machines: rows }],
+            nowMs: 100,
+        });
+        // Count only persisted profile reads through the native storage boundary.
+        const reads = vi.spyOn(MMKV.prototype, 'getString');
+        try {
+            expect(read(machines.slice(0, 1)).map(row => row.candidate.availability)).toEqual(['online']);
+            const oneMachineReads = reads.mock.calls.filter(([key]) => key === 'server-state-v1').length;
+            reads.mockClear();
+            const candidates = read(machines);
+            expect(candidates).toHaveLength(138);
+            expect(candidates.every(row => row.candidate.availability === 'online')).toBe(true);
+            expect(candidates.map(row => row.machine.id).sort()).toEqual(machines.map(row => row.id).sort());
+            const fleetReads = reads.mock.calls.filter(([key]) => key === 'server-state-v1').length;
+            expect({ oneMachineReads, fleetReads }).toEqual({ oneMachineReads: 1, fleetReads: 1 });
+            recordMachineRequestFailed({ serverId: profile.serverIdentityId!, accountId: 'account-b', machineId: machines[0]!.id, observedAtMs: 100 });
+            reads.mockClear();
+            const next = read(machines);
+            expect(next.find(row => row.machine.id === machines[0]!.id)?.candidate.availability).toBe('offline');
+            expect(next.filter(row => row.candidate.availability === 'online')).toHaveLength(137);
+            expect(reads.mock.calls.filter(([key]) => key === 'server-state-v1')).toHaveLength(1);
+        } finally { reads.mockRestore(); }
+    });
     it('uses the canonical inventory names in snapshot candidate projections', () => {
         const machines = [
             { ...machine({ id: 'aaaa-machine' }), metadata: { ...machine({ id: 'aaaa-machine' }).metadata!, displayName: 'Studio' } },

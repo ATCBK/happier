@@ -6,6 +6,7 @@ import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServ
 import { computeMachinesSummary, type MachinesSummary } from './computeMachinesSummary';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 export { computeMachinesSummary, type MachinesSummary } from './computeMachinesSummary';
 
@@ -148,6 +149,7 @@ function resolveTargetLabel(input: SessionGettingStartedViewModelInput, activeSe
  * the shared this-computer connection owner explains that state instead.
  */
 export function resolveSessionGettingStartedMachinesSummary(input: SessionGettingStartedMachinesInput): SessionGettingStartedMachinesResolution {
+    const resolveScopeId = captureServerProfileScopeResolver();
     const machinesFor = (serverId: string) => resolveServerScopedMachines({
         serverId,
         activeServerId: input.selection.activeServerId,
@@ -155,7 +157,7 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
         activeMachines: input.activeMachines,
         machineListByServerId: input.machineListByServerId,
         machineListStatusByServerId: input.machineListStatusByServerId,
-    });
+    }, resolveScopeId);
     // A Home that is not answering never holds the decision: it is reported, and the Homes that
     // answer (or the active Home) decide.
     const unavailableServerIds = input.selection.allowedServerIds.filter((serverId) => (
@@ -169,7 +171,7 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
         activeMachines: input.activeMachines,
         machineListByServerId: input.machineListByServerId,
         machineListStatusByServerId: input.machineListStatusByServerId,
-    });
+    }, resolveScopeId);
     const perServer = selectedServerIds.map((serverId) => {
         const machines = resolveServerScopedMachines({
             serverId,
@@ -178,18 +180,18 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
             activeMachines: input.activeMachines,
             machineListByServerId: input.machineListByServerId,
             machineListStatusByServerId: input.machineListStatusByServerId,
-        });
+        }, resolveScopeId);
         if (!machines) {
             return { machineCount: null, onlineCount: null };
         }
-        const online = machines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(serverId), machine)).length;
+        const online = machines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(serverId), machine, undefined, resolveScopeId)).length;
         return { machineCount: machines.length, onlineCount: online };
     });
     const selectedMachines = computeMachinesSummary(perServer);
     const activeServerSummary = activeServerMachines
         ? {
             machineCount: activeServerMachines.length,
-            onlineCount: activeServerMachines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(input.selection.activeServerId), machine)).length,
+            onlineCount: activeServerMachines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(input.selection.activeServerId), machine, undefined, resolveScopeId)).length,
         }
         : null;
     if (selectedServerIds.length === 0 && unavailableServerIds.length > 0) {

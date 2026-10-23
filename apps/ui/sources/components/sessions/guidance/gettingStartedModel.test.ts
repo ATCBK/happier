@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
     buildSessionGettingStartedViewModel as buildScopedViewModel,
@@ -80,6 +80,43 @@ describe('computeSessionGettingStartedDecision', () => {
 });
 
 describe('buildSessionGettingStartedViewModel', () => {
+    it('reads profile identity once per bulk summary and refreshes it on the next invocation', async () => {
+        const { MMKV } = await import('react-native-mmkv');
+        const { setServerProfileIdentityForUrl, upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+        const profile = await upsertServerProfile({ serverUrl: 'https://bulk-guidance.example.test', name: 'Bulk guidance' });
+        const serverId = profile.id;
+        const identity = 'srv_bulk_guidance';
+        const machines = Array.from({ length: 138 }, (_, index) => createMachineFixture({
+            id: `bulk-guidance-${index}`, active: true, activeAt: Date.now(),
+        }));
+        const read = (rows: readonly Machine[]) => resolveScopedMachinesSummary({
+            selection: { activeTarget: { kind: 'server', id: serverId }, activeServerId: serverId, allowedServerIds: [serverId] },
+            activeMachines: rows, machineListByServerId: { [serverId]: rows },
+            accountScopesByServerId: new Map([[serverId, { serverId, accountId: 'bulk-guidance-account' }]]),
+        });
+        // Observe the canonical native storage boundary; all identity and fleet logic remains real.
+        const reads = vi.spyOn(MMKV.prototype, 'getString');
+        try {
+            expect(read(machines.slice(0, 1))).toMatchObject({ machineCount: 1, onlineCount: 1, hasUnknownServers: false });
+            const oneMachineReads = reads.mock.calls.filter(([key]) => key === 'server-state-v1').length;
+            reads.mockClear();
+            expect(read(machines)).toMatchObject({ machineCount: 138, onlineCount: 138, hasUnknownServers: false });
+            const fleetReads = reads.mock.calls.filter(([key]) => key === 'server-state-v1').length;
+            expect({ oneMachineReads, fleetReads }).toEqual({ oneMachineReads: 1, fleetReads: 1 });
+
+            recordMachineRequestFailed({ serverId: identity, accountId: 'bulk-guidance-account', machineId: machines[0]!.id });
+            expect(read(machines).onlineCount).toBe(138);
+            await setServerProfileIdentityForUrl(profile.serverUrl, identity);
+            reads.mockClear();
+            expect(read(machines).onlineCount).toBe(137);
+            expect(reads.mock.calls.filter(([key]) => key === 'server-state-v1')).toHaveLength(1);
+            recordMachineRequestSucceeded({ serverId: identity, accountId: 'bulk-guidance-account', machineId: machines[0]!.id });
+            expect(read(machines).onlineCount).toBe(138);
+        } finally {
+            reads.mockRestore();
+            recordMachineRequestSucceeded({ serverId: identity, accountId: 'bulk-guidance-account', machineId: machines[0]!.id });
+        }
+    });
     it('does not offer session creation from a request-failed or replaced fleet member', () => {
         const serverId = 'fleet-guidance-home';
         const machine = createMachineFixture({ id: 'fleet-guidance-machine', active: true, activeAt: Date.now() });
