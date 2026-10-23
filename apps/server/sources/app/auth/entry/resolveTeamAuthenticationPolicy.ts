@@ -4,7 +4,7 @@ import { resolveEffectiveHomeAuthMethodsInTx, type HomeAuthenticationAvailabilit
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { listProviderDescriptorsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { readIdentityProviderInstancePresentationsByIdsInTx } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
-import { readTeamIdentityConnectionInTx } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
+import { readTeamIdentityConnectionsByIdInTx, teamIdentityConnectionReferenceKey } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import type { Tx } from "@/storage/inTx";
 
 export type ResolvedTeamAuthenticationPolicy =
@@ -195,10 +195,9 @@ export async function resolveTeamAuthenticationPolicyInTx(
                 ? {}
                 : { emailDeliveryReady: input.emailDeliveryReady }),
         }),
-        Promise.all(acceptedConnectionIds.map(async (id) => await readTeamIdentityConnectionInTx(tx, {
-            id,
-            teamId: input.teamId,
-        }))),
+        readTeamIdentityConnectionsByIdInTx(tx, {
+            references: acceptedConnectionIds.map((id) => ({ id, teamId: input.teamId })),
+        }),
         input.homeAvailability?.providerDescriptors ?? listProviderDescriptorsInTx(tx, input.env),
         listProviderDescriptorsInTx(tx, input.env, { kind: "team", teamId: input.teamId }),
         readIdentityProviderInstancePresentationsByIdsInTx(tx, { ids: acceptedHomeMethodIds }),
@@ -227,8 +226,10 @@ export async function resolveTeamAuthenticationPolicyInTx(
         descriptor,
     ]));
     const effectiveHomeById = new Map(effectiveHome.decisions.map((decision) => [normalizeAuthMethodId(decision.id), decision]));
-    const connectionReadById = new Map(acceptedConnectionIds.map((id, index) => [id, connectionReads[index]!] as const));
-    const connectionById = new Map(connectionReads.flatMap((read) =>
+    const connectionReadById = new Map(acceptedConnectionIds.map((id) => [id, connectionReads.get(
+        teamIdentityConnectionReferenceKey({ id, teamId: input.teamId }),
+    )] as const));
+    const connectionById = new Map([...connectionReads.values()].flatMap((read) =>
         read.status === "ready" ? [[read.connection.id, read.connection] as const] : []));
     const homeMethodAvailability = acceptedHomeMethodIds.map((id) => [id, resolveTeamAcceptedChoiceAvailability({
         kind: "home_method",

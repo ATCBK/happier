@@ -5,6 +5,7 @@ import type { ProviderCatalogContext } from "@/app/auth/providers/providerRefere
 import { resolveDeploymentProviderSnapshot } from "@/app/auth/providers/providerModules";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { acquireAccountSessionOwnerMetadataFencesInTx, type AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { readHomeGovernanceChangeAccountIdsInTx } from "@/app/home/governance/governanceChanges";
 import { readIdentityProviderTeamIdsInTx, readTeamChangePublicationAudienceInTx } from "@/app/teams/teamChanges";
@@ -226,8 +227,9 @@ function projectInstance(row: IdentityProviderInstanceSafeRow): IdentityProvider
 
 function readSecrets(
     row: Pick<IdentityProviderInstanceRow, "id" | "kind" | "config" | "encryptedSecrets">,
+    admittedConfig?: IdentityProviderConfig,
 ): IdentityProviderSecrets | null | undefined {
-    const config = parseIdentityProviderConfig(row.kind, row.config);
+    const config = admittedConfig ? { ok: true as const, value: admittedConfig } : parseIdentityProviderConfig(row.kind, row.config);
     if (!config.ok) return undefined;
     const parsed = decryptIdentityProviderSecrets({
         id: row.id,
@@ -281,10 +283,10 @@ export async function readIdentityProviderInstancePresentationsByIdsInTx(
 ): Promise<ReadonlyMap<string, IdentityProviderInstanceReadResult>> {
     const ids = [...new Set(input.ids.map((id) => id.trim().toLowerCase()).filter(Boolean))];
     if (ids.length === 0) return new Map();
-    const rows = await tx.identityProviderInstance.findMany({
-        where: { id: { in: ids } },
+    const rows = (await Promise.all(portableQueryChunks({ values: ids, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.identityProviderInstance.findMany({
+        where: { id: { in: [...ids] } },
         select: instanceSafeSelect,
-    });
+    })))).flat();
     const byId = new Map(rows.map((row) => [row.id, row]));
     const entries: Array<readonly [string, IdentityProviderInstanceReadResult]> = ids.map((id) => {
         const row = byId.get(id);
@@ -347,6 +349,55 @@ export async function readIdentityProviderSecretHealthByIdsInTx(
 export type IdentityProviderInstanceRuntimeResult =
     | Readonly<{ status: "ready"; instance: IdentityProviderInstanceView; secrets: IdentityProviderSecrets | null }>
     | Readonly<{ status: "not_found" | "disabled" | "unreadable" }>;
+
+export type IdentityProviderRuntimeFacts = Readonly<{
+    owner: ProviderCatalogContext;
+    enabled: boolean;
+    instance: IdentityProviderInstanceView | null;
+    runtime: IdentityProviderInstanceRuntimeResult;
+    secretHealth: IdentityProviderSecretHealth;
+}>;
+
+/** One transaction's current provider rows, admitted and decrypted once for
+ * both runtime currentness and redacted administration health. */
+export async function readIdentityProviderRuntimeFactsByIdsInTx(
+    tx: Tx,
+    input: Readonly<{ ids: readonly string[] }>,
+): Promise<ReadonlyMap<string, IdentityProviderRuntimeFacts>> {
+    const ids = [...new Set(input.ids)];
+    const rows = (await Promise.all(portableQueryChunks({ values: ids, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.identityProviderInstance.findMany({
+        where: { id: { in: [...ids] } }, select: instanceRuntimeSelect,
+    })))).flat();
+    return new Map(rows.map(row => {
+        const instance = projectInstance(row);
+        const secrets = instance ? readSecrets(row, instance.config) : undefined;
+        return [row.id, {
+            owner: row.ownerTeamId === null ? { kind: "home" as const } : { kind: "team" as const, teamId: row.ownerTeamId },
+            enabled: row.enabled,
+            instance,
+            runtime: instance && secrets !== undefined
+                ? { status: "ready" as const, instance, secrets }
+                : { status: "unreadable" as const },
+            secretHealth: row.encryptedSecrets === null ? "not_configured" as const
+                : secrets === undefined ? "unreadable" as const : "configured" as const,
+        }] as const;
+    }));
+}
+
+/** Preserve exact owner and disabled-state admission when consuming a row
+ * already loaded by the catalog in this same transaction. */
+export function resolveIdentityProviderRuntimeForOwner(
+    facts: IdentityProviderRuntimeFacts | undefined,
+    owner: ProviderCatalogContext,
+    includeDisabled = false,
+): IdentityProviderInstanceRuntimeResult {
+    if (!facts || facts.owner.kind !== owner.kind
+        || (facts.owner.kind === "team" && owner.kind === "team" && facts.owner.teamId !== owner.teamId)) {
+        return { status: "not_found" };
+    }
+    if (!facts.enabled && !includeDisabled) return { status: "disabled" };
+    return facts.runtime;
+}
 
 export async function resolveIdentityProviderInstanceRuntimeInTx(
     tx: Tx,

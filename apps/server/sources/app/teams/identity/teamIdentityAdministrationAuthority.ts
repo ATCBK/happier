@@ -9,6 +9,7 @@ import { HOME_PROVIDER_CONTEXT, type ProviderCatalogContext } from "@/app/auth/p
 import {
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
+    type TeamActorContext,
     type TeamOperationAuthenticationContext,
 } from "../actorContext";
 
@@ -80,19 +81,21 @@ type TeamIdentityAdministrationAuthorityInput<TeamId extends string | null> = Pa
     teamId: TeamId;
     actorAccountId: string;
 }>;
-type TeamIdentityAdministrationAuthorityResult<ErrorCode extends TeamIdentityAdministrationAuthorityError> =
-    Readonly<{ ok: true; canMutate: boolean }> | Readonly<{ ok: false; error: ErrorCode }>;
+type TeamIdentityAdministrationAuthorityResult<
+    ErrorCode extends TeamIdentityAdministrationAuthorityError,
+    Actor extends TeamActorContext | null = TeamActorContext | null,
+> = Readonly<{ ok: true; canMutate: boolean; actor: Actor }> | Readonly<{ ok: false; error: ErrorCode }>;
 
 export function authorizeTeamIdentityAdministrationInTx(
     tx: Tx,
     input: TeamIdentityAdministrationAuthorityInput<string>,
     operation?: "view" | "mutate",
-): Promise<TeamIdentityAdministrationAuthorityResult<Exclude<TeamIdentityAdministrationAuthorityError, "home_forbidden">>>;
+): Promise<TeamIdentityAdministrationAuthorityResult<Exclude<TeamIdentityAdministrationAuthorityError, "home_forbidden">, TeamActorContext>>;
 export function authorizeTeamIdentityAdministrationInTx(
     tx: Tx,
     input: TeamIdentityAdministrationAuthorityInput<null>,
     operation?: "view" | "mutate",
-): Promise<TeamIdentityAdministrationAuthorityResult<"home_forbidden">>;
+): Promise<TeamIdentityAdministrationAuthorityResult<"home_forbidden", null>>;
 export function authorizeTeamIdentityAdministrationInTx(
     tx: Tx,
     input: TeamIdentityAdministrationAuthorityInput<string | null>,
@@ -112,7 +115,7 @@ export async function authorizeTeamIdentityAdministrationInTx(
             request: { operation: operation === "view" ? "view" : "set_authentication_policy" },
         });
         return authorization.status === "authorized"
-            ? { ok: true, canMutate: authorization.authority.manageAuthentication }
+            ? { ok: true, canMutate: authorization.authority.manageAuthentication, actor: null }
             : { ok: false, error: "home_forbidden" };
     }
     return await authorizeTeamIdentityAdministrationForTeamInTx(tx, { ...input, teamId: input.teamId });
@@ -121,7 +124,7 @@ export async function authorizeTeamIdentityAdministrationInTx(
 async function authorizeTeamIdentityAdministrationForTeamInTx(
     tx: Tx,
     input: TeamIdentityAdministrationAuthorityInput<string>,
-): Promise<TeamIdentityAdministrationAuthorityResult<Exclude<TeamIdentityAdministrationAuthorityError, "home_forbidden">>> {
+): Promise<TeamIdentityAdministrationAuthorityResult<Exclude<TeamIdentityAdministrationAuthorityError, "home_forbidden">, TeamActorContext>> {
     const actor = await resolveTeamActorContextInTx(tx, input);
     // Identity and directory administration are Team-only surfaces. Home's
     // manageAllTeams projection deliberately grants detail/metadata/lifecycle
@@ -133,5 +136,5 @@ async function authorizeTeamIdentityAdministrationForTeamInTx(
         context: actor,
         ...input,
     });
-    return qualification.ok ? { ok: true, canMutate: true } : qualification;
+    return qualification.ok ? { ok: true, canMutate: true, actor } : qualification;
 }

@@ -16,7 +16,7 @@ import type {
     TeamErrorCodeV1,
     TeamIdentityErrorCodeV1,
 } from "@happier-dev/protocol/teams";
-import { resolveStoredGitHubDirectoryReadiness } from "@/app/integrations/github/githubManagedDirectory";
+import { resolveStoredGitHubDirectoryReadinessBatch } from "@/app/integrations/github/githubManagedDirectory";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
 import {
     decodeTeamKeysetCursorV1,
@@ -355,22 +355,25 @@ export async function listDirectorySourceSetupOptionsForActor(
                 githubHost: true,
                 config: true,
                 encryptedSecrets: true,
+                securityRevision: true,
             } },
         },
     }));
     const scannedRows = githubRows.slice(0, limit);
-    const items = scannedRows.flatMap((installation) => {
-        if (!resolveStoredGitHubDirectoryReadiness({
-            teamId: input.teamId,
-            home: preflight.value.home,
-            installation: {
-                ...installation,
-                registration: {
-                    ...installation.registration,
-                    encryptedSecrets: Uint8Array.from(installation.registration.encryptedSecrets),
-                },
+    const readiness = resolveStoredGitHubDirectoryReadinessBatch(scannedRows.map(installation => ({
+        key: installation.id,
+        teamId: input.teamId,
+        home: preflight.value.home,
+        installation: {
+            ...installation,
+            registration: {
+                ...installation.registration,
+                encryptedSecrets: Uint8Array.from(installation.registration.encryptedSecrets),
             },
-        }).ok || (query.length > 0 && !installation.githubOrganizationLogin.toLowerCase().includes(query))) {
+        },
+    })));
+    const items = scannedRows.flatMap((installation) => {
+        if (!readiness.get(installation.id)?.ok || (query.length > 0 && !installation.githubOrganizationLogin.toLowerCase().includes(query))) {
             return [];
         }
         return [{

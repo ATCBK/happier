@@ -4,7 +4,7 @@ import type { HomeIdentityConnectionV1 } from '@happier-dev/protocol/home';
 import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
 
 import { resolveTeamAuthenticationPolicy, resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
-import { resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
+import { resolveOAuthRuntimeByIdInTx, type IdentityProviderRuntimeCurrentness } from "@/app/auth/providers/identityProviderCatalog";
 import { readHomeGovernancePolicyInTx, resolveIdentityConnectionProviderKindPolicy } from "@/app/home/governance/governancePolicy";
 import { resolveWorkosPlatformRuntimeMetadata } from "@/app/integrations/workos/workosPlatform";
 import type { Tx } from "@/storage/inTx";
@@ -84,15 +84,20 @@ export type TeamIdentityCurrentnessInputs = Readonly<{
     policyStatusFor: (connectionId: string) => TeamIdentityConnectionCurrentness["policyStatus"];
     workosPlatformAvailable: boolean;
     teamsUsingHomeMethods: ReadonlyMap<string, NonNullable<HomeIdentityConnectionV1["teamsUsingIt"]>>;
+    runtimeCurrentness?: ReadonlyMap<string, IdentityProviderRuntimeCurrentness>;
 }>;
 
 export async function readTeamIdentityCurrentnessInputsInTx(
     tx: Tx,
-    input: Readonly<{ env: NodeJS.ProcessEnv; teamId: string | null; homeProviderInstanceIds?: readonly string[] }>,
+    input: Readonly<{
+        env: NodeJS.ProcessEnv; teamId: string | null; homeProviderInstanceIds?: readonly string[];
+        home?: Awaited<ReturnType<typeof readHomeGovernancePolicyInTx>>;
+        runtimeCurrentness?: ReadonlyMap<string, IdentityProviderRuntimeCurrentness>;
+    }>,
 ): Promise<TeamIdentityCurrentnessInputs> {
     const [team, home, teamsUsingHomeMethods] = await Promise.all([
         input.teamId === null ? Promise.resolve(null) : tx.team.findUnique({ where: { id: input.teamId }, select: { authenticationPolicy: true } }),
-        readHomeGovernancePolicyInTx(tx),
+        input.home ?? readHomeGovernancePolicyInTx(tx),
         readTeamsUsingHomeIdentityMethodsInTx(tx, input.teamId === null ? input.homeProviderInstanceIds ?? [] : []),
     ]);
     const policy = team && input.teamId !== null
@@ -116,6 +121,7 @@ export async function readTeamIdentityCurrentnessInputsInTx(
         },
         workosPlatformAvailable: resolveWorkosPlatformRuntimeMetadata(input.env).available,
         teamsUsingHomeMethods,
+        ...(input.runtimeCurrentness ? { runtimeCurrentness: input.runtimeCurrentness } : {}),
     };
 }
 
@@ -140,16 +146,19 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
     const shared = input.inputs ?? await readTeamIdentityCurrentnessInputsInTx(tx, {
         ...input, homeProviderInstanceIds: [input.connection.providerInstanceId],
     });
-    const runtime = await resolveOAuthRuntimeByIdInTx(
+    const runtime = shared.runtimeCurrentness ? null : await resolveOAuthRuntimeByIdInTx(
         tx,
         input.env,
         input.connection.providerInstanceId,
         identityConnectionOwner(input.teamId),
         "identity_connection_test",
     );
+    const runtimeFingerprint = shared.runtimeCurrentness
+        ? shared.runtimeCurrentness.get(input.connection.providerInstanceId)?.runtimeFingerprint ?? null
+        : runtime?.reference.runtimeFingerprint ?? null;
     return {
         currentness: {
-            runtimeAvailable: runtime !== null,
+            runtimeAvailable: runtimeFingerprint !== null,
             providerAllowedByHome: resolveIdentityConnectionProviderKindPolicy(shared.home, identityConnectionOwner(input.teamId), input.connection.providerKind) === "allowed",
             policyStatus: shared.policyStatusFor(input.connection.id),
             workosPlatformAvailable: shared.workosPlatformAvailable,
@@ -157,7 +166,7 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
                 teamsUsingIt: shared.teamsUsingHomeMethods.get(normalizeAuthMethodId(input.connection.providerInstanceId)) ?? [],
             } : {}),
         },
-        runtimeFingerprint: runtime?.reference.runtimeFingerprint ?? null,
+        runtimeFingerprint,
     };
 }
 

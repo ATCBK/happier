@@ -2,7 +2,7 @@ import type { Tx } from "@/storage/inTx";
 import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 
 import { applyReadyDirectorySourceFactsForAccountInTx } from "./directoryProjectionRepository";
-import { isDirectorySourceCompletedEvidenceAllowedInTx } from "./directorySourcePolicy";
+import { readDirectorySourceCompletedEvidenceAllowedByIdsInTx } from "./directorySourcePolicy";
 
 /**
  * Bind a provisioned directory person to the Account that just proved the
@@ -85,8 +85,11 @@ export async function readDirectoryProvisionedIdentityCandidatesInTx(
         directorySourceId: string;
         boundAccountId: string | null;
     }>> = [];
+    const allowedSources = await readDirectorySourceCompletedEvidenceAllowedByIdsInTx(tx, {
+        sources: candidates.map(candidate => candidate.source),
+    });
     for (const candidate of candidates) {
-        if (!await isDirectorySourceCompletedEvidenceAllowedInTx(tx, candidate.source)) continue;
+        if (allowedSources.get(candidate.source.id) !== true) continue;
         ready.push({
             id: candidate.id,
             directorySourceId: candidate.directorySourceId,

@@ -171,21 +171,26 @@ async function projectHomeAuthenticationOptionsV1(
     tx: Tx,
     env: NodeJS.ProcessEnv,
     emailDeliveryReady: boolean,
+    home: HomeGovernancePolicyRecord,
 ): Promise<HomeAuthenticationOptionsV1> {
+    const stored = home.authentication;
     // The choices are what this Home could offer if it turned everything on that the deployment
     // leaves unset (§3.4: both directions within the env locks); the persisted-Home decision supplies
     // their current action state. Both are projections of the same canonical resolver, never
     // parallel availability formulas. A method that can never run here stays in the list as fixed
     // (its enable key is set by the deployment) or unavailable (a prerequisite is missing), so the
     // console can say why instead of hiding it.
-    const stored = (await readHomeGovernancePolicyInTx(tx)).authentication;
     const ceilingEnv = homeAuthenticationCeilingEnv(env);
     const ceiling = await resolveEffectiveHomeAuthMethodsInTx(tx, {
         env: ceilingEnv,
         homeAuthenticationPolicyOverride: { status: "inherited" },
+        homeGovernancePolicy: home,
         emailDeliveryReady,
     });
-    const effective = await resolveEffectiveHomeAuthMethodsInTx(tx, { env, emailDeliveryReady });
+    const effective = await resolveEffectiveHomeAuthMethodsInTx(tx, {
+        env, emailDeliveryReady, homeAuthenticationPolicyOverride: stored,
+        homeGovernancePolicy: home,
+    });
     const permittedAccountModes = [...resolveAllowedAccountProvisionModes(ceilingEnv)];
     const recommendedProvisioningMode = resolveRecommendedAccountProvisionMode(env);
     const anonymousSignup = {
@@ -275,10 +280,9 @@ export async function readHomeGovernanceProjectionInTx(tx: Tx, input: Readonly<{
         request: { operation: "view" },
     });
     if (authorization.status === "rejected") return authorization;
-    const viewer = await readHomeGovernanceAccountInTx(tx, input.viewerAccountId);
-    if (!viewer) return { status: "rejected", code: "home_account_not_found" };
+    const viewer = authorization.actor;
     const policy = await readHomeGovernancePolicyInTx(tx);
-    const authenticationOptions = await projectHomeAuthenticationOptionsV1(tx, input.env, input.emailDeliveryReady);
+    const authenticationOptions = await projectHomeAuthenticationOptionsV1(tx, input.env, input.emailDeliveryReady, policy);
     return { status: "ok", result: {
         identityServices: projectHomeIdentityDeploymentServicesV1(input.env),
         viewer: { accountId: viewer.accountId, homeRole: viewer.homeRole, status: viewer.status },

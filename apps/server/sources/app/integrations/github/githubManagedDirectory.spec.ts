@@ -16,6 +16,9 @@ vi.mock("@/storage/db", () => ({
         gitHubAppInstallation: { update: mocks.updateInstallation },
         homeGovernancePolicy: { findUnique: vi.fn().mockResolvedValue(null) },
         $transaction: vi.fn(async (run) => await run({
+            // PostgreSQL transport used by the real transaction-budget owner.
+            $queryRaw: vi.fn(async () => [{ statement_timeout: "0" }]),
+            $executeRawUnsafe: vi.fn(async () => 0),
             teamDirectorySource: { findUnique: mocks.findUnique, update: mocks.updateSource },
             gitHubAppInstallation: { update: mocks.updateInstallation },
         })),
@@ -27,10 +30,13 @@ vi.mock("octokit", () => ({
 }));
 
 import { initEncrypt } from "@/modules/encrypt";
-import { encryptGitHubAppRegistrationSecretsV1 } from "./githubManagedApp";
+import * as encryption from "@/modules/encrypt";
+import { readHomeGovernancePolicy } from "@/app/home/governance/governancePolicy";
+import { encryptGitHubAppRegistrationSecretsV1, projectGitHubAppSecretHealthV1 } from "./githubManagedApp";
 import {
     beginManagedGitHubDirectoryRead,
     readManagedGitHubDirectoryPage,
+    resolveStoredGitHubDirectoryReadinessBatch,
 } from "./githubManagedDirectory";
 
 const previousMasterSecret = process.env.HANDY_MASTER_SECRET;
@@ -107,6 +113,112 @@ beforeEach(() => {
 });
 
 describe("managed GitHub directory operation", () => {
+    it("keeps distinct secret revisions of one registration separate in a batch", async () => {
+        const row = sourceRow();
+        const home = await readHomeGovernancePolicy();
+        const input = { key: "old", teamId: row.teamId, home, installation: row.githubAppInstallation };
+        const results = resolveStoredGitHubDirectoryReadinessBatch([input, {
+            ...input, key: "new", installation: { ...input.installation, registration: {
+                ...input.installation.registration, securityRevision: 6,
+                encryptedSecrets: encryptGitHubAppRegistrationSecretsV1({
+                    registrationId: input.installation.registration.id, secrets: { v: 1, clientSecret: "new-client-only" },
+                }),
+            } },
+        }]);
+        expect(Object.fromEntries(results)).toEqual({ old: { ok: true },
+            new: { ok: false, code: "installation_unavailable" } });
+    });
+
+    it("reuses exact registration health while keeping directory scope, state and permission decisions", async () => {
+        const row = sourceRow();
+        const home = await readHomeGovernancePolicy();
+        const input = { key: "valid", teamId: row.teamId, home, installation: row.githubAppInstallation,
+            registrationSecretHealth: {
+                registrationId: row.githubAppInstallation.registration.id, securityRevision: 5,
+                secretHealth: projectGitHubAppSecretHealthV1({ v: 1, privateKey: "test-private-key" }),
+            },
+        };
+        const decryptions = vi.spyOn(encryption, "decryptString");
+        try {
+            const results = resolveStoredGitHubDirectoryReadinessBatch([
+                input, { ...input, key: "wrong-owner", teamId: "other-team" },
+                { ...input, key: "suspended", installation: { ...input.installation, suspendedAt: new Date() } },
+                { ...input, key: "permission-lost", installation: { ...input.installation, verifiedPermissions: {} } },
+            ]);
+            expect(Object.fromEntries(results)).toEqual({ valid: { ok: true },
+                "wrong-owner": { ok: false, code: "directory_source_unavailable" },
+                suspended: { ok: false, code: "installation_unavailable" },
+                "permission-lost": { ok: false, code: "permission_lost" },
+            });
+            expect(decryptions.mock.calls.length).toBe(0);
+        } finally { decryptions.mockRestore(); }
+    });
+
+    it("rejects admitted unreadable secrets and freshly decrypts health with another registration id or revision", async () => {
+        const row = sourceRow();
+        const home = await readHomeGovernancePolicy();
+        const input = { key: "unreadable", teamId: row.teamId, home, installation: row.githubAppInstallation,
+            registrationSecretHealth: { registrationId: row.githubAppInstallation.registration.id, securityRevision: 5, secretHealth: null },
+        };
+        const decryptions = vi.spyOn(encryption, "decryptString");
+        try {
+            const results = resolveStoredGitHubDirectoryReadinessBatch([
+                input,
+                { ...input, key: "stale", registrationSecretHealth: { ...input.registrationSecretHealth, securityRevision: 4 } },
+                { ...input, key: "other", registrationSecretHealth: { ...input.registrationSecretHealth, registrationId: "another-registration" } },
+            ]);
+            expect(Object.fromEntries(results)).toEqual({
+                unreadable: { ok: false, code: "installation_unavailable" }, stale: { ok: true }, other: { ok: true },
+            });
+            expect(decryptions).toHaveBeenCalledTimes(1);
+        } finally { decryptions.mockRestore(); }
+    });
+
+    it("decrypts a shared registration once for a batch of 128 admitted directory sources", async () => {
+        const row = sourceRow();
+        const home = await readHomeGovernancePolicy();
+        const decryptions = vi.spyOn(encryption, "decryptString");
+        try {
+            const results = resolveStoredGitHubDirectoryReadinessBatch(Array.from({ length: 128 }, (_, index) => ({
+                key: `source-${index}`, teamId: row.teamId, home, installation: row.githubAppInstallation,
+            })));
+            expect(results.size).toBe(128);
+            expect([...results.values()].every(result => result.ok)).toBe(true);
+            expect(decryptions).toHaveBeenCalledTimes(1);
+            expect([...results.values()].every(result => !("privateKey" in result))).toBe(true);
+        } finally { decryptions.mockRestore(); }
+    });
+
+    it("preserves per-source scope, suspension, permission and corrupt-secret failures in a batch", async () => {
+        const row = sourceRow();
+        const home = await readHomeGovernancePolicy();
+        const input = { key: "valid", teamId: row.teamId, home, installation: row.githubAppInstallation };
+        const corrupt = { ...input.installation, registration: { ...input.installation.registration,
+            id: "corrupt-registration", encryptedSecrets: Uint8Array.from([1, 2, 3]),
+        } };
+        const decryptions = vi.spyOn(encryption, "decryptString");
+        try {
+            const results = resolveStoredGitHubDirectoryReadinessBatch([
+                input, { ...input, key: "wrong-owner", teamId: "other-team" },
+                { ...input, key: "suspended", installation: { ...input.installation, suspendedAt: new Date() } },
+                { ...input, key: "revoked", installation: { ...input.installation, state: "revoked" } },
+                { ...input, key: "permission-lost", installation: { ...input.installation, verifiedPermissions: {} } },
+                { ...input, key: "corrupt-one", installation: corrupt },
+                { ...input, key: "corrupt-two", installation: corrupt },
+            ]);
+            expect(Object.fromEntries(results)).toEqual({
+                valid: { ok: true },
+                "wrong-owner": { ok: false, code: "directory_source_unavailable" },
+                suspended: { ok: false, code: "installation_unavailable" },
+                revoked: { ok: false, code: "installation_unavailable" },
+                "permission-lost": { ok: false, code: "permission_lost" },
+                "corrupt-one": { ok: false, code: "installation_unavailable" },
+                "corrupt-two": { ok: false, code: "installation_unavailable" },
+            });
+            expect(decryptions).toHaveBeenCalledTimes(2);
+        } finally { decryptions.mockRestore(); }
+    });
+
     it("carries one transient security tuple through normalized source-bound pages", async () => {
         mocks.findUnique.mockResolvedValue(sourceRow());
 

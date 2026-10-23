@@ -7,7 +7,9 @@ import {
     readIdentityProviderInstanceInTx,
     readIdentityProviderInstancePresentationsByIdsInTx,
     type IdentityProviderInstanceView,
+    type IdentityProviderInstanceReadResult,
 } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { removeIdentitiesForProviderInTx } from "@/app/auth/providers/accountIdentityLifecycle";
 import {
     parseTeamIdentityConnectionDocuments,
@@ -163,10 +165,10 @@ async function findConflictingWorkosProviderIdsInTx(
     }>,
 ): Promise<ReadonlySet<string>> {
     if (input.providerInstanceIds.length === 0) return new Set();
-    const rows = await tx.teamIdentityConnection.findMany({
-        where: { providerInstanceId: { in: [...new Set(input.providerInstanceIds)] } },
+    const rows = (await Promise.all(portableQueryChunks({ values: [...new Set(input.providerInstanceIds)], bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.teamIdentityConnection.findMany({
+        where: { providerInstanceId: { in: [...ids] } },
         select: { id: true, providerInstanceId: true, externalReference: true },
-    });
+    })))).flat();
     const references = rows.filter((row) => row.id !== input.proposed?.id);
     const candidates = input.proposed ? [...references, input.proposed] : references;
     const firstByProvider = new Map<string, Extract<TeamIdentityConnectionExternalReference, { kind: "workos_sso" }>>();
@@ -258,7 +260,10 @@ export function teamIdentityConnectionReferenceKey<TeamId extends string | null>
  */
 export async function readTeamIdentityConnectionsByIdInTx<TeamId extends string | null>(
     tx: Tx,
-    input: Readonly<{ references: readonly Readonly<{ id: string; teamId: TeamId }>[] }>,
+    input: Readonly<{
+        references: readonly Readonly<{ id: string; teamId: TeamId }>[];
+        providers?: ReadonlyMap<string, IdentityProviderInstanceReadResult>;
+    }>,
 ): Promise<ReadonlyMap<string, TeamIdentityConnectionReadResult<TeamId>>> {
     const references = [...new Map(input.references.map((reference) => [
         teamIdentityConnectionReferenceKey(reference),
@@ -266,14 +271,14 @@ export async function readTeamIdentityConnectionsByIdInTx<TeamId extends string 
     ])).values()];
     if (references.length === 0) return new Map();
     const wantedKeys = new Set(references.map(teamIdentityConnectionReferenceKey));
-    const rows = await tx.teamIdentityConnection.findMany({
+    const rows = (await Promise.all(portableQueryChunks({ values: references, bindingsPerValue: 3, fixedBindings: 1 }).map(references => tx.teamIdentityConnection.findMany({
         where: {
             id: { in: [...new Set(references.map((reference) => reference.id))] },
             OR: references.map((reference) => ({ id: reference.id, teamId: reference.teamId })),
         },
         select: connectionSelect,
-    });
-    const providerReads = await readIdentityProviderInstancePresentationsByIdsInTx(tx, {
+    })))).flat();
+    const providerReads = input.providers ?? await readIdentityProviderInstancePresentationsByIdsInTx(tx, {
         ids: rows.map((row) => row.providerInstanceId),
     });
     const conflicts = await findConflictingWorkosProviderIdsInTx(tx, {

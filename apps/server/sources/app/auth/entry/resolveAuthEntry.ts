@@ -28,7 +28,7 @@ import {
 import { isEffectiveTeamMembership } from '@/app/teams/memberships/effectiveMembership';
 import { listTeamIdentityConnectionsInTx } from '@/app/teams/identity/teamIdentityConnectionLifecycle';
 import {
-    isDirectorySourceCompletedEvidenceAllowedInTx,
+    readDirectorySourceCompletedEvidenceAllowedByIdsInTx,
     resolveDirectorySourceProviderKind,
 } from '@/app/teams/directory/directorySourcePolicy';
 import { inTx } from '@/storage/inTx';
@@ -481,14 +481,14 @@ async function projectTeamConnectionActionsInTx(
             select: { id: true, kind: true, state: true, activeReconcileRunId: true, teamIdentityConnectionId: true },
         })
         : [];
-    const bindingSources: typeof directorySources = [];
-    for (const source of directorySources) {
-        if (await isDirectorySourceCompletedEvidenceAllowedInTx(tx, source)) bindingSources.push(source);
-    }
+    const allowedSources = await readDirectorySourceCompletedEvidenceAllowedByIdsInTx(tx, { sources: directorySources });
+    const bindingSources = directorySources.filter(source => allowedSources.get(source.id) === true);
+    const workosConnectionIds = new Set(bindingSources.flatMap(source => source.kind === 'workos_directory'
+        && source.teamIdentityConnectionId !== null ? [source.teamIdentityConnectionId] : []));
+    const providerKinds = new Set(bindingSources.flatMap(source => source.kind !== 'workos_directory'
+        ? [resolveDirectorySourceProviderKind(source.kind)] : []));
     const canBindDirectoryPerson = (connection: (typeof connections)[number]): boolean =>
-        bindingSources.some((source) => source.kind === 'workos_directory'
-            ? source.teamIdentityConnectionId === connection.id
-            : resolveDirectorySourceProviderKind(source.kind) === connection.providerKind);
+        workosConnectionIds.has(connection.id) || providerKinds.has(connection.providerKind);
     const descriptorByProviderId = new Map(descriptors.map((descriptor) => [
         normalizeAuthMethodId(descriptor.reference.id),
         descriptor,

@@ -105,6 +105,7 @@ async function resolveProviderOwnerAuthorizationInTx(
         actorAccountId: string;
         owner?: ProviderCatalogContext;
     }>,
+    operation: "view" | "mutate" = "mutate",
 ): Promise<Readonly<{
     status: "authorized" | "forbidden" | "team_authentication_required" | "team_authentication_unavailable";
 }>> {
@@ -118,7 +119,7 @@ async function resolveProviderOwnerAuthorizationInTx(
         env: input.env,
         authenticationEvidence: input.authenticationEvidence,
         authenticationAuthority: input.authenticationAuthority,
-    });
+    }, operation);
     if (!authority.ok) {
         return {
             status: authority.error === "team_authentication_required" || authority.error === "team_authentication_unavailable"
@@ -139,28 +140,34 @@ async function authorizeProviderOwnerInTx(
         actorAccountId: string;
         owner?: ProviderCatalogContext;
     }>,
+    operation: "view" | "mutate" = "mutate",
 ) {
-    const authorization = await resolveProviderOwnerAuthorizationInTx(tx, input);
+    const authorization = await resolveProviderOwnerAuthorizationInTx(tx, input, operation);
     return authorization.status === "authorized" ? null : { status: authorization.status } as const;
 }
 
-export async function listHomeManagedIdentityProviders(input: Readonly<{
+type HomeManagedIdentityProviderListInput = Readonly<{
     actorAccountId: string;
     owner?: ProviderCatalogContext;
-}> & Partial<TeamOperationAuthenticationContext>) {
-    return await inTx(async (tx) => {
-        const denied = await authorizeProviderOwnerInTx(tx, input);
-        if (denied) return denied;
-        const owner = providerOwner(input);
-        const instances = await listIdentityProviderInstancesInTx(tx, { owner });
-        return {
-            status: "ready" as const,
-            instances: instances.filter((resolved) =>
-                resolved.status !== "ready"
-                || resolved.instance.kind === "oidc"
-                || (owner.kind === "home" && resolved.instance.kind === "github_app_identity")),
-        };
-    });
+}> & Partial<TeamOperationAuthenticationContext>;
+
+export async function listHomeManagedIdentityProviders(input: HomeManagedIdentityProviderListInput) {
+    return await inTx(tx => listHomeManagedIdentityProvidersInTx(tx, input));
+}
+
+/** Authorize and read inside an enclosing administration read snapshot. */
+export async function listHomeManagedIdentityProvidersInTx(tx: Tx, input: HomeManagedIdentityProviderListInput) {
+    const denied = await authorizeProviderOwnerInTx(tx, input, "view");
+    if (denied) return denied;
+    const owner = providerOwner(input);
+    const instances = await listIdentityProviderInstancesInTx(tx, { owner });
+    return {
+        status: "ready" as const,
+        instances: instances.filter((resolved) =>
+            resolved.status !== "ready"
+            || resolved.instance.kind === "oidc"
+            || (owner.kind === "home" && resolved.instance.kind === "github_app_identity")),
+    };
 }
 
 export async function createHomeManagedOidcProvider(input: Readonly<{

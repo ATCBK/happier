@@ -15,8 +15,9 @@ import { resolveAllowedAccountProvisionModes, resolveRecommendedAccountProvision
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { resolveEffectiveHomeSignInServicePolicy } from "@/app/auth/methods/signInServicePolicy";
 import { listProviderDescriptorsInTx, resolveOAuthRuntimeByIdInTx, type ProviderDescriptorResolution } from "@/app/auth/providers/identityProviderCatalog";
+import { HOME_PROVIDER_CONTEXT } from "@/app/auth/providers/providerReference";
 import { resolveAccountDirectoryFeature } from "@/app/features/accountDirectoryFeature";
-import { readHomeGovernancePolicyInTx, resolveTeamProviderKindPolicy } from "@/app/home/governance/governancePolicy";
+import { readHomeGovernancePolicyInTx, resolveTeamProviderKindPolicy, type HomeGovernancePolicyRecord } from "@/app/home/governance/governancePolicy";
 import { applyHomeAuthenticationPolicyToEnv } from "@/app/home/governance/homeAuthenticationPolicyEnv";
 import { readTeamIdentityConnectionInTx } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -54,6 +55,7 @@ async function resolveEffectiveHomeAuthMethodsForPolicyInTx(
     input: Readonly<{
         env: NodeJS.ProcessEnv;
         homeAuthenticationPolicy: HomeAuthenticationPolicyReadV1;
+        homeGovernancePolicy?: HomeGovernancePolicyRecord;
         emailDeliveryReady?: boolean;
         admission?: Readonly<{ kind: "team_invitation" | "team_provisioned_identity" | "team_jit_identity" }>;
     }>,
@@ -76,7 +78,7 @@ async function resolveEffectiveHomeAuthMethodsForPolicyInTx(
     const allowedProvisionModes = resolveAllowedAccountProvisionModes(env);
     const recommendedProvisionMode = resolveRecommendedAccountProvisionMode(env);
     const providerActions = createProviderAuthMethodActionTable(env);
-    const providerDescriptors = await listProviderDescriptorsInTx(tx, env);
+    const providerDescriptors = await listProviderDescriptorsInTx(tx, env, HOME_PROVIDER_CONTEXT, input.homeGovernancePolicy);
     const managedDecisions = providerDescriptors
         .flatMap(({ descriptor: details, reference, providerKind }) => {
             if (reference.source !== "managed" || existingIds.has(reference.id)) return [];
@@ -128,13 +130,15 @@ export async function captureHomeAuthenticationAvailabilityInTx(
     tx: Tx,
     input: Parameters<typeof resolveEffectiveHomeAuthMethodsInTx>[1],
 ): Promise<HomeAuthenticationAvailabilityCapture> {
-    const authentication = input.homeAuthenticationPolicyOverride
-        ?? (await readHomeGovernancePolicyInTx(tx)).authentication;
+    const home = input.homeGovernancePolicy
+        ?? (input.homeAuthenticationPolicyOverride === undefined ? await readHomeGovernancePolicyInTx(tx) : undefined);
+    const authentication = input.homeAuthenticationPolicyOverride ?? home!.authentication;
     return await resolveEffectiveHomeAuthMethodsForPolicyInTx(tx, {
         env: input.env,
         ...(input.emailDeliveryReady === undefined ? {} : { emailDeliveryReady: input.emailDeliveryReady }),
         ...(input.admission === undefined ? {} : { admission: input.admission }),
         homeAuthenticationPolicy: authentication,
+        ...(home === undefined ? {} : { homeGovernancePolicy: home }),
     });
 }
 
@@ -147,6 +151,8 @@ export async function resolveEffectiveHomeAuthMethodsInTx(
         admission?: Readonly<{ kind: "team_invitation" | "team_provisioned_identity" | "team_jit_identity" }>;
         /** Server-owned prospective override used by Home policy validation/projection. */
         homeAuthenticationPolicyOverride?: HomeAuthenticationPolicyReadV1;
+        /** Already read by the enclosing transaction, never a cross-request snapshot. */
+        homeGovernancePolicy?: HomeGovernancePolicyRecord;
     }>,
 ): Promise<EffectiveHomeAuthMethodsResult> {
     return (await captureHomeAuthenticationAvailabilityInTx(tx, input)).effectiveHome;

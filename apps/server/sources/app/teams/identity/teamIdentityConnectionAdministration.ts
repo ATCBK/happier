@@ -22,6 +22,8 @@ import {
     resolveOAuthRuntimeById,
     resolveRuntimeInTx,
     listEligibleTeamIdentityProvidersInTx,
+    readIdentityConnectionAdministrationSnapshotInTx,
+    type IdentityConnectionAdministrationSnapshot,
 } from "@/app/auth/providers/identityProviderCatalog";
 import {
     checkAccountRetainsLoginRouteForDecisions,
@@ -112,7 +114,7 @@ async function resolveTeamIdentityConnectionRemovalPreflightInTx(
         env: NodeJS.ProcessEnv;
     }>,
 ): Promise<Result<IdentityConnectionRemovalPreflightV1>> {
-    const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input);
+    const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input, input.teamId === null ? "mutate" : "view");
     if (!authority.ok) return authority;
     const resolved = await readTeamIdentityConnectionInTx(tx, {
         id: input.connectionId,
@@ -325,9 +327,10 @@ export async function listTeamIdentityConnectionsForActor(
         if (input.teamId === null) {
             return { ok: true, value: await projectListInTx(tx, { ...input, teamId: null }, authority.canMutate) };
         }
+        const admitted = await readIdentityConnectionAdministrationSnapshotInTx(tx, { env: input.env, teamId: input.teamId });
         const [projection, admissionModeApplicability] = await Promise.all([
-            projectListInTx(tx, { ...input, teamId: input.teamId }, authority.canMutate),
-            resolveTeamAdmissionModeApplicabilityInTx({ tx, env: input.env, teamId: input.teamId }),
+            projectListInTx(tx, { ...input, teamId: input.teamId }, authority.canMutate, admitted),
+            resolveTeamAdmissionModeApplicabilityInTx({ tx, env: input.env, teamId: input.teamId, admitted }),
         ]);
         return { ok: true, value: { ...projection, admissionModeApplicability } };
     });
@@ -337,11 +340,15 @@ async function projectListInTx<TeamId extends string | null>(
     tx: Tx,
     input: Readonly<{ teamId: TeamId; env: NodeJS.ProcessEnv }>,
     canMutate: boolean,
+    admitted?: IdentityConnectionAdministrationSnapshot<TeamId>,
 ): Promise<Readonly<{ items: IdentityConnectionV1<TeamId>[]; eligibleProviders: IdentityEligibleProviderV1[] }>> {
-    const connections = await listTeamIdentityConnectionsInTx(tx, input);
+    const snapshot = admitted ?? await readIdentityConnectionAdministrationSnapshotInTx(tx, input);
+    const connections = snapshot.connections;
     const inputs = await readTeamIdentityCurrentnessInputsInTx(tx, {
         env: input.env, teamId: input.teamId,
         homeProviderInstanceIds: connections.map((connection) => connection.providerInstanceId),
+        home: snapshot.home,
+        runtimeCurrentness: snapshot.runtimeCurrentness,
     });
     const projectedItems = await Promise.all(connections.map((connection) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
         env: input.env,

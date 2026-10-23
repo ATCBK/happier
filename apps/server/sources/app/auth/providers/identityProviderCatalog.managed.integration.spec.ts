@@ -10,12 +10,17 @@ import {
     listProviderDescriptors,
     resolveIdentityRuntimeById,
     resolveOAuthRuntimeById,
+    resolveOAuthRuntimeByIdInTx,
+    readIdentityProviderRuntimeCurrentnessByIdsInTx,
     resolveRuntimeInTx,
 } from "./identityProviderCatalog";
 import { HOME_PROVIDER_CONTEXT } from "./providerReference";
 import { resolveOAuthSecurityBinding } from "@/app/api/routes/connect/oauthExternal/oauthSecurityBinding";
 import { inTx } from "@/storage/inTx";
 import { encryptGitHubAppRegistrationSecretsV1 } from "@/app/integrations/github/githubManagedApp";
+import { FEATURE_ENV_KEYS } from "@/app/features/catalog/featureEnvSchema";
+import type { ProviderCatalogContext } from "./providerReference";
+import { listTeamIdentityConnectionsForActor } from "@/app/teams/identity/teamIdentityConnectionAdministration";
 
 let harness: LightSqliteHarness;
 
@@ -66,6 +71,91 @@ afterEach(async () => {
 });
 
 describe("managed identity-provider catalog source", () => {
+    it("keeps batched currentness identical to scalar owner, purpose, platform, network and revision decisions", async () => {
+        const team = await db.team.create({ data: { name: "Currentness Team" } });
+        const actor = await db.account.create({ data: { encryptionMode: "plain" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "owner" } });
+        const otherTeam = await db.team.create({ data: { name: "Other currentness Team" } });
+        const oidc = async (ownerTeamId: string | null = null, enabled = true) => {
+            const provider = await db.identityProviderInstance.create({ data: {
+                ownerTeamId, kind: "oidc", displayName: "Current provider", enabled, config,
+            } });
+            await db.identityProviderInstance.update({ where: { id: provider.id }, data: {
+                encryptedSecrets: encryptString(["storage", "identity_provider_instance", provider.id, "oidc", "secrets", "v1"],
+                    JSON.stringify({ v: 1, kind: "oidc", clientSecret: "disposable-secret" })),
+            } });
+            return provider;
+        };
+        const home = await oidc();
+        const owned = await oidc(team.id);
+        const wrongTeam = await oidc(otherTeam.id);
+        const disabled = await oidc(null, false);
+        const workos = await db.identityProviderInstance.create({ data: {
+            kind: "workos_sso", displayName: "Current WorkOS", enabled: true, config: { v: 1, kind: "workos_sso" },
+        } });
+        const settings = { v: 1, kind: "oidc", allowedUsers: [], allowedEmailDomains: [], groupsAny: [], groupsAll: [] };
+        await db.teamIdentityConnection.createMany({ data: [home, owned].map(provider => ({
+            teamId: team.id, providerInstanceId: provider.id, enabled: true,
+            externalReference: { v: 1, kind: "oidc" }, settings,
+        })) });
+        const workosConnection = await db.teamIdentityConnection.create({ data: {
+            teamId: null, providerInstanceId: workos.id, enabled: true, revision: 3,
+            externalReference: { v: 1, kind: "workos_sso", organizationId: "org_current", connectionId: "conn_current" },
+            settings: { v: 1, kind: "workos_sso" },
+        } });
+        const providerIds = [home.id, owned.id, wrongTeam.id, disabled.id, workos.id, "missing-provider"];
+        const env: NodeJS.ProcessEnv = {
+            HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test", WORKOS_API_KEY: "sk_test_currentness", WORKOS_CLIENT_ID: "client_currentness",
+        };
+        const contexts: ProviderCatalogContext[] = [HOME_PROVIDER_CONTEXT, { kind: "team", teamId: team.id }];
+        const compare = async (selectedEnv = env) => {
+            for (const context of contexts) await inTx(async tx => {
+                const batch = await readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, { env: selectedEnv, context, providerIds });
+                for (const id of providerIds) {
+                    const test = await resolveOAuthRuntimeByIdInTx(tx, selectedEnv, id, context, "identity_connection_test");
+                    const oauth = await resolveOAuthRuntimeByIdInTx(tx, selectedEnv, id, context, "oauth_start");
+                    expect(batch.get(id), `${context.kind}:${id}`).toMatchObject({
+                        runtimeFingerprint: test?.reference.runtimeFingerprint ?? null,
+                        oauthRuntimeAvailable: oauth !== null,
+                    });
+                }
+                expect(batch.get(wrongTeam.id)?.secretHealth).toBe("unreadable");
+            });
+        };
+        await compare();
+        await compare({ ...env, WORKOS_API_KEY: undefined });
+        const captured = await inTx(tx => readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, { env, context: HOME_PROVIDER_CONTEXT, providerIds }));
+        await db.identityProviderInstance.update({ where: { id: home.id }, data: { securityRevision: { increment: 1 } } });
+        await db.teamIdentityConnection.update({ where: { id: workosConnection.id }, data: { revision: { increment: 1 }, enabled: false } });
+        const revised = await inTx(tx => readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, { env, context: HOME_PROVIDER_CONTEXT, providerIds }));
+        expect(revised.get(home.id)?.runtimeFingerprint).not.toBe(captured.get(home.id)?.runtimeFingerprint);
+        expect(revised.get(workos.id)?.runtimeFingerprint).not.toBe(captured.get(workos.id)?.runtimeFingerprint);
+        expect(revised.get(workos.id)?.oauthRuntimeAvailable).toBe(false);
+        await compare();
+        await db.identityProviderInstance.update({ where: { id: home.id }, data: { encryptedSecrets: new Uint8Array([1, 2, 3]) } });
+        const corrupted = await inTx(tx => readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, { env, context: HOME_PROVIDER_CONTEXT, providerIds }));
+        expect(corrupted.get(home.id)).toMatchObject({ runtimeFingerprint: null, oauthRuntimeAvailable: false, secretHealth: "unreadable" });
+        const listed = await listTeamIdentityConnectionsForActor({
+            env, teamId: team.id, actorAccountId: actor.id, authenticationAuthority: "present_user",
+        });
+        expect(listed).toMatchObject({ ok: true, value: { items: expect.arrayContaining([
+            expect.objectContaining({ provider: expect.objectContaining({ id: home.id }), state: "unavailable" }),
+        ]) } });
+        await compare();
+        await db.homeGovernancePolicy.update({ where: { id: "home" }, data: {
+            identityNetworkPolicy: { v: 1, mode: "private_allowlist", hostnames: ["id.example.test"], cidrs: ["10.0.0.0/8"], ports: [443] },
+            teamProviderPolicy: { v: 1, allowedTeamProviderKinds: ["workos_sso"], teamJitAllowed: false, approvedGitHubEnterpriseOrigins: [] },
+        } });
+        const privateEnv = { ...env, [FEATURE_ENV_KEYS.authManagedIdentityPrivateNetworkEnabled]: "1" };
+        const networkChanged = await inTx(tx => readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, {
+            env: privateEnv, context: HOME_PROVIDER_CONTEXT, providerIds,
+        }));
+        expect(networkChanged.get(disabled.id)?.runtimeFingerprint).not.toBe(corrupted.get(disabled.id)?.runtimeFingerprint);
+        await compare(privateEnv);
+        await db.identityProviderInstance.delete({ where: { id: disabled.id } });
+        await compare();
+    });
+
     it("publishes only an enabled exact Home WorkOS binding and invalidates its OAuth proof when changed", async () => {
         const provider = await db.identityProviderInstance.create({ data: {
             kind: "workos_sso", displayName: "Acme company sign-in", enabled: true,

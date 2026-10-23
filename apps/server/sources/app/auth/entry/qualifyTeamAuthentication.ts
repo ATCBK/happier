@@ -3,12 +3,9 @@ import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/au
 import type { TeamAcceptedAuthenticationV1 } from '@happier-dev/protocol/auth/entry';
 
 import { resolveCurrentAuthenticationEvidenceForTeamQualificationInTx } from "@/app/auth/authenticationEvidence";
-import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
+import { captureHomeAuthenticationAvailabilityInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
-import {
-    listProviderDescriptorsInTx,
-    readTeamAuthenticationConnectionDescriptorsInTx,
-} from "@/app/auth/providers/identityProviderCatalog";
+import { readTeamAuthenticationConnectionDescriptorsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { readIdentityProviderInstancePresentationsByIdsInTx } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
 import { teamIdentityConnectionReferenceKey } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import type { Tx } from "@/storage/inTx";
@@ -142,15 +139,15 @@ export async function qualifyTeamAuthenticationsInTx(
     });
 
     try {
-        const [effectiveHome, homeDescriptors, homeInstances, connections] = await Promise.all([
-            resolveEffectiveHomeAuthMethodsInTx(tx, { env: input.env }),
-            listProviderDescriptorsInTx(tx, input.env),
+        const [homeAvailability, homeInstances, connections] = await Promise.all([
+            captureHomeAuthenticationAvailabilityInTx(tx, { env: input.env }),
             readIdentityProviderInstancePresentationsByIdsInTx(tx, { ids: acceptedHomeMethodIds }),
             readTeamAuthenticationConnectionDescriptorsInTx(tx, {
                 env: input.env,
                 references: connectionReferences,
             }),
         ]);
+        const { effectiveHome, providerDescriptors: homeDescriptors } = homeAvailability;
         const currentEvidence = await resolveCurrentAuthenticationEvidenceForTeamQualificationInTx(tx, {
             env: input.env,
             accountId: input.accountId,

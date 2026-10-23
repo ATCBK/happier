@@ -16,6 +16,8 @@ import {
     projectGitHubAppSecretHealthV1,
     resolveGitHubAppConsumerReadinessV1,
     validateGitHubAppInstallationEvidenceV1,
+    type GitHubAppRegistrationSecretHealthFact,
+    type GitHubAppSecretHealthV1,
 } from "./githubManagedApp";
 import { readGitHubAppInstallationEvidence } from "./githubAppInstallationClient";
 import {
@@ -114,6 +116,8 @@ type ResolvedManagedDirectory = Readonly<{
 export type StoredGitHubDirectoryReadinessInput = Readonly<{
     teamId: string;
     home: HomeGovernancePolicyRecord;
+    /** Safe health captured by the GitHub owner in this same transaction. */
+    registrationSecretHealth?: GitHubAppRegistrationSecretHealthFact;
     installation: Readonly<{
         state: string;
         suspendedAt: Date | null;
@@ -125,6 +129,7 @@ export type StoredGitHubDirectoryReadinessInput = Readonly<{
             githubHost: string;
             config: unknown;
             encryptedSecrets: Uint8Array;
+            securityRevision: number;
         }>;
     }>;
 }>;
@@ -133,9 +138,14 @@ type StoredGitHubDirectoryReadiness =
     | Readonly<{ ok: true; privateKey: string }>
     | ManagedGitHubDirectoryFailure;
 
-function evaluateStoredGitHubDirectoryReadiness(
+type StoredGitHubDirectorySecrets = Readonly<{
+    privateKey: string | undefined;
+    secretHealth: GitHubAppSecretHealthV1;
+}>;
+
+function readStoredGitHubDirectoryScopeFailure(
     input: StoredGitHubDirectoryReadinessInput,
-): StoredGitHubDirectoryReadiness {
+): ManagedGitHubDirectoryFailure | null {
     const { installation, home } = input;
     const registration = installation.registration;
     if (!isManagedGitHubHostApprovedByHome(home, registration.githubHost)) {
@@ -147,18 +157,18 @@ function evaluateStoredGitHubDirectoryReadiness(
     )) {
         return { ok: false, code: "directory_source_unavailable" };
     }
+    return null;
+}
+
+function evaluateStoredGitHubDirectorySecretHealth(
+    input: StoredGitHubDirectoryReadinessInput,
+    secretHealth: GitHubAppSecretHealthV1,
+): Readonly<{ ok: true }> | ManagedGitHubDirectoryFailure {
+    const { installation } = input;
     try {
-        parseGitHubAppRegistrationConfigV1(registration.config);
-        const secrets = decryptGitHubAppRegistrationSecretsV1({
-            registrationId: registration.id,
-            encryptedSecrets: Uint8Array.from(registration.encryptedSecrets),
-        });
         const readiness = resolveGitHubAppConsumerReadinessV1({
             purpose: { kind: "directorySync" },
-            registration: {
-                state: registration.state,
-                secretHealth: projectGitHubAppSecretHealthV1(secrets),
-            },
+            registration: { state: installation.registration.state, secretHealth },
             installation: {
                 state: installation.state,
                 suspended: installation.suspendedAt !== null,
@@ -166,14 +176,42 @@ function evaluateStoredGitHubDirectoryReadiness(
                 events: [],
             },
         });
-        if (!readiness.ok) {
-            return {
-                ok: false,
-                code: readiness.code === "github_permission_missing"
-                    ? "permission_lost"
-                    : "installation_unavailable",
-            };
+        return readiness.ok ? { ok: true } : {
+            ok: false,
+            code: readiness.code === "github_permission_missing" ? "permission_lost" : "installation_unavailable",
+        };
+    } catch {
+        return { ok: false, code: "installation_unavailable" };
+    }
+}
+
+function evaluateStoredGitHubDirectoryReadiness(
+    input: StoredGitHubDirectoryReadinessInput,
+    secretsByRegistration = new Map<string, StoredGitHubDirectorySecrets | null>(),
+): StoredGitHubDirectoryReadiness {
+    const scopeFailure = readStoredGitHubDirectoryScopeFailure(input);
+    if (scopeFailure) return scopeFailure;
+    const registration = input.installation.registration;
+    const registrationKey = JSON.stringify([registration.id, registration.securityRevision]);
+    try {
+        let secrets = secretsByRegistration.get(registrationKey);
+        if (secrets === undefined) {
+            try {
+                parseGitHubAppRegistrationConfigV1(registration.config);
+                const decrypted = decryptGitHubAppRegistrationSecretsV1({
+                    registrationId: registration.id,
+                    encryptedSecrets: Uint8Array.from(registration.encryptedSecrets),
+                });
+                secrets = { privateKey: decrypted.privateKey, secretHealth: projectGitHubAppSecretHealthV1(decrypted) };
+                secretsByRegistration.set(registrationKey, secrets);
+            } catch {
+                secretsByRegistration.set(registrationKey, null);
+                return { ok: false, code: "installation_unavailable" };
+            }
         }
+        if (secrets === null) return { ok: false, code: "installation_unavailable" };
+        const readiness = evaluateStoredGitHubDirectorySecretHealth(input, secrets.secretHealth);
+        if (!readiness.ok) return readiness;
         return secrets.privateKey
             ? { ok: true, privateKey: secrets.privateKey }
             : { ok: false, code: "installation_unavailable" };
@@ -186,8 +224,27 @@ function evaluateStoredGitHubDirectoryReadiness(
 export function resolveStoredGitHubDirectoryReadiness(
     input: StoredGitHubDirectoryReadinessInput,
 ): Readonly<{ ok: true }> | ManagedGitHubDirectoryFailure {
-    const result = evaluateStoredGitHubDirectoryReadiness(input);
-    return result.ok ? { ok: true } : result;
+    return resolveStoredGitHubDirectoryReadinessBatch([{ ...input, key: "single" }]).get("single")!;
+}
+
+/** Evaluate one admitted snapshot, retaining decrypted material only for this call. */
+export function resolveStoredGitHubDirectoryReadinessBatch(
+    inputs: readonly (StoredGitHubDirectoryReadinessInput & Readonly<{ key: string }>)[],
+): ReadonlyMap<string, Readonly<{ ok: true }> | ManagedGitHubDirectoryFailure> {
+    const secretsByRegistration = new Map<string, StoredGitHubDirectorySecrets | null>();
+    return new Map(inputs.map(input => {
+        const fact = input.registrationSecretHealth;
+        if (fact && fact.registrationId === input.installation.registration.id
+            && fact.securityRevision === input.installation.registration.securityRevision) {
+            const safe = readStoredGitHubDirectoryScopeFailure(input)
+                ?? (fact.secretHealth === null ? { ok: false as const, code: "installation_unavailable" as const }
+                    : evaluateStoredGitHubDirectorySecretHealth(input, fact.secretHealth));
+            return [input.key, safe] as const;
+        }
+        const result = evaluateStoredGitHubDirectoryReadiness(input, secretsByRegistration);
+        const safe: Readonly<{ ok: true }> | ManagedGitHubDirectoryFailure = result.ok ? { ok: true } : result;
+        return [input.key, safe] as const;
+    }));
 }
 
 async function resolveManagedDirectory(

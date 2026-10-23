@@ -20,7 +20,7 @@ import {
 
 import { inTx, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { acquireTeamMutationLockInTx, resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
+import { acquireTeamMutationLockInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import {
     acquireExternalSourceAccountAdmissionInTx,
@@ -88,8 +88,7 @@ async function authorizeInTx(
 ): Promise<Result<Readonly<{ defaultSessionHistoryAccess: "all_existing" | "from_membership" }>>> {
     const identityAuthority = await authorizeTeamIdentityAdministrationInTx(tx, input, operation);
     if (!identityAuthority.ok) return identityAuthority;
-    const context = await resolveTeamActorContextInTx(tx, input);
-    if (!context || !context.teamCapabilities.viewTeam) return { ok: false, error: "team_not_found" };
+    const context = identityAuthority.actor;
     if (context.team.archivedAt !== null) return { ok: false, error: "team_archived" };
     if (!context.teamCapabilities.manageGroups || !context.teamCapabilities.manageAuthentication) {
         return { ok: false, error: "team_forbidden" };

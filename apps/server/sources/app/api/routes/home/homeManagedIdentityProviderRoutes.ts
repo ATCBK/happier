@@ -12,7 +12,7 @@ import {
     createHomeManagedOidcProvider,
     consumeHomeManagedIdentityProviderTest,
     deleteHomeManagedIdentityProvider,
-    listHomeManagedIdentityProviders,
+    listHomeManagedIdentityProvidersInTx,
     preflightDeleteHomeManagedIdentityProvider,
     replaceHomeManagedIdentityProviderSecret,
     setHomeManagedIdentityProviderEnabled,
@@ -21,15 +21,15 @@ import {
     validateHomeManagedIdentityProvider,
 } from "@/app/home/governance/homeManagedIdentityProviders";
 import {
-    readIdentityProviderSecretHealthByIdsInTx,
     type IdentityProviderInstanceView,
     type IdentityProviderSecretHealth,
 } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
 import { OutboundIdentityEndpointError } from "@/app/net/outboundIdentityNetworkPolicy";
-import { identityProviderCallbackUrl, resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
+import { identityProviderCallbackUrl, readIdentityProviderRuntimeCurrentnessByIdsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { resolveConfiguredPublicServerUrl } from "@/app/serverUrls/effectiveServerUrls";
-import { readHomeConfigEnv } from "@/app/home/settings/homeSettings";
-import { inTx } from "@/storage/inTx";
+import { readHomeConfigEnvInTx } from "@/app/home/settings/homeSettings";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
 
 import type { Fastify } from "../../types";
@@ -111,62 +111,49 @@ function projectProvider(
 }
 
 async function projectProviders(instances: readonly IdentityProviderInstanceView[]) {
+    if (instances.length === 0) return [];
+    return await inReadSnapshot(tx => projectProvidersInTx(tx, instances));
+}
+
+async function projectProvidersInTx(tx: Tx, instances: readonly IdentityProviderInstanceView[]) {
     const owner = instances[0]?.owner;
     if (!owner) return [];
-    const projected = await inTx(async (tx) => {
-        const currentRuntimeFingerprintById = new Map<string, string>();
-        const teamConsumersByProviderId = new Map<string, ManagedIdentityProviderTeamConsumerV1[]>();
-        for (const instance of instances) {
-            const runtime = await resolveOAuthRuntimeByIdInTx(
-                tx,
-                process.env,
-                instance.id,
-                instance.owner,
-                "identity_connection_test",
-            );
-            if (runtime) currentRuntimeFingerprintById.set(instance.id, runtime.reference.runtimeFingerprint);
-        }
-        if (owner.kind === "home") {
-            const connections = await tx.teamIdentityConnection.findMany({
-                where: { providerInstanceId: { in: instances.map((instance) => instance.id) } },
-                orderBy: [{ team: { name: "asc" } }, { teamId: "asc" }, { id: "asc" }],
-                select: {
-                    id: true,
-                    providerInstanceId: true,
-                    enabled: true,
-                    team: { select: { id: true, name: true } },
+    const runtimeCurrentness = await readIdentityProviderRuntimeCurrentnessByIdsInTx(tx, {
+        env: process.env, context: owner, providerIds: instances.map(instance => instance.id),
+    });
+    const teamConsumersByProviderId = new Map<string, ManagedIdentityProviderTeamConsumerV1[]>();
+    if (owner.kind === "home") {
+        const connections = (await Promise.all(portableQueryChunks({ values: instances.map(instance => instance.id), bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.teamIdentityConnection.findMany({
+            where: { providerInstanceId: { in: [...ids] } },
+            orderBy: [{ team: { name: "asc" } }, { teamId: "asc" }, { id: "asc" }],
+            select: {
+                id: true,
+                providerInstanceId: true,
+                enabled: true,
+                team: { select: { id: true, name: true } },
+            },
+        })))).flat();
+        for (const connection of connections) {
+            if (connection.team === null) continue;
+            const consumers = teamConsumersByProviderId.get(connection.providerInstanceId) ?? [];
+            consumers.push({
+                team: connection.team,
+                binding: {
+                    kind: "identity_connection",
+                    id: connection.id,
+                    enabled: connection.enabled,
                 },
             });
-            for (const connection of connections) {
-                if (connection.team === null) continue;
-                const consumers = teamConsumersByProviderId.get(connection.providerInstanceId) ?? [];
-                consumers.push({
-                    team: connection.team,
-                    binding: {
-                        kind: "identity_connection",
-                        id: connection.id,
-                        enabled: connection.enabled,
-                    },
-                });
-                teamConsumersByProviderId.set(connection.providerInstanceId, consumers);
-            }
+            teamConsumersByProviderId.set(connection.providerInstanceId, consumers);
         }
-        return {
-            currentRuntimeFingerprintById,
-            teamConsumersByProviderId,
-            secretHealthById: await readIdentityProviderSecretHealthByIdsInTx(tx, {
-                ids: instances.map((instance) => instance.id),
-                owner,
-            }),
-        };
-    });
+    }
     // The callback lives at the Home's effective public address, stored or inferred (plan §3.2).
-    const publicServerUrl = resolveConfiguredPublicServerUrl(await readHomeConfigEnv());
+    const publicServerUrl = resolveConfiguredPublicServerUrl(await readHomeConfigEnvInTx(tx));
     return instances.map((instance) => projectProvider(
         instance,
-        projected.secretHealthById.get(instance.id) ?? "unreadable",
-        projected.currentRuntimeFingerprintById.get(instance.id) ?? null,
-        projected.teamConsumersByProviderId.get(instance.id) ?? [],
+        runtimeCurrentness.get(instance.id)?.secretHealth ?? "unreadable",
+        runtimeCurrentness.get(instance.id)?.runtimeFingerprint ?? null,
+        teamConsumersByProviderId.get(instance.id) ?? [],
         publicServerUrl,
     ));
 }
@@ -267,10 +254,18 @@ export function registerHomeManagedIdentityProviderRoutes(app: Fastify): void {
         },
         async (request, reply) => {
             if (request.validationError) return await rejectInvalidProviderInput(reply);
-            const result = await listHomeManagedIdentityProviders({
-                actorAccountId: request.userId,
-                owner: request.body.owner,
-                ...readTeamOperationAuthenticationFromRequest(request),
+            const result = await inReadSnapshot(async tx => {
+                const listed = await listHomeManagedIdentityProvidersInTx(tx, {
+                    actorAccountId: request.userId,
+                    owner: request.body.owner,
+                    ...readTeamOperationAuthenticationFromRequest(request),
+                });
+                if (listed.status !== "ready") return listed;
+                const instances = listed.instances.flatMap((item) => item.status === "ready"
+                    && (item.instance.kind === "oidc" || item.instance.kind === "github_app_identity")
+                    ? [item.instance] : []);
+                const items = await projectProvidersInTx(tx, instances);
+                return { status: "ready" as const, items, unreadableCount: listed.instances.length - items.length };
             });
             if (result.status !== "ready") {
                 const error = result.status === "team_authentication_required" || result.status === "team_authentication_unavailable"
@@ -278,12 +273,7 @@ export function registerHomeManagedIdentityProviderRoutes(app: Fastify): void {
                     : "identity_provider_forbidden" as const;
                 return await reply.code(errorStatus(error)).send({ error });
             }
-            const instances = result.instances.flatMap((item) => item.status === "ready"
-                && (item.instance.kind === "oidc" || item.instance.kind === "github_app_identity")
-                ? [item.instance]
-                : []);
-            const ready = await projectProviders(instances);
-            return await reply.send({ items: ready, unreadableCount: result.instances.length - ready.length });
+            return await reply.send({ items: result.items, unreadableCount: result.unreadableCount });
         },
     );
 

@@ -117,6 +117,14 @@ export type GitHubAppSecretHealthV1 = Readonly<{
     webhookSecretConfigured: boolean;
 }>;
 
+/** Decrypted health admitted for this exact registration revision in the same transaction. */
+export type GitHubAppRegistrationSecretHealthFact = Readonly<{
+    registrationId: string;
+    securityRevision: number;
+    /** Unreadable ciphertext remains an explicit refusal, never inferred configuration. */
+    secretHealth: GitHubAppSecretHealthV1 | null;
+}>;
+
 export function projectGitHubAppSecretHealthV1(
     secrets: GitHubAppRegistrationSecretsV1,
 ): GitHubAppSecretHealthV1 {

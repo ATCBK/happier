@@ -16,10 +16,7 @@ import { prepareIdentityLink, refreshIdentity, unlinkIdentity } from "@/app/auth
 import { db, getDbProviderFromEnv } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { prepareIdentityConnectionGroupRefresh } from "@/app/teams/memberships/identityConnectionGroupRefresh";
-import {
-    resolveManagedIdentityNetworkPolicy,
-    resolveManagedIdentityNetworkPolicyInTx,
-} from "@/app/auth/providers/managed/managedIdentityNetworkPolicy";
+import { resolveManagedIdentityNetworkPolicy } from "@/app/auth/providers/managed/managedIdentityNetworkPolicy";
 import { bindDirectoryProvisionedIdentitiesInTx, type DirectoryProvisionedIdentityMatch } from "@/app/teams/directory/provisionedIdentityBinding";
 
 import {
@@ -34,13 +31,16 @@ import {
     decryptGitHubAppRegistrationSecretsV1,
     parseGitHubAppRegistrationConfigV1,
     parseGitHubPermissionsV1,
+    projectGitHubAppSecretHealthV1,
     resolveGitHubAppConsumerReadinessV1,
+    type GitHubAppRegistrationSecretHealthFact,
 } from "./githubManagedApp";
 import {
     isGitHubAppRegistrationOwnerEligible,
     isManagedGitHubHostApprovedByHome,
 } from "./githubAppInstallationEligibility";
-import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
+import { readHomeGovernancePolicyInTx, type HomeGovernancePolicyRecord } from "@/app/home/governance/governancePolicy";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 
 export type ManagedGitHubIdentityProviderModuleInput = Readonly<{
     providerId: string;
@@ -65,6 +65,11 @@ export type ResolveManagedGitHubIdentityProviderModuleResult = Readonly<{
     module: ProviderModule;
     runtimeFingerprint: string;
     connectionRevision: number | null;
+}>;
+
+export type ManagedGitHubIdentityProviderRuntimeFacts = Readonly<{
+    modules: ReadonlyMap<string, ResolveManagedGitHubIdentityProviderModuleResult>;
+    registrationSecretHealthByKey: ReadonlyMap<string, GitHubAppRegistrationSecretHealthFact>;
 }>;
 
 export type ManagedGitHubIdentityProviderRuntimeMetadata = Readonly<{
@@ -143,87 +148,11 @@ async function resolveManagedGitHubIdentityProviderReadinessInTx(
         provider: IdentityProviderInstanceView;
     }>,
 ): Promise<ManagedGitHubIdentityProviderReadiness | null> {
-    if (
-        input.provider.kind !== "github_app_identity"
-        || input.provider.config.kind !== "github_app_identity"
-        || input.provider.githubAppInstallationId === null
-        || (input.context.kind === "home" && input.provider.owner.kind !== "home")
-        || (
-            input.provider.owner.kind === "team"
-            && (input.context.kind !== "team" || input.context.teamId !== input.provider.owner.teamId)
-        )
-    ) return null;
-    const installation = await tx.gitHubAppInstallation.findUnique({
-        where: { id: input.provider.githubAppInstallationId },
-        select: {
-            id: true,
-            githubOrganizationLogin: true,
-            revision: true,
-            state: true,
-            verifiedPermissions: true,
-            suspendedAt: true,
-            lastVerifiedAt: true,
-            registration: { select: {
-                ownerTeamId: true,
-                githubHost: true,
-                config: true,
-                securityRevision: true,
-                state: true,
-                lastVerifiedAt: true,
-            } },
-        },
+    const captured = await captureManagedGitHubIdentityProviderFactsInTx(tx, {
+        inputs: [{ ...input, key: "single", connectionRevision: null }],
+        includeSecrets: false,
     });
-    if (
-        !installation
-        || installation.state !== "verified"
-        || installation.suspendedAt !== null
-        || installation.lastVerifiedAt === null
-        || installation.registration.state !== "verified"
-        || installation.registration.lastVerifiedAt === null
-        || !isGitHubAppRegistrationOwnerEligible(installation.registration.ownerTeamId, input.context)
-        || !isManagedGitHubHostApprovedByHome(
-            await readHomeGovernancePolicyInTx(tx),
-            installation.registration.githubHost,
-        )
-    ) return null;
-    let config: ReturnType<typeof parseGitHubAppRegistrationConfigV1>;
-    let permissions: ReturnType<typeof parseGitHubPermissionsV1>;
-    try {
-        config = parseGitHubAppRegistrationConfigV1(installation.registration.config);
-        permissions = parseGitHubPermissionsV1(installation.verifiedPermissions);
-    } catch {
-        return null;
-    }
-    if (!resolveGitHubAppConsumerReadinessV1({
-        purpose: { kind: "identity", requiresOrganizationEvidence: true },
-        registration: {
-            state: installation.registration.state,
-            secretHealth: config.secretHealth ?? {
-                clientSecretConfigured: false,
-                privateKeyConfigured: false,
-                webhookSecretConfigured: false,
-            },
-        },
-        installation: {
-            state: installation.state,
-            suspended: installation.suspendedAt !== null,
-            permissions,
-            events: [],
-        },
-    }).ok) return null;
-    const network = await resolveManagedIdentityNetworkPolicyInTx(tx, {
-        env: input.env,
-        timeoutSeconds: 30,
-    });
-    return {
-        installationId: installation.id,
-        organizationLogin: installation.githubOrganizationLogin,
-        providerSecurityRevision: input.provider.securityRevision,
-        registrationSecurityRevision: installation.registration.securityRevision,
-        installationRevision: installation.revision,
-        networkFingerprint: network.fingerprint,
-        networkPolicy: network.policy,
-    };
+    return captured.get("single")?.readiness ?? null;
 }
 
 export async function isManagedGitHubIdentityProviderAvailableForConnectionInTx(
@@ -247,6 +176,11 @@ export async function isManagedGitHubIdentityProviderAvailableForConnectionInTx(
  * would be an `identity_connection_invalid` rejection of the exact values the
  * server itself proposed.
  */
+type ManagedGitHubIdentityProviderConnectionDraft = Readonly<{
+    externalReference: Extract<TeamIdentityConnectionExternalReferenceV1, { kind: "github_app_identity" }>;
+    settings: Extract<TeamIdentityConnectionSettingsV1, { kind: "github_app_identity" }>;
+}>;
+
 export async function resolveManagedGitHubIdentityProviderConnectionDraftInTx(
     tx: Tx,
     input: Readonly<{
@@ -254,23 +188,34 @@ export async function resolveManagedGitHubIdentityProviderConnectionDraftInTx(
         context: ProviderCatalogContext;
         provider: IdentityProviderInstanceView;
     }>,
-): Promise<Readonly<{
-    externalReference: Extract<TeamIdentityConnectionExternalReferenceV1, { kind: "github_app_identity" }>;
-    settings: Extract<TeamIdentityConnectionSettingsV1, { kind: "github_app_identity" }>;
-}> | null> {
-    const readiness = await resolveManagedGitHubIdentityProviderReadinessInTx(tx, input);
-    return readiness && {
-        externalReference: {
-            v: 1,
-            kind: "github_app_identity",
-            installationId: readiness.installationId,
-        },
-        settings: {
-            v: 1,
-            kind: "github_app_identity",
-            organizationLogin: readiness.organizationLogin,
-        },
-    };
+): Promise<ManagedGitHubIdentityProviderConnectionDraft | null> {
+    return (await resolveManagedGitHubIdentityProviderConnectionDraftsInTx(tx, {
+        inputs: [{ ...input, key: "single" }],
+    })).get("single") ?? null;
+}
+
+/** Secret-free setup drafts share the same fresh readiness acquisition as runtime consumers. */
+export async function resolveManagedGitHubIdentityProviderConnectionDraftsInTx(
+    tx: Tx,
+    input: Readonly<{
+        inputs: readonly Readonly<{
+            key: string;
+            env: NodeJS.ProcessEnv;
+            context: ProviderCatalogContext;
+            provider: IdentityProviderInstanceView;
+        }>[];
+        home?: HomeGovernancePolicyRecord;
+    }>,
+): Promise<ReadonlyMap<string, ManagedGitHubIdentityProviderConnectionDraft>> {
+    const captured = await captureManagedGitHubIdentityProviderFactsInTx(tx, {
+        home: input.home,
+        inputs: input.inputs.map(candidate => ({ ...candidate, connectionRevision: null })),
+        includeSecrets: false,
+    });
+    return new Map<string, ManagedGitHubIdentityProviderConnectionDraft>([...captured].map(([key, { readiness }]) => [key, {
+        externalReference: { v: 1, kind: "github_app_identity", installationId: readiness.installationId },
+        settings: { v: 1, kind: "github_app_identity", organizationLogin: readiness.organizationLogin },
+    }]));
 }
 
 export function resolveManagedGitHubAuthProviderFeatures(
@@ -309,7 +254,7 @@ export async function resolveManagedGitHubIdentityProviderRuntimeMetadataInTx(
 ): Promise<ManagedGitHubIdentityProviderRuntimeMetadata | null> {
     const key = "single";
     return (await resolveManagedGitHubIdentityProviderRuntimeMetadataBatchInTx(tx, {
-        inputs: [{ key, ...input }],
+        inputs: [{ ...input, key }],
     })).get(key) ?? null;
 }
 
@@ -325,63 +270,116 @@ export async function resolveManagedGitHubIdentityProviderRuntimeMetadataBatchIn
         provider: IdentityProviderInstanceView;
         connectionId: string | null;
         connectionRevision: number | null;
-    }>[] }>,
+    }>[]; home?: HomeGovernancePolicyRecord }>,
 ): Promise<ReadonlyMap<string, ManagedGitHubIdentityProviderRuntimeMetadata>> {
-    const candidates = input.inputs.filter((candidate) =>
+    const captured = await captureManagedGitHubIdentityProviderFactsInTx(tx, {
+        ...input,
+        inputs: input.inputs.filter(hasManagedGitHubRuntimeBinding),
+        includeSecrets: false,
+    });
+    return new Map([...captured].map(([key, value]) => [key, value.metadata]));
+}
+
+type ManagedGitHubIdentityProviderRuntimeInput = Readonly<{
+    key: string;
+    env: NodeJS.ProcessEnv;
+    context: ProviderCatalogContext;
+    provider: IdentityProviderInstanceView;
+    connectionId: string | null;
+    connectionRevision: number | null;
+}>;
+
+function hasManagedGitHubRuntimeBinding(candidate: ManagedGitHubIdentityProviderRuntimeInput): boolean {
+    return (candidate.context.kind === "team") === (candidate.connectionId !== null)
+        && (candidate.connectionId === null) === (candidate.connectionRevision === null)
+        && (candidate.connectionRevision === null || candidate.connectionRevision >= 1);
+}
+
+/** Shared fresh acquisition and readiness owner for drafts, metadata, and live modules. */
+async function captureManagedGitHubIdentityProviderFactsInTx(
+    tx: Tx,
+    input: Readonly<{
+        inputs: readonly Omit<ManagedGitHubIdentityProviderRuntimeInput, "connectionId">[];
+        includeSecrets: boolean;
+        /** Already admitted by the caller in this same transaction. */
+        home?: HomeGovernancePolicyRecord;
+    }>,
+) {
+    const candidates = input.inputs.filter(candidate =>
         candidate.provider.kind === "github_app_identity"
         && candidate.provider.config.kind === "github_app_identity"
         && candidate.provider.githubAppInstallationId !== null
-        && (candidate.context.kind === "team") === (candidate.connectionId !== null)
-        && (candidate.connectionId === null) === (candidate.connectionRevision === null)
-        && (candidate.connectionRevision === null || candidate.connectionRevision >= 1));
-    if (candidates.length === 0) return new Map();
-    const [home, installations] = await Promise.all([
-        readHomeGovernancePolicyInTx(tx),
-        tx.gitHubAppInstallation.findMany({
-            // A catalog capture must not mix installation facts with a later
-            // registration snapshot. Row providers support one joined statement;
-            // SQLite's enclosing write admission already excludes other writers.
-            ...(getDbProviderFromEnv(process.env, "postgres") === "sqlite" ? {} : { relationLoadStrategy: "join" as const }),
-            where: { id: { in: [...new Set(candidates.flatMap((candidate) =>
-                candidate.provider.githubAppInstallationId ? [candidate.provider.githubAppInstallationId] : []))] } },
-            select: {
-                id: true,
-                githubOrganizationLogin: true,
-                revision: true,
-                state: true,
-                verifiedPermissions: true,
-                suspendedAt: true,
-                lastVerifiedAt: true,
-                registration: { select: {
-                    ownerTeamId: true,
-                    githubHost: true,
-                    config: true,
-                    securityRevision: true,
+        && (candidate.context.kind !== "home" || candidate.provider.owner.kind === "home")
+        && (candidate.provider.owner.kind !== "team"
+            || (candidate.context.kind === "team" && candidate.context.teamId === candidate.provider.owner.teamId)));
+    const ids = [...new Set(candidates.flatMap(candidate =>
+        candidate.provider.githubAppInstallationId ? [candidate.provider.githubAppInstallationId] : []))];
+    const [home, installationBatches] = await Promise.all([
+        candidates.length === 0 ? null : input.home ?? readHomeGovernancePolicyInTx(tx),
+        // Only the portable SQL bind boundary adds chunks, never a product list cap.
+        Promise.all(portableQueryChunks({ values: ids, bindingsPerValue: 1, fixedBindings: 1 }).map(installationIds =>
+            tx.gitHubAppInstallation.findMany({
+                // Keep installation and registration facts in one joined snapshot.
+                // SQLite's enclosing write admission already excludes other writers.
+                ...(getDbProviderFromEnv(process.env, "postgres") === "sqlite" ? {} : { relationLoadStrategy: "join" as const }),
+                where: { id: { in: [...installationIds] } },
+                select: {
+                    id: true,
+                    githubInstallationId: true,
+                    githubOrganizationId: true,
+                    githubOrganizationLogin: true,
+                    revision: true,
                     state: true,
+                    verifiedPermissions: true,
+                    suspendedAt: true,
                     lastVerifiedAt: true,
-                } },
-            },
-        }),
+                    registration: { select: {
+                        id: true,
+                        ownerTeamId: true,
+                        githubHost: true,
+                        githubAppId: true,
+                        githubClientId: true,
+                        config: true,
+                        securityRevision: true,
+                        state: true,
+                        lastVerifiedAt: true,
+                        encryptedSecrets: input.includeSecrets,
+                    } },
+                },
+            }))),
     ]);
-    const installationById = new Map(installations.map((installation) => [installation.id, installation]));
-    const results = new Map<string, ManagedGitHubIdentityProviderRuntimeMetadata>();
-    for (const candidate of candidates) {
-        const installationId = candidate.provider.githubAppInstallationId;
-        const installation = installationId ? installationById.get(installationId) : undefined;
+    const installations = installationBatches.flat();
+    const results = new Map<string, Readonly<{
+        installation: typeof installations[number];
+        readiness: ManagedGitHubIdentityProviderReadiness;
+        metadata: ManagedGitHubIdentityProviderRuntimeMetadata;
+    }>>();
+    if (home === null) return results;
+    const registrationConfigs = new Map<string, ReturnType<typeof parseGitHubAppRegistrationConfigV1> | null>();
+    const readyInstallations = new Map<string, typeof installations[number]>();
+    for (const installation of installations) {
         if (
-            !installation
-            || installation.state !== "verified"
+            installation.state !== "verified"
             || installation.suspendedAt !== null
             || installation.lastVerifiedAt === null
             || installation.registration.state !== "verified"
             || installation.registration.lastVerifiedAt === null
-            || !isGitHubAppRegistrationOwnerEligible(installation.registration.ownerTeamId, candidate.context)
             || !isManagedGitHubHostApprovedByHome(home, installation.registration.githubHost)
         ) continue;
-        let config: ReturnType<typeof parseGitHubAppRegistrationConfigV1>;
+        const registrationKey = JSON.stringify([installation.registration.id, installation.registration.securityRevision]);
+        let config = registrationConfigs.get(registrationKey);
         let permissions: ReturnType<typeof parseGitHubPermissionsV1>;
         try {
-            config = parseGitHubAppRegistrationConfigV1(installation.registration.config);
+            if (config === undefined) {
+                try {
+                    config = parseGitHubAppRegistrationConfigV1(installation.registration.config);
+                    registrationConfigs.set(registrationKey, config);
+                } catch {
+                    registrationConfigs.set(registrationKey, null);
+                    continue;
+                }
+            }
+            if (config === null) continue;
             permissions = parseGitHubPermissionsV1(installation.verifiedPermissions);
         } catch {
             continue;
@@ -403,8 +401,14 @@ export async function resolveManagedGitHubIdentityProviderRuntimeMetadataBatchIn
                 events: [],
             },
         }).ok) continue;
+        readyInstallations.set(installation.id, installation);
+    }
+    for (const candidate of candidates) {
+        const installation = candidate.provider.githubAppInstallationId
+            ? readyInstallations.get(candidate.provider.githubAppInstallationId) : undefined;
+        if (!installation || !isGitHubAppRegistrationOwnerEligible(installation.registration.ownerTeamId, candidate.context)) continue;
         const network = resolveManagedIdentityNetworkPolicy({ env: candidate.env, timeoutSeconds: 30, home });
-        results.set(candidate.key, {
+        const metadata: ManagedGitHubIdentityProviderRuntimeMetadata = {
             runtimeFingerprint: [
                 "managed-github:v1",
                 candidate.provider.securityRevision,
@@ -414,6 +418,19 @@ export async function resolveManagedGitHubIdentityProviderRuntimeMetadataBatchIn
                 network.fingerprint,
             ].join(":"),
             networkPolicy: network.policy,
+        };
+        results.set(candidate.key, {
+            installation,
+            metadata,
+            readiness: {
+                installationId: installation.id,
+                organizationLogin: installation.githubOrganizationLogin,
+                providerSecurityRevision: candidate.provider.securityRevision,
+                registrationSecurityRevision: installation.registration.securityRevision,
+                installationRevision: installation.revision,
+                networkFingerprint: network.fingerprint,
+                networkPolicy: network.policy,
+            },
         });
     }
     return results;
@@ -430,76 +447,103 @@ export async function resolveManagedGitHubIdentityProviderModuleInTx(
         publicServerUrl: string;
     }>,
 ): Promise<ResolveManagedGitHubIdentityProviderModuleResult | null> {
-    const metadata = await resolveManagedGitHubIdentityProviderRuntimeMetadataInTx(tx, input);
-    const githubAppInstallationRecordId = input.provider.githubAppInstallationId;
-    if (!metadata || githubAppInstallationRecordId === null) return null;
-    const installation = await tx.gitHubAppInstallation.findUnique({
-        where: { id: githubAppInstallationRecordId },
-        select: {
-            githubInstallationId: true,
-            githubOrganizationId: true,
-            githubOrganizationLogin: true,
-            revision: true,
-            state: true,
-            verifiedPermissions: true,
-            suspendedAt: true,
-            lastVerifiedAt: true,
-            registration: {
-                select: {
-                    id: true,
-                    ownerTeamId: true,
-                    githubHost: true,
-                    githubAppId: true,
-                    githubClientId: true,
-                    config: true,
-                    encryptedSecrets: true,
-                    securityRevision: true,
-                    state: true,
-                    lastVerifiedAt: true,
-                },
-            },
-        },
+    return (await resolveManagedGitHubIdentityProviderModulesInTx(tx, {
+        inputs: [{ ...input, key: "single" }],
+    })).get("single") ?? null;
+}
+
+/** Resolve live leaves from one admitted snapshot, decrypting each registration once. */
+export async function resolveManagedGitHubIdentityProviderModulesInTx(
+    tx: Tx,
+    input: Readonly<{ inputs: readonly Readonly<{
+        key: string;
+        env: NodeJS.ProcessEnv;
+        context: ProviderCatalogContext;
+        provider: IdentityProviderInstanceView;
+        connectionId: string | null;
+        connectionRevision: number | null;
+        publicServerUrl: string;
+    }>[]; home?: HomeGovernancePolicyRecord }>,
+): Promise<ReadonlyMap<string, ResolveManagedGitHubIdentityProviderModuleResult>> {
+    return (await resolveManagedGitHubIdentityProviderRuntimeFactsInTx(tx, input)).modules;
+}
+
+/** Retain safe decrypted health even when these credentials cannot construct an OAuth module. */
+export async function resolveManagedGitHubIdentityProviderRuntimeFactsInTx(
+    tx: Tx,
+    input: Readonly<{ inputs: readonly Readonly<{
+        key: string;
+        env: NodeJS.ProcessEnv;
+        context: ProviderCatalogContext;
+        provider: IdentityProviderInstanceView;
+        connectionId: string | null;
+        connectionRevision: number | null;
+        publicServerUrl: string;
+    }>[]; home?: HomeGovernancePolicyRecord }>,
+): Promise<ManagedGitHubIdentityProviderRuntimeFacts> {
+    const candidates = input.inputs.filter(hasManagedGitHubRuntimeBinding);
+    const captured = await captureManagedGitHubIdentityProviderFactsInTx(tx, {
+        inputs: candidates,
+        home: input.home,
+        includeSecrets: true,
     });
-    if (!installation) return null;
-    let secrets: ReturnType<typeof decryptGitHubAppRegistrationSecretsV1>;
-    let permissions: ReturnType<typeof parseGitHubPermissionsV1>;
-    try {
-        parseGitHubAppRegistrationConfigV1(installation.registration.config);
-        secrets = decryptGitHubAppRegistrationSecretsV1({
-            registrationId: installation.registration.id,
-            encryptedSecrets: Uint8Array.from(installation.registration.encryptedSecrets),
+    const results = new Map<string, ResolveManagedGitHubIdentityProviderModuleResult>();
+    const registrationSecretHealthByKey = new Map<string, GitHubAppRegistrationSecretHealthFact>();
+    const registrations = new Map<string, Readonly<{
+        secrets: ReturnType<typeof decryptGitHubAppRegistrationSecretsV1> | null;
+        fact: GitHubAppRegistrationSecretHealthFact;
+    }>>();
+    for (const candidate of candidates) {
+        const facts = captured.get(candidate.key);
+        if (!facts) continue;
+        const { installation, metadata } = facts;
+        const registration = installation.registration;
+        const registrationKey = JSON.stringify([registration.id, registration.securityRevision]);
+        let admitted = registrations.get(registrationKey);
+        if (!admitted) {
+            let secrets: ReturnType<typeof decryptGitHubAppRegistrationSecretsV1> | null;
+            try {
+                secrets = decryptGitHubAppRegistrationSecretsV1({
+                    registrationId: registration.id,
+                    encryptedSecrets: Uint8Array.from(registration.encryptedSecrets),
+                });
+            } catch {
+                secrets = null;
+            }
+            admitted = { secrets, fact: {
+                registrationId: registration.id,
+                securityRevision: registration.securityRevision,
+                secretHealth: secrets === null ? null : projectGitHubAppSecretHealthV1(secrets),
+            } };
+            registrations.set(registrationKey, admitted);
+        }
+        registrationSecretHealthByKey.set(candidate.key, admitted.fact);
+        const { secrets } = admitted;
+        if (!secrets?.clientSecret || !secrets.privateKey) continue;
+        results.set(candidate.key, {
+            module: createManagedGitHubIdentityProviderModule({
+                providerId: candidate.provider.id,
+                callbackProviderId: "github-app",
+                displayName: candidate.provider.displayName,
+                context: candidate.context,
+                connectionId: candidate.connectionId,
+                githubHost: registration.githubHost,
+                githubAppId: registration.githubAppId,
+                githubClientId: registration.githubClientId,
+                clientSecret: secrets.clientSecret,
+                privateKey: secrets.privateKey,
+                githubInstallationId: installation.githubInstallationId,
+                githubAppInstallationRecordId: installation.id,
+                githubOrganizationId: installation.githubOrganizationId,
+                githubOrganizationLogin: installation.githubOrganizationLogin,
+                redirectUrl: managedGitHubAppUserAuthorizationCallbackUrl(candidate.publicServerUrl),
+                networkPolicy: metadata.networkPolicy,
+            }),
+            runtimeFingerprint: metadata.runtimeFingerprint,
+            connectionRevision: candidate.connectionRevision,
         });
-        permissions = parseGitHubPermissionsV1(installation.verifiedPermissions);
-    } catch {
-        return null;
     }
-    if (
-        !secrets.clientSecret
-        || !secrets.privateKey
-        || (permissions.members !== "read" && permissions.members !== "write")
-    ) return null;
-    return {
-        module: createManagedGitHubIdentityProviderModule({
-            providerId: input.provider.id,
-            callbackProviderId: "github-app",
-            displayName: input.provider.displayName,
-            context: input.context,
-            connectionId: input.connectionId,
-            githubHost: installation.registration.githubHost,
-            githubAppId: installation.registration.githubAppId,
-            githubClientId: installation.registration.githubClientId,
-            clientSecret: secrets.clientSecret,
-            privateKey: secrets.privateKey,
-            githubInstallationId: installation.githubInstallationId,
-            githubAppInstallationRecordId,
-            githubOrganizationId: installation.githubOrganizationId,
-            githubOrganizationLogin: installation.githubOrganizationLogin,
-            redirectUrl: managedGitHubAppUserAuthorizationCallbackUrl(input.publicServerUrl),
-            networkPolicy: metadata.networkPolicy,
-        }),
-        runtimeFingerprint: metadata.runtimeFingerprint,
-        connectionRevision: input.connectionRevision,
-    };
+    return { modules: results, registrationSecretHealthByKey };
 }
 
 /** Builds the live leaves for one verified managed GitHub identity consumer. */

@@ -2,10 +2,11 @@ import { computeCanonicalDomainSeparatedDigest } from "@happier-dev/protocol/cry
 
 import {
     resolveIdentityProviderInstanceRuntimeInTx,
+    type IdentityProviderInstanceRuntimeResult,
     type IdentityProviderInstanceView,
 } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
 import type { TeamIdentityConnectionDocuments } from "@/app/auth/providers/managed/identityProviderDocuments";
-import { readTeamIdentityConnectionInTx } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
+import { readTeamIdentityConnectionInTx, type TeamIdentityConnectionReadResult } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import type {
     WorkosPlatformConfigResolution,
     WorkosPlatformRequestPolicy,
@@ -65,6 +66,12 @@ type TeamWorkosRuntimeInput = Readonly<{
     includeDisabled?: boolean;
     purpose?: "sso" | "directory";
     requestPolicy?: WorkosPlatformRequestPolicy;
+    /** Current facts captured by the catalog in this same transaction. */
+    admitted?: Readonly<{
+        connection: TeamIdentityConnectionReadResult<string | null>;
+        provider: ReturnType<typeof resolveTeamWorkosProviderInstanceFromRuntimeResult>;
+        platform: WorkosPlatformConfigResolution;
+    }>;
 }>;
 
 type TeamWorkosRuntimeDependencies = Readonly<{
@@ -118,6 +125,14 @@ export async function resolveTeamWorkosProviderInstanceInTx(
             includeDisabled: input.includeDisabled,
         })
         : teamProvider;
+    return resolveTeamWorkosProviderInstanceFromRuntimeResult(resolvedProvider);
+}
+
+/** The same WorkOS provider admission for singular and set runtime reads. */
+export function resolveTeamWorkosProviderInstanceFromRuntimeResult(
+    resolvedProvider: IdentityProviderInstanceRuntimeResult,
+): Readonly<{ status: "ready"; instance: IdentityProviderInstanceView }>
+    | Readonly<{ status: "unreadable" | "provider_unavailable" }> {
     if (resolvedProvider.status === "unreadable") return { status: "unreadable" };
     if (
         resolvedProvider.status !== "ready"
@@ -145,7 +160,7 @@ export async function resolveTeamWorkosConnectionRuntimeInTx(
 ): Promise<TeamWorkosConnectionRuntimeResult<string | null> | TeamWorkosDirectoryRuntimeResult> {
     const purpose = input.purpose ?? "sso";
     if (purpose === "directory" && input.teamId === null) return { status: "connection_not_found" };
-    const current = await readTeamIdentityConnectionInTx(tx, {
+    const current = input.admitted?.connection ?? await readTeamIdentityConnectionInTx(tx, {
         id: input.connectionId, teamId: input.teamId,
     });
     if (current.status === "not_found") return { status: "connection_not_found" };
@@ -155,7 +170,7 @@ export async function resolveTeamWorkosConnectionRuntimeInTx(
         return { status: "connection_disabled" };
     }
 
-    const resolvedProvider = await resolveTeamWorkosProviderInstanceInTx(tx, {
+    const resolvedProvider = input.admitted?.provider ?? await resolveTeamWorkosProviderInstanceInTx(tx, {
         providerInstanceId: row.providerInstanceId,
         teamId: input.teamId,
         includeDisabled: input.includeDisabled,
@@ -178,9 +193,9 @@ export async function resolveTeamWorkosConnectionRuntimeInTx(
         return { status: "connection_unavailable" };
     }
 
-    const platform = dependencies.resolvePlatform
+    const platform = input.admitted?.platform ?? (dependencies.resolvePlatform
         ? dependencies.resolvePlatform(input.env, input.requestPolicy)
-        : resolveWorkosPlatformConfig(input.env, {}, input.requestPolicy);
+        : resolveWorkosPlatformConfig(input.env, {}, input.requestPolicy));
     if (!platform.available) return { status: "platform_unavailable" };
     const runtimeFingerprint = computeTeamWorkosConnectionRuntimeFingerprint({
         teamId: input.teamId,
