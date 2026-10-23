@@ -67,9 +67,9 @@ describe("Session-filtered changes replay (SQLite)", () => {
             accountId: account.id, kind, entityId, hint,
         })).then(publication => publication.resolveCursor());
         const revisionCursor = await mark("session", a!.id, { updatedMessageSeq: 7, updatedMessageId: "message-revised" });
-        const otherCursor = await mark("session", b!.id, { updatedMessageSeq: 2, updatedMessageId: "other-message" });
+        await mark("session", b!.id, { updatedMessageSeq: 2, updatedMessageId: "other-message" });
         // Same entity id in another namespace must not enter the Session read.
-        const unrelatedCursor = await mark("automation", a!.id);
+        await mark("automation", a!.id);
         const shareCursor = await mark("share", a!.id, { reason: "access-updated" });
         await withAuthenticatedTestApp(changesRoutes, async (app) => {
             const headers = { "x-test-user-id": account.id };
@@ -80,11 +80,7 @@ describe("Session-filtered changes replay (SQLite)", () => {
                     hint: { updatedMessageSeq: 7, updatedMessageId: "message-revised" } }],
                 nextCursor: revisionCursor,
             });
-            const empty = await app.inject({ method: "GET", url: `/v2/changes?sessionId=${a!.id}&after=${revisionCursor}&limit=1`, headers });
-            expect(empty.json()).toMatchObject({ changes: [], nextCursor: otherCursor });
-            const unrelated = await app.inject({ method: "GET", url: `/v2/changes?sessionId=${a!.id}&after=${otherCursor}&limit=1`, headers });
-            expect(unrelated.json()).toMatchObject({ changes: [], nextCursor: unrelatedCursor });
-            const next = await app.inject({ method: "GET", url: `/v2/changes?sessionId=${a!.id}&after=${unrelatedCursor}&limit=1`, headers });
+            const next = await app.inject({ method: "GET", url: `/v2/changes?sessionId=${a!.id}&after=${revisionCursor}&limit=1`, headers });
             expect(next.json()).toMatchObject({
                 changes: [{ cursor: shareCursor, kind: "share", entityId: a!.id }], nextCursor: shareCursor,
             });
@@ -104,6 +100,44 @@ describe("Session-filtered changes replay (SQLite)", () => {
                 expect(filtered.statusCode).toBe(410);
                 expect(filtered.json()).toEqual(unfiltered.json());
             }
+        });
+    });
+
+    it("serves one exact Session page despite one thousand unrelated Account changes", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: account.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
+        } });
+        const unrelatedCount = 1_000;
+        await db.accountChange.createMany({ data: [
+            ...Array.from({ length: unrelatedCount }, (_, index) => ({
+                accountId: account.id,
+                kind: "automation",
+                entityId: `unrelated-${index}`,
+                cursor: index + 1,
+            })),
+            {
+                accountId: account.id,
+                kind: "session",
+                entityId: session.id,
+                sessionId: session.id,
+                cursor: unrelatedCount + 1,
+            },
+        ] });
+        await db.account.update({ where: { id: account.id }, data: { seq: unrelatedCount + 1 } });
+
+        await withAuthenticatedTestApp(changesRoutes, async (app) => {
+            const response = await app.inject({
+                method: "GET",
+                url: `/v2/changes?sessionId=${session.id}&limit=1`,
+                headers: { "x-test-user-id": account.id },
+            });
+
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({
+                changes: [{ cursor: unrelatedCount + 1, kind: "session", entityId: session.id }],
+                nextCursor: unrelatedCount + 1,
+            });
         });
     });
 

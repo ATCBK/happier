@@ -190,7 +190,14 @@ export function changesRoutes(app: Fastify) {
         const rows = await inTx(tx => tx.accountChange.findMany({
             where: {
                 accountId: userId,
-                cursor: { gt: after },
+                cursor: {
+                    gt: after,
+                    ...(sessionId === undefined ? {} : { lte: account.seq }),
+                },
+                ...(sessionId === undefined ? {} : {
+                    entityId: sessionId,
+                    kind: { in: ["session", "share"] },
+                }),
             },
             orderBy: [
                 { cursor: 'asc' },
@@ -225,14 +232,16 @@ export function changesRoutes(app: Fastify) {
             return reply.code(410).send({ error: 'cursor-gone', currentCursor: currentAccount.seq });
         }
 
-        const nextCursor = rows.length > 0 ? rows[rows.length - 1]!.cursor : after;
-        // Exact Session selectors and compatibility can withhold rows, while
-        // `nextCursor` stays derived from the raw page so even an empty filtered
-        // page progresses through unrelated Account activity.
+        // An exact Session read selects only its two possible AccountChange
+        // identities. Once that bounded result is shorter than the requested
+        // page, the Account snapshot proves every cursor through `account.seq`
+        // was examined; advance directly instead of paging unrelated activity.
+        // A full page retains its last row cursor so a smaller caller limit can
+        // fetch the other exact identity without skipping it.
+        const nextCursor = sessionId !== undefined && rows.length < limit
+            ? account.seq
+            : rows.length > 0 ? rows[rows.length - 1]!.cursor : after;
         const visibleRows = rows.filter((row) => {
-            if (sessionId !== undefined && (
-                (row.kind !== 'session' && row.kind !== 'share') || row.entityId !== sessionId
-            )) return false;
             if (row.kind === 'pluginDomain') return compatibility.supportsPluginDataProtocol;
             if (row.kind === 'machinePool') return compatibility.supportsMachinePoolChangeProtocol;
             if (row.kind === 'savedSecretResource') return compatibility.supportsSavedSecretResourceChangeProtocol;
