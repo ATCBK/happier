@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createXaiVoiceRuntimeEnvironment, XaiVoiceWebSocket as FakeWebSocket, XAI_VOICE_HISTORY_SESSION_ID as XAI_HISTORY_SESSION_ID, type XaiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/xaiVoiceRuntime';
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -34,14 +35,14 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
       const first = FakeWebSocket.instances[0]!;
       first.emitConversationId('conv-auth-refresh');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID), environment.xaiEntry().providerId,
       )?.conversationId).toBe('conv-auth-refresh'));
       first.emit('message', { data: JSON.stringify({
         type: 'error', event_id: 'auth-expiration-initial', error: { code: 'client_secret_expired' },
       }) });
-      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
+      await waitForTestEvent(FakeWebSocket.subscribe, () => expect(FakeWebSocket.instances).toHaveLength(2));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
       const replacement = FakeWebSocket.instances[1]!;
       expect(new URL(replacement.url).searchParams.get('conversation_id')).toBe('conv-auth-refresh');
       expect(composed.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets'))).toHaveLength(2);
@@ -72,24 +73,24 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
         const first = FakeWebSocket.instances[0]!;
         first.emitConversationId('conv-auth-budget');
-        await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+        await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
           environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID), environment.xaiEntry().providerId,
         )?.conversationId).toBe('conv-auth-budget'));
         first.emit('message', { data: JSON.stringify({
           type: 'error', event_id: 'auth-expiration-first', error: { code: 'client_secret_expired' },
         }) });
-        await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+        await waitForTestEvent(FakeWebSocket.subscribe, () => expect(FakeWebSocket.instances).toHaveLength(2));
         const second = FakeWebSocket.instances[1]!;
         if (timing === 'after_reconnect_settles') {
-          await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
+          await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
           emitSecondExpiration(second);
         }
-        await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
+        await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
           status: 'error', errorCode: 'voice_auth_refresh_exhausted',
         }));
         expect(composed.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets'))).toHaveLength(2);
         expect(FakeWebSocket.instances).toHaveLength(2);
-        await vi.waitFor(() => expect(second.readyState).toBe(3));
+        await waitForTestEvent(FakeWebSocket.subscribe, () => expect(second.readyState).toBe(3));
         expect(composed.getController().getOwnedAttemptId()).toBeNull();
       } finally {
         await composed.runtime.dispose();
@@ -131,7 +132,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       expect(composed.runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected' });
       const first = FakeWebSocket.instances[0]!;
       first.emitConversationId('conv-stable-tool');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID), environment.xaiEntry().providerId,
       )?.conversationId).toBe('conv-stable-tool'));
       if (!resumed) {
@@ -155,7 +156,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       first.emit('message', { data: JSON.stringify({
         type: 'response.done', event_id: 'stable-tool-done', response: { id: 'stable-tool-response', status: 'completed' },
       }) });
-      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      await waitForTestEvent(FakeWebSocket.subscribe, () => expect(FakeWebSocket.instances).toHaveLength(2));
       const second = FakeWebSocket.instances[1]!;
       const delivered = () => second.sent.map(value => JSON.parse(value)).filter(event => (
         event.item?.type === 'function_call_output'
@@ -165,22 +166,23 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
         // an already-submitted result into a detached delivery or repeat it.
         expect(delivered()).toEqual([]);
         expect(new URL(second.url).searchParams.get('conversation_id')).toBe('conv-stable-tool');
-        await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
+        await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
       } else if (resumed) {
-        await vi.waitFor(() => expect(delivered()).toEqual([expect.objectContaining({ item: expect.objectContaining({
+        await waitForTestEvent(FakeWebSocket.subscribe, () => expect(delivered()).toEqual([expect.objectContaining({ item: expect.objectContaining({
           call_id: 'stable-tool-call', output: expect.stringContaining('items'),
         }) })]));
         expect(new URL(second.url).searchParams.get('conversation_id')).toBe('conv-stable-tool');
+        await waitForTestEvent(FakeWebSocket.subscribe, () => expect(second.sent.map(value => JSON.parse(value)).filter(event => event.type === 'response.create')).toHaveLength(1));
         expect(second.sent.map(value => JSON.parse(value)).filter(event => event.type === 'response.create')).toHaveLength(1);
         expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
       } else {
-        await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
+        await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot()).toMatchObject({
           status: 'error', errorCode: 'voice_tool_result_delivery_unrecoverable',
         }));
         expect(new URL(second.url).searchParams.get('conversation_id')).toBeNull();
         expect(delivered()).toEqual([]);
         expect(second.sent.map(value => JSON.parse(value)).filter(event => event.type === 'response.create')).toEqual([]);
-        await vi.waitFor(() => expect(second.readyState).toBe(3));
+        await waitForTestEvent(FakeWebSocket.subscribe, () => expect(second.readyState).toBe(3));
       }
       expect(deliveryAttempts).toEqual(transportLoss === 'closed_after_send' ? ['stable-tool-call'] : []);
       expect(first.sent.map(value => JSON.parse(value)).filter(event => (
@@ -209,7 +211,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
       const first = FakeWebSocket.instances[0]!;
       first.emitConversationId('conv-pending-read');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID), environment.xaiEntry().providerId,
       )?.conversationId).toBe('conv-pending-read'));
       environment.machineInventoryRequest = inventoryRequest;
@@ -220,17 +222,17 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       first.emit('message', { data: JSON.stringify({
         type: 'response.done', event_id: 'pending-read-done', response: { id: 'pending-read-response', status: 'completed' },
       }) });
-      await vi.waitFor(() => expect(inventoryRequest).toHaveBeenCalledOnce());
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(inventoryRequest).toHaveBeenCalledOnce());
       first.emit('close', { code: 1006, reason: '' });
-      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      await waitForTestEvent(FakeWebSocket.subscribe, () => expect(FakeWebSocket.instances).toHaveLength(2));
       const second = FakeWebSocket.instances[1]!;
-      await vi.waitFor(() => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
+      await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(composed.runtime.adapter.getSnapshot().status).toBe('connected'));
       expect(new URL(second.url).searchParams.get('conversation_id')).toBe('conv-pending-read');
       resolveInventory(Response.json([machineRow]));
       const deliveredResults = () => FakeWebSocket.instances.flatMap(socket => socket.sent.map(value => ({
         socket, event: JSON.parse(value),
       }))).filter(({ event }) => event.item?.type === 'function_call_output');
-      await vi.waitFor(() => {
+      await waitForTestEvent(FakeWebSocket.subscribe, () => {
         expect(deliveredResults()).toHaveLength(1);
         const delivery = deliveredResults()[0]!;
         expect(delivery.event.item.call_id).toBe('pending-read-call');
@@ -244,6 +246,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       const surviving = deliveredResults()[0]!.socket;
       expect(surviving).toBe(FakeWebSocket.instances.at(-1));
       expect(new URL(surviving.url).searchParams.get('conversation_id')).toBe('conv-pending-read');
+      await waitForTestEvent(FakeWebSocket.subscribe, () => expect(surviving.sent.map(value => JSON.parse(value)).filter(event => event.type === 'response.create')).toHaveLength(1));
       expect(surviving.sent.map(value => JSON.parse(value)).filter(event => event.type === 'response.create')).toHaveLength(1);
       expect(first.sent.map(value => JSON.parse(value)).filter(event => event.item?.type === 'function_call_output')).toEqual([]);
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connected');
@@ -272,11 +275,12 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       const captureContext = environment.audioContexts.find(context => context.processor.onaudioprocess !== null);
       if (!captureContext) throw new Error('The real PCM capture did not subscribe to browser input');
       captureContext.emitInput(new Float32Array(2_400).fill(0.25));
-      await vi.waitFor(() => expect(FakeWebSocket.instances[0]!.sent.map(value => JSON.parse(value))).toContainEqual(
+      await waitForTestEvent(FakeWebSocket.subscribe, () => expect(FakeWebSocket.instances[0]!.sent.map(value => JSON.parse(value))).toContainEqual(
         expect.objectContaining({ type: 'input_audio_buffer.append', audio: expect.any(String) }),
       ));
       FakeWebSocket.instances[0]!.emit('message', { data: JSON.stringify({ type: 'response.output_audio.delta', delta: 'AQACAA==' }) });
-      await vi.waitFor(() => expect(captureContext.sources).toHaveLength(1));
+      await captureContext.sourceCreated();
+      expect(captureContext.sources).toHaveLength(1);
       expect(captureContext.sources[0]?.buffer?.samples).toEqual(new Float32Array([1 / 32_767, 2 / 32_767]));
       expect(Object.keys(storage.getState().sessions)).toEqual([
         XAI_HISTORY_SESSION_ID,
@@ -318,7 +322,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
           transcript: 'hello through Grok Voice',
         }),
       });
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readCanonicalVoiceTranscriptSnapshot(binding!.conversationSessionId),
       ).toEqual([
         expect.objectContaining({
@@ -326,7 +330,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
           text: 'hello through Grok Voice',
         }),
       ]));
-      await vi.waitFor(() => {
+      await waitForTestEvent(storage.subscribe, () => {
         expect(readStoredSessionMessages(storage.getState(), binding!.conversationSessionId)).toEqual([
           expect.objectContaining({
             kind: 'user-text',
@@ -368,7 +372,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       expect(composed.providerFetch.mock.calls.filter(([url]) => String(url).endsWith('/client_secrets'))).toHaveLength(1);
       expect(FakeWebSocket.instances).toHaveLength(1);
       FakeWebSocket.instances[0]!.emitConversationId('conv-durable');
-      await vi.waitFor(() => expect(patchSessionMetadata).toHaveBeenCalledTimes(1));
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(patchSessionMetadata).toHaveBeenCalledTimes(1));
       await patchSessionMetadata.mock.results[0]?.value;
       expect(storage.getState().sessions[XAI_HISTORY_SESSION_ID]?.metadata).not.toHaveProperty('voiceProviderConversationsV1');
       expect(readVoiceProviderConversationMetadata(
@@ -441,7 +445,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
       const socket = FakeWebSocket.instances[0]!;
       socket.emitConversationId('conv-forget-local-only');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({
@@ -506,7 +510,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
       const historySocket = FakeWebSocket.instances[0]!;
       historySocket.emitConversationId('conv-history-current');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-history-current' }));
@@ -540,7 +544,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       expect(new URL(directSocket.url).searchParams.get('conversation_id'))
         .toBe('conv-direct-before');
       directSocket.emitConversationId('conv-direct-current');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(directTargetSessionId),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-direct-current' }));
@@ -634,7 +638,7 @@ describe('realtime_grok source-composed direct-media persistence gate', () => {
       await composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
       const socket = FakeWebSocket.instances[0]!;
       socket.emitConversationId('conv-before-end');
-      await vi.waitFor(() => expect(readVoiceProviderConversationMetadata(
+      await waitForTestEvent(storage.subscribe, () => expect(readVoiceProviderConversationMetadata(
         environment.readProviderConversationOwnerMetadata(XAI_HISTORY_SESSION_ID),
         'happier.voice.xai/realtime-grok',
       )).toMatchObject({ conversationId: 'conv-before-end' }));

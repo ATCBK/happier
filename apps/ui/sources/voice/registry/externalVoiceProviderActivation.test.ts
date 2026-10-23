@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as React from 'react';
 import type { VoiceSettingsActionContext } from '@happier-dev/plugin-sdk/voice';
@@ -412,7 +413,7 @@ describe('external Voice provider activation', () => {
       running = actions.execute({ actionId: 'create-agent', settings: { mode: 'byo' }, signal: new AbortController().signal });
       await Promise.resolve();
     });
-    await vi.waitFor(() => expect(screen.findByTestId('app-shell-question-decision-choice-continue')).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.findByTestId('app-shell-question-decision-choice-continue')).not.toBeNull());
     await screen.pressByTestIdAsync('app-shell-question-decision-choice-continue');
     await screen.pressByTestIdAsync('app-shell-question-submit');
     const result = await running;

@@ -1,4 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
+import { useVoiceConversationRuntimeStore } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
 import { PluginContributesV2Schema } from '@happier-dev/protocol';
 import type { RealtimeVoiceProviderRuntime } from '@happier-dev/plugin-sdk/voice/client';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
@@ -39,6 +41,7 @@ describe('createBundledRealtimeProviderRuntime mute ownership', () => {
     const delayedMuteB = createDeferredVoid();
     const rejectedUnmute = createDeferredVoid();
     const delayedReplacedUnmute = createDeferredVoid();
+    const replacedUnmuteEntered = createDeferred<void>();
     const delayedReplacedMute = createDeferredVoid();
     const rejectedTerminalMute = createDeferredVoid();
     const providerCapture = { muted: false };
@@ -63,6 +66,7 @@ describe('createBundledRealtimeProviderRuntime mute ownership', () => {
       if (!operation || operation.muted !== muted) {
         throw new Error('unexpected_provider_mute_operation');
       }
+      if (operation.deferred === delayedReplacedUnmute) replacedUnmuteEntered.resolve();
       await operation.deferred.promise;
       providerCapture.muted = muted;
       providerSettlements.push(muted);
@@ -191,7 +195,8 @@ describe('createBundledRealtimeProviderRuntime mute ownership', () => {
       expect(setInputMuted).toHaveBeenLastCalledWith(true);
 
       const replacedUnmute = runtime.adapter.setMuted({ sessionId: controlSessionId, muted: false });
-      await vi.waitFor(() => expect(setInputMuted).toHaveBeenCalledTimes(8));
+      await replacedUnmuteEntered.promise;
+      expect(setInputMuted).toHaveBeenCalledTimes(8);
       // Replacement is a lifecycle boundary, not a second concurrent Start on
       // the same adapter. Stop must retire the old attempt without joining a
       // public provider hook that may remain pending indefinitely.
@@ -232,7 +237,7 @@ describe('createBundledRealtimeProviderRuntime mute ownership', () => {
       assertNoHostCaptureMutation();
       rejectedTerminalMute.reject(new Error('provider_input_mute_rejected'));
       await expect(failedMute).rejects.toThrow('provider_input_mute_rejected');
-      await vi.waitFor(() => expect(['disconnected', 'error']).toContain(
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => expect(['disconnected', 'error']).toContain(
         runtimeMachine.getSnapshot().state,
       ));
       assertNoHostCaptureMutation();

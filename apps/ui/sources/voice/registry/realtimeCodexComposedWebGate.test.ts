@@ -1,3 +1,4 @@
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BundledRealtimeProviderRuntimeHost,
@@ -26,6 +27,7 @@ import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { parseToken } from '@/utils/auth/parseToken';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
@@ -37,6 +39,11 @@ const machineRpcBoundary = vi.hoisted(() => ({
 }));
 let daemonProjection: ReturnType<typeof PluginProjectionV2Schema.parse> | null = null;
 const transportHomes = new Map<string, { serverId: string; token: string }>();
+const rpcEvents = new EventTarget();
+function subscribeRpc(notify: () => void) {
+  rpcEvents.addEventListener('rpc', notify);
+  return () => rpcEvents.removeEventListener('rpc', notify);
+}
 // Keep Home/Account admission, Session and Machine crypto, request scope and RPC
 // framing real. Only the Socket.IO network's authenticated daemon reply changes.
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
@@ -63,9 +70,12 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
     const requestTimeoutMs = timeoutMs;
     timeoutMs = null;
     const authority = { serverId: home.serverId, accountId: parseToken(home.token), timeoutMs: requestTimeoutMs };
-    const result = method.startsWith('session.agentRealtime.')
-      ? await rpcBoundary.sessionRpc({ ...authority, sessionId: targetId, method, payload: payload.params })
-      : await machineRpcBoundary.machineRpc({ ...authority, machineId: targetId, method, payload: payload.params });
+    const responding = method.startsWith('session.agentRealtime.')
+      ? rpcBoundary.sessionRpc({ ...authority, sessionId: targetId, method, payload: payload.params })
+      : machineRpcBoundary.machineRpc({ ...authority, machineId: targetId, method, payload: payload.params });
+    rpcEvents.dispatchEvent(new Event('rpc'));
+    let result: unknown;
+    try { result = await responding; } finally { rpcEvents.dispatchEvent(new Event('rpc')); }
     return { ok: true, result };
   });
 });
@@ -216,8 +226,16 @@ describe('realtime_codex normal web composed gate', () => {
   // These records belong to the simulated Home database, not the client store.
   // The real spawned-session owner must fetch and publish them through Sync.
   let daemonSessions: Record<string, ReturnType<typeof createSessionFixture>>;
+  let daemonMachines: Record<string, ReturnType<typeof createMachineFixture>>;
+  let globalCreationSettings = storage.getState().settings;
+
+  const machineRow = (id: string) => ({
+    ...createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' }),
+    ...(daemonMachines[id] ? { metadata: encodePlainMachineStoredContent(daemonMachines[id]!.metadata) } : {}),
+  });
 
   const restoreGlobalCreationAccount = async (settings = storage.getState().settings) => {
+    globalCreationSettings = settings;
     // This is a new server document fixture, not an older echo of the scoped
     // document already persisted by the actual settings owner.
     const settingsRevision = (storage.getState().settingsVersion ?? 0) + 1;
@@ -247,13 +265,13 @@ describe('realtime_codex normal web composed gate', () => {
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }));
-        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: settingsRevision });
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: globalCreationSettings }, version: settingsRevision });
         if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } });
-        if (path === '/v1/machines') return Response.json(Object.keys(storage.getState().machines).map(id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' })));
+        if (path === '/v1/machines') return Response.json(Object.keys(daemonMachines).map(machineRow));
         if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
-          id => createPlainMachineRowFixture({ id, accountId: 'codex-composed-account' }));
+          machineRow);
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(path);
-        if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]!), accountId: 'codex-composed-account' }) });
+        if (machine) return Response.json({ machine: machineRow(decodeURIComponent(machine[1]!)) });
         const access = /^\/v1\/machines\/([^/]+)\/access$/.exec(path);
         if (access) {
           const machineId = decodeURIComponent(access[1]!);
@@ -297,6 +315,7 @@ describe('realtime_codex normal web composed gate', () => {
     persistenceCleanup = null;
     globalCreationAccount = null;
     daemonSessions = {};
+    daemonMachines = {};
     sessionHttp = createSessionMetadataHttpBoundary(() => ({
       ...storage.getState().sessions, ...daemonSessions,
     }));
@@ -409,7 +428,12 @@ describe('realtime_codex normal web composed gate', () => {
     });
     const browser = installVoiceWebRtcBrowserBoundary();
     const hostLease = createBundledConversationRuntimeHostLease();
-    const presentAttemptDiagnostic = vi.fn(hostLease.host.presentAttemptDiagnostic);
+    const diagnosticPresented = createDeferred<void>();
+    const presentAttemptDiagnostic = vi.fn((...args: Parameters<typeof hostLease.host.presentAttemptDiagnostic>) => {
+      const result = hostLease.host.presentAttemptDiagnostic(...args);
+      diagnosticPresented.resolve();
+      return result;
+    });
     const webHost = Object.freeze({
       ...hostLease.host,
       getPlatform: () => 'web' as const,
@@ -450,8 +474,8 @@ describe('realtime_codex normal web composed gate', () => {
       sessionId: 'codex-direct-session',
       requestedTargetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
     });
-    await vi.waitFor(() => expect(runtime.adapter.getSnapshot().status).toBe('connecting'));
-    await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+    await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot().status).toBe('connecting'));
+    await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
     browser.peer.channel.open();
     await starting;
 
@@ -518,20 +542,21 @@ describe('realtime_codex normal web composed gate', () => {
         transcript: 'must remain inert',
       },
     }));
-    await vi.waitFor(() => expect(presentAttemptDiagnostic).toHaveBeenCalledWith(
+    await diagnosticPresented.promise;
+    expect(presentAttemptDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         diagnostic: expect.objectContaining({
           code: 'codex_v3_malformed_turn_done',
         }),
       }),
-    ));
+    );
     expect(runtime.adapter.getSnapshot().status).toBe('connected');
     expect(readCanonicalVoiceTranscriptSnapshot('codex-direct-session')).toEqual([]);
 
     await installTranscriptPersistenceBoundary();
     browser.peer.channel.message(JSON.stringify(final));
     browser.peer.channel.message(JSON.stringify(final));
-    await vi.waitFor(() => expect(
+    await waitForTestEvent(storage.subscribe, () => expect(
       readCanonicalVoiceTranscriptSnapshot('codex-direct-session'),
     ).toEqual([
       expect.objectContaining({
@@ -542,7 +567,7 @@ describe('realtime_codex normal web composed gate', () => {
         final: true,
       }),
     ]));
-    await vi.waitFor(() => expect(
+    await waitForTestEvent(storage.subscribe, () => expect(
       readStoredSessionMessages(storage.getState(), 'codex-direct-session'),
     ).toEqual([
       expect.objectContaining({
@@ -567,16 +592,16 @@ describe('realtime_codex normal web composed gate', () => {
     persistenceCleanup?.();
     const secondBrowser = installVoiceWebRtcBrowserBoundary();
     browser.peer.channel.close();
-    await vi.waitFor(() => expect(rpcBoundary.sessionRpc.mock.calls.filter(
+    await waitForTestEvent(subscribeRpc, () => expect(rpcBoundary.sessionRpc.mock.calls.filter(
       ([input]) => String((input as { method?: unknown }).method).endsWith('.stop'),
     )).toHaveLength(1));
-    await vi.waitFor(() => expect(browser.peer.close).toHaveBeenCalledTimes(1));
+    await Promise.resolve(browser.peerCreated().then(peer => peer.closed)).then(() => expect(browser.peer.close).toHaveBeenCalledTimes(1));
     await Promise.resolve();
     expect(secondBrowser.peers).toHaveLength(0);
     resolveFirstStop({ ok: true, status: 'stopped' });
-    await vi.waitFor(() => expect(secondBrowser.peer.createDataChannel).toHaveBeenCalledTimes(1));
+    await Promise.resolve(secondBrowser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(secondBrowser.peer.createDataChannel).toHaveBeenCalledTimes(1));
     secondBrowser.peer.channel.open();
-    await vi.waitFor(() => expect(runtime.adapter.getSnapshot()).toMatchObject({
+    await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot()).toMatchObject({
       status: 'connected',
     }));
     expect(runtime.adapter.getSnapshot()).toMatchObject({
@@ -606,7 +631,7 @@ describe('realtime_codex normal web composed gate', () => {
         transcript: 'Second attempt survives.',
       },
     }));
-    await vi.waitFor(() => expect(
+    await waitForTestEvent(storage.subscribe, () => expect(
       readCanonicalVoiceTranscriptSnapshot('codex-direct-session'),
     ).toEqual([
       expect.objectContaining({
@@ -628,7 +653,7 @@ describe('realtime_codex normal web composed gate', () => {
         final: true,
       }),
     ]));
-    await vi.waitFor(() => expect(
+    await waitForTestEvent(storage.subscribe, () => expect(
       readStoredSessionMessages(storage.getState(), 'codex-direct-session'),
     ).toEqual([
       expect.objectContaining({
@@ -666,18 +691,20 @@ describe('realtime_codex normal web composed gate', () => {
       status: 'terminal',
       event: { kind: 'terminal', reason: 'upstream_closed' },
     });
-    await vi.waitFor(() => expect(secondBrowser.peer.close).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(rpcBoundary.sessionRpc.mock.calls.filter(
+    await Promise.resolve(secondBrowser.peerCreated().then(peer => peer.closed)).then(() => expect(secondBrowser.peer.close).toHaveBeenCalledTimes(1));
+    await waitForTestEvent(subscribeRpc, () => expect(rpcBoundary.sessionRpc.mock.calls.filter(
       ([input]) => String((input as { method?: unknown }).method).endsWith('.stop'),
     )).toHaveLength(2));
-    expect(runtime.adapter.getSnapshot().status).not.toBe('connected');
+    await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot().status).not.toBe('connected'));
 
     const thirdBrowser = installVoiceWebRtcBrowserBoundary();
+    const playbackEntered = createDeferred<void>();
     const remoteAudio = {
       autoplay: false,
       srcObject: null as MediaStream | null,
       volume: 1,
       play: vi.fn(async () => {
+        playbackEntered.resolve();
         throw new DOMException(
           'browser autoplay policy detail must not escape',
           'NotAllowedError',
@@ -700,14 +727,15 @@ describe('realtime_codex normal web composed gate', () => {
       code: 'voice_webrtc_remote_audio_playback_failed',
       message: 'voice_webrtc_remote_audio_playback_failed',
     });
-    await vi.waitFor(() => expect(thirdBrowser.peer.setRemoteDescription).toHaveBeenCalledTimes(1));
+    await Promise.resolve(thirdBrowser.peerCreated().then(peer => peer.remoteDescriptionSet)).then(() => expect(thirdBrowser.peer.setRemoteDescription).toHaveBeenCalledTimes(1));
     const remoteTrackEvent = new Event('track');
     Object.defineProperties(remoteTrackEvent, {
       track: { value: { id: 'remote-playback-failure' } as MediaStreamTrack },
       streams: { value: [{ id: 'remote-playback-stream' } as MediaStream] },
     });
     thirdBrowser.peer.dispatchEvent(remoteTrackEvent);
-    await vi.waitFor(() => expect(remoteAudio.play).toHaveBeenCalledTimes(1));
+    await playbackEntered.promise;
+    expect(remoteAudio.play).toHaveBeenCalledTimes(1);
     thirdBrowser.peer.channel.open();
 
     await thirdRejected;
@@ -716,7 +744,7 @@ describe('realtime_codex normal web composed gate', () => {
       errorCode: 'voice_webrtc_remote_audio_playback_failed',
       errorMessage: 'voice_webrtc_remote_audio_playback_failed',
     });
-    await vi.waitFor(() => expect(rpcBoundary.sessionRpc.mock.calls.filter(
+    await waitForTestEvent(subscribeRpc, () => expect(rpcBoundary.sessionRpc.mock.calls.filter(
       ([input]) => String((input as { method?: unknown }).method).endsWith('.stop'),
     )).toHaveLength(3));
 
@@ -764,7 +792,7 @@ describe('realtime_codex normal web composed gate', () => {
         sessionId: 'codex-direct-session',
         requestedTargetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
       });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
       await starting;
       expect(runtime.adapter.getSnapshot().status).toBe('connected');
@@ -775,7 +803,7 @@ describe('realtime_codex normal web composed gate', () => {
         type: 'error',
         error: { message: 'Bearer private-token; private session context', code: 'private-code' },
       }));
-      await vi.waitFor(() => expect(runtime.adapter.getSnapshot()).toMatchObject({
+      await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot()).toMatchObject({
         status: 'disconnected',
         errorCode: 'provider_error',
         errorMessage: 'upstream_rejected',
@@ -945,19 +973,15 @@ describe('realtime_codex normal web composed gate', () => {
         },
       },
     });
+    daemonMachines = { [globalMachine.id]: globalMachine };
     storage.setState((current) => ({
       ...current,
-      settings: { ...settingsDefaults, ...normalizeVoiceSettingsLocalDelta({ voice }, settingsDefaults) },
-      machines: {
-        ...current.machines,
-        [globalMachine.id]: globalMachine,
-      },
-      machineListByServerId: {
-        ...current.machineListByServerId,
-        [activeServerId]: [globalMachine],
-      },
+      settings: settingsParse({ ...settingsDefaults, ...normalizeVoiceSettingsLocalDelta({ voice }, settingsDefaults) }),
     }) as never);
     observeMachinePresenceForTest({ serverId: activeServerId, accountId: 'codex-composed-account' }, [globalMachine.id]);
+    globalCreationSettings = storage.getState().settings;
+    await sync.refreshMachines();
+    expect(storage.getState().machines[globalMachine.id]?.metadata).toMatchObject(globalMachine.metadata!);
     daemonProjection = PluginProjectionV2Schema.parse({
         v: 2,
         generation: 1,
@@ -1194,7 +1218,7 @@ describe('realtime_codex normal web composed gate', () => {
           sessionId: 'codex-direct-session',
           requestedTargetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
         });
-        await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+        await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
         browser.peer.channel.open();
         await starting;
 
@@ -1207,7 +1231,7 @@ describe('realtime_codex normal web composed gate', () => {
             diagnostic: { code: diagnosticCode, severity: 'error' },
           },
         });
-        await vi.waitFor(() => expect(runtime.adapter.getSnapshot()).toMatchObject({
+        await waitForTestEvent(runtime.adapter.subscribe!, () => expect(runtime.adapter.getSnapshot()).toMatchObject({
           status: 'disconnected',
           errorCode: 'provider_error',
           errorMessage: diagnosticCode,
@@ -1270,20 +1294,13 @@ describe('realtime_codex normal web composed gate', () => {
         },
       },
     });
+    daemonMachines = { [globalMachine.id]: globalMachine };
     storage.setState((current) => ({
       ...current,
-      settings: {
+      settings: settingsParse({
         ...settingsDefaults,
         ...normalizeVoiceSettingsLocalDelta({ voice }, settingsDefaults),
-      },
-      machines: {
-        ...current.machines,
-        [globalMachine.id]: globalMachine,
-      },
-      machineListByServerId: {
-        ...current.machineListByServerId,
-        [activeServerId]: [globalMachine],
-      },
+      }),
       sessions: {
         ...current.sessions,
         // Production's cold-resume proof is deliberately false. This exact
@@ -1307,6 +1324,9 @@ describe('realtime_codex normal web composed gate', () => {
       },
     }) as never);
     observeMachinePresenceForTest({ serverId: activeServerId, accountId: 'codex-composed-account' }, [globalMachine.id]);
+    globalCreationSettings = storage.getState().settings;
+    await sync.refreshMachines();
+    expect(storage.getState().machines[globalMachine.id]?.metadata).toMatchObject(globalMachine.metadata!);
 
     daemonProjection = PluginProjectionV2Schema.parse({
           v: 2,
@@ -1427,11 +1447,12 @@ describe('realtime_codex normal web composed gate', () => {
         systemSessionV1: { v: 1, key: 'voice_conversation_retired', hidden: true },
       });
       registerVoiceAdapters([runtime.adapter]);
+      expect(storage.getState().settings.voice.executionMachine).toEqual({ mode: 'fixed', machineId: globalMachine.id });
       const starting = runtime.adapter.start({
         sessionId: host.globalVoiceSessionId,
         requestedTargetSessionAddress: null,
       });
-      await vi.waitFor(() => {
+      await Promise.race([browser.peerCreated().then(peer => peer.dataChannelCreated), starting]).then(() => {
         expect(events).toContain('service:hidden-global-ready');
         expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
       });

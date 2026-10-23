@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import {
   installDisconnectedServerSocketBoundary,
   restoreServerAccountForTest,
@@ -17,10 +18,12 @@ describe('createBundledHostedConversationService', () => {
   let admissionStarted: boolean;
   let holdAdmission: boolean;
   let observedAbort: boolean;
+  let admissionEntered = createDeferred<void>();
 
   beforeEach(async () => {
     requests.length = 0;
     admissionStarted = false;
+    admissionEntered = createDeferred<void>();
     holdAdmission = false;
     observedAbort = false;
     account = await restoreServerAccountForTest({
@@ -34,6 +37,7 @@ describe('createBundledHostedConversationService', () => {
         requests.push({ path, body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get('Authorization') });
         if (path === '/v1/voice/token') {
           admissionStarted = true;
+          admissionEntered.resolve();
           if (holdAdmission) {
             await new Promise<void>((resolve) => init?.signal?.addEventListener('abort', () => {
               observedAbort = init.signal?.aborted === true;
@@ -84,7 +88,8 @@ describe('createBundledHostedConversationService', () => {
     });
 
     const start = service.start({ sessionId: null });
-    await vi.waitFor(() => expect(admissionStarted).toBe(true));
+    await admissionEntered.promise;
+    expect(admissionStarted).toBe(true);
     await service.abort();
     await expect(start).rejects.toMatchObject({ code: 'aborted' });
 

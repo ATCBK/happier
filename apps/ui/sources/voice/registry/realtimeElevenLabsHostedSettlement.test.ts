@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
-import { createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createSessionFixture } from '@/dev/testkit';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
@@ -46,6 +46,7 @@ let assembly: ReturnType<typeof createBuiltinVoiceAdapterAssembly>;
 let completionFailures = 0;
 let releaseFailures = 0;
 let settlements = 0;
+let settlementCommitted = createDeferred<void>();
 const requests: Array<{ path: string; body: unknown }> = [];
 
 function adapter() {
@@ -68,6 +69,7 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
     completionFailures = 0;
     releaseFailures = 0;
     settlements = 0;
+    settlementCommitted = createDeferred<void>();
     sdk.endSession.mockReset().mockResolvedValue(undefined);
     sdk.startSession.mockReset().mockResolvedValue({
       endSession: sdk.endSession, setMicMuted() {}, setVolume() {},
@@ -92,6 +94,7 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
         if (path === '/v1/voice/session/complete') {
           if (completionFailures-- > 0) return Response.json({ ok: false, reason: 'upstream_error' }, { status: 503 });
           settlements += 1;
+          settlementCommitted.resolve();
           return Response.json({ ok: true });
         }
         if (path === '/v1/voice/session/release') {
@@ -205,7 +208,8 @@ describe('hosted ElevenLabs settlement through host teardown', () => {
     const retryHost = getCurrentBundledConversationRuntimeHost();
     try {
       expect(await TokenStorage.getCredentials()).toEqual(replacementCredentials);
-      await vi.waitFor(() => expect(settlements).toBe(1));
+      await settlementCommitted.promise;
+      expect(settlements).toBe(1);
       await retiring.dispose();
       await retiring.dispose();
       expect(settlements).toBe(1);

@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import * as React from 'react';
 import { createOpenAiVoiceRuntimeEnvironment, type OpenAiMintTransport } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { act } from 'react-test-renderer';
@@ -92,7 +93,8 @@ import {
 } from '@/voice/transcript/voiceTranscriptSelectors';
 import { getCurrentBundledConversationRuntimeHost } from './bundledConversationRuntimeHost';
 
-import { getExternalVoiceProviderRegistration } from './externalVoiceProviderRegistrations';
+import { getExternalVoiceProviderRegistration, subscribeExternalVoiceProviderRegistrations } from './externalVoiceProviderRegistrations';
+import { subscribeToVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -172,7 +174,6 @@ const composedCurrentUiPlacement = Object.freeze({
   hostOrigin: {
     machineId: 'current-ui-composed-machine',
     serverId: 'current-ui-composed-server',
-    generation: 1,
     phase: 'current',
     interactionEnabled: true,
     executionOrigin: {
@@ -296,19 +297,15 @@ function sendOpenAiCurrentUiToolCalls(input: Readonly<{
 }
 
 function setBufferedAmount(
-  channel: EventTarget,
+  channel: TestVoiceWebRtcPeer['channel'],
   bufferedAmount: number,
 ): void {
+  channel.bufferedAmountLowThreshold = 0;
   Object.defineProperties(channel, {
     bufferedAmount: {
       configurable: true,
       writable: true,
       value: bufferedAmount,
-    },
-    bufferedAmountLowThreshold: {
-      configurable: true,
-      writable: true,
-      value: 0,
     },
   });
 }
@@ -500,16 +497,16 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         navigationBinding,
         onReader: (next) => { readerRef.current = next; },
       }));
-      await vi.waitFor(() => expect(readerRef.current?.readCurrentUiContext()?.entity?.label).toBe('Account A'));
+      await waitForTestEvent(screen!.subscribe, () => expect(readerRef.current?.readCurrentUiContext()?.entity?.label).toBe('Account A'));
       const commandA = readerRef.current?.readCurrentUiContext()?.commands[0]?.id ?? '';
       expect(commandA).toMatch(/^current-ui-command:/);
 
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(subscribeExternalVoiceProviderRegistrations, () => expect(
         getExternalVoiceProviderRegistration(openAiEntry().providerId)?.adapter,
       ).not.toBeNull());
       const configuredVoice = voiceSettingsParse(storage.getState().settings.voiceSettingsV1);
       expect(configuredVoice.providerId).toBe(openAiEntry().providerId);
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(subscribeToVoiceSessionSnapshot, () => expect(
         getVoiceSessionLifecycleController()?.getConfiguredProviderId(),
       ).toBe(openAiEntry().providerId));
       voiceSessionBindingStore.getState().bind({
@@ -536,7 +533,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         'invokeCurrentUiCommand',
       ]));
       const starting = controller.toggle(null);
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
       await starting;
 
@@ -561,12 +558,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         responseId: 'active-account-a',
         commandId: commandA,
       });
-      await vi.waitFor(() => {
+      await waitForTestEvent(browser.peer.channel.subscribe, () => {
         expect(readOpenAiFunctionCallOutputIds(browser.peer.channel.sent)).toEqual(
           expect.arrayContaining(['active-account-a:read', 'active-account-a:invoke']),
         );
       });
-      await vi.waitFor(() => expect(openSurface).toHaveBeenCalledTimes(1));
+      expect(openSurface).toHaveBeenCalledTimes(1);
       const functionCallOutputIdsBeforeRetirement = readOpenAiFunctionCallOutputIds(
         browser.peer.channel.sent,
       );
@@ -587,7 +584,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(readOpenAiFunctionCallOutputIds(browser.peer.channel.sent))
         .toEqual(functionCallOutputIdsBeforeRetirement);
       expect(openSurface).not.toHaveBeenCalled();
-      await vi.waitFor(() => {
+      await waitForTestEvent(controller.subscribe!, () => {
         expect(browser.micTrack.stop).toHaveBeenCalledTimes(1);
         expect(controller.getSnapshot().status).toBe('disconnected');
       });
@@ -617,7 +614,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         navigationBinding,
         onReader: (next) => { readerRef.current = next; },
       }));
-      await vi.waitFor(() => expect(readerRef.current?.readCurrentUiContext()?.entity?.label).toBe('Account B'));
+      await waitForTestEvent(screen!.subscribe, () => expect(readerRef.current?.readCurrentUiContext()?.entity?.label).toBe('Account B'));
       const commandB = readerRef.current?.readCurrentUiContext()?.commands[0]?.id ?? '';
       expect(commandB).toMatch(/^current-ui-command:/);
 
@@ -636,10 +633,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(openSurface).not.toHaveBeenCalled();
     } finally {
       unregisterNavigationOwner();
+      const retiringController = getVoiceSessionLifecycleController();
       if (screen) await screen.unmount();
+      await retiringController?.dispose();
       await accountB?.dispose();
       retireActiveServerAccountScopeLifetime();
-      await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
+      expect(getVoiceSessionLifecycleController()).toBeNull();
       webLocks.restore();
       browser.restore();
     }
@@ -682,7 +681,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -726,7 +725,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: 'hello without a daemon',
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readCanonicalVoiceTranscriptSnapshot(binding!.conversationSessionId),
       ).toEqual([
         expect.objectContaining({
@@ -906,7 +905,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           initialContext: '',
         });
         await Promise.race([peerCreated.promise, secondStart]);
-        await vi.waitFor(() => expect(
+        await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
           browser.peer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));
         expect(request).toHaveBeenCalledTimes(2);
@@ -992,7 +991,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         binding = nextBinding;
         await environment.selectConnectedAccount(binding);
         releaseFirstResourcePreparation.resolve();
-        await vi.waitFor(() => expect(
+        await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
           browser.peer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));
         browser.peer.channel.open();
@@ -1100,7 +1099,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           requestedTargetSessionAddress: null,
           initialContext: '',
         });
-        await vi.waitFor(() => expect(
+        await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
           browser.peer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));
         browser.peer.channel.open();
@@ -1114,12 +1113,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         binding = nextBinding;
         await environment.selectConnectedAccount(binding);
         const reconnect = composed.requestReconnect();
-        await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+        await Promise.resolve(browser.peerCreated(1)).then(() => expect(browser.peers).toHaveLength(2));
         const reconnectPeer = browser.peers[1]!;
-        await vi.waitFor(() => expect(
+        await Promise.resolve(reconnectPeer.dataChannelCreated).then(() => expect(
           reconnectPeer.createDataChannel,
         ).toHaveBeenCalledWith('oai-events'));
         expect(reconnectPeer).not.toBe(firstPeer);
+        await reconnectPeer.remoteDescriptionSet;
         expect(reconnectPeer.channel).not.toBe(firstPeer.channel);
         expect(firstPeer.close).toHaveBeenCalledOnce();
         expect(requestBindings).toEqual(['account-a']);
@@ -1129,7 +1129,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         ]);
         reconnectPeer.channel.open();
         await expect(reconnect).resolves.toBe(true);
-        await vi.waitFor(() => expect(
+        await waitForTestEvent(composed.runtime.adapter.subscribe!, () => expect(
           composed.runtime.adapter.getSnapshot().status,
         ).toBe('connected'));
 
@@ -1157,11 +1157,11 @@ describe('realtime_openai source-composed WebRTC gate', () => {
             errorCode: 'provider_auth_invalid',
           });
         } else {
-          await vi.waitFor(() => expect(requestBindings).toEqual([
+          await waitForTestEvent(environment.subscribeNetwork, () => expect(requestBindings).toEqual([
             'account-a',
             'account-b',
           ]));
-          await vi.waitFor(() => expect(browser.peers).toHaveLength(3));
+          await Promise.resolve(browser.peerCreated(2)).then(() => expect(browser.peers).toHaveLength(3));
           expect(browser.micStream).not.toBe(firstStream);
           expect(browser.micTrack).not.toBe(firstTrack);
           expect(browser.micTrack.readyState).toBe('live');
@@ -1227,10 +1227,11 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       resolveNextOffer = resolve;
     });
     let offerNumber = 0;
+    const offerEntered = createDeferredVoid();
     const browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => {
       offerNumber += 1;
       const offer = offerNumber === 1 ? delayedOffer : nextOffer;
-      peer.createOffer.mockImplementation(async () => await offer);
+      peer.createOffer.mockImplementation(async () => { offerEntered.resolve(); return await offer; });
     } });
     const composed = await environment.createRuntime(browser, {
       respondToDaemonAccountOperation: request,
@@ -1242,7 +1243,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(browser.peer.createOffer).toHaveBeenCalledTimes(1));
+      await offerEntered.promise;
+      expect(browser.peer.createOffer).toHaveBeenCalledTimes(1);
       const failedPeer = browser.peer;
       const failedStream = browser.micStream;
       const failedTrack = browser.micTrack;
@@ -1273,11 +1275,11 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         () => null,
         (error: unknown) => error,
       );
-      await vi.waitFor(() => expect(requestBindings).toEqual([
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(requestBindings).toEqual([
         'account-a',
         'account-b',
       ]));
-      await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+      await Promise.resolve(browser.peerCreated(1)).then(() => expect(browser.peers).toHaveLength(2));
       expect(browser.peer).not.toBe(failedPeer);
       expect(browser.peer.channel).not.toBe(failedPeer.channel);
       expect(browser.micStream).not.toBe(failedStream);
@@ -1308,7 +1310,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1327,7 +1329,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: 'persist me without a daemon',
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readCanonicalVoiceTranscriptSnapshot(binding!.conversationSessionId),
       ).toEqual([
         expect.objectContaining({
@@ -1336,7 +1338,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         }),
       ]));
 
-      await vi.waitFor(() => {
+      await waitForTestEvent(storage.subscribe, () => {
         const state = storage.getState();
         const storedMessages = Object.keys(state.sessionMessages)
           .flatMap((sessionId) => readStoredSessionMessages(state, sessionId));
@@ -1364,7 +1366,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1394,14 +1396,14 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         unreleased_provider_field: 7,
       }));
 
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readCanonicalVoiceTranscriptSnapshot(binding!.conversationSessionId),
       ).toEqual([
         expect.objectContaining({ role: 'user', text: 'hello, please reply out loud' }),
         expect.objectContaining({ role: 'assistant', text: 'voice canary alpha seven confirmed' }),
       ]));
 
-      await vi.waitFor(() => {
+      await waitForTestEvent(storage.subscribe, () => {
         const state = storage.getState();
         const storedMessages = Object.keys(state.sessionMessages)
           .flatMap((sessionId) => readStoredSessionMessages(state, sessionId));
@@ -1435,7 +1437,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     const composed = await environment.createRuntime(browser);
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
       await starting;
       expect(composed.runtime.adapter.getSnapshot().canCommitInput).toBe(turnDetection === 'manual');
@@ -1470,7 +1472,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
     let lifecycle: ReturnType<typeof createVoiceSessionLifecycleController> | null = null;
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalled());
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalled());
       browser.peer.channel.open();
       await starting;
       await composed.runtime.adapter.setMuted({ sessionId: composed.controlSessionId, muted: userMuted });
@@ -1537,7 +1539,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       const captureOpening = createDeferredVoid();
       try {
         const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-        await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+        await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
         browser.peer.channel.open();
         await starting;
         await composed.runtime.adapter.setMuted({ sessionId: composed.controlSessionId, muted: true });
@@ -1563,7 +1565,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         const held = composed.runtime.adapter.beginHoldToTalk?.({ sessionId: composed.controlSessionId });
         expect(held).toBeTruthy();
         if (outcome === 'early_release') {
-          await vi.waitFor(() => expect(attemptPeer.channel.bufferedAmountLowThreshold).toBeGreaterThan(0));
+          await waitForTestEvent(attemptPeer.channel.subscribe, () => expect(attemptPeer.channel.bufferedAmountLowThreshold).toBeGreaterThan(0));
           const release = held!.release();
           attemptPeer.channel.drainTo(0);
           await release;
@@ -1587,9 +1589,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
           if (outcome === 'stopped') await composed.runtime.adapter.stop({ sessionId: composed.controlSessionId });
           if (outcome === 'reconnected') {
             const reconnect = composed.requestReconnect();
-            await vi.waitFor(() => expect(browser.peers).toHaveLength(2));
+            await Promise.resolve(browser.peerCreated(1)).then(() => expect(browser.peers).toHaveLength(2));
             const reconnectPeer = browser.peers[1]!;
-            await vi.waitFor(() => expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+            await Promise.resolve(reconnectPeer.dataChannelCreated).then(() => expect(reconnectPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
             expect(reconnectPeer).not.toBe(attemptPeer);
             expect(reconnectPeer.channel).not.toBe(attemptPeer.channel);
             reconnectPeer.channel.open();
@@ -1637,7 +1639,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1678,7 +1680,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       // Response creation is client-owned for this provider, so a plain turn
       // that interrupts nothing is answered only if the host creates it.
-      await vi.waitFor(() => expect(browser.peer.channel.sent.map(
+      await waitForTestEvent(browser.peer.channel.subscribe, () => expect(browser.peer.channel.sent.map(
         (value) => (JSON.parse(value) as Readonly<{ type?: unknown }>).type,
       )).toContain('response.create'));
       expect(browser.peer.channel.sent.filter(
@@ -1701,7 +1703,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1720,7 +1722,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         browser.peer.channel.message(JSON.stringify(event));
       }
 
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readCanonicalVoiceTranscriptSnapshot(binding!.conversationSessionId),
       ).toEqual([
         expect.objectContaining({
@@ -1745,7 +1747,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         }),
       ]));
 
-      await vi.waitFor(() => expect(readStoredSessionMessages(
+      await waitForTestEvent(storage.subscribe, () => expect(readStoredSessionMessages(
         storage.getState(),
         OPENAI_HISTORY_SESSION_ID,
       )).toEqual([
@@ -1816,7 +1818,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1935,7 +1937,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -1993,13 +1995,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       )).toEqual([]);
 
       releaseAssistantWrite.resolve();
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readStoredSessionMessages(
           storage.getState(),
           OPENAI_HISTORY_SESSION_ID,
         ),
       ).toHaveLength(2));
-      await vi.waitFor(() => expect(selectVoiceTranscriptEntriesForConversationSession(
+      await waitForTestEvent(storage.subscribe, () => expect(selectVoiceTranscriptEntriesForConversationSession(
         storage.getState(),
         OPENAI_HISTORY_SESSION_ID,
       )).toEqual([
@@ -2062,7 +2064,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -2222,7 +2224,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -2236,7 +2238,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: 'delete this committed history',
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readStoredSessionMessages(
           storage.getState(),
           OPENAI_HISTORY_SESSION_ID,
@@ -2348,13 +2350,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       releaseRebind.resolve();
       releaseOldWrite.resolve();
 
-      await vi.waitFor(() => expect(ensureHistorySession).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(ensureHistorySession).toHaveBeenCalledTimes(1));
+      await waitForTestEvent(voiceSessionBindingStore.subscribe, () => expect(
         voiceSessionBindingStore.getState().getByControlSessionId(
           composed.controlSessionId,
         )?.conversationSessionId,
       ).toBe(recreatedSessionId));
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         readStoredSessionMessages(storage.getState(), recreatedSessionId),
       ).toEqual([
         expect.objectContaining({
@@ -2416,7 +2418,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -2453,11 +2455,11 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(stopSettled).toBe(false);
       releaseEnsure.resolve();
       await stopping;
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(storage.subscribe, () => expect(
         storage.getState().sessions[recreatedSessionId],
       ).toBeDefined());
 
-      await vi.waitFor(() => expect(readStoredSessionMessages(
+      await waitForTestEvent(storage.subscribe, () => expect(readStoredSessionMessages(
         storage.getState(),
         recreatedSessionId,
       )).toEqual([
@@ -2521,7 +2523,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -2563,7 +2565,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       releaseAcceptance.resolve();
       await typedTurn;
-      await vi.waitFor(() => expect(transcriptRequest.mock.calls.filter(
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptRequest.mock.calls.filter(
         ([input]) => String(input) === transcriptMessageUrl(carrierId),
       )).toHaveLength(2));
       const writes = transcriptRequest.mock.calls
@@ -2605,7 +2607,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
       await starting;
 
@@ -2622,7 +2624,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         url: `${home.serverUrl}/v1/artifacts`,
         init: { method: 'GET' },
       })).rejects.toThrow('offline Home boundary');
-      await vi.waitFor(() => expect(storage.getState().endpointStatus).toBe('offline'));
+      await waitForTestEvent(storage.subscribe, () => expect(storage.getState().endpointStatus).toBe('offline'));
 
       browser.peer.channel.message(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.completed',
@@ -2632,7 +2634,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: 'private offline words',
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => {
+      await waitForTestEvent(notify => log.onChange(notify), () => {
         const failures = log.getLogs().slice(beforeLogs)
           .filter(line => line.startsWith('[voiceRuntimeFailure] '))
           .map(line => JSON.parse(line.slice('[voiceRuntimeFailure] '.length)) as unknown);
@@ -2739,7 +2741,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -2792,7 +2794,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(replacementBrowser!.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       const replacementPeer = replacementBrowser.peer;
@@ -2831,9 +2833,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // B correctly owns the live connection by then, so A's trailing control
       // fails; that must not discard the final A admitted before the boundary.
       await expect(typedTurn).rejects.toThrow('voice_service_unavailable');
-      await vi.waitFor(() => expect(transcriptWrites).toHaveLength(1), {
-        timeout: 1_000,
-      });
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(1));
       await aWriteStarted.promise;
 
       replacementPeer.channel.message(JSON.stringify({
@@ -2844,9 +2844,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: 'persist B final once',
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => expect(transcriptWrites).toHaveLength(2), {
-        timeout: 1_000,
-      });
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(2));
 
       let oldDisposalSettled = false;
       const oldDisposal = composed.runtime.dispose().then(() => {
@@ -2857,7 +2855,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       releaseAWrite.resolve();
       await oldDisposal;
-      await vi.waitFor(() => expect(readStoredSessionMessages(
+      await waitForTestEvent(storage.subscribe, () => expect(readStoredSessionMessages(
         storage.getState(),
         recreatedCarrierId,
       )).toEqual(expect.arrayContaining([
@@ -2996,7 +2994,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -3011,8 +3009,8 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         transcript: initialTranscript,
         usage: { type: 'duration', seconds: 1 },
       }));
-      await vi.waitFor(() => expect(transcriptWrites).toHaveLength(1));
-      await vi.waitFor(() => expect(readStoredSessionMessages(
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(1));
+      await waitForTestEvent(storage.subscribe, () => expect(readStoredSessionMessages(
         storage.getState(),
         recreatedCarrierId,
       )).toEqual(expect.arrayContaining([
@@ -3070,7 +3068,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(replacementBrowser!.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       const replacementPeer = replacementBrowser.peer;
@@ -3106,9 +3104,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       releaseTypedAcceptance.resolve();
       await expect(typedTurn).rejects.toThrow('voice_service_unavailable');
-      await vi.waitFor(() => expect(transcriptWrites).toHaveLength(2), {
-        timeout: 1_000,
-      });
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(2));
       await aCorrectionWriteStarted.promise;
 
       let oldStopSettled = false;
@@ -3122,7 +3118,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       releaseACorrectionWrite.resolve();
       await oldStopping;
-      await vi.waitFor(() => {
+      await waitForTestEvent(storage.subscribe, () => {
         const aRows = readStoredSessionMessages(
           storage.getState(),
           recreatedCarrierId,
@@ -3241,7 +3237,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         requestedTargetSessionAddress: null,
         initialContext: '',
       });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       browser.peer.channel.open();
@@ -3308,7 +3304,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       expect(replacementBrowser.peers).toEqual([]);
       releaseCarrierEnsure.resolve();
       await persistenceStarted.promise;
-      await vi.waitFor(() => expect(
+      await Promise.resolve(replacementBrowser!.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         replacementBrowser!.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       const replacementPeer = replacementBrowser.peer;
@@ -3364,9 +3360,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       // earlier write remains awaiting its ACK. Both canonical persistence
       // attempts may therefore be pending together; the late retired-A final
       // must not add a third write.
-      await vi.waitFor(() => expect(transcriptWrites).toHaveLength(2), {
-        timeout: 1_000,
-      });
+      await waitForTestEvent(environment.subscribeNetwork, () => expect(transcriptWrites).toHaveLength(2));
       await persistenceStarted.promise;
 
       expect(oldDisposalSettled).toBe(false);
@@ -3385,7 +3379,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
       releasePersistence.resolve();
       await oldDisposal;
-      await vi.waitFor(() => expect(readStoredSessionMessages(
+      await waitForTestEvent(storage.subscribe, () => expect(readStoredSessionMessages(
         storage.getState(),
         recreatedCarrierId,
       )).toEqual([
@@ -3442,13 +3436,13 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
-      await vi.waitFor(() => expect(
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(
         browser.peer.createDataChannel,
       ).toHaveBeenCalledWith('oai-events'));
       expect(composed.runtime.adapter.getSnapshot().status).toBe('connecting');
 
       browser.peer.channel.open();
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(browser.peer.channel.subscribe, () => expect(
         (browser.peer.channel as unknown as RTCDataChannel).bufferedAmountLowThreshold,
       ).toBeGreaterThan(0));
 
@@ -3516,7 +3510,7 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledTimes(1));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledTimes(1));
       browser.peer.channel.open();
 
       await expect(starting).rejects.toThrow();
@@ -3543,9 +3537,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
 
     try {
       const starting = composed.runtime.adapter.start({ sessionId: '', requestedTargetSessionAddress: null, initialContext: '' });
-      await vi.waitFor(() => expect(browser.peer.createDataChannel).toHaveBeenCalledTimes(1));
+      await Promise.resolve(browser.peerCreated().then(peer => peer.dataChannelCreated)).then(() => expect(browser.peer.createDataChannel).toHaveBeenCalledTimes(1));
       browser.peer.channel.open();
-      await vi.waitFor(() => expect(
+      await waitForTestEvent(browser.peer.channel.subscribe, () => expect(
         (browser.peer.channel as unknown as RTCDataChannel).bufferedAmountLowThreshold,
       ).toBeGreaterThan(0));
 

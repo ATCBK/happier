@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { PluginContributesV2Schema, type VoiceRealtimeJsonValue } from '@happier-dev/protocol';
@@ -53,13 +54,7 @@ vi.mock('expo-modules-core', async original => {
     name === 'HappierAudioStreamNative' ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };
 });
 
-function createDeferredVoid() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+const createDeferredVoid = createDeferred<void>;
 
 function isControlRecord(value: VoiceRealtimeJsonValue): value is Readonly<Record<string, VoiceRealtimeJsonValue>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -120,6 +115,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     const callbacks = new Map<number, Parameters<VoiceSdkHandleConnectionDriver['open']>[0]>();
     const providerOpen = new Map<number, boolean>();
     const providerControls: Array<{ attemptId: number; event: VoiceRealtimeJsonValue }> = [];
+    const replacementTextSent = createDeferredVoid();
     const preparationReleases: number[] = [];
     let activeProviderPreparation: number | null = null;
     let preparationCount = 0;
@@ -202,6 +198,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
             if (!mic.getStream()) throw new Error('replacement_mic_released');
             if (activeProviderPreparation !== attemptId) throw new Error('replacement_preparation_released');
             providerControls.push({ attemptId, event });
+            if (attemptId === 2 && isControlRecord(event) && event.type === 'input_text') replacementTextSent.resolve();
           },
           async close() {
             if (attemptId === 1) await staleConnectionClose.promise;
@@ -280,9 +277,10 @@ describe('createBundledRealtimeProviderRuntime', () => {
         controlSessionId, conversationSessionId: controlSessionId, text: 'continue on B',
         localId: 'replacement-b-text', deliveryCommand: 'interrupt_and_send', onAccepted: async () => {},
       });
-      await vi.waitFor(() => expect(providerControls).toContainEqual({
+      await Promise.race([replacementTextSent.promise, textTurn]);
+      expect(providerControls).toContainEqual({
         attemptId: 2, event: { type: 'input_text', text: 'continue on B' },
-      }));
+      });
       releaseFirstWrite.resolve();
       await Promise.all([staleStop, textTurn]);
       expect(voiceSessionBindingStore.getState().runtimeBindingsByConversationSessionId[controlSessionId]).toBe(runtimeBinding);
@@ -290,12 +288,13 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(adapter.getSnapshot().status).toBe('connected');
       expect(replacementTrack.readyState).toBe('live');
       expect(activeProviderPreparation).toBe(2);
-      await vi.waitFor(() => expect(readStoredSessionMessages(storage.getState(), controlSessionId)).toEqual(
+      await waitForTestEvent(storage.subscribe, () => readStoredSessionMessages(storage.getState(), controlSessionId), messages => messages.some(message => message && typeof message === 'object' && 'kind' in message && message.kind === 'user-text' && 'text' in message && message.text === 'replacement B is still live'));
+      expect(readStoredSessionMessages(storage.getState(), controlSessionId)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: 'user-text', text: 'A admitted before replacement' }),
           expect.objectContaining({ kind: 'user-text', text: 'replacement B is still live' }),
         ]),
-      ));
+      );
       await adapter.stop({ sessionId: controlSessionId });
       expect(replacementTrack.readyState).toBe('ended');
       expect(activeProviderPreparation).toBeNull();
@@ -852,6 +851,11 @@ describe('createBundledRealtimeProviderRuntime', () => {
     const sdkCallbacks: Array<Parameters<VoiceSdkHandleConnectionDriver['open']>[0]> = [];
     const closedConnections: Array<Parameters<VoiceSdkHandleConnectionDriver['close']>[0]> = [];
     const sentControls: VoiceRealtimeJsonValue[] = [];
+    const controlSends = new EventTarget();
+    const subscribeControlSends = (notify: () => void) => {
+      controlSends.addEventListener('send', notify);
+      return () => controlSends.removeEventListener('send', notify);
+    };
     const acceptanceStarted = createDeferredVoid();
     const releaseAcceptance = createDeferredVoid();
     const stoppedAcceptanceStarted = createDeferredVoid();
@@ -893,7 +897,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
         if (publishProviderConversation) nativeProviderConversationId = 'sdk-native-conversation';
         sdkCallbacks.push(input);
       },
-      async sendControl(event) { sentControls.push(event); },
+      async sendControl(event) { sentControls.push(event); controlSends.dispatchEvent(new Event('send')); },
       async close(reason) { closedConnections.push(reason); },
     };
     const provider: RealtimeVoiceProviderRuntime = {
@@ -999,7 +1003,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       replacementInput.levels.onOutputLevel(0.8);
       expect(voiceRuntimeLevelStore.getSnapshot().outputLevel).toBeGreaterThan(0);
       sdkCallbacks.at(-1)!.onControl({ type: 'output_stopped' });
-      await vi.waitFor(() => expect(voiceRuntimeLevelStore.getSnapshot().outputLevel).toBe(0));
+      await waitForTestEvent(notify => voiceRuntimeLevelStore.subscribe('output', notify), () => voiceRuntimeLevelStore.getSnapshot().outputLevel, level => level === 0);
+      expect(voiceRuntimeLevelStore.getSnapshot().outputLevel).toBe(0);
       sentControls.length = 0;
       sdkCallbacks.at(-1)!.onControl({ type: 'tool_call', response: 'native-response', call: 'native-call',
         tool: 'listSessions', arguments: {} });
@@ -1012,12 +1017,14 @@ describe('createBundledRealtimeProviderRuntime', () => {
         responseId: 'native-response', callId: 'native-call', status: 'success',
       });
       releaseNativePlayback.resolve();
-      await vi.waitFor(() => expect(sentControls.slice(1)).toEqual([
+      await waitForTestEvent(subscribeControlSends, () => sentControls, events => events.some(event => isControlRecord(event) && event.kind === 'tool_continue'));
+      expect(sentControls.slice(1)).toEqual([
         { kind: 'native_playback_drained' }, { kind: 'tool_continue', response: 'native-response' },
-      ]));
+      ]);
       sentControls.length = 0;
       adapter.sendContextUpdate({ sessionId: controlSessionId, update: 'later context' });
-      await vi.waitFor(() => expect(sentControls).toEqual([{ kind: 'context', text: 'later context' }]));
+      await waitForTestEvent(subscribeControlSends, () => sentControls.length, count => count > 0);
+      expect(sentControls).toEqual([{ kind: 'context', text: 'later context' }]);
       sentControls.length = 0;
       const acknowledgeTranscript = environment.transcriptRequest.getMockImplementation();
       if (!acknowledgeTranscript) throw new Error('Expected the canonical transcript HTTP boundary');
@@ -1039,7 +1046,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
           sentControls.push({ kind: 'pending_settled', localId: 'public-first-turn' });
         },
       });
-      await vi.waitFor(() => expect(sentControls).toEqual([{ kind: 'input_text', text: 'first overlapping turn' }]));
+      await waitForTestEvent(subscribeControlSends, () => sentControls.length, count => count > 0);
+      expect(sentControls).toEqual([{ kind: 'input_text', text: 'first overlapping turn' }]);
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       expect(firstAccepted).toBe(false);
       releasePreviousTranscript.resolve();
@@ -1080,7 +1088,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       let queuedSettled = false;
       void queuedTurn.catch(() => { queuedSettled = true; });
       await adapter.stop({ sessionId: controlSessionId });
-      await vi.waitFor(() => expect(queuedSettled).toBe(true));
+      await queuedTurn.catch(() => {});
+      expect(queuedSettled).toBe(true);
       releaseStoppedAcceptance.resolve();
       await expect(admittedTurn).rejects.toThrow('voice_transcript_carrier_changed');
       await expect(queuedTurn).rejects.toThrow('voice_transcript_attempt_ownership_mismatch');
@@ -1144,7 +1153,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       // connection must not receive a duplicate host-authored context update.
       expect(sentControls).toEqual([]);
       adapter.sendContextUpdate({ sessionId: controlSessionId, update: 'context after prepared startup' });
-      await vi.waitFor(() => expect(sentControls).toEqual([{ kind: 'context', text: 'context after prepared startup' }]));
+      await waitForTestEvent(subscribeControlSends, () => sentControls.length, count => count > 0);
+      expect(sentControls).toEqual([{ kind: 'context', text: 'context after prepared startup' }]);
       const readProviderConversationState = hostLease.host.readProviderConversationState;
       if (!readProviderConversationState) throw new Error('Expected the real provider conversation persistence reader');
       const persistedConversation = { providerId, conversationSessionId: environment.historySessionId };
@@ -2230,6 +2240,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     const releaseRebind = createDeferredVoid();
     const persistenceStarted = createDeferredVoid();
     const releasePersistence = createDeferredVoid();
+    const audioRestoreEntered = createDeferredVoid();
     let callbacks: Parameters<VoiceSdkHandleConnectionDriver['open']>[0] | null = null;
     let scope: ReturnType<typeof createExternalVoiceProviderActivationScope> | null = null;
     let stopping: Promise<void> | null = null;
@@ -2242,7 +2253,7 @@ describe('createBundledRealtimeProviderRuntime', () => {
     const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
     const ladder = createVoiceTranscriptLadderMapper();
     const restoreAudio = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
-    restoreAudio.mockReset().mockRejectedValueOnce(new Error('native_restore_failed')).mockResolvedValue(undefined);
+    restoreAudio.mockReset().mockImplementationOnce(async () => { audioRestoreEntered.resolve(); throw new Error('native_restore_failed'); }).mockResolvedValue(undefined);
     const declaration = PluginContributesV2Schema.parse({ voiceProviders: [{
       id: localId, title: 'Public native tail SDK', kind: 'conversation', platforms: ['ios'],
       roles: ['conversation_stt', 'conversation_tts', 'realtime_conversation'],
@@ -2334,7 +2345,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(disposeSettled).toBe(false);
       releaseRebind.resolve();
       await persistenceStarted.promise;
-      await vi.waitFor(() => expect(restoreAudio).toHaveBeenCalled());
+      await audioRestoreEntered.promise;
+      expect(restoreAudio).toHaveBeenCalled();
       // Observe the genuine projector/HTTP drain below invocation retirement;
       // a held response alone would not prove that its owner still awaited it.
       expect(observedCarrierReleases.filter(release => release.conversationSessionId === recreatedSessionId))
@@ -2442,7 +2454,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       environment.transcriptRequest.mockClear();
       observation.sdk!.onControl({ id: 'target-refused-one' });
       observation.sdk!.onControl({ id: 'target-refused-two' });
-      await vi.waitFor(() => expect(transcriptDrops()).toHaveLength(1));
+      await waitForTestEvent(notify => log.onChange(notify), () => transcriptDrops().length, count => count === 1);
+      expect(transcriptDrops()).toHaveLength(1);
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       expect(transcriptDrops()).toHaveLength(1);
       // A targeted runtime binding survives deletion until its actual attempt
@@ -2464,7 +2477,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       environment.historySessionPost = async () => new Response('{}', { status: 503 });
       log.clear();
       observation.sdk!.onControl({ id: 'global-rebind-refused-one' });
-      await vi.waitFor(() => expect(transcriptDrops()).toHaveLength(1));
+      await waitForTestEvent(notify => log.onChange(notify), () => transcriptDrops().length, count => count === 1);
+      expect(transcriptDrops()).toHaveLength(1);
       observation.sdk!.onControl({ id: 'global-rebind-refused-two' });
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       expect(transcriptDrops()).toHaveLength(1);
@@ -2484,12 +2498,13 @@ describe('createBundledRealtimeProviderRuntime', () => {
       environment.historySessionPost = async init => environment.sessionHttp.createSessionFromPost('refusal-generation-carrier', init);
       // The genuine 503 above revoked verified Home transport. Recover through
       // its real readiness owner before asking a new Voice attempt to connect.
-      const { invalidateServerReachabilitySupervisor, peekServerReachabilityState } =
+      const { invalidateServerReachabilitySupervisor, peekServerReachabilityState, subscribeServerReachabilityState } =
         await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
       const home = environment.accountConnection.home;
       const token = environment.accountConnection.credentials.token;
       await invalidateServerReachabilitySupervisor({ serverUrl: home.serverUrl, token });
-      await vi.waitFor(() => expect(peekServerReachabilityState(home.serverUrl, token)?.phase).toBe('online'));
+      await waitForTestEvent(notify => subscribeServerReachabilityState(home.serverUrl, notify, token), () => peekServerReachabilityState(home.serverUrl, token)?.phase, phase => phase === 'online');
+      expect(peekServerReachabilityState(home.serverUrl, token)?.phase).toBe('online');
       await adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null, initialContext: '' });
       const liveAttemptId = observation.controller!.getOwnedAttemptId();
       if (liveAttemptId === null) throw new Error('Expected current generation attempt');
@@ -2866,7 +2881,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
         connectionId: 1,
         event: authoritativeFinal('user-final-3'),
       });
-      await vi.waitFor(() => expect(transcriptDropRecords()).toHaveLength(1));
+      await waitForTestEvent(notify => log.onChange(notify), () => transcriptDropRecords().length, count => count === 1);
+      expect(transcriptDropRecords()).toHaveLength(1);
       expect(transcriptDropRecords()[0]).toContain('transcript_carrier_rebind_failed');
       expect(projectTranscript).not.toHaveBeenCalled();
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -33,6 +34,7 @@ describe('generated OpenAI runtime stop ordering', () => {
     audio.setAudioModeAsync.mockReset().mockResolvedValue(undefined);
     const permissionProbe = browser.allocateCapture();
     const lateCapture = browser.allocateCapture();
+    const captureEntered = createDeferred<void>();
     // The OS may finish after cancellation. Only its acquisition is held;
     // the actual permission parser and NativeMicSession own invalidation.
     const capture = new Promise<MediaStream>(resolve => {
@@ -40,7 +42,7 @@ describe('generated OpenAI runtime stop ordering', () => {
     });
     const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia')
       .mockResolvedValueOnce(permissionProbe.stream)
-      .mockImplementationOnce(() => capture);
+      .mockImplementationOnce(() => { captureEntered.resolve(); return capture; });
     // Preserve lazy physical SDK getters: there is deliberately no peer yet.
     // Only factory selection differs from the real WebMicSession recipe.
     const nativeBrowser = new Proxy({} as typeof browser, {
@@ -58,7 +60,8 @@ describe('generated OpenAI runtime stop ordering', () => {
     const statuses: string[] = [];
     unsubscribe = adapter.subscribe?.(() => statuses.push(adapter.getSnapshot().status));
     const start = adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null });
-    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    await captureEntered.promise;
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
     expect(adapter.getSnapshot().status).toBe('connecting');
     expect(audio.setAudioModeAsync.mock.calls[0]?.[0]).toMatchObject({ shouldPlayInBackground: true });
     expect(audio.setAudioModeAsync.mock.invocationCallOrder[0]).toBeLessThan(getUserMedia.mock.invocationCallOrder[1]!);
@@ -78,7 +81,8 @@ describe('generated OpenAI runtime stop ordering', () => {
     // physical track must be retired without signaling or state revival.
     expect(lateCapture.track.readyState).toBe('live');
     completeCapture();
-    await vi.waitFor(() => expect(lateCapture.track.readyState).toBe('ended'));
+    await lateCapture.stopped;
+    expect(lateCapture.track.readyState).toBe('ended');
     expect(adapter.getSnapshot().status).toBe('disconnected');
     expect(statuses).not.toContain('connected');
     expect(browser.peers).toHaveLength(0);

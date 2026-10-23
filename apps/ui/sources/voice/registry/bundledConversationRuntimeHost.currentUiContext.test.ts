@@ -1,3 +1,4 @@
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import * as React from 'react';
@@ -51,10 +52,17 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
     const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
     if (!entry) throw new Error('Missing first-party ElevenLabs contribution');
     sdk.sendContextualUpdate.mockReset();
+    const contextEvents = new EventTarget();
+    const subscribeContext = (notify: () => void) => {
+      contextEvents.addEventListener('send', notify);
+      return () => contextEvents.removeEventListener('send', notify);
+    };
+    sdk.sendContextualUpdate.mockImplementation(() => { contextEvents.dispatchEvent(new Event('send')); });
     sdk.endSession.mockReset().mockResolvedValue(undefined);
     const conversation = { endSession: sdk.endSession, setMicMuted() {}, setVolume() {}, sendUserMessage() {}, sendContextualUpdate: sdk.sendContextualUpdate, getId: () => 'ui-context-conversation' };
     let connect: (() => void) | undefined;
-    sdk.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); }));
+    const sdkEntered = createDeferred<void>();
+    sdk.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); sdkEntered.resolve(); }));
     const history = createSessionFixture({ id: 'ui-voice-history', active: false, metadata: { path: '/voice', host: 'test', ...buildVoiceTranscriptHistorySessionMetadata() } });
     const target = createSessionFixture({ id: 'ui-context-target', metadata: { path: '/private', host: 'test', name: 'private session title' } });
     const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history, [target.id]: target }));
@@ -108,7 +116,7 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
     if (!credentials) throw new Error('Actual Voice Home credentials unavailable');
     // Mount after the real core bootstrap; Account hydration must not retire
     // preferences/publication seeded for this exact Voice attempt.
-    await vi.waitFor(() => {
+    await waitForTestEvent(storage.subscribe, () => {
       expect(storage.getState().profileScope?.serverId).toBe(home.id);
       expect(storage.getState().isDataReady).toBe(true);
     });
@@ -156,7 +164,8 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
     try {
       expect(lifecycle.getConfiguredProviderId()).toBe(entry.providerId);
       const starting = lifecycle.toggle(null);
-      await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+      await sdkEntered.promise;
+      expect(connect).toBeTypeOf('function');
       expect(subscribe).not.toHaveBeenCalled();
       expect(sdk.sendContextualUpdate).not.toHaveBeenCalled();
       connect?.();
@@ -164,15 +173,16 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
       expect(lifecycle.getSnapshot().status).toBe('connected');
       expect(lifecycle.getSnapshot().adapterId).toBe(entry.providerId);
       const received = () => sdk.sendContextualUpdate.mock.calls.map(([value]) => value);
-      await vi.waitFor(() => expect(received().at(-1)).toBe('CURRENT UI CONTEXT\n\n{"navigation":{"area":"session","screen":"session/:id","presentation":"screen"}}'));
+      await waitForTestEvent(subscribeContext, () => expect(received().at(-1)).toBe('CURRENT UI CONTEXT\n\n{"navigation":{"area":"session","screen":"session/:id","presentation":"screen"}}'));
       expect(received().join('\n')).not.toContain('private session title');
       route.segments = ['(app)', 'settings', 'voice'];
       route.pathname = '/settings/voice';
       const firstListener = subscribe.mock.calls[0]?.[0];
       if (!firstListener) throw new Error('Missing current UI subscription');
       await screen.update(tree());
-      await vi.waitFor(() => {
+      await waitForTestEvent(subscribeContext, () => {
         const update = received().at(-1);
+        expect(update?.startsWith('CURRENT UI CONTEXT\n\n')).toBe(true);
         if (!update?.startsWith('CURRENT UI CONTEXT\n\n')) throw new Error('Missing settings context delivery');
         expect(JSON.parse(update.slice('CURRENT UI CONTEXT\n\n'.length))).toEqual({
           navigation: { area: 'settings', screen: 'settings/voice', presentation: 'screen', title: expect.any(String) },
@@ -184,7 +194,7 @@ describe('bundled conversation runtime host current UI lifecycle', () => {
       expect(received()).toHaveLength(delivered);
       await screen.unmount();
       expect(currentReader.readCurrentUiContext()).toBeNull();
-      await vi.waitFor(() => expect(received().at(-1)).toBe('CURRENT UI CONTEXT\n\n{"navigation":{"state":"unavailable"}}'));
+      await waitForTestEvent(subscribeContext, () => expect(received().at(-1)).toBe('CURRENT UI CONTEXT\n\n{"navigation":{"state":"unavailable"}}'));
       await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
       expect(removals[0]).toHaveBeenCalledTimes(1);
       const deliveredAfterStop = received();

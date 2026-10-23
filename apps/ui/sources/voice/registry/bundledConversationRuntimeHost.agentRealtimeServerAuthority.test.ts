@@ -84,9 +84,10 @@ describe('Agent-realtime voice RPCs keep the server they were bound to', () => {
       provider: PROVIDER, agent: AGENT, controlSessionId: SESSION_ID,
       requestedTargetSessionAddress: { serverId: homeA.id, sessionId: SESSION_ID }, settings: {},
     }).then(() => 'settled', () => 'settled');
-    await vi.waitFor(() => expect(network.requests.some(request => request.method === 'session.agentRealtime.inspect')).toBe(true));
+    await network.waitForRpcRequest(request => request.method === 'session.agentRealtime.inspect');
+    expect(network.requests.some(request => request.method === 'session.agentRealtime.inspect')).toBe(true);
     lease.revoke();
-    await vi.waitFor(async () => expect(await Promise.race([reading, Promise.resolve('pending')])).toBe('settled'));
+    expect(await reading).toBe('settled');
   });
 
   it('keeps start, watch and cleanup stop on the server captured when the attempt bound', async () => {

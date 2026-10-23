@@ -1,4 +1,5 @@
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { waitForTestEvent } from '@/dev/testkit';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const network = await installSessionOpsNetworkBoundary();
@@ -2205,7 +2206,6 @@ describe('external Voice provider host composition', () => {
           [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: Object.freeze({
             machineId: packedOrigin.materializationRef.machineId,
             serverId: preparationHome.home.id,
-            generation: 12,
             interactionEnabled: true,
             phase: 'current',
             executionOrigin: packedOrigin,
@@ -2283,7 +2283,17 @@ describe('external Voice provider host composition', () => {
         body: new TextEncoder().encode(JSON.stringify(body)),
       });
     });
-    const hostCreateSdkHandleConnection = vi.fn(createSdkHandleConnection);
+    const providerSends = new EventTarget();
+    const hostCreateSdkHandleConnection = vi.fn((input: Parameters<typeof createSdkHandleConnection>[0]) => createSdkHandleConnection({
+      ...input,
+      driver: {
+        ...input.driver,
+        async sendControl(event) {
+          await input.driver.sendControl(event);
+          providerSends.dispatchEvent(new Event('send'));
+        },
+      },
+    }));
     const runtimeHost = createHostFixture({
         transcriptEvents,
         lifecycleEvents,
@@ -2396,7 +2406,10 @@ describe('external Voice provider host composition', () => {
       })).resolves.toEqual({ patch: { profile: 'expressive' } });
 
       await startAdapterAtKnownSession(registration.adapter, 'control-session-1');
-      await vi.waitFor(() => {
+      await waitForTestEvent(notify => {
+        providerSends.addEventListener('send', notify);
+        return () => providerSends.removeEventListener('send', notify);
+      }, () => {
         expect(fixtureEvents).toContainEqual(expect.objectContaining({
           kind: 'current_ui_context_invoked',
           result: expect.objectContaining({ ok: true }),

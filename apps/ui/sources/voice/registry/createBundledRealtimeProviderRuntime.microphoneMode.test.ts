@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, type MockInstance } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -172,7 +173,8 @@ describe('public provider microphone mode', () => {
       const track = webRtc.browser.micTrack;
       expect(track.readyState).toBe('live');
       await expect(webRtc.adapter.setMuted({ sessionId: webRtc.controlSessionId, muted: true })).rejects.toThrow('secondary_capture_mute_rejected');
-      await vi.waitFor(() => expect(track.readyState).toBe('ended'));
+      await webRtc.browser.captures[0]!.stopped;
+      expect(track.readyState).toBe('ended');
       expect(webRtc.adapter.getSnapshot().status).not.toBe('connected');
       expect(webRtc.browser.peer.connectionState).toBe('closed');
     } finally { await webRtc.dispose(); }
@@ -180,13 +182,17 @@ describe('public provider microphone mode', () => {
 
   it('fails a fresh mute closed until the retired provider mute operation settles', async () => {
     let releaseOldMute!: () => void;
+    const oldMuteEntered = createDeferred<void>();
     const oldMute = new Promise<void>(resolve => { releaseOldMute = resolve; });
     const providerCalls: boolean[] = [];
     let captureMuted = false;
     const providerManaged = await createRuntimeForMode('provider_managed', {
       setInputMuted: async muted => {
         providerCalls.push(muted);
-        if (muted && providerCalls.filter(Boolean).length === 1) await oldMute;
+        if (muted && providerCalls.filter(Boolean).length === 1) {
+          oldMuteEntered.resolve();
+          await oldMute;
+        }
         captureMuted = muted;
       },
     });
@@ -197,7 +203,8 @@ describe('public provider microphone mode', () => {
       expect(initialCalls.length).toBeGreaterThan(0);
       expect(initialCalls.every(value => value === false)).toBe(true);
       const staleMute = adapter.setMuted({ sessionId: controlSessionId, muted: true });
-      await vi.waitFor(() => expect(providerCalls).toEqual([...initialCalls, true]));
+      await oldMuteEntered.promise;
+      expect(providerCalls).toEqual([...initialCalls, true]);
       await adapter.stop({ sessionId: controlSessionId });
       await expect(adapter.start({ sessionId: controlSessionId, requestedTargetSessionAddress: null })).rejects.toMatchObject({ code: 'voice_input_mute_failed' });
       expect(adapter.getSnapshot().status).not.toBe('connected');
@@ -327,15 +334,17 @@ describe('generated ElevenLabs provider microphone authority', () => {
   it('keeps coalesced disposal pending behind native audio release and the vendor teardown', async () => {
     const conversation = createVendorConversation();
     let finishSdkStop!: () => void;
+    const sdkStopEntered = createDeferred<void>();
     const sdkStop = new Promise<void>(resolve => { finishSdkStop = resolve; });
-    conversation.endSession.mockImplementation(() => sdkStop);
+    conversation.endSession.mockImplementation(() => { sdkStopEntered.resolve(); return sdkStop; });
     vendor.startSession.mockReset().mockResolvedValue(conversation);
     const configure = vi.mocked(nativeAudio.nativeModule.configureAudioSession);
     const restore = vi.mocked(nativeAudio.nativeModule.restoreAudioSession);
     configure.mockClear();
     let finishNativeRestore!: () => void;
+    const nativeRestoreEntered = createDeferred<void>();
     const nativeRestore = new Promise<void>(resolve => { finishNativeRestore = resolve; });
-    restore.mockReset().mockImplementationOnce(() => nativeRestore);
+    restore.mockReset().mockImplementationOnce(() => { nativeRestoreEntered.resolve(); return nativeRestore; });
     await withGeneratedElevenLabs(async ({ lifecycle, assembly, adapter, getUserMedia }) => {
       try {
         await lifecycle.toggle(null);
@@ -346,10 +355,12 @@ describe('generated ElevenLabs provider microphone authority', () => {
         expect(secondDispose).toBe(firstDispose);
         let settled = false;
         void firstDispose.then(() => { settled = true; });
-        await vi.waitFor(() => expect(restore).toHaveBeenCalledTimes(1));
+        await Promise.race([nativeRestoreEntered.promise, firstDispose]);
+        expect(restore).toHaveBeenCalledTimes(1);
         expect(settled).toBe(false);
         finishNativeRestore();
-        await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+        await Promise.race([sdkStopEntered.promise, firstDispose]);
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
         expect(settled).toBe(false);
         finishSdkStop();
         await Promise.all([firstDispose, secondDispose]);
@@ -403,16 +414,21 @@ describe('generated ElevenLabs provider microphone authority', () => {
 
   it.each([false, true])('applies the latest provider mute (%s) before a delayed SDK conversation becomes connected', async muted => {
     const conversation = createVendorConversation();
-    let connect: (() => void) | undefined;
-    vendor.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); }));
+    const sdkStarted = createDeferred<void>();
+    const sdkConnected = createDeferred<typeof conversation>();
+    vendor.startSession.mockReset().mockImplementation(() => {
+      sdkStarted.resolve();
+      return sdkConnected.promise;
+    });
     await withGeneratedElevenLabs(async ({ lifecycle, adapter }) => {
       const starting = lifecycle.toggle(null);
-      await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+      await Promise.race([sdkStarted.promise, starting]);
+      expect(vendor.startSession).toHaveBeenCalledTimes(1);
       expect(adapter.getSnapshot().status).toBe('connecting');
       await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: !muted });
       await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted });
       expect(conversation.setMicMuted).not.toHaveBeenCalled();
-      connect?.();
+      sdkConnected.resolve(conversation);
       await starting;
       expect(conversation.isMuted()).toBe(muted);
       expect(adapter.getSnapshot().status).toBe('connected');
@@ -430,7 +446,8 @@ describe('generated ElevenLabs provider microphone authority', () => {
         if (value) throw new Error('vendor_capture_mute_rejected');
       });
       await expect(adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true })).rejects.toThrow('vendor_capture_mute_rejected');
-      await vi.waitFor(() => expect(adapter.getSnapshot().status).not.toBe('connected'));
+      await waitForTestEvent(adapter.subscribe!, () => adapter.getSnapshot().status, status => status !== 'connected');
+      expect(adapter.getSnapshot().status).not.toBe('connected');
       expect(conversation.endSession).toHaveBeenCalledTimes(1);
       expect(vendor.setAudioModeAsync.mock.calls.at(-1)?.[0]).toEqual({ shouldPlayInBackground: false });
       expect(getUserMedia).not.toHaveBeenCalled();
@@ -458,25 +475,33 @@ describe('generated ElevenLabs provider microphone authority', () => {
 
   it('closes a late SDK conversation after cancellation without publishing connected or retaining its audio lease', async () => {
     const conversation = createVendorConversation();
-    let connect: (() => void) | undefined;
-    vendor.startSession.mockReset().mockImplementation(() => new Promise<typeof conversation>(resolve => { connect = () => resolve(conversation); }));
+    const sdkStarted = createDeferred<void>();
+    const sdkConnected = createDeferred<typeof conversation>();
+    const sdkEnded = createDeferred<void>();
+    conversation.endSession.mockImplementation(async () => { sdkEnded.resolve(); });
+    vendor.startSession.mockReset().mockImplementation(() => {
+      sdkStarted.resolve();
+      return sdkConnected.promise;
+    });
     await withGeneratedElevenLabs(async ({ lifecycle, adapter, getUserMedia }) => {
       const statuses: string[] = [];
       const unsubscribe = adapter.subscribe?.(() => statuses.push(adapter.getSnapshot().status));
       try {
         const starting = lifecycle.toggle(null);
-        await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+        await Promise.race([sdkStarted.promise, starting]);
+        expect(vendor.startSession).toHaveBeenCalledTimes(1);
         await lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
         expect(adapter.getSnapshot().status).toBe('disconnected');
         expect(vendor.setAudioModeAsync.mock.calls.at(-1)?.[0]).toEqual({ shouldPlayInBackground: false });
-        connect?.();
+        sdkConnected.resolve(conversation);
         await starting;
-        await vi.waitFor(() => expect(conversation.endSession).toHaveBeenCalledTimes(1));
+        await sdkEnded.promise;
+        expect(conversation.endSession).toHaveBeenCalledTimes(1);
         expect(statuses).not.toContain('connected');
         expect(getUserMedia).not.toHaveBeenCalled();
       } finally {
         unsubscribe?.();
-        connect?.();
+        sdkConnected.resolve(conversation);
       }
     });
   });

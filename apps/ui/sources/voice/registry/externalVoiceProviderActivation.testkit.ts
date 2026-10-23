@@ -1,4 +1,5 @@
 import { expect, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import type { RealtimeVoiceProviderRuntime, VoiceSdkHandleConnectionDriver } from '@happier-dev/plugin-sdk/voice/client';
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
 
@@ -94,10 +95,12 @@ export async function createPublicPcmVoiceConversationForTest(
   let receiveAudio: ((audio: string, item: string | null) => boolean) | null = null;
   let pcm: ReturnType<Parameters<RealtimeVoiceProviderRuntime['createConnection']>[0]['media']['createPcmConnection']> | null = null;
   const sent: unknown[] = [];
+  const sendEvents = new EventTarget();
   const pendingOpenGates: Array<Readonly<{
     promise: Promise<void>;
     release(): void;
     reject(error: unknown): void;
+    entered: ReturnType<typeof createDeferred<void>>;
   }>> = [];
   let sdkOpenCount = 0;
   const ladder = createVoiceTranscriptLadderMapper();
@@ -140,6 +143,7 @@ export async function createPublicPcmVoiceConversationForTest(
           async open(input) {
             sdkOpenCount += 1;
             const gate = pendingOpenGates.shift();
+            gate?.entered.resolve();
             if (gate && !input.signal.aborted) {
               let onAbort = () => {};
               const aborted = new Promise<void>(resolve => {
@@ -159,11 +163,11 @@ export async function createPublicPcmVoiceConversationForTest(
               return accepted;
             };
           },
-          async sendControl(event) { sent.push(event); },
+          async sendControl(event) { sent.push(event); sendEvents.dispatchEvent(new Event('send')); },
           async close() { callbacks = null; receiveAudio = null; },
         },
         input: { sampleRate: 24_000, chunkMs: 100 }, output: { sampleRate: 24_000 },
-        onInputChunk: audio => { sent.push({ kind: 'input.audio', audio }); },
+        onInputChunk: audio => { sent.push({ kind: 'input.audio', audio }); sendEvents.dispatchEvent(new Event('send')); },
       });
       return pcm.connection;
     },
@@ -206,19 +210,22 @@ export async function createPublicPcmVoiceConversationForTest(
     if (!receiveAudio) throw new Error('The vendor SDK audio callback is absent');
     const bytes = new Int16Array(24_000).fill(2_000);
     expect(receiveAudio(Buffer.from(bytes.buffer).toString('base64'), item)).toBe(true);
-    await vi.waitFor(() => expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'speaking' }));
+    const { useVoiceConversationRuntimeStore } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+    await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => createVoiceConversationRuntimeMachine().getSnapshot().state, state => state === 'speaking');
+    expect(createVoiceConversationRuntimeMachine().getSnapshot()).toMatchObject({ state: 'speaking' });
   };
   const finalizeAssistant = async (item = 'turn-n', text = 'current response') => {
     emit({ kind: 'final', role: 'assistant', item, text });
     let entryId: string | null = null;
-    await vi.waitFor(() => {
+    const readEntryId = () => {
       const message = readStoredSessionMessages(storage.getState(), environment.historySessionId).find(message => (
         message && typeof message === 'object' && 'kind' in message && message.kind === 'agent-text'
         && 'text' in message && message.text === text
       ));
-      entryId = resolveVoiceTranscriptEntryId(message);
-      expect(entryId).not.toBeNull();
-    });
+      return resolveVoiceTranscriptEntryId(message);
+    };
+    entryId = await waitForTestEvent(storage.subscribe, readEntryId, id => id !== null);
+    expect(entryId).not.toBeNull();
     return entryId!;
   };
   return { sent, emit, startOutput, finalizeAssistant, isVoiceTurnInterrupted, providerId,
@@ -231,21 +238,27 @@ export async function createPublicPcmVoiceConversationForTest(
     getConnection: () => pcm?.connection ?? null,
     sdk: {
       get openCount() { return sdkOpenCount; },
+      async controlSent(kind: string, after = 0) {
+        await waitForTestEvent(notify => {
+          sendEvents.addEventListener('send', notify);
+          return () => sendEvents.removeEventListener('send', notify);
+        }, () => sent.slice(after), events => events.some(event => (
+          event !== null && typeof event === 'object' && 'kind' in event && event.kind === kind
+        )));
+      },
       holdNextOpen() {
-        let release = () => {};
-        let reject = (_error: unknown) => {};
-        const promise = new Promise<void>((resolve, rejectOpen) => {
-          release = resolve;
-          reject = rejectOpen;
-        });
-        pendingOpenGates.push({ promise, release, reject });
-        return { release, reject };
+        const pending = createDeferred<void>();
+        const entered = createDeferred<void>();
+        const gate = { promise: pending.promise, release: () => pending.resolve(), reject: pending.reject, entered };
+        pendingOpenGates.push(gate);
+        return { release: gate.release, reject: gate.reject, entered: entered.promise };
       },
     },
     readMessages: () => readStoredSessionMessages(storage.getState(), environment.historySessionId),
-    waitForUser: (text: string) => vi.waitFor(() => expect(
-      readCanonicalVoiceTranscriptSnapshot(environment.historySessionId),
-    ).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text })]))),
+    waitForUser: async (text: string) => {
+      await waitForTestEvent(storage.subscribe, () => readCanonicalVoiceTranscriptSnapshot(environment.historySessionId), entries => entries.some(entry => entry.role === 'user' && entry.text === text));
+      expect(readCanonicalVoiceTranscriptSnapshot(environment.historySessionId)).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text })]));
+    },
     get context() {
       const context = contexts[contexts.length - 1];
       if (!context) throw new Error('The real mic owner has not acquired its AudioContext');
