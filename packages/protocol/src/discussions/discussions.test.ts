@@ -469,6 +469,7 @@ describe('session discussion API schemas', () => {
       discussion: '/v1/discussions/:discussionId',
       archive: '/v1/discussions/:discussionId/archive',
       restore: '/v1/discussions/:discussionId/restore',
+      settings: '/v1/discussions/:discussionId/settings',
       messages: '/v1/discussions/:discussionId/messages',
       read: '/v1/discussions/:discussionId/read',
       participants: '/v1/discussions/:discussionId/participants',
