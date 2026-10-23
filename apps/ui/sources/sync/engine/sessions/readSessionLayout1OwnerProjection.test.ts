@@ -7,6 +7,8 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { encodeBase64 } from '@/encryption/base64';
+import { isDataKeyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
+import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 
 import { normalizeSessionAccessProjection } from './normalizeSessionAccessProjection';
 
@@ -192,6 +194,57 @@ describe('readSessionLayout1OwnerMetadata', () => {
         expect(readSessionLayout1OwnerMetadata({ ...params, credentials: changedCredentials,
             previousProjection: beforeMutation.kind === 'owner' ? beforeMutation : null,
         })).toMatchObject({ kind: 'unavailable', reason: 'invalid_ciphertext' });
+    });
+
+    it.each(['legacy', 'dataKey'] as const)('retains the full owner projection for recaptured %s credentials but not changed authority or mutated original material', kind => {
+        const legacyCredentials = { ...credentials };
+        const dataKeyCredentials = {
+            token: credentials.token,
+            encryption: { machineKey: encodeBase64(secret, 'base64'),
+                publicKey: encodeBase64(new Uint8Array(32).fill(9), 'base64') },
+        };
+        const captured = kind === 'legacy' ? legacyCredentials : dataKeyCredentials;
+        const recapture = () => isDataKeyAuthCredentials(captured)
+            ? { ...captured, encryption: { ...captured.encryption } }
+            : { ...captured };
+        const currentness = AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'e2ee', version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null });
+        const params = {
+            access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
+            accountMode: 'e2ee' as const, accountCurrentness: currentness,
+            ownerMetadataEnvelope: sealSessionOwnerMetadataEnvelopeV1({
+                material: kind === 'legacy' ? { type: 'legacy', secret } : { type: 'dataKey', machineKey: secret },
+                ownerMetadata, randomBytes: length => new Uint8Array(length).fill(3),
+            }),
+        };
+        const project = (nextCredentials: AuthCredentials, previousProjection?: Extract<ReturnType<typeof readSessionLayout1OwnerMetadata>, { kind: 'owner' }>) =>
+            projectSessionLayout1OwnerMetadata({ sharedMetadata: { v: 1 }, metadataVersion: 7,
+                ownerMetadataRead: readSessionLayout1OwnerMetadata({ ...params,
+                    credentials: nextCredentials, previousProjection }) });
+        const first = project(captured);
+        if (first.kind !== 'owner') throw new Error('Expected admitted owner projection');
+        for (let refresh = 0; refresh < 10; refresh += 1) {
+            const nextCredentials = recapture();
+            expect(nextCredentials).not.toBe(captured);
+            expect(first.isCurrentAuthority?.({ credentials: nextCredentials, accountCurrentness: { ...currentness } })).toBe(true);
+            expect(project(nextCredentials, first)).toBe(first);
+        }
+        // Equal plaintext does not authorize reuse under a different credential.
+        expect(project({ ...recapture(), token: 'replacement-token' }, first)).not.toBe(first);
+        const changedCurrentness = { ...currentness, contentKeyFingerprint: 'replacement-account-key' };
+        expect(first.isCurrentAuthority?.({ credentials: recapture(), accountCurrentness: changedCurrentness })).toBe(false);
+        expect(readSessionLayout1OwnerMetadata({ ...params, credentials: recapture(),
+            accountCurrentness: changedCurrentness, previousProjection: first })).not.toBe(first);
+        const unchangedRecapture = recapture();
+        if (kind === 'legacy') legacyCredentials.secret = encodeBase64(new Uint8Array(32).fill(8), 'base64url');
+        else dataKeyCredentials.encryption.machineKey = encodeBase64(new Uint8Array(32).fill(8), 'base64');
+        expect(first.isCurrentAuthority?.({ credentials: unchangedRecapture, accountCurrentness: currentness })).toBe(false);
+        // The recaptured original bytes still open successfully, but mutated custody
+        // must never revive the previous projection's witness.
+        const reopened = project(unchangedRecapture, first);
+        expect(reopened.kind).toBe('owner');
+        expect(reopened).not.toBe(first);
+        expect(project(captured, first)).toMatchObject({ kind: 'unavailable', reason: 'invalid_ciphertext' });
     });
 
     it.each([

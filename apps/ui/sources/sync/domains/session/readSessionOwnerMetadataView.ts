@@ -26,10 +26,7 @@ export type SessionOwnerMetadataProjection = Readonly<{
   admittedMetadataVersion?: number;
   accountEncryptionIdentity?: AccountEncryptionIdentity;
   isCurrentAuthority?: (input: SessionOwnerMetadataAuthority) => boolean;
-  canReuse?: (input: Readonly<{
-    accountMode?: AccountEncryptionCurrentnessResponse['mode'];
-    accountCurrentness?: AccountEncryptionCurrentnessResponse;
-    credentials: object;
+  canReuse?: (input: SessionOwnerMetadataAuthority & Readonly<{
     ownerMetadataEnvelope: unknown;
   }>) => boolean;
 }>;

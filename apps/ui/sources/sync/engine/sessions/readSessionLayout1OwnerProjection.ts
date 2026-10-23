@@ -205,7 +205,7 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
         isCurrentAuthority,
         accountEncryptionIdentity,
         ...(ciphertext === null ? {} : { canReuse: (next: Parameters<NonNullable<SessionOwnerMetadataProjection['canReuse']>>[0]) => {
-            if (next.credentials !== credentials || !isCurrentAuthority({ ...next, credentials })) return false;
+            if (!isCurrentAuthority(next)) return false;
             const envelope = next.ownerMetadataEnvelope;
             // Identity comparison only: unknown extensions still take the canonical strict reader.
             return envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
