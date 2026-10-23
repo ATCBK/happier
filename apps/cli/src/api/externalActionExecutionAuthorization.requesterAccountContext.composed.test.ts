@@ -74,6 +74,9 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
   allowedTerminalSecurity?: boolean;
   authorityCeiling?: 'account_automation';
   beforeEncryptionRead?: () => Promise<void>;
+  beforeInventoryRead?: () => Promise<void>;
+  onInstalledMachineRead?: () => void;
+  installedCustodianAccountId?: string;
   passiveReadDelayMs?: number;
   invalidEncryptionResponse?: boolean;
   inventoryUnavailable?: boolean;
@@ -101,12 +104,18 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
     }
     if (request.url === '/v1/machines') {
       options.onInventoryRead?.();
+      await options.beforeInventoryRead?.();
       if (options.passiveReadDelayMs) await new Promise(resolve => setTimeout(resolve, options.passiveReadDelayMs));
       if (options.inventoryUnavailable) { response.statusCode = 503; return respond({ error: 'unavailable' }); }
       return respond(options.finiteWake ? [machine, controller] : [machine]);
     }
     if (request.url === '/ping') return respond({ status: 'ok' });
-    if (request.url === '/v1/machines/alice-machine') return respond({ machine });
+    if (request.url === '/v1/machines/alice-machine') {
+      options.onInstalledMachineRead?.();
+      if (options.passiveReadDelayMs) await new Promise(resolve => setTimeout(resolve, options.passiveReadDelayMs));
+      return respond({ machine: options.installedCustodianAccountId
+        ? { ...machine, access: { ...machine.access, custodian: { accountId: options.installedCustodianAccountId } } } : machine });
+    }
     if (request.url === '/v1/machines/alice-controller') return respond({ machine: options.staleController === 'installation'
       ? { ...controller, installationId: 'replacement-controller-installation' } : controller });
     if (options.allowedTerminalSecurity && request.method === 'GET' && request.url === '/v1/account/security') {
@@ -654,6 +663,35 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
       .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
     expect(events).toEqual([]);
     expect(target.readReceived()).toBeUndefined();
+  });
+
+  it('overlaps installed publication with inventory and validates their custody before disclosure', async () => {
+    const request = { actionId: 'machines.work.summary.get', input: ownMachineInput,
+      requestId: 'request-1', target: { kind: 'machine', machineId: 'alice-machine' } as const,
+      credentials: { token: token(), encryption: null }, serverIdentityId: homeIdentityId };
+    const events: string[] = [];
+    let releaseInventory!: () => void;
+    const inventoryGate = new Promise<void>(resolve => { releaseInventory = resolve; });
+    let publicationRead = false;
+    const target = await home('plain', events, { originalOwnAction: 'machines.work.summary.get',
+      beforeInventoryRead: () => inventoryGate, onInstalledMachineRead: () => { publicationRead = true; } });
+    const pending = dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: target.url,
+      onRequesterSessionCredentialDisclosure: async () => { events.push('disclosed'); return true; } });
+    try {
+      await vi.waitFor(() => expect(publicationRead).toBe(true));
+      expect(events).toEqual([]);
+      expect(target.readReceived()).toBeUndefined();
+    } finally {
+      releaseInventory();
+      await expect(pending).resolves.toMatchObject({ ok: true, result: ownMachineResult });
+    }
+    const mismatchEvents: string[] = [];
+    const mismatch = await home('plain', mismatchEvents, { installedCustodianAccountId: 'replacement-owner' });
+    expect(await dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: mismatch.url,
+      onRequesterSessionCredentialDisclosure: async () => { mismatchEvents.push('disclosed'); return true; } }))
+      .toMatchObject({ ok: false, errorCode: 'admission_unavailable' });
+    expect(mismatchEvents).toEqual([]);
+    expect(mismatch.readReceived()).toBeUndefined();
   });
 
   it('cancels own remote origination during Home inventory before disclosure or dispatch', async () => {

@@ -28,8 +28,18 @@ export async function inspectProjectSetupFromRuntime(input: Readonly<{
     };
     let releaseRequester: (() => Promise<void>) | undefined;
     const unknown = (code: string): ProjectSetupInspection => ({ setupReadiness: { kind: 'unknown', code } });
-    const current = async () => !signal.aborted && (!runtime.isCurrent || await phase('requester_currentness', () => runtime.isCurrent!()))
-        && Boolean(ingress.verifyMachineAdmissionCurrent && await phase('machine_admission', () => ingress.verifyMachineAdmissionCurrent!()));
+    const requester = runtime.accountAuthorization === ingress.callerInputAuthorization
+        ? readRequesterAccountActionContext(runtime.accountAuthorization) : null;
+    const current = async (fresh = true) => !signal.aborted
+        && (!runtime.isCurrent || await phase('requester_currentness', () => runtime.isCurrent!()))
+        // Only the exact installed execution carries both the fresh-effect
+        // verifier and FX62's observed custody predicate. Passive review has no
+        // native effect: reuse that custody between initial and final admission.
+        // Generic/Session runtimes retain their existing fresh Machine checks.
+        && (!fresh && runtime.verifyCurrent && requester?.isCustodyCurrent
+            ? await requester.isCustodyCurrent()
+            : Boolean(ingress.verifyMachineAdmissionCurrent && await phase('machine_admission', () => ingress.verifyMachineAdmissionCurrent!())))
+        && !signal.aborted;
     try {
         if (!await isServerProfileHomeIdentity(authorityRuntime.serverId, input.workspace.serverId) || input.workspace.machineId !== runtime.machineId
             || ingress.machineAdmission && ingress.machineAdmission.machineId !== runtime.machineId) return unknown('target_mismatch');
@@ -45,7 +55,7 @@ export async function inspectProjectSetupFromRuntime(input: Readonly<{
             ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId,
             serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal }));
         const secretEnvironment = await phase('requester_environment', () => resolveProjectRequesterSecretEnvironment(runtime, undefined, signal));
-        if (!await current()) return unknown('project_requester_credentials_unavailable');
+        if (!await current(false)) return unknown('project_requester_credentials_unavailable');
         const inspection = await phase('review', () => inspectProjectSetup({ workspace: association.workspace, projectAssociation: association,
             requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
             purpose: 'setup', approvalContext: input.context,

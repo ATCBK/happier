@@ -39,6 +39,8 @@ import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from './pr
 import { createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
 import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createInstalledProjectFiniteRuntime } from '@/daemon/startup/createInstalledProjectFiniteRuntime';
+import * as installationStore from '@/daemon/identity/store';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import nacl from 'tweetnacl';
@@ -846,7 +848,8 @@ describe('authenticated finite Project Action owner', () => {
     });
 
     it.each([
-        ['projects.inspect', 'current'], ['projects.script.run', 'current'],
+        ['projects.inspect', 'current'], ['projects.inspect', 'revoked'], ['projects.inspect', 'mode'], ['projects.inspect', 'disconnect'],
+        ['projects.script.run', 'current'],
         ['projects.script.run', 'revoked'], ['projects.script.run', 'mode'], ['projects.script.run', 'disconnect'],
         ['projects.script.run', 'setup revoked'],
         ['projects.script.run', 'environment revoked'], ['projects.script.run', 'setup environment revoked'],
@@ -879,7 +882,16 @@ describe('authenticated finite Project Action owner', () => {
         const rowPost = h.post.getMockImplementation()!;
         let revoked = false;
         h.post.mockImplementation(async (url, body, options) => {
-            if (!String(url).endsWith('/verify')) return rowPost(url, body, options);
+            if (!String(url).endsWith('/verify')) {
+                const response = await rowPost(url, body, options);
+                if (actionId === 'projects.inspect' && String(url).includes('/project-rows/') && change !== 'current') {
+                    if (change === 'revoked') revoked = true;
+                    else if (change === 'disconnect') await channel.disconnect();
+                    else await channel.push('bob', { mode: 'e2ee', version: 2, updatedAt: 2,
+                        signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' });
+                }
+                return response;
+            }
             await new Promise(resolve => setTimeout(resolve, 20));
             return revoked ? { status: 403, data: { error: 'not_authenticated' } } : { status: 200, data: { ok: true } };
         });
@@ -925,13 +937,39 @@ describe('authenticated finite Project Action owner', () => {
         try {
             if (actionId === 'projects.inspect') {
                 const { ApiMachineClient } = await import('@/api/apiMachine');
+                // The installation filesystem adapter is the only substituted
+                // boundary in the installed finite factory; its custody is real.
+                vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({
+                    version: 1, installationId: 'installation', createdAt: 1,
+                    publicKey: Buffer.from(privateKey.subarray(32)).toString('base64url'),
+                    privateKey: Buffer.from(privateKey).toString('base64url'),
+                });
+                const installed = createInstalledProjectFiniteRuntime({
+                    api: { getMachine: async () => { throw new Error('Unexpected Machine HTTP read'); } },
+                    credentials: h.runtime.credentials!, externalActionAccountId: 'owner',
+                    finiteServerId: 'home', finiteServerHttpBaseUrl: 'https://home.example', registeredMachineId: 'machine',
+                    admission: h.runtime.workerAdmission, isCurrent: h.runtime.isCurrent!,
+                    nativeIo: { commandIo: h.runtime.nativeIo, environmentIo: h.runtime.environmentIo },
+                    successHomeDir: join(h.root, 'success'),
+                    prepareBetween: async () => { throw new Error('Unexpected Sync transport'); },
+                    resolveCurrentMachineExecutionOriginContext: async () => { throw new Error('Unexpected origin HTTP read'); },
+                });
                 const client: ApiMachineClient = Object.assign(Object.create(ApiMachineClient.prototype), {
                     machine: { id: 'machine' }, machineRpcWorkingDirectory: h.root,
                     filesystemAccessPolicy: { kind: 'restrictedRoots', roots: [h.root] },
-                    rpcLifecycleRegistrations: [{ resolveProjectFiniteRuntime: async () => runtime }],
+                    rpcLifecycleRegistrations: [{ resolveProjectFiniteRuntime: (currentIngress: RpcHandlerContext) => installed({
+                        operationRuntime: h.operationRuntime, terminalSessions: h.terminalSessions,
+                    }, currentIngress) }],
                 });
                 const inspect = client.createProjectDefinitionAction('home', ingress);
                 const read = () => inspect({ actionId, input: { workspace: h.address }, context: { serverId: 'home' } });
+                if (change !== 'current') {
+                    expect(ProjectDefinitionInspectOutputSchema.parse(await read())).toMatchObject({
+                        setupReadiness: { kind: 'unknown' },
+                    });
+                    expect(h.spawned).toEqual([]);
+                    return;
+                }
                 await read(); // Warm module/plugin loading before comparing the same passive composition.
                 for (let sample = 0; sample < 3; sample++) {
                     h.get.mockClear(); h.post.mockClear();
@@ -967,9 +1005,15 @@ describe('authenticated finite Project Action owner', () => {
                 verify: h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
             console.info('Requester decision HTTP reads', actionId, counts, { elapsedMs: Math.round(performance.now() - started) });
             if (actionId === 'projects.inspect') {
-                // One initial admitted requester fence, then checks after the
-                // private inputs and after review. No duplicate initial HTTP hop.
+                // Fresh requester admission and final disclosure. Passive review
+                // between them consumes the installed execution's local custody.
                 expect(counts).toEqual({ encryption: 0, verify: 3 });
+                h.post.mockClear();
+                expect(await inspectProjectSetupFromRuntime({ runtime: { ...runtime, verifyCurrent: undefined },
+                    ingress, workspace: h.address, context: {} })).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
+                // A generic runtime without the installed fresh/local split
+                // keeps all three fresh readiness checks.
+                expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify'))).toHaveLength(3);
                 revoked = true;
                 h.post.mockClear();
                 expect(await inspectProjectSetupFromRuntime({ runtime, ingress, workspace: h.address, context: {} }))

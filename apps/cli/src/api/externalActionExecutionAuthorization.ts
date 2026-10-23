@@ -45,7 +45,7 @@ import type { ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed
 import { MachineEnvironmentApplyInputV1Schema, MANAGED_CONTROL_ACTION_IDS_V1, type MachineEnvironmentApplyInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
-import { refuseExternalActionPhase, traceExternalActionInnerStage, runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
+import { refuseExternalActionPhase, traceExternalActionInnerStage, runTracedExternalActionInnerStage, readSessionInputAdmissionDiagnostic } from '@/daemon/externalActions/externalActionPhase';
 import { projectExternalActionRunNowIdempotencyKeyV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -373,17 +373,22 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
   const headers = { Authorization: `Bearer ${input.credentials.token}`, 'Content-Type': 'application/json',
     ...(kind === 'terminal' || input.authority === 'account_automation'
       ? { [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' } : {}) };
-  // Both are passive reads under the same authenticated requester. Join them
+  const readInstalledPublication = (machineId: string) => phase('installed_machine', () => readExternalActionInstalledMachine({
+    serverHttpBaseUrl: homeUrl, machineId, headers, ...(input.signal ? { signal: input.signal } : {}),
+  }));
+  // These passive reads already have the exact target and authenticated requester. Join them
   // before interpreting mode/ownership, minting authority or disclosing material.
-  const [modeRead, inventoryRead] = await Promise.allSettled([
+  const [modeRead, inventoryRead, installedRead] = await Promise.allSettled([
     phase('account_mode', () => readAccountEncryptionModeOnce({ request: () => axios.get<unknown>(`${homeUrl}/v1/account/encryption`, {
       headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
     }) })),
     input.target.kind === 'machine' && !machines
       ? phase('machine_inventory', () => listCurrentAccountMachines({ token: input.credentials.token, serverHttpBaseUrl: homeUrl,
         ...(input.signal ? { signal: input.signal } : {}) })) : machines,
+    input.target.kind === 'machine' && requiresMachineProof && input.serverIdentityId
+      ? readInstalledPublication(input.target.machineId) : undefined,
   ]);
-  // Preserve mode refusal/error precedence while settling both passive reads.
+  // Preserve mode refusal/error precedence while settling all passive reads.
   if (modeRead.status === 'rejected') throw modeRead.reason;
   const mode = modeRead.value;
   if (mode.kind !== 'resolved') return fail('content_unavailable');
@@ -426,8 +431,10 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
     if (!input.serverIdentityId) return fail('admission_unavailable');
     if (foreign && !input.onRequesterSessionCredentialDisclosure) return fail('requester_credential_disclosure_required');
     const readInstalledMachine = async (observed: CurrentAccountMachineInventoryItem) => {
-      const installed = await phase('installed_machine', () => readExternalActionInstalledMachine({ serverHttpBaseUrl: homeUrl,
-        machineId: observed.id, headers, ...(input.signal ? { signal: input.signal } : {}) }));
+      const isOriginalTarget = input.target.kind === 'machine' && observed.id === input.target.machineId && requiresMachineProof;
+      if (isOriginalTarget && installedRead.status === 'rejected') throw installedRead.reason;
+      const installed = isOriginalTarget && installedRead.status === 'fulfilled' ? installedRead.value
+        : await readInstalledPublication(observed.id);
       if (!installed || installed.access?.accessState !== 'ready'
         || installed.access.custodian.accountId !== observed.access?.custodian.accountId
         || installed.access.resourceMode !== observed.access?.resourceMode || !await isCurrent()) return null;
@@ -1392,8 +1399,10 @@ export async function verifyExternalActionExecutionAuthorizationCurrent(input: R
     });
     traceExternalActionInnerStage('requester.root_verification.http', { httpStatus: response.status });
     if (response.status < 200 || response.status >= 300) {
-      refuseExternalActionPhase('signed_root_http_status', input.authorization.binding.machineId);
-      rethrowRequesterHomeReadFailure(createHttpStatusError(response.status, 'External Action authorization is unavailable'));
+      const failure = createHttpStatusError(response.status, 'External Action authorization is unavailable');
+      refuseExternalActionPhase('signed_root_http_status', input.authorization.binding.machineId, failure,
+        readSessionInputAdmissionDiagnostic(input.authorization.binding));
+      rethrowRequesterHomeReadFailure(failure);
       return false;
     }
     const parsed = ExternalActionExecutionAuthorizationVerifyResponseV1Schema.safeParse(response.data);
