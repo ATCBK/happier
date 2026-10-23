@@ -12,7 +12,7 @@ import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '
 import { resetVoiceSessionStoreForTests } from '@/voice/session/voiceSessionStore';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
-import { createSessionFixture } from '@/dev/testkit';
+import { createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
@@ -159,6 +159,13 @@ describe('Voice default-target lifecycle', () => {
         };
         const unsubscribe = controller.subscribe(publish);
         publish();
+        const waitForStatus = async (status: ReturnType<typeof controller.getSnapshot>['status']) => {
+            await act(async () => {
+                await waitForTestEvent(controller.subscribe, controller.getSnapshot, snapshot => snapshot.status === status);
+            });
+            expect(getVoiceSessionSnapshot().status,
+                `Voice transition failure code: ${getVoiceSessionSnapshot().errorCode ?? 'none'}`).toBe(status);
+        };
         dismissVoiceSessionEndedAttempt();
         let toggle: () => boolean = () => false;
         let glanceToggle = () => {};
@@ -177,53 +184,52 @@ describe('Voice default-target lifecycle', () => {
             expect(getStorage().getState().settings.voice.ui.scopeDefault).toBe(scopeDefault);
             await screen.pressByTestIdAsync('voice-top-bar-rest');
             const expected = scopeDefault === 'global' ? null : { serverId: account.home.id, sessionId: 'session-a' };
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status,
-                `Voice Start failure code: ${getVoiceSessionSnapshot().errorCode ?? 'none'}`).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts).toEqual([expected]);
             const admitted = getVoiceSessionSnapshot();
             expect(admitted.status).toBe('connected');
             await act(async () => { setFocusedSessionId('session-b', 'server-b'); });
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             expect(stops).toEqual([admitted.sessionId]);
             expect(starts).toHaveLength(1);
             expect(getVoiceSessionSnapshot().status).toBe('disconnected');
             await act(async () => { setFocusedSessionId('session-a', account.home.id); });
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts).toEqual([expected, expected]);
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             await act(async () => { glanceToggle(); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts).toEqual([expected, expected, expected]);
             // An explicitly targeted composer attempt keeps its target when the
             // app-level shortcut ends and restarts it, even with Global as the idle default.
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             const explicitTarget = { serverId: account.home.id, sessionId: 'session-a' };
             await act(async () => { await controller.toggle(explicitTarget); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             await act(async () => { setFocusedSessionId('session-b', 'server-b'); expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts.slice(-2)).toEqual([explicitTarget, explicitTarget]);
             // A provider failure is still the admitted Session attempt. The
             // rebound keyboard command must not apply the idle Global default.
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             sdk.startSession.mockRejectedValueOnce(Object.assign(new Error('provider unavailable'), { code: 'provider_unavailable' }));
             await act(async () => { await expect(controller.toggle(explicitTarget)).rejects.toMatchObject({ code: 'provider_unavailable' }); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().errorRecoveryAction).toBe('retry')));
+            expect(getVoiceSessionSnapshot().errorRecoveryAction).toBe('retry');
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts.at(-1)).toEqual(explicitTarget);
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('disconnected')));
+            await waitForStatus('disconnected');
             await act(async () => { dismissVoiceSessionEndedAttempt(); setFocusedSessionId('session-a', account.home.id); });
             await act(async () => { expect(toggle()).toBe(true); });
-            await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
+            await waitForStatus('connected');
             expect(starts.at(-1)).toEqual(expected);
             const { Modal } = await import('@/modal');
             expect(Modal.confirm).not.toHaveBeenCalled();

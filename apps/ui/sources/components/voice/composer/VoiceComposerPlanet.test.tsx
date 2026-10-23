@@ -233,7 +233,9 @@ describe('VoiceComposerPlanet', () => {
         const beginHoldToTalk = () => adapter.beginHoldToTalk?.({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }) ?? null;
         try {
             const start = adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
-            await vi.waitFor(() => expect(browser.peer.setRemoteDescription).toHaveBeenCalled());
+            const peer = await browser.peerCreated();
+            await peer.remoteDescriptionSet;
+            expect(peer.setRemoteDescription).toHaveBeenCalled();
             browser.peer.channel.open();
             await start;
             expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, status: 'connected', canHoldToTalk: true });

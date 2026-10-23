@@ -5,7 +5,7 @@ import 'fake-indexeddb/auto';
 import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import renderer, { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setPreferredLanguageFromSettings, t } from '@/text';
 
 import { storage } from '@/sync/domains/state/storage';
@@ -30,6 +30,8 @@ import {
   createSessionListRenderableSessionFixture,
   createSessionMessagesFixture,
   createMachineFixture,
+  createDeferred,
+  waitForTestEvent,
 } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -73,6 +75,7 @@ type DaemonRpcRequest = Readonly<{ machineId: string; method: string; payload: R
 const daemonRpcRequests: DaemonRpcRequest[] = [];
 let transcriptionError: string | null = null;
 let heldTranscription: Promise<unknown> | null = null;
+let transcriptionStarted = createDeferred<void>();
 let assembly: ReturnType<typeof import('@/voice/adapters/registerBuiltinVoiceAdapters').createBuiltinVoiceAdapterAssembly> | null = null;
 let lifecycle: ReturnType<typeof import('@/voice/session/voiceSessionLifecycleController').createVoiceSessionLifecycleController> | null = null;
 let unsubscribeLifecycle: (() => void) | null = null;
@@ -108,6 +111,7 @@ installDisconnectedServerSocketBoundary(socket => {
       result = { success: true, uploadId: 'qa-upload', path: '/tmp/qa-recording.wav',
         sizeBytes: recordingBytes.byteLength, sha256: 'qa-recording' };
     } else if (method === 'daemon.voiceInference.stt.transcribe') {
+      transcriptionStarted.resolve();
       result = heldTranscription ? await heldTranscription
         : transcriptionError ? { ok: false, errorCode: 'internal_error', error: transcriptionError }
         : { ok: true, requestId: request.params.requestId, text: 'hello explicit daemon stt',
@@ -234,9 +238,10 @@ async function prepareRealtimeQa(targetSessionId: string) {
 
 class BrowserFixtureAudio {
   static instances: BrowserFixtureAudio[] = [];
+  static playbackStarted = createDeferred<void>();
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  readonly play = vi.fn(async () => undefined);
+  readonly play = vi.fn(async () => { BrowserFixtureAudio.playbackStarted.resolve(); });
   readonly pause = vi.fn(() => undefined);
   constructor(readonly url: string) {
     BrowserFixtureAudio.instances.push(this);
@@ -247,6 +252,7 @@ const emptySessionMetadata = MetadataSchema.parse({});
 
 function prepareOutputPlaybackQa() {
   BrowserFixtureAudio.instances.length = 0;
+  BrowserFixtureAudio.playbackStarted = createDeferred<void>();
   fixtureFetches.length = 0;
   vi.stubGlobal('AudioContext', undefined);
   vi.stubGlobal('webkitAudioContext', undefined);
@@ -268,18 +274,9 @@ async function renderScreen(element: React.ReactElement) {
 
 // Observe actual Start settlement; the containing test owns the time budget.
 async function waitForQaStart() {
-  await new Promise<void>((resolve, reject) => {
-    const observe = () => {
-      const status = useVoiceQaStore.getState().status;
-      if (status !== 'running' && status !== 'error') return;
-      unsubscribe();
-      if (status === 'running') resolve();
-      else reject(new Error('voice_qa_start_failed'));
-    };
-    const unsubscribe = useVoiceQaStore.subscribe(observe);
-    onTestFinished(unsubscribe);
-    observe();
-  });
+  const state = await waitForTestEvent(useVoiceQaStore.subscribe, useVoiceQaStore.getState,
+    state => state.status === 'running' || state.status === 'error');
+  if (state.status === 'error') throw new Error('voice_qa_start_failed');
 }
 
 // Hoist framework boundaries before storage's import graph reaches real media owners.
@@ -320,6 +317,7 @@ describe('VoiceQaScreen', () => {
     for (const sessionId of Object.keys(homeSessions)) delete homeSessions[sessionId];
     transcriptionError = null;
     heldTranscription = null;
+    transcriptionStarted = createDeferred<void>();
     resetVoiceQaStoreForTests();
     useVoiceTargetStore.getState().setPrimaryActionSessionAddress(null);
     useVoiceTargetStore.getState().setLastFocusedSessionAddress(null);
@@ -965,13 +963,11 @@ describe('VoiceQaScreen', () => {
     });
 
     await waitForQaStart();
-    await vi.waitFor(() => {
-      const state = useVoiceQaStore.getState();
-      expect({ status: state.status,
-        errors: state.entries.filter(entry => entry.kind === 'error').map(entry => entry.text),
-        adapter: assembly!.adapters[0].getSnapshot(), sdkStarts: sdk.startSession.mock.calls.length,
-      }).toMatchObject({ status: 'running', errors: [], adapter: { status: 'connected' }, sdkStarts: 1 });
-    });
+    const state = useVoiceQaStore.getState();
+    expect({ status: state.status,
+      errors: state.entries.filter(entry => entry.kind === 'error').map(entry => entry.text),
+      adapter: assembly!.adapters[0].getSnapshot(), sdkStarts: sdk.startSession.mock.calls.length,
+    }).toMatchObject({ status: 'running', errors: [], adapter: { status: 'connected' }, sdkStarts: 1 });
     expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
       targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_latest' } });
     expect(sdk.startSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -994,7 +990,7 @@ describe('VoiceQaScreen', () => {
     });
 
     await waitForQaStart();
-    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
+    expect(useVoiceQaStore.getState().status).toBe('running');
     expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
       targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_media' } });
     expect(lifecycle!.getSnapshot().status).toBe('connected');
@@ -1014,7 +1010,8 @@ describe('VoiceQaScreen', () => {
       tree.changeTextByTestId('voiceQa.sessionIdInput', 'session_withdrawn');
       await tree.pressByTestIdAsync('voiceQa.start');
     });
-    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('error'));
+    await waitForTestEvent(useVoiceQaStore.subscribe, useVoiceQaStore.getState, state => state.status === 'error');
+    expect(useVoiceQaStore.getState().status).toBe('error');
     expect(useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'error').map(entry => entry.text))
       .toContain('realtime_voice_session_not_registered');
     expect(sdk.startSession).not.toHaveBeenCalled();
@@ -1038,7 +1035,7 @@ describe('VoiceQaScreen', () => {
     });
 
     await waitForQaStart();
-    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('running'));
+    expect(useVoiceQaStore.getState().status).toBe('running');
     expect(useVoiceQaStore.getState()).toMatchObject({ status: 'running',
       targetSessionAddress: { serverId: account!.home.id, sessionId: 'session_relay' } });
     const { readDaemonSpeechStreamQaRouteRequirement } = await import('@/voice/runtime/daemonInference/daemonSpeechStreamQaRouteRequirement');
@@ -1063,11 +1060,12 @@ describe('VoiceQaScreen', () => {
       (node) => String(node.props?.testID) === 'voiceQa.output.playFixture',
     );
     await pressTestInstanceAsync(playFixtureButton);
-    await vi.waitFor(() => expect({
+    await BrowserFixtureAudio.playbackStarted.promise;
+    expect({
       errors: useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'error').map(entry => entry.text),
       fetches: fixtureFetches,
       audioInstances: BrowserFixtureAudio.instances.length,
-    }).toMatchObject({ errors: [], fetches: ['https://fixtures.invalid/output.wav'], audioInstances: 1 }));
+    }).toMatchObject({ errors: [], fetches: ['https://fixtures.invalid/output.wav'], audioInstances: 1 });
     expect(fixtureFetches).toEqual(['https://fixtures.invalid/output.wav']);
 
     await act(async () => {
@@ -1104,7 +1102,7 @@ describe('VoiceQaScreen', () => {
       (node) => String(node.props?.testID) === 'voiceQa.output.playFixture',
     );
     await pressTestInstanceAsync(playFixtureButton);
-    await flushHookEffects({ cycles: 2, turns: 2 });
+    await BrowserFixtureAudio.playbackStarted.promise;
     expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(24);
@@ -1121,6 +1119,10 @@ describe('VoiceQaScreen', () => {
 
   it('uses the latest prompt when send is pressed before the button rerenders', async () => {
     await prepareRealtimeQa('session_send');
+    const userMessageSent = createDeferred<void>();
+    sdk.sendUserMessage.mockImplementation((message) => {
+      if (message === 'prompt_latest') userMessageSent.resolve();
+    });
     const { VoiceQaScreen } = await import('./VoiceQaScreen');
 
     let tree!: renderer.ReactTestRenderer;
@@ -1137,8 +1139,9 @@ describe('VoiceQaScreen', () => {
     });
 
     await waitForQaStart();
-    await vi.waitFor(() => expect(pendingWrites).toHaveLength(1));
-    await vi.waitFor(() => expect(sdk.sendUserMessage).toHaveBeenCalledWith('prompt_latest'));
+    await userMessageSent.promise;
+    expect(pendingWrites).toHaveLength(1);
+    expect(sdk.sendUserMessage).toHaveBeenCalledWith('prompt_latest');
     expect(useVoiceQaStore.getState().targetSessionAddress?.sessionId).toBe('session_send');
     expect(pendingWrites).toEqual([expect.objectContaining({ sessionId: 'session_send',
       body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
@@ -1168,7 +1171,7 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(stopButton);
     });
 
-    await vi.waitFor(() => expect(useVoiceQaStore.getState().status).toBe('idle'));
+    await waitForTestEvent(useVoiceQaStore.subscribe, useVoiceQaStore.getState, state => state.status === 'idle');
     expect(useVoiceQaStore.getState().status).toBe('idle');
     expect(sdk.endSession).toHaveBeenCalledTimes(1);
   });
@@ -1314,7 +1317,9 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+    expect(await waitForTestEvent(tree.subscribe,
+      () => String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      status => status.includes('success'))).toContain('success');
 
     expect({
       status: String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
@@ -1373,7 +1378,9 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+    expect(await waitForTestEvent(tree.subscribe,
+      () => String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      status => status.includes('success'))).toContain('success');
 
     expect(daemonRpcRequests.filter(request => request.method.endsWith('.transcribe'))).toHaveLength(1);
     expect(transcribeRequests()[0]?.payload).toMatchObject({
@@ -1419,7 +1426,9 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+    expect(await waitForTestEvent(tree.subscribe,
+      () => String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      status => status.includes('success'))).toContain('success');
 
     expect(transcribeRequests()[0]?.machineId).toBe('machine-after-rerender');
     expect((storage.getState()).sessions?.['session-latest-target']).toBeUndefined();
@@ -1459,9 +1468,8 @@ describe('VoiceQaScreen', () => {
     });
     await act(async () => {
       transcribeButton.props.onPress();
-      await vi.waitFor(() => {
-        expect(transcribeRequests()).toHaveLength(1);
-      });
+      await transcriptionStarted.promise;
+      expect(transcribeRequests()).toHaveLength(1);
     });
     const primedSettings = storage.getState().settings;
     expect(readLocalConversationVoiceSettings(primedSettings.voice).stt.localNeural).toMatchObject({
@@ -1512,7 +1520,9 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('success'));
+    expect(await waitForTestEvent(tree.subscribe,
+      () => String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      status => status.includes('success'))).toContain('success');
 
     expect(transcribeRequests()[0]?.payload).toMatchObject({
       packId: 'sherpa-onnx-stt-en-v1',
@@ -1559,7 +1569,9 @@ describe('VoiceQaScreen', () => {
       await pressTestInstanceAsync(transcribeButton);
     });
 
-    await vi.waitFor(() => expect(String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children)).toContain('error'));
+    expect(await waitForTestEvent(tree.subscribe,
+      () => String(tree.find(node => node.props.testID === 'voiceQa.recordedAudio.status').props.children),
+      status => status.includes('error'))).toContain('error');
 
     const statusText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.status');
     const resultText = tree.find((node) => String(node.props?.testID) === 'voiceQa.recordedAudio.result');

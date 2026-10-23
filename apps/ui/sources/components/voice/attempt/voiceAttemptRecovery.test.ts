@@ -12,7 +12,7 @@ import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindi
 import { storage } from '@/sync/domains/state/storage';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
-import { createSessionFixture } from '@/dev/testkit';
+import { createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -269,7 +269,8 @@ describe('the one Voice recovery dispatch every placement fires', () => {
   it('retries through the canonical voice session manager', async () => {
     await admitFailedConversation('s1');
     await (await dispatch('retry'))();
-    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'idle', canStop: true }));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'connected');
+    expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'idle', canStop: true });
     expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 's1' });
   });
 
@@ -280,7 +281,8 @@ describe('the one Voice recovery dispatch every placement fires', () => {
       startSessionId: 'named-session',
       globalStartAuthorized: false,
     }))();
-    await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 'named-session', status: 'connected' }));
+    await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot, snapshot => snapshot.status === 'connected');
+    expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 'named-session', status: 'connected' });
     expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 'named-session' });
   });
 

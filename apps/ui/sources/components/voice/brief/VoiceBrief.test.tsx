@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
-import { createPlainAccountEncryptionCurrentnessFixture, renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture, renderScreen, waitForTestEvent, type RenderScreenResult } from '@/dev/testkit';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { AuthProvider } from '@/auth/context/AuthContext';
 import { storage } from '@/sync/domains/state/storage';
@@ -81,20 +81,18 @@ const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value 
 const historyId = 'brief-history';
 let browser: ReturnType<typeof installVoiceWebRtcBrowserBoundary>;
 let disposeRuntime: (() => Promise<void>) | null = null;
+let observePeerCreated: (peer: TestVoiceWebRtcPeer) => void = () => {};
 
 // Only browser media/WebRTC and provider HTTP are synthetic. The shipped leaf,
 // credentials, registration, mic, conversation controller and lifecycle are real.
 async function transport() {
-    const peers: TestVoiceWebRtcPeer[] = [];
+    const peers = browser.peers;
     const starts: Array<{ requestedTargetSessionAddress: SessionAddress | null; controlSessionId: string }> = [];
-    vi.mocked(globalThis.RTCPeerConnection).mockImplementation(() => {
-        const peer = new TestVoiceWebRtcPeer();
-        peers.push(peer);
+    observePeerCreated = () => {
         const binding = voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID);
         if (!binding) throw new Error('WebRTC started before its Voice conversation was bound');
         starts.push({ requestedTargetSessionAddress: binding.targetSessionAddress, controlSessionId: binding.controlSessionId });
-        return peer as unknown as RTCPeerConnection;
-    });
+    };
     const hostLease = createBundledConversationRuntimeHostLease();
     const scope = createExternalVoiceProviderActivationScope({
         pluginId: entry.pluginId, occurrenceId: 'brief-openai', declarations: [entry.declaration], hostPlatform: 'web',
@@ -115,39 +113,60 @@ async function transport() {
         return event.type === 'conversation.item.create' && event.item?.role === role
             ? event.item.content.flatMap(content => content.text ? [content.text] : []) : [];
     }));
+    const usablePeer = () => browser.peerCreated(peers.at(-1)?.channel.readyState === 'closed'
+        ? peers.length : Math.max(0, peers.length - 1));
     return { adapter, starts,
         get spoken() { return messages('user'); },
         get contexts() { return messages('system').filter(value => value.includes('"approval":"tap_only"')); },
         get interrupted() { return peers.flatMap((peer, index) => peer.channel.sent.flatMap(value => JSON.parse(value).type === 'response.cancel' ? [starts[index]!.controlSessionId] : [])); },
-        async connect() {
-            await vi.waitFor(() => {
-                expect(peers.at(-1)?.setRemoteDescription).toHaveBeenCalled();
-                expect(peers.at(-1)?.channel.readyState).not.toBe('closed');
+        async waitForSpoken() {
+            const peer = await usablePeer();
+            await peer.channel.controlSent(value => {
+                const event = JSON.parse(value) as { type?: string; item?: { role?: string } };
+                return event.type === 'conversation.item.create' && event.item?.role === 'user';
             });
-            peers.at(-1)!.channel.open();
-            await vi.waitFor(() => expect(lifecycle?.getSnapshot().status).toBe('connected'));
+            expect(messages('user')).toHaveLength(1);
+        },
+        async waitForInterrupted() {
+            const peer = await usablePeer();
+            await peer.channel.controlSent(value => JSON.parse(value).type === 'response.cancel');
+            expect(peers.flatMap((value, index) => value.channel.sent.flatMap(sent =>
+                JSON.parse(sent).type === 'response.cancel' ? [starts[index]!.controlSessionId] : [])))
+                .toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]);
+        },
+        async connect() {
+            const peer = await usablePeer();
+            await peer.remoteDescriptionSet;
+            expect(peer.setRemoteDescription).toHaveBeenCalled();
+            expect(peer.channel.readyState).not.toBe('closed');
+            peer.channel.open();
+            await waitForTestEvent(lifecycle!.subscribe, lifecycle!.getSnapshot, value => value.status === 'connected');
+            expect(lifecycle?.getSnapshot().status).toBe('connected');
         },
         async waitForStart() {
-            await vi.waitFor(() => {
-                expect(peers.at(-1)?.setRemoteDescription).toHaveBeenCalled();
-                expect(peers.at(-1)?.channel.readyState).not.toBe('closed');
-            });
+            const peer = await usablePeer();
+            await peer.remoteDescriptionSet;
+            expect(peer.setRemoteDescription).toHaveBeenCalled();
+            expect(peer.channel.readyState).not.toBe('closed');
         },
-        async waitForStarts(count: number) { await vi.waitFor(() => expect(starts).toHaveLength(count)); },
+        async waitForStarts(count: number) { await browser.peerCreated(count - 1); expect(starts).toHaveLength(count); },
         lateConnect() { peers.at(-1)!.channel.dispatchEvent(new Event('open')); },
         async fail() {
-            await vi.waitFor(() => expect(peers.at(-1)).toBeDefined());
+            await browser.peerCreated(Math.max(0, peers.length - 1));
+            expect(peers.at(-1)).toBeDefined();
             if (lifecycle?.getSnapshot().status === 'connected') {
                 peers.at(-1)!.channel.message(JSON.stringify({ type: 'error', event_id: 'brief-session-expired', error: { code: 'session_expired' } }));
             } else {
                 peers.at(-1)!.connectionState = 'failed';
                 peers.at(-1)!.dispatchEvent(new Event('connectionstatechange'));
             }
-            await vi.waitFor(() => expect(lifecycle?.getSnapshot().status).toBe('error'));
+            await waitForTestEvent(lifecycle!.subscribe, lifecycle!.getSnapshot, value => value.status === 'error');
+            expect(lifecycle?.getSnapshot().status).toBe('error');
         },
         async startOutput() {
             peers.at(-1)!.channel.message(JSON.stringify({ type: 'output_audio_buffer.started', event_id: 'brief-output-started', response_id: 'brief-response' }));
-            await vi.waitFor(() => expect(lifecycle?.getSnapshot().mode).toBe('speaking'));
+            await waitForTestEvent(lifecycle!.subscribe, lifecycle!.getSnapshot, value => value.mode === 'speaking');
+            expect(lifecycle?.getSnapshot().mode).toBe('speaking');
         },
     };
 }
@@ -162,7 +181,7 @@ function setActionPolicy(value: Parameters<typeof normalizeActionsSettingsV1>[0]
     storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1(value) } });
 }
 async function pressBriefControl(testID: string) {
-    await vi.waitFor(() => {
+    await waitForTestEvent(screen!.subscribe, () => {
         const control = screen?.findByTestId(testID);
         expect(control).toBeTruthy();
         expect(control?.props.disabled).not.toBe(true);
@@ -200,11 +219,13 @@ beforeEach(async () => {
     }) });
     // Cold restore starts Profile sync asynchronously; observe its real publication,
     // including after the preceding test deliberately retires the Account lifetime.
-    await vi.waitFor(() => expect(getActiveServerAccountScope()).not.toBeNull());
+    await waitForTestEvent(storage.subscribe, getActiveServerAccountScope, scope => scope !== null);
+    expect(getActiveServerAccountScope()).not.toBeNull();
     const scope = getActiveServerAccountScope();
     if (!scope) throw new Error('Brief Account was not restored');
     await purposes.hydrate(scope);
-    browser = installVoiceWebRtcBrowserBoundary();
+    observePeerCreated = () => {};
+    browser = installVoiceWebRtcBrowserBoundary({ onCreatePeer: peer => observePeerCreated(peer) });
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/realtime/client_secrets') return Response.json({ value: 'ek_brief', expires_at: Math.floor(Date.now() / 1000) + 60,
@@ -296,7 +317,7 @@ describe('mounted Voice Brief request', () => {
         expect(speech.starts).toHaveLength(0);
         await act(async () => setActionPolicy({}));
         await pressBriefControl('home-brief-me');
-        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief')).toBeTruthy());
+        await waitForTestEvent(screen!.subscribe, () => expect(screen?.findByTestId('voice-brief')).toBeTruthy());
         await speech.waitForStarts(1);
         await act(async () => speech.connect());
         expect(speech.spoken).toHaveLength(1);
@@ -310,7 +331,7 @@ describe('mounted Voice Brief request', () => {
             'ui.voice_global.brief.retry': { disabledSurfaces: ['ui'] },
         } });
         screen = await renderScreen(render());
-        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        await waitForTestEvent(screen!.subscribe, () => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
         expect(speech.starts).toHaveLength(0);
         await pressBriefControl('voice-brief.retry');
         expect(speech.starts).toHaveLength(0);
@@ -318,7 +339,7 @@ describe('mounted Voice Brief request', () => {
             'ui.voice_global.start': { disabledSurfaces: ['ui'] },
         } }));
         await pressBriefControl('voice-brief.retry');
-        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        await waitForTestEvent(screen!.subscribe, () => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
         expect(speech.starts).toHaveLength(0);
         await act(async () => setActionPolicy({}));
         await pressBriefControl('voice-brief.retry');
@@ -334,7 +355,7 @@ describe('mounted Voice Brief request', () => {
         await speech.connect();
         screen = await renderScreen(renderHome());
         await act(async () => { executeVoiceBriefOperation('request'); });
-        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
+        await speech.waitForSpoken();
         await act(async () => speech.startOutput());
         setActionPolicy({ v: 1, actions: {
             'ui.voice_global.brief.stop': { disabledSurfaces: ['ui'] },
@@ -346,10 +367,10 @@ describe('mounted Voice Brief request', () => {
         expect(screen.findByTestId('voice-brief')).toBeTruthy();
         await act(async () => setActionPolicy({}));
         await pressBriefControl('voice-brief.stop');
-        await vi.waitFor(() => expect(speech.interrupted).toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]));
+        await speech.waitForInterrupted();
         expect(lifecycle?.getSnapshot().status).toBe('connected');
         await pressBriefControl('voice-brief.close');
-        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief')).toBeNull());
+        await waitForTestEvent(screen!.subscribe, () => expect(screen?.findByTestId('voice-brief')).toBeNull());
         expect(lifecycle?.getSnapshot().status).toBe('connected');
     });
 
@@ -442,7 +463,7 @@ describe('mounted Voice Brief request', () => {
         await speech.connect();
         screen = await renderScreen(render());
         const attemptId = getVoiceSessionAttemptId();
-        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
+        await speech.waitForSpoken();
         let outcome;
         await act(async () => { outcome = executeVoiceBriefOperation('request', { expectedAttemptId: attemptId! }); });
         expect(outcome).toEqual({ ok: true, result: { status: 'sent', attemptId } });
@@ -451,7 +472,7 @@ describe('mounted Voice Brief request', () => {
         await act(async () => speech.startOutput());
         await act(async () => { outcome = executeVoiceBriefOperation('stop', { expectedAttemptId: attemptId! }); });
         expect(outcome).toEqual({ ok: true, result: { status: 'waiting', attemptId } });
-        await vi.waitFor(() => expect(speech.interrupted).toEqual([VOICE_AGENT_GLOBAL_SESSION_ID]));
+        await speech.waitForInterrupted();
         expect(lifecycle?.getSnapshot().status).toBe('connected');
         expect(executeVoiceBriefOperation('retry')).toEqual({ ok: false, errorCode: 'voice_brief_not_retryable' });
         await screen.unmount(); screen = null;
@@ -509,7 +530,7 @@ describe('mounted Voice Brief request', () => {
         retireActiveServerAccountScopeLifetime();
         expect(captureActiveServerAccountScopeCurrentness().isCurrent()).toBe(true);
         await screen.update(renderHome());
-        await vi.waitFor(() => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
+        await waitForTestEvent(screen!.subscribe, () => expect(screen?.findByTestId('voice-brief.retry')).toBeTruthy());
         expect(speech.starts).toHaveLength(0);
         expect(speech.spoken).toHaveLength(0);
     });
@@ -572,7 +593,7 @@ describe('mounted Voice Brief request', () => {
         expect(screen.getTextContent()).not.toContain(recover.props.accessibilityHint);
         expect(speech.starts).toHaveLength(0);
         await pressBriefControl('voice-brief.recover');
-        await vi.waitFor(() => expect(navigation.push).toHaveBeenCalled());
+        expect(navigation.push).toHaveBeenCalled();
         await selectService();
         expect(speech.starts).toHaveLength(0);
         await pressBriefControl('voice-brief.retry');
@@ -612,7 +633,7 @@ describe('mounted Voice Brief request', () => {
         void lifecycle?.toggle(null);
         await speech.connect();
         screen = await renderScreen(render());
-        await vi.waitFor(() => expect(speech.spoken).toHaveLength(1));
+        await speech.waitForSpoken();
         await act(async () => lifecycle?.stop(VOICE_AGENT_GLOBAL_SESSION_ID));
         expect(speech.starts).toHaveLength(1);
         expect(speech.spoken).toHaveLength(1);

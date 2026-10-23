@@ -5,7 +5,7 @@ import { resolveHref } from 'expo-router/build/link/href';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { standardCleanup, renderHook, createSessionMessagesFixture, createSessionFixture, createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, type RenderHookResult } from '@/dev/testkit';
+import { standardCleanup, renderHook, createDeferred, waitForTestEvent, createSessionMessagesFixture, createSessionFixture, createMachineFixture, createRootLayoutFeaturesResponse, flushHookEffects, type RenderHookResult } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { VOICE_SETTINGS_PROVIDER_FOCUS_TARGET } from '@/voice/settings/voiceSettingsRouteFocus';
@@ -648,8 +648,8 @@ describe('useVoiceAttemptControl availability ladder', () => {
 
         await act(async () => { await hook.getCurrent().control.onPrimaryAction(); });
 
-        await vi.waitFor(() => expect(routerMock.instance?.spies.push.mock.calls.map((call) => call[0]))
-            .toContainEqual(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET));
+        expect(routerMock.instance?.spies.push.mock.calls.map((call) => call[0]))
+            .toContainEqual(VOICE_SETTINGS_PROVIDER_FOCUS_TARGET);
 
         await hook.unmount();
     });
@@ -661,7 +661,6 @@ describe('useVoiceAttemptControl availability ladder', () => {
         const { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
         const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
-        const { flushHookEffects } = await import('@/dev/testkit');
         installDisconnectedServerSocketBoundary();
         await import('@/sync/syncEngine');
         const artifact = createHomeHubArtifactHttpBoundary('voice-dismissal-account');
@@ -681,7 +680,8 @@ describe('useVoiceAttemptControl availability ladder', () => {
                 model: useVoiceSurfaceModel({ variant: 'sidebar' }),
                 control: useVoiceAttemptControl(GLOBAL_TARGET),
             }), { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection.credentials}>{children}</InjectedAuthProvider> });
-            await flushHookEffects({ cycles: 3 });
+            await waitForTestEvent(hook.subscribe, hook.getCurrent,
+                value => value.control.availability === 'unavailable' && value.control.primaryAction === null);
             // The same Account Artifact Home's "Get set up" reads; Settings → Voice remains reachable.
             expect(hook.getCurrent().control).toMatchObject({ availability: 'unavailable', primaryAction: null });
         } finally {
@@ -916,7 +916,7 @@ describe('useVoiceAttemptControl recovery routing', () => {
         const hook = await renderBothRecoveryOwners('open_settings');
         try {
             await act(async () => { await hook.getCurrent().control.onRecover(); });
-            await vi.waitFor(() => { expect(platformState.openSettings).toHaveBeenCalledTimes(1); });
+            expect(platformState.openSettings).toHaveBeenCalledTimes(1);
         } finally { await hook.unmount(); }
     });
 });
@@ -1356,7 +1356,8 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().canStart).toBe(true);
         hook.getCurrent().onToggle();
 
-        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('connected'));
+        await waitForTestEvent(routing.controller.subscribe, routing.controller.getSnapshot, snapshot => snapshot.status === 'connected');
+        expect(routing.controller.getSnapshot().status).toBe('connected');
         expect(routing.controller.getAttemptTargetSessionAddress()).toBeNull();
         expect(routing.start).toHaveBeenCalledTimes(1);
 
@@ -1373,7 +1374,9 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().canStart).toBe(true);
         hook.getCurrent().onToggle();
 
-        await vi.waitFor(() => expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({ serverId: 'server-b', sessionId: 'session-42' }));
+        await waitForTestEvent(routing.controller.subscribe, routing.controller.getAttemptTargetSessionAddress,
+            address => address?.serverId === 'server-b' && address.sessionId === 'session-42');
+        expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({ serverId: 'server-b', sessionId: 'session-42' });
 
         await hook.unmount();
     });
@@ -1387,10 +1390,12 @@ describe('useVoiceAttemptControl idle targeting', () => {
         suppliedAddress.sessionId = 'different-session';
         hook.getCurrent().onToggle();
 
-        await vi.waitFor(() => expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({
+        await waitForTestEvent(routing.controller.subscribe, routing.controller.getAttemptTargetSessionAddress,
+            address => address?.serverId === 'server-b' && address.sessionId === 'shared-session');
+        expect(routing.controller.getAttemptTargetSessionAddress()).toEqual({
             serverId: 'server-b',
             sessionId: 'shared-session',
-        }));
+        });
         await hook.unmount();
     });
 
@@ -1411,7 +1416,8 @@ describe('useVoiceAttemptControl idle targeting', () => {
         expect(hook.getCurrent().canStop).toBe(true);
         hook.getCurrent().onToggle();
 
-        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('disconnected'));
+        await waitForTestEvent(routing.controller.subscribe, routing.controller.getSnapshot, snapshot => snapshot.status === 'disconnected');
+        expect(routing.controller.getSnapshot().status).toBe('disconnected');
         expect(routing.stop).toHaveBeenCalledTimes(1);
         expect(routing.start).toHaveBeenCalledTimes(starts);
 
@@ -1426,18 +1432,24 @@ describe('useVoiceAttemptControl idle targeting', () => {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ ...state.settings.actionsSettingsV1, actions: {
                 ...state.settings.actionsSettingsV1.actions, 'ui.voice_global.end': { disabledSurfaces: ['ui'] },
             } }) } }));
-        const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const endSettled = createDeferred<void>();
+        const diagnostic = vi.spyOn(console, 'info').mockImplementation((message) => {
+            if (message === '[fireAndForget] VoiceAttemptControl.stop') endSettled.resolve();
+        });
+        routing.stop.mockImplementation(async () => { endSettled.resolve(); });
         const hook = await renderControl(GLOBAL_TARGET);
         hook.getCurrent().onToggle();
         // Wait for either the rejected Action's diagnostic or the incorrect audio effect.
-        await vi.waitFor(() => expect(Number(diagnostic.mock.calls.some(([message]) =>
-            message === '[fireAndForget] VoiceAttemptControl.stop')) + routing.stop.mock.calls.length).toBeGreaterThan(0));
+        await endSettled.promise;
+        expect(Number(diagnostic.mock.calls.some(([message]) =>
+            message === '[fireAndForget] VoiceAttemptControl.stop')) + routing.stop.mock.calls.length).toBeGreaterThan(0);
         expect(routing.controller.getSnapshot().status).toBe('connected');
         expect(routing.stop).not.toHaveBeenCalled();
         await act(async () => getStorage().setState(state => ({ settings: { ...state.settings,
             actionsSettingsV1: { ...state.settings.actionsSettingsV1, actions: {} } } })));
         hook.getCurrent().onToggle();
-        await vi.waitFor(() => expect(routing.controller.getSnapshot().status).toBe('disconnected'));
+        await waitForTestEvent(routing.controller.subscribe, routing.controller.getSnapshot, snapshot => snapshot.status === 'disconnected');
+        expect(routing.controller.getSnapshot().status).toBe('disconnected');
         await hook.unmount();
     });
 
@@ -1592,12 +1604,14 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
             const options = sdk.startSession.mock.calls[0]?.[0];
             if (!options?.onDisconnect) throw new Error('Vendor SDK did not receive its disconnect callback');
             await act(async () => { options.onDisconnect?.({ reason: 'error', message: 'Transport closed', context: { type: 'close', code: 1006 } }); });
-            await vi.waitFor(() => expect(hook.getCurrent().recoveryAvailable).toBe(true));
+            await waitForTestEvent(hook.subscribe, () => expect(hook.getCurrent().recoveryAvailable).toBe(true));
             expect(controller.getSnapshot()).toMatchObject({ presentationState: 'reconnecting', reconnectRetryAvailable: true });
             expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
             expect(hook.getCurrent().recoveryIcon).toBe('arrow-clockwise');
+            vi.useRealTimers();
             await act(async () => { await hook.getCurrent().onRecover(); });
-            await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('connected'));
+            await waitForTestEvent(controller.subscribe, controller.getSnapshot, snapshot => snapshot.status === 'connected');
+            expect(controller.getSnapshot().status).toBe('connected');
             expect(sdk.startSession).toHaveBeenCalledTimes(2);
             expect(getVoiceSessionPresentedAttemptId()).toBe(admittedAttempt);
             expect(controller.getAttemptTargetSessionAddress()).toBeNull();
@@ -1622,32 +1636,29 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
             await Promise.resolve();
         });
 
-        await vi.waitFor(() => {
-            expect(hook.getCurrent().primaryAction).toBe('recover');
-        });
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.primaryAction === 'recover');
+        expect(hook.getCurrent().primaryAction).toBe('recover');
         expect(hook.getCurrent().recoveryLabel).toBe(t('common.retry'));
         await act(async () => {
             hook.getCurrent().onRecover();
             await Promise.resolve();
         });
-        await vi.waitFor(() => {
-            // Retry retains the admitted Global target; the provider's synthetic carrier id
-            // is not a new requested Session target.
-            expect(sdk.startSession).toHaveBeenCalledTimes(2);
-            expect(controller.getAttemptTargetSessionAddress()).toBeNull();
-        });
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.primaryAction === 'recover' && sdk.startSession.mock.calls.length === 2);
+        // Retry retains the admitted Global target; the provider's synthetic carrier id
+        // is not a new requested Session target.
+        expect(sdk.startSession).toHaveBeenCalledTimes(2);
+        expect(controller.getAttemptTargetSessionAddress()).toBeNull();
         expect(hook.getCurrent().canDismissFailedAttempt).toBe(true);
         expect(hook.getCurrent().ended).toBeNull();
         await act(async () => {
             hook.getCurrent().onDismissFailedAttempt?.();
         });
-        await vi.waitFor(() => {
-            expect(hook.getCurrent().surfaceState).toBe('idle');
-            expect(hook.getCurrent().markPose).toBe('mic');
-            expect(hook.getCurrent().recoveryAvailable).toBe(false);
-            expect(hook.getCurrent().canDismissFailedAttempt).toBe(false);
-            expect(hook.getCurrent().ended).toBeNull();
-        });
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.surfaceState === 'idle');
+        expect(hook.getCurrent().surfaceState).toBe('idle');
+        expect(hook.getCurrent().markPose).toBe('mic');
+        expect(hook.getCurrent().recoveryAvailable).toBe(false);
+        expect(hook.getCurrent().canDismissFailedAttempt).toBe(false);
+        expect(hook.getCurrent().ended).toBeNull();
         expect(consoleError.mock.calls.some(([entry]) =>
             String(entry).includes('[fireAndForget] VoiceAttemptControl.'),
         )).toBe(false);
@@ -1660,7 +1671,10 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         // A retained registry reference can outlive its public runtime lease.
         // The real adapter rejects before publishing any machine error.
         await providerAssembly?.dispose();
-        const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const diagnostic = createDeferred<void>();
+        const consoleInfo = vi.spyOn(console, 'info').mockImplementation((message) => {
+            if (message === '[fireAndForget] VoiceAttemptControl.toggle') diagnostic.resolve();
+        });
         const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
         const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
 
@@ -1669,12 +1683,11 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
             await Promise.resolve();
         });
 
-        await vi.waitFor(() => {
-            expect(consoleInfo).toHaveBeenCalledWith(
-                '[fireAndForget] VoiceAttemptControl.toggle',
-                expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
-            );
-        });
+        await diagnostic.promise;
+        expect(consoleInfo).toHaveBeenCalledWith(
+            '[fireAndForget] VoiceAttemptControl.toggle',
+            expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
+        );
 
         await hook.unmount();
     });
@@ -1682,22 +1695,25 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
     it('still sends a mismatched rejection to diagnostics after the retry recovery is rendered', async () => {
         sdk.startSession.mockRejectedValue(Object.assign(new Error('voice_connection_failed'), { code: 'voice_connection_failed' }));
         await installElevenLabsLifecycle();
-        const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const diagnostic = createDeferred<void>();
+        const consoleInfo = vi.spyOn(console, 'info').mockImplementation((message) => {
+            if (message === '[fireAndForget] VoiceAttemptControl.recover') diagnostic.resolve();
+        });
         const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
         const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
         await act(async () => { hook.getCurrent().onToggle(); });
-        await vi.waitFor(() => expect(hook.getCurrent().primaryAction).toBe('recover'));
+        await waitForTestEvent(hook.subscribe, hook.getCurrent, value => value.primaryAction === 'recover');
+        expect(hook.getCurrent().primaryAction).toBe('recover');
         // Retiring the real public runtime does not rewrite its terminal error.
         // Its next Start rejects with a different code before the controller,
         // which must not be hidden merely because a Retry is already visible.
         await providerAssembly?.dispose();
         await act(async () => { await hook.getCurrent().onRecover(); });
-        await vi.waitFor(() => {
-            expect(consoleInfo).toHaveBeenCalledWith(
-                '[fireAndForget] VoiceAttemptControl.recover',
-                expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
-            );
-        });
+        await diagnostic.promise;
+        expect(consoleInfo).toHaveBeenCalledWith(
+            '[fireAndForget] VoiceAttemptControl.recover',
+            expect.objectContaining({ code: 'action_failed', message: 'voice_runtime_generation_revoked' }),
+        );
         expect(hook.getCurrent().primaryAction).toBe('recover');
         await hook.unmount();
     });
