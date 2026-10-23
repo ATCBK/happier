@@ -1621,6 +1621,95 @@ describe('Channels mounted provider setup recovery', () => {
     }
   });
 
+  it('walks the provider-authored setup steps in order, with their official links and copyable values', async () => {
+    const openedLinks: string[] = [];
+    const copied: string[] = [];
+    const submittedProviderSetup = {
+      kind: 'submitted' as const,
+      action: providerSetupOperation.action,
+      input: { repository: 'happier-dev/happier' },
+      selection: {
+        target: {
+          pluginId: 'happier.channels',
+          sourceCustody: { kind: 'development', registeredRootId: 'channels-target-root-a' } as const,
+        },
+        point: providerSetupOperation.point,
+        contributor: providerPortableContributor(),
+      },
+      connectedAccount: { kind: 'none' as const },
+      presentation: { connectedAccountLabel: null, machineDisplayName: 'Development Mac' },
+    };
+    const executeAction = vi.fn(async (request: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (request.action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare) {
+        return {
+          kind: 'ready',
+          supportedTransports: ['socket'],
+          recommendedTransport: 'socket',
+          overlapSafety: 'safe',
+          replayContinuity: 'none',
+          outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
+          setupGuidance: {
+            externalUrl: 'https://provider.example.test/apps',
+            requiredPermissionsLabel: 'Read messages, Send messages',
+            steps: [
+              { title: 'Create an app for this workspace', externalUrl: 'https://provider.example.test/apps' },
+              {
+                title: 'Configure bot scopes and events',
+                copyableValues: [
+                  { label: 'Bot scopes', value: 'chat:write, channels:history' },
+                  { label: 'Bot events', value: 'message.channels' },
+                ],
+              },
+              { title: 'Install the app and save its token in Connected Accounts' },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected mounted Action: ${String(request.action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-77s', mountNonce: 'fixture-mount-77s' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => submittedProviderSetup,
+        executeAction,
+        readResource: bindingResourceReader(),
+        openExternalLink: async ({ url }) => { openedLinks.push(url); },
+        writeClipboard: async ({ value }) => { copied.push(value); },
+      },
+    });
+
+    try {
+      await fixture.press(await fixture.getByRole('button', { name: 'Set up Integration provider' }));
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-provider-setup-guidance"]')).not.toBeNull();
+      });
+      const guidance = document.querySelector('[data-testid="channels-provider-setup-guidance"]')?.textContent ?? '';
+      const order = [
+        'Create an app for this workspace',
+        'Configure bot scopes and events',
+        'Install the app and save its token in Connected Accounts',
+        'Create and test the connection',
+      ].map((title) => guidance.indexOf(title));
+      expect(order.every((position) => position >= 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+      // The provider's steps replace the generic summary.
+      expect(guidance).not.toContain('Grant what it asks for');
+      await fixture.press(await fixture.getByRole('link', { name: 'Open provider.example.test' }));
+      expect(openedLinks).toEqual(['https://provider.example.test/apps']);
+      await fixture.press(await fixture.getByRole('button', { name: 'Copy Bot scopes' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Copy Bot events' }));
+      await vi.waitFor(() => {
+        expect(copied).toEqual(['chat:write, channels:history', 'message.channels']);
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('retries the exact durablePush ensure and continuation after distinct response-loss outcomes', async () => {
     const credentialRef = {
       service: {

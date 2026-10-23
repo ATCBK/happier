@@ -31,6 +31,7 @@ import {
   CountedDisclosureItem,
   Item,
   ItemGroup,
+  CodeBlock,
   Link,
   List,
   LoadingState,
@@ -294,10 +295,7 @@ type PreparedConnectionSetup = Readonly<{
   selectedTransport: ConnectionCreateTransport;
   maximumObservationAgeMs: string;
   presentation: PreparedConnectionPresentation;
-  setupGuidance?: Readonly<{
-    externalUrl: string;
-    requiredPermissionsLabel: string;
-  }>;
+  setupGuidance?: PreparedConnectionReady['setupGuidance'];
 }>;
 type PreparedConnectionReady = Extract<ConversationConnectionPrepareResultV1, Readonly<{ kind: 'ready' }>>;
 type PreparedConnectionPresentation = Readonly<{
@@ -13704,9 +13702,10 @@ function ProviderSetupPicker(props: Readonly<{
 }
 
 /**
- * The provider's own setup, as numbered steps: open its page, grant what it asks for (copyable, since it
- * is pasted on the provider's side), then create the connection here and test it. The steps carry only
- * what the provider's prepare result said; the test is the connection's existing Test control.
+ * The provider's own setup, as numbered steps. A provider that authored `steps` is shown exactly those,
+ * in its order: each with its official link and one copy control per value pasted on the provider's side.
+ * A provider without steps keeps the summary: open its page and grant what it asks for. Both end with the
+ * connection's existing Test control (`connection/test`).
  */
 function ProviderSetupGuidanceSteps(props: Readonly<{
   guidance: NonNullable<PreparedConnectionSetup['setupGuidance']>;
@@ -13716,61 +13715,95 @@ function ProviderSetupGuidanceSteps(props: Readonly<{
 }>): React.ReactElement {
   const { guidance, providerDisplayName, t } = props;
   const openTitle = t('plugins.channels.surface.setupGuidanceOpen', 'Open {provider}', { provider: providerDisplayName });
-  let host: string | undefined;
-  try {
-    host = new URL(guidance.externalUrl).host;
-  } catch {
-    host = undefined;
-  }
+  const hostOf = (url: string): string | undefined => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return undefined;
+    }
+  };
+  const verifyStep = {
+    key: 'verify',
+    title: t('plugins.channels.surface.setupGuidanceVerify', 'Create and test the connection'),
+    detail: t(
+      'plugins.channels.surface.setupGuidanceVerifyDetail',
+      'Create it below. Then Test connection checks that Happier can reach {provider} with it.',
+      { provider: providerDisplayName },
+    ),
+  };
+  const providerSteps = guidance.steps?.map((step, index) => {
+    const host = step.externalUrl === undefined ? undefined : hostOf(step.externalUrl);
+    const openStepTitle = host === undefined
+      ? t('plugins.channels.surface.setupGuidanceOpenStep', 'Open page')
+      : t('plugins.channels.surface.setupGuidanceOpenHost', 'Open {host}', { host });
+    return {
+      key: `provider-${index}`,
+      title: step.title,
+      ...(step.copyableValues === undefined ? {} : {
+        body: (
+          <Stack gap="xsmall">
+            {step.copyableValues.map((copyable) => (
+              <CodeBlock
+                key={copyable.label}
+                code={copyable.value}
+                copyLabel={t('plugins.channels.surface.setupGuidanceCopyValue', 'Copy {label}', { label: copyable.label })}
+              />
+            ))}
+          </Stack>
+        ),
+      }),
+      ...(step.externalUrl === undefined ? {} : {
+        action: (
+          <Link
+            testID={`channels-provider-setup-guidance-link-${index}`}
+            title={openStepTitle}
+            url={step.externalUrl}
+            disabled={props.disabled}
+          />
+        ),
+      }),
+    };
+  });
+  const summaryHost = hostOf(guidance.externalUrl);
+  const summarySteps = [
+    {
+      key: 'open',
+      title: openTitle,
+      ...(summaryHost === undefined ? {} : { detail: summaryHost }),
+      body: (
+        <Action.Copy
+          title={t('plugins.channels.surface.setupGuidanceCopyLink', 'Copy link')}
+          value={guidance.externalUrl}
+        />
+      ),
+      action: (
+        <Link
+          testID="channels-provider-setup-guidance-link"
+          title={openTitle}
+          url={guidance.externalUrl}
+          disabled={props.disabled}
+        />
+      ),
+    },
+    {
+      key: 'grant',
+      title: t('plugins.channels.surface.setupGuidanceGrant', 'Grant what it asks for'),
+      detail: guidance.requiredPermissionsLabel,
+      action: (
+        <Action.Copy
+          title={t('plugins.channels.surface.setupGuidanceCopyPermissions', 'Copy permissions')}
+          value={guidance.requiredPermissionsLabel}
+        />
+      ),
+    },
+  ];
   return (
     <Stack gap="small" testID="channels-provider-setup-guidance">
       <Heading
         level={4}
         value={t('plugins.channels.surface.providerSetupRemediationTitle', 'Finish provider setup')}
       />
-      <SetupSteps
-        steps={[
-          {
-            key: 'open',
-            title: openTitle,
-            ...(host === undefined ? {} : { detail: host }),
-            body: (
-              <Action.Copy
-                title={t('plugins.channels.surface.setupGuidanceCopyLink', 'Copy link')}
-                value={guidance.externalUrl}
-              />
-            ),
-            action: (
-              <Link
-                testID="channels-provider-setup-guidance-link"
-                title={openTitle}
-                url={guidance.externalUrl}
-                disabled={props.disabled}
-              />
-            ),
-          },
-          {
-            key: 'grant',
-            title: t('plugins.channels.surface.setupGuidanceGrant', 'Grant what it asks for'),
-            detail: guidance.requiredPermissionsLabel,
-            action: (
-              <Action.Copy
-                title={t('plugins.channels.surface.setupGuidanceCopyPermissions', 'Copy permissions')}
-                value={guidance.requiredPermissionsLabel}
-              />
-            ),
-          },
-          {
-            key: 'verify',
-            title: t('plugins.channels.surface.setupGuidanceVerify', 'Create and test the connection'),
-            detail: t(
-              'plugins.channels.surface.setupGuidanceVerifyDetail',
-              'Create it below. Then Test connection checks that Happier can reach {provider} with it.',
-              { provider: providerDisplayName },
-            ),
-          },
-        ]}
-      />
+      <SetupSteps steps={[...(providerSteps ?? summarySteps), verifyStep]} />
     </Stack>
   );
 }
