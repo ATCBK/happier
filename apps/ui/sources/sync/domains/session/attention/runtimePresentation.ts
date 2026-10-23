@@ -3,6 +3,7 @@ import { normalizeAwarenessTimestampV1 } from '@happier-dev/protocol/sessions/aw
 import { projectSessionAwarenessOperationalV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import type { SessionRuntimeActivityState } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { readSessionRuntimeObservation } from '../sessionRuntimeObservation';
 
 /**
  * The UI adapter over the canonical Session-awareness runtime owner.
@@ -23,6 +24,8 @@ export const SESSION_OPTIMISTIC_PENDING_THINKING_MS = SESSION_AWARENESS_OPTIMIST
 export const SESSION_RESUMING_PRESENTATION_TIMEOUT_MS = 30_000;
 
 export type SessionRuntimePresentationInput = Readonly<{
+    id?: string | null;
+    serverId?: string | null;
     resumingAt?: number | null;
     controlServiceability?: 'servable' | 'recoverable_unservable' | null;
     pendingBlockedCount?: number | null;
@@ -112,6 +115,7 @@ export function readAwarenessPresence(presence: unknown): 'online' | 'offline' |
 }
 
 export function toAwarenessRuntimeInput(input: SessionRuntimePresentationInput) {
+    input = readSessionRuntimeObservation(input);
     return {
         lifecycle: {
             archivedAtMs: input.archivedAt,
@@ -184,7 +188,8 @@ export function projectUiSessionRuntimeAwareness(
         : Date.now();
     const normalized = toAwarenessRuntimeInput(input);
     const facts = projectSessionAwarenessRuntimeV1({ ...normalized, nowMs });
-    const operational = projectSessionAwarenessOperationalV1({ runtime: facts, lifecycle: normalized.lifecycle });
+    const operational = projectSessionAwarenessOperationalV1({ runtime: facts, lifecycle: normalized.lifecycle,
+        runtimeIssue: input.lastRuntimeIssue });
     return {
         ...facts,
         operational,
@@ -210,6 +215,7 @@ export function readSessionRuntimePresentationFreshnessSignals(
     input: SessionRuntimePresentationInput,
     nowMs: number,
 ): readonly SessionRuntimeFreshnessSignal[] {
+    input = readSessionRuntimeObservation(input);
     const runtimePresentation = projectUiSessionRuntimeAwareness({ ...input, nowMs });
     const signals: SessionRuntimeFreshnessSignal[] = [];
     const addFreshnessSignal = (timestamp: number | null | undefined, budgetMs: number) => {

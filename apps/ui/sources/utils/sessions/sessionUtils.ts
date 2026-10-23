@@ -1,15 +1,15 @@
 import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
+import { readSessionRuntimeObservation } from '@/sync/domains/session/sessionRuntimeObservation';
 import { resolveSessionAwarenessContentLabel } from '@/sync/domains/session/awareness/sessionAwarenessContentLabels';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, type SessionAwarenessPresentationFactsV1, type SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
-import type { SessionAwarenessEncryptionV1 } from '@happier-dev/protocol/sessions/awareness/projectionV1';
 import * as React from 'react';
 import { Message } from "@happier-dev/session-core/messages";
 import { readLatestLocalOutboundPendingUserMessageAt } from '@/sync/domains/messages/outgoingUserMessage';
-import { storage, useSession, useSessionMessagesVersion, useSessionPendingMessages, useSetting } from '@/sync/domains/state/storage';
+import { storage, useSession, useSessionMessagesVersion, useSessionPendingMessages } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from './machineDisplayNames';
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
@@ -17,9 +17,8 @@ import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCata
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { readSessionListRenderableSourceMetadata, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
-    projectUiSessionRuntimeAwareness,
     isFreshTimestamp,
     readSessionRuntimePresentationFreshnessExpirations,
     SESSION_OPTIMISTIC_PENDING_THINKING_MS,
@@ -50,21 +49,19 @@ import { formatSessionPath } from './formatPathRelativeToHome';
 import { useUnistyles } from 'react-native-unistyles';
 export { formatPathRelativeToHome } from './formatPathRelativeToHome';
 
-export type SessionState = 'archiving' | 'unknown' | 'stale' | 'locked' | 'preparing' | 'repair_needed' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'ready' | 'pending_input' | 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required';
-
 /**
  * The canonical presented answer for one Session's awareness: which state it is in, how that
  * state is worded, and whether it is worth saying at all. It carries no colour, dot, pill
  * variant or animation — those belong to each presenter's own chrome.
  */
 export type SessionAwarenessPresentationV1 = Readonly<{
-    state: SessionState;
+    state: SessionAwarenessPresentationStateV1;
     statusText: string;
     /** The canonical owner's judgement that this state needs no badge (idle online, archived). */
     quiet: boolean;
 }>;
 
-type UiSessionAwareness = import('@happier-dev/protocol').SessionAwarenessProjectionV1;
+type UiSessionAwareness = SessionAwarenessPresentationFactsV1;
 
 export interface SessionStatus {
     /** Optional authored explanation, independent of the runtime-derived status label. */
@@ -75,15 +72,16 @@ export interface SessionStatus {
      * second derivation path to fall back to.
      */
     awareness: import('@happier-dev/protocol').SessionAwarenessProjectionV1;
-    state: SessionState;
+    state: SessionAwarenessPresentationStateV1;
     isConnected: boolean;
+    bucket: ReturnType<typeof readSessionAwarenessWorkStatusV1>['bucket'];
+    tone: ReturnType<typeof readSessionAwarenessWorkStatusV1>['tone'];
     statusText: string;
     shouldShowStatus: boolean;
     statusColor: string;
     statusDotColor: string;
     isPulsing?: boolean;
 }
-
 export const OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS = SESSION_OPTIMISTIC_PENDING_THINKING_MS;
 export { SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS };
 
@@ -191,38 +189,6 @@ const DEFAULT_SESSION_STATUS_COLORS: SessionStatusColors = {
     default: '#8E8E93',
 };
 
-/**
- * Per-state chrome for the list/header presenter. It is a lookup beside the one ladder rather
- * than a second ladder: adding a Session state makes this table fail to compile until its
- * chrome is stated, which is how the two stayed in step when they were one expression.
- */
-const SESSION_STATE_STATUS_CHROME: Readonly<Record<SessionState, Readonly<{
-    color: keyof SessionStatusColors;
-    pulse: boolean;
-    disconnected?: boolean;
-}>>> = Object.freeze({
-    archiving: { color: 'connecting', pulse: true },
-    waiting: { color: 'connected', pulse: false },
-    unknown: { color: 'default', pulse: false },
-    stale: { color: 'default', pulse: false },
-    locked: { color: 'default', pulse: false },
-    preparing: { color: 'default', pulse: false },
-    repair_needed: { color: 'default', pulse: false },
-    access_pending: { color: 'default', pulse: false },
-    setup_required: { color: 'default', pulse: false },
-    content_unavailable: { color: 'default', pulse: false },
-    failed: { color: 'error', pulse: false },
-    ready: { color: 'connected', pulse: false },
-    pending_input: { color: 'default', pulse: false },
-    disconnected: { color: 'disconnected', pulse: false },
-    recoverable_unservable: { color: 'error', pulse: false, disconnected: true },
-    resuming: { color: 'connecting', pulse: true },
-    thinking: { color: 'connecting', pulse: true },
-    background_active: { color: 'default', pulse: false },
-    permission_required: { color: 'actionRequired', pulse: true },
-    action_required: { color: 'actionRequired', pulse: true },
-});
-
 export function listPendingTranscriptRequests(
     session: Session,
     messages?: ReadonlyArray<Message>,
@@ -281,10 +247,12 @@ function resolveRuntimeStatusFreshnessRefreshDelayMs(
     input: RuntimeStatusFreshnessRefreshInput,
     nowMs: number,
 ): number | null {
-    const { session } = input;
+    const session = readSessionRuntimeObservation(input.session);
     if (session.presence !== 'online') return null;
 
     const expirations = [...readSessionRuntimePresentationFreshnessExpirations({
+        id: session.id,
+        serverId: session.serverId,
         active: session.active,
         activeAt: session.activeAt,
         archivedAt: session.archivedAt,
@@ -363,32 +331,10 @@ function useRuntimeStatusFreshnessRefresh(input: RuntimeStatusFreshnessRefreshIn
     ]);
 }
 
-export function shouldShowAbortButtonForSessionState(state: SessionState): boolean {
+export function shouldShowAbortButtonForSessionState(state: SessionAwarenessPresentationStateV1): boolean {
     // Abort should only be available when there's an in-flight operation or a permission gate.
     // Idle online sessions are represented as `waiting` today.
     return state === 'thinking' || state === 'permission_required' || state === 'action_required';
-}
-
-/**
- * Localized copy for each content state this viewer cannot read. Whether content is readable at
- * all stays Protocol's decision (`isSessionAwarenessContentReadableV1`); this is only the wording
- * and the row vocabulary for the answer it already gave.
- */
-function presentUnreadableSessionContent(
-    encryption: SessionAwarenessEncryptionV1,
-): Readonly<{ state: SessionState; statusText: string }> {
-    // The wording lives with the shared context line's owner so a row and its context line cannot
-    // explain the same envelope differently; only the row's own state vocabulary stays here.
-    const statusText = resolveSessionAwarenessContentLabel(encryption) ?? t('status.unknown');
-    switch (encryption) {
-        case 'locked': return { state: 'locked', statusText };
-        case 'preparing': return { state: 'preparing', statusText };
-        case 'repair_needed': return { state: 'repair_needed', statusText };
-        case 'access_pending': return { state: 'access_pending', statusText };
-        case 'setup_required': return { state: 'setup_required', statusText };
-        case 'content_unavailable': return { state: 'content_unavailable', statusText };
-        default: return { state: 'unknown', statusText };
-    }
 }
 
 function resolveGetSessionStatusOptions(options?: GetSessionStatusOptionsInput): GetSessionStatusOptions {
@@ -412,20 +358,25 @@ export function presentSessionAwarenessV1(
         /** `activeAt` for the "last seen" wording; omit it for a plain disconnected label. */
         lastSeenAtMs?: number | null;
         disconnectedTextMode?: 'lastSeen' | 'offline';
-        /** Existing process-terminal metadata; unknown values never imply a stop. */
-        lifecycleState?: string;
         /** The caller's already-chosen working wording; omitted callers get the static one. */
         workingLabel?: string;
     }>,
 ): SessionAwarenessPresentationV1 {
-    const state = readSessionAwarenessPresentationV1(awareness);
+    return presentSessionAwarenessStateV1(readSessionAwarenessPresentationV1(awareness), options);
+}
+
+/** Localize an already classified state without running a second presentation decision. */
+export function presentSessionAwarenessStateV1(
+    state: SessionAwarenessPresentationStateV1,
+    options?: Parameters<typeof presentSessionAwarenessV1>[1],
+): SessionAwarenessPresentationV1 {
     if (state === 'archived') {
-        return { state: 'waiting', statusText: t('status.online'), quiet: true };
+        return { state, statusText: t('status.online'), quiet: true };
     }
     // Settled content blockers keep their recovery copy; unreadable content must not be guessed
     // into an operational state such as working.
     if (state === 'locked' || state === 'preparing' || state === 'repair_needed' || state === 'access_pending' || state === 'setup_required' || state === 'content_unavailable') {
-        return { ...presentUnreadableSessionContent(awareness.encryption), quiet: false };
+        return { state, statusText: resolveSessionAwarenessContentLabel(state) ?? t('status.unknown'), quiet: false };
     }
     if (state === 'recoverable_unservable') {
         return { state: 'recoverable_unservable', statusText: t('status.disconnected'), quiet: false };
@@ -437,9 +388,7 @@ export function presentSessionAwarenessV1(
         const lastSeenAtMs = options?.lastSeenAtMs;
         return {
             state: 'disconnected',
-            statusText: options?.lifecycleState === 'stopped'
-                ? t('sessionWork.states.stopped')
-                : options?.disconnectedTextMode === 'offline'
+            statusText: options?.disconnectedTextMode === 'offline'
                     ? t('status.offline')
                     : typeof lastSeenAtMs === 'number'
                         ? t('status.lastSeen', { time: formatLastSeen(lastSeenAtMs, false) })
@@ -450,6 +399,12 @@ export function presentSessionAwarenessV1(
     if (state === 'unknown') return { state: 'unknown', statusText: '—', quiet: true };
     if (state === 'stale') return { state: 'stale', statusText: t('status.awaitingUpdates'), quiet: false };
     switch (state) {
+        case 'archiving': return { state, statusText: t('status.archiving'), quiet: false };
+        case 'stopped': return { state, statusText: t('sessionWork.states.stopped'), quiet: false };
+        case 'usage_limited': return { state, statusText: t('session.usageLimitRecovery.banner.title'), quiet: false };
+        case 'finished_unseen': return { state, statusText: t('workStatus.buckets.finished'), quiet: false };
+        case 'mentioned': return { state, statusText: t('status.mentioned'), quiet: false };
+        case 'unread': return { state, statusText: t('status.unread'), quiet: false };
         case 'failed': return { state: 'failed', statusText: t('status.error'), quiet: false };
         case 'action_required': return { state: 'action_required', statusText: t('status.actionRequired'), quiet: false };
         case 'permission_required': return { state: 'permission_required', statusText: t('status.permissionRequired'), quiet: false };
@@ -468,17 +423,10 @@ export function presentSessionAwarenessV1(
     }
 }
 
-/** The authorized metadata view carrying the process fact, for every status-word presenter. */
-export function readSessionStatusLifecycleState(session: SessionStatusSource): string | undefined {
-    if ('metadataUnavailable' in session && session.metadataUnavailable === true) return undefined;
-    const metadata = 'agentState' in session ? readSessionListRenderableSourceMetadata(session) : session.metadata;
-    const lifecycleState = metadata?.lifecycleState;
-    return typeof lifecycleState === 'string' ? lifecycleState : undefined;
-}
-
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
+    session = readSessionRuntimeObservation(session);
     const resolvedOptions = resolveGetSessionStatusOptions(options);
-    const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolvedOptions;
+    const { statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolvedOptions;
     const awareness = projectUiSessionAwareness(session, nowMs, {
         ...resolvedOptions,
         hasPendingPermissionRequests: hasPendingPermissionRequests(session),
@@ -487,45 +435,33 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     });
     const connected = awareness.runtime !== 'offline' && awareness.runtime !== 'unknown';
     const archiving = resolvedOptions.archiving ?? ('archiving' in session && session.archiving === true);
-    if (archiving) {
-        return {
-            awareness, state: 'archiving', statusText: t('status.archiving'), isConnected: connected,
-            shouldShowStatus: true, statusColor: statusColors.connecting, statusDotColor: statusColors.connecting,
-            isPulsing: true,
-        };
-    }
     const contentReadable = isSessionAwarenessContentReadableV1(awareness.encryption);
     const canAnimate = awareness.freshness === 'live' && contentReadable;
-    const idx = typeof vibingIndex === 'number' ? vibingIndex : Math.floor(Math.random() * vibingMessages.length);
-    const presented = presentSessionAwarenessV1(awareness, {
+    const facts = { ...awareness, viewer: session.viewer, archiving };
+    const status = readSessionAwarenessWorkStatusV1({ awareness: facts });
+    const presented = presentSessionAwarenessStateV1(status.state, {
         lastSeenAtMs: session.activeAt,
         disconnectedTextMode: resolvedOptions.disconnectedTextMode,
-        lifecycleState: readSessionStatusLifecycleState(session),
-        ...(workingTextMode === 'static'
-            ? {}
-            : { workingLabel: vibingMessages[idx % vibingMessages.length].toLowerCase() + '…' }),
     });
-    const chrome = SESSION_STATE_STATUS_CHROME[presented.state];
-    // An archived Session is quiet rather than connected; its lifecycle, not its state
-    // vocabulary, is what withholds the live colour.
-    const color = awareness.lifecycle === 'archived'
-        ? statusColors.default
-        : statusColors[chrome.color];
+    const color = status.tone === 'danger' ? statusColors.error
+        : status.tone === 'attention' ? statusColors.actionRequired : statusColors.default;
     return {
         awareness,
         state: presented.state,
+        bucket: status.bucket,
+        tone: status.tone,
         statusText: presented.statusText,
         ...(awareness.statusReason ? { statusReason: awareness.statusReason } : {}),
-        isConnected: chrome.disconnected ? false : connected,
+        isConnected: status.bucket === 'offline' ? false : connected,
         shouldShowStatus: !presented.quiet,
         statusColor: color,
         statusDotColor: color,
-        isPulsing: chrome.pulse && canAnimate,
+        isPulsing: status.bucket === 'working' && awareness.runtime === 'working' && canAnimate,
     };
 }
 
 /**
- * Hook wrapper around `getSessionStatus` that keeps vibing text stable while the session is thinking.
+ * Subscription and freshness binding around the canonical Session presenter.
  */
 export function useSessionStatus(session: SessionStatusSource, options?: UseSessionStatusOptions): SessionStatus;
 export function useSessionStatus(session: SessionStatusSource | null, options?: UseSessionStatusOptions): SessionStatus | null;
@@ -537,14 +473,12 @@ export function useSessionStatus(session: SessionStatusSource | null, options: U
     const archivePending = useSessionArchivePending(scopedAddress);
     const shouldSubscribeToSession = options.subscribeToSession !== false && sessionId.length > 0;
     const rawSession = useSession(shouldSubscribeToSession ? sessionId : '');
-    const sessionListWorkingStatusAnimatedTextEnabled = useSetting('sessionListWorkingStatusAnimatedTextEnabled');
     const shouldSubscribeToTranscript = options.subscribeToTranscript !== false && sessionId.length > 0;
     const transcriptVersion = useSessionMessagesVersion(sessionId, shouldSubscribeToTranscript);
     const pendingMessagesState = useSessionPendingMessages(shouldSubscribeToTranscript ? sessionId : '');
     void transcriptVersion;
 
-    const resolvedSession = rawSession ?? session ?? UNBOUND_SESSION_STATUS_SOURCE;
-    const isOnline = resolvedSession.presence === "online";
+    const resolvedSession = readSessionRuntimeObservation(rawSession ?? session ?? UNBOUND_SESSION_STATUS_SOURCE);
     const hasPermissions = hasPendingPermissionRequests(resolvedSession);
     const hasUserActions = hasPendingUserActionRequests(resolvedSession);
     const hasPendingUserMessages = hasPendingUserMessagesFromSource(resolvedSession) || pendingMessagesState.messages.length > 0;
@@ -560,38 +494,9 @@ export function useSessionStatus(session: SessionStatusSource | null, options: U
     });
 
     const now = Date.now();
-    const runtimePresentation = projectUiSessionRuntimeAwareness({
-        active: resolvedSession.active,
-        activeAt: resolvedSession.activeAt,
-        archivedAt: resolvedSession.archivedAt,
-        presence: resolvedSession.presence,
-        thinking: resolvedSession.thinking,
-        thinkingAt: resolvedSession.thinkingAt,
-        optimisticThinkingAt: resolvedSession.optimisticThinkingAt ?? optimisticPendingUserMessageAt ?? null,
-        hasPendingUserMessages,
-        latestTurnStatus: resolvedSession.latestTurnStatus ?? null,
-        latestTurnStatusObservedAt: resolvedSession.latestTurnStatusObservedAt ?? null,
-        runtimeActivityState: resolvedSession.runtimeActivityState ?? 'unknown',
-        runtimeActivityActiveCount: resolvedSession.runtimeActivityActiveCount ?? null,
-        runtimeActivityObservedAt: resolvedSession.runtimeActivityObservedAt ?? null,
-        runtimeActivityRevision: resolvedSession.runtimeActivityRevision ?? null,
-        meaningfulActivityAt: resolvedSession.meaningfulActivityAt ?? null,
-        lastRuntimeIssue: resolvedSession.lastRuntimeIssue ?? null,
-        hasPendingPermissionRequests: hasPermissions,
-        hasPendingUserActionRequests: hasUserActions,
-        pendingRequestObservedAt,
-        nowMs: now,
-    });
-
-    const vibingIndex = React.useMemo(() => {
-        return Math.floor(Math.random() * vibingMessages.length);
-    }, [isOnline, hasPermissions, hasUserActions, runtimePresentation.working]);
-
     if (!session && !rawSession) return null;
     return getSessionStatus(resolvedSession, now, {
         archiving: archivePending || Boolean(session && 'archiving' in session && session.archiving === true),
-        vibingIndex,
-        workingTextMode: options.workingTextMode ?? (sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated'),
         statusColors: theme.colors.status as SessionStatusColors,
         hasPendingUserMessages,
         optimisticPendingUserMessageAt,
@@ -867,5 +772,3 @@ export function formatLastSeen(activeAt: number, isActive: boolean = false): str
         return formatWithCachedDateTimeFormatter(date, undefined, options);
     }
 }
-
-const vibingMessages = ["Accomplishing", "Actioning", "Actualizing", "Baking", "Booping", "Brewing", "Calculating", "Cerebrating", "Channelling", "Churning", "Clauding", "Coalescing", "Cogitating", "Computing", "Combobulating", "Concocting", "Conjuring", "Considering", "Contemplating", "Cooking", "Crafting", "Creating", "Crunching", "Deciphering", "Deliberating", "Determining", "Discombobulating", "Divining", "Doing", "Effecting", "Elucidating", "Enchanting", "Envisioning", "Finagling", "Flibbertigibbeting", "Forging", "Forming", "Frolicking", "Generating", "Germinating", "Hatching", "Herding", "Honking", "Ideating", "Imagining", "Incubating", "Inferring", "Manifesting", "Marinating", "Meandering", "Moseying", "Mulling", "Mustering", "Musing", "Noodling", "Percolating", "Perusing", "Philosophising", "Pontificating", "Pondering", "Processing", "Puttering", "Puzzling", "Reticulating", "Ruminating", "Scheming", "Schlepping", "Shimmying", "Simmering", "Smooshing", "Spelunking", "Spinning", "Stewing", "Sussing", "Synthesizing", "Thinking", "Tinkering", "Transmuting", "Unfurling", "Unravelling", "Vibing", "Wandering", "Whirring", "Wibbling", "Wizarding", "Working", "Wrangling"];

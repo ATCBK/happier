@@ -1,8 +1,15 @@
 import type { SessionManagedSessionsV1 } from '@happier-dev/protocol';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import type { SessionPersonalAttentionProjectionV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { resolveSessionInboxAttentionV1, resolveRequestFollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { resolvePersonalFollowOnceAttentionV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { selectOldestPendingRequest } from '@happier-dev/session-core/pending';
 
 import { hasProjectedActiveTurn } from '@/sync/domains/session/attention/runtimePresentation';
 import { getSessionStatus, type SessionStatus } from '@/utils/sessions/sessionUtils';
+import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
+import { listPendingSessionRequests } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import { t } from '@/text';
 
 import type { WorkStatusInput } from './resolveWorkStatusTone';
@@ -42,7 +49,7 @@ export function readSessionWorkStatusFacts(
     const status = getSessionStatus(session, nowMs, {
         workingTextMode: 'static', includeTitle: false, disconnectedTextMode: 'offline',
     });
-    return sessionWorkStatusFactsFromStatus(session, status);
+    return sessionWorkStatusFactsFromStatus(session, status, { nowMs });
 }
 
 /**
@@ -50,14 +57,43 @@ export function readSessionWorkStatusFacts(
  * with its own working-word mode), so "settled" has one rule whichever surface asks.
  */
 export function sessionWorkStatusFactsFromStatus(
-    session: SessionReportCounts,
+    session: Parameters<typeof getSessionStatus>[0] & SessionReportCounts,
     status: Pick<SessionStatus, 'awareness' | 'statusText' | 'state'>,
+    options: Readonly<{ nowMs?: number; personalAttention?: SessionPersonalAttentionProjectionV1 }> = {},
 ): SessionWorkStatusFacts {
+    const personal = options.personalAttention
+        ?? resolveSessionPersonalAttentionForViewer(session, options.nowMs ?? Date.now(), []);
+    const viewer = personal === session.viewer?.attention ? session.viewer : { attention: personal };
+    const requestReason = personal.reasons.includes('permission_required') ? 'permission_required'
+        : personal.reasons.includes('user_action_required') ? 'user_action_required' : null;
+    // The already-held request owner supplies type/handler/mode; rows never hydrate a body here.
+    const request = requestReason && 'agentState' in session ? selectOldestPendingRequest(
+        listPendingSessionRequests(session, []).filter(value => resolvePendingRequestAttentionReasonV1(value) === requestReason),
+    ) : undefined;
+    const requestFollowEvent = request ? resolveRequestFollowEventV1({
+        requestKind: requestReason === 'permission_required' ? 'permission' : 'user_action',
+        questionV1: request.questionV1, currentHandler: request.currentHandler,
+    }) : undefined;
+    const onceDelivery = session.viewer?.follow.onceDelivery;
+    const attention = resolveSessionInboxAttentionV1({
+        personalAttention: personal,
+        hasBlockedPendingDelivery: personal.reasons.includes('pending_blocked'),
+        working: status.awareness.operational.reasons.includes('working')
+            || status.awareness.operational.reasons.includes('background_activity'),
+        ready: status.state === 'ready' || status.state === 'finished_unseen'
+            || status.awareness.operational.reasons.includes('ready'),
+        questionType: request?.questionV1?.type,
+        onceDelivery, onceAttentionReason: resolvePersonalFollowOnceAttentionV1({ delivery: onceDelivery }),
+    });
     return withOutstandingReports({
         awareness: status.awareness,
+        viewer,
+        attentionType: attention.type,
+        ...(request ? { currentRequest: request } : {}),
+        ...(requestFollowEvent ? { requestFollowEvent } : {}),
         archiving: status.state === 'archiving',
         word: status.state === 'archiving' ? status.statusText
-            : readSessionAwarenessPresentationV1(status.awareness) === 'unknown' ? t('status.unknownState') : status.statusText,
+            : readSessionAwarenessPresentationV1({ ...status.awareness, viewer }) === 'unknown' ? t('status.unknownState') : status.statusText,
         // Settled is the Session's own statement — its latest turn completed and it reads Ready — not
         // merely "no turn in flight": a quiet Session with nothing to show is idle, not finished.
         settled: status.awareness.operational.primary === 'ready',

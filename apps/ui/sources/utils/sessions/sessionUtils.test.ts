@@ -89,6 +89,16 @@ function setWorkingTextAnimation(enabled: boolean) {
 }
 
 describe('nullable static session presentation', () => {
+    it('uses Protocol stopped state and static request chrome from the same canonical status', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const stopped = createSessionListRenderableSessionFixture({ encryptionMode: 'plain', active: false,
+            metadata: { path: '/work', lifecycleState: 'stopped' } });
+        expect(getSessionStatus(stopped, 1_000)).toMatchObject({ state: 'stopped', isPulsing: false });
+        const permission = createSessionListRenderableSessionFixture({ encryptionMode: 'plain', active: true,
+            presence: 'online', activeAt: 1_000, hasPendingPermissionRequests: true,
+            hasPendingUserActionRequests: false, pendingRequestObservedAt: 1_000 });
+        expect(getSessionStatus(permission, 1_001)).toMatchObject({ state: 'permission_required', isPulsing: false });
+    });
     it('keeps an unbound presenter inert and uses canonical static work copy when it binds', async () => {
         const { useSessionStatus } = await import('./sessionUtils');
         setWorkingTextAnimation(true);
@@ -407,8 +417,8 @@ describe('getSessionStatus', () => {
 
         expect(hook.getCurrent()).toMatchObject({
             state: 'thinking',
-            statusColor: '#2222AA',
-            statusDotColor: '#2222AA',
+            statusColor: '#555555',
+            statusDotColor: '#555555',
             isPulsing: true,
         });
     });
@@ -669,8 +679,8 @@ describe('getSessionStatus', () => {
             },
         });
 
-        expect(status.statusColor).toBe('#connecting');
-        expect(status.statusDotColor).toBe('#connecting');
+        expect(status.statusColor).toBe('#default');
+        expect(status.statusDotColor).toBe('#default');
     });
 
     it('uses a neutral color token and distinct label for background activity', async () => {
@@ -825,7 +835,7 @@ describe('getSessionStatus', () => {
             runtimeActivityState: 'active',
             runtimeActivityActiveCount: 1,
         }), now, { workingTextMode: 'static' })).toMatchObject({
-            state: 'waiting',
+            state: 'archived',
             shouldShowStatus: false,
         });
     });
@@ -916,7 +926,7 @@ describe('getSessionStatus', () => {
         expect(status).toMatchObject({
             state: 'resuming',
             isConnected: true,
-            isPulsing: true,
+            isPulsing: false,
         });
     });
 

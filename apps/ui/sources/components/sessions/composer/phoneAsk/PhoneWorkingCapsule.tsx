@@ -15,8 +15,8 @@ import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
 import {
   useSessionStatus,
-  type SessionState,
 } from '@/utils/sessions/sessionUtils';
+import type { SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { usePhoneAskSheet } from './phoneAskSheetState';
 
@@ -24,7 +24,7 @@ export type PhoneWorkingCapsuleKind = 'working' | 'queued' | 'needsYou';
 
 /** How the canonical Session status reads in the capsule; anything else means the turn has settled. */
 export function resolvePhoneWorkingCapsuleKind(
-  state: SessionState,
+  state: SessionAwarenessPresentationStateV1,
 ): PhoneWorkingCapsuleKind | null {
   if (state === 'thinking' || state === 'resuming') return 'working';
   // The message waits with no turn running (an inactive Session): it is queued, not being worked on.

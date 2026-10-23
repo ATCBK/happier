@@ -24,6 +24,13 @@ import { readExternalSessionLink } from '../external/readExternalSessionLink';
 import { deriveExternalSessionAttentionHasUnread } from '../external/readExternalSessionAttention';
 import { isSessionPersonallyTrackedForViewer } from './sessionViewer';
 import type { SessionListRenderableSession } from '../listing/sessionListRenderable';
+import { readSessionListRenderableOwnerMetadataView } from '../listing/sessionListRenderableSessionProjection';
+
+type ViewerAttentionSession = Session | SessionListRenderableSession;
+
+function ownerMetadataForAttention(session: ViewerAttentionSession) {
+    return 'agentState' in session ? readSessionOwnerMetadataView(session) : readSessionListRenderableOwnerMetadataView(session);
+}
 
 /** Only consumed admission/attention facts invalidate Activity and Inbox projections. */
 export function readSessionViewerAttentionSignature(session: Session | SessionListRenderableSession): string {
@@ -47,12 +54,14 @@ export function readSessionViewerAttentionSignature(session: Session | SessionLi
 
 /** Exact accepted occurrence currently represented by the source, never ongoing tracking. */
 export function readCurrentPersonalFollowOnceOccurrenceForViewer(
-    session: Session,
+    session: ViewerAttentionSession,
     messages?: readonly Message[],
 ): PersonalFollowOnceOccurrenceV1 | null {
     const delivery = session.viewer?.follow.onceDelivery;
     if (!delivery || session.archivedAt != null) return null;
     if (delivery.event === 'permission_required' || delivery.event === 'user_action_required') {
+        // An admitted list summary carries counts, not proof of a current transient request id.
+        if (!('agentState' in session)) return null;
         const responsible = session.viewer?.relevance.reasons.includes('responsible_for_me') === true;
         const capabilities = {
             canSubmitAgentInput: session.access?.capabilities.submitAgentInput === true || responsible,
@@ -76,16 +85,17 @@ const NO_ATTENTION_EXPIRATIONS: readonly number[] = [];
  * not actually use.
  */
 function buildPreViewerRuntimeInput(
-    session: Session,
+    session: ViewerAttentionSession,
     nowMs: number,
     messages?: readonly Message[],
 ) {
-    const pending = derivePendingRequestFlagsFromSession(session, messages);
+    const pending = 'agentState' in session ? derivePendingRequestFlagsFromSession(session, messages) : session;
     return {
         ...session,
         hasPendingPermissionRequests: pending.hasPendingPermissionRequests,
         hasPendingUserActionRequests: pending.hasPendingUserActionRequests,
-        pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session, messages),
+        pendingRequestObservedAt: 'agentState' in session
+            ? deriveLatestPendingRequestObservedAtFromSession(session, messages) : session.pendingRequestObservedAt,
         nowMs,
     };
 }
@@ -100,7 +110,7 @@ function buildPreViewerRuntimeInput(
  * permission and user-action freshness use the existing runtime owner budget.
  */
 export function readSessionPersonalAttentionExpirationsForViewer(
-    session: Session,
+    session: ViewerAttentionSession,
     nowMs: number,
     messages?: readonly Message[],
 ): readonly number[] {
@@ -113,13 +123,13 @@ export function readSessionPersonalAttentionExpirationsForViewer(
     );
 }
 
-function addRuleAttentionForViewer(session: Session, existing: SessionPersonalAttentionProjectionV1,
+function addRuleAttentionForViewer(session: ViewerAttentionSession, existing: SessionPersonalAttentionProjectionV1,
     nowMs: number, messages: readonly Message[] | undefined, policies: readonly FollowPolicyV1[]): SessionPersonalAttentionProjectionV1 {
     const viewer = session.viewer;
     if (!viewer || policies.length === 0) return existing;
-    const metadata = readSessionOwnerMetadataView(session);
+    const metadata = ownerMetadataForAttention(session);
     const runtime = projectUiSessionRuntimeAwareness(buildPreViewerRuntimeInput(session, nowMs, messages));
-    const pending = derivePendingRequestFlagsFromSession(session, messages);
+    const pending = 'agentState' in session ? derivePendingRequestFlagsFromSession(session, messages) : session;
     const projected = resolveSessionPersonalAttentionV1({
         tracked: true, accessible: session.access?.capabilities.readTranscript === true, accountSuspended: false,
         contentAvailable: session.metadataLayoutVersion !== 1 || metadata != null,
@@ -154,7 +164,7 @@ function addRuleAttentionForViewer(session: Session, existing: SessionPersonalAt
 
 /** Modern viewer facts plus transient private rule interest; no persisted viewer mutation. */
 export function resolveSessionPersonalAttentionForViewer(
-    session: Session,
+    session: ViewerAttentionSession,
     nowMs: number,
     messages?: readonly Message[],
     rulePolicies: readonly FollowPolicyV1[] = [],
@@ -179,7 +189,7 @@ export function resolveSessionPersonalAttentionForViewer(
 
     // 0.2.11 owner compatibility: legacy scalar/metadata is read only, never
     // authoritative over a modern viewer row. Remove with pre-viewer Home support.
-    const metadata = readSessionOwnerMetadataView(session);
+    const metadata = ownerMetadataForAttention(session);
     const runtime = projectUiSessionRuntimeAwareness(
         buildPreViewerRuntimeInput(session, nowMs, messages),
     );

@@ -225,6 +225,26 @@ describe('resolveSessionViewConnectionStatus', () => {
             },
         );
 
+        it.each(['failed', 'permission_required', 'action_required', 'usage_limited', 'stopped'] as const)(
+            'keeps canonical %s news ahead of generic inactive copy',
+            (state) => {
+                const status = resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: state,
+                    sessionStatusText: 'canonical status',
+                    sessionUnservable: state === 'failed',
+                    inactiveStatusText: 'Inactive (machine offline)',
+                    inactiveDetail: 'Machine offline',
+                    inactiveResumeAvailable: true,
+                });
+                expect(status?.text).toBe('canonical status');
+                expect(status).not.toHaveProperty('detail');
+                if (state === 'permission_required' || state === 'action_required') {
+                    expect(status).not.toHaveProperty('inactiveAction');
+                }
+            },
+        );
+
         it('yields to resuming, a restart in progress and a failed switch', () => {
             expect(resolveSessionViewConnectionStatus({
                 ...baseInput,

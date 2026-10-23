@@ -13,6 +13,7 @@ import { deriveLatestPendingRequestObservedAtFromSession, derivePendingRequestFl
 import { readSessionOwnerMetadataView } from '../readSessionOwnerMetadataView';
 import { toAwarenessRuntimeInput } from '../attention/runtimePresentation';
 import { readSessionContentAvailability } from '../encryptedContentAvailability';
+import { readSessionUsageLimitRecoveryFromMetadata } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 export type UiSessionAwarenessOptions = Readonly<{
     /** Status/count consumers need the same classification without constructing the display title. */
@@ -93,12 +94,18 @@ export function createUiSessionAwarenessInput(
         controlServiceability: controlState === 'unknown' ? null : controlState,
         pendingRequestObservedAt: options.pendingRequestObservedAt ?? (hydrated ? deriveLatestPendingRequestObservedAtFromSession(session, []) : session.pendingRequestObservedAt),
     });
+    const lifecycle = { ...components.lifecycle,
+        processTerminalState: metadata?.lifecycleState === 'stopped' ? 'stopped' as const : null };
     return {
         sessionId: session.id,
         origin: session.origin,
         nowMs,
         title: options.includeTitle === false ? undefined : readSessionDisplayTitleField({ metadata }).value ?? metadata?.name,
         ...components,
+        lifecycle,
+        runtimeIssue: session.lastRuntimeIssue,
+        usageLimitRecovery: hydrated ? readSessionUsageLimitRecoveryFromMetadata(metadata)
+            : hasReadableMetadata ? session.metadata?.sessionUsageLimitRecoveryV1 ?? null : null,
         content: readUiSessionContentAvailability(session),
         statusReason,
         work: hydrated ? metadata ? readSessionWorkStateV1FromMetadata(metadata) : null : session.workState,
@@ -109,7 +116,7 @@ export function createUiSessionAwarenessInput(
             : null,
         lineage: fork ? { relation: 'fork', sourceSessionId: fork.parentSessionId } : null,
         currentness: resolveAwarenessCurrentnessV1({
-            lifecycle: components.lifecycle,
+            lifecycle,
             runtime: components.runtime,
             pending: hasPendingOptionsEvidence || hasPendingProjectionEvidence ? 'observed' : 'unavailable',
             work: metadata ? 'observed' : 'unavailable',

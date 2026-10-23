@@ -4,7 +4,7 @@ import { Modal } from '@/modal';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { AskHappierContext } from '@/sync/domains/pending/pendingSetupIntent.shared';
 import { t } from '@/text';
-import type { SessionState } from '@/utils/sessions/sessionUtils';
+import type { SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { AskHappierDraftResult } from './happierGuideDraft';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
@@ -60,9 +60,9 @@ export async function startAskHappier(
  * Session states in which the status row offers Ask Happier: the machine or runtime can't serve the
  * Session and the person needs to know what to do. Healthy and in-progress states stay quiet.
  */
-const ASK_HAPPIER_STATUS_OFFER_STATES: ReadonlySet<SessionState> = new Set<SessionState>([
+const ASK_HAPPIER_STATUS_OFFER_STATES: ReadonlySet<SessionAwarenessPresentationStateV1> = new Set<SessionAwarenessPresentationStateV1>([
     'disconnected', 'failed', 'repair_needed', 'recoverable_unservable', 'setup_required',
 ]);
-export function isAskHappierStatusOfferState(state: SessionState): boolean {
+export function isAskHappierStatusOfferState(state: SessionAwarenessPresentationStateV1): boolean {
     return ASK_HAPPIER_STATUS_OFFER_STATES.has(state);
 }

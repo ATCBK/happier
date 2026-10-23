@@ -5,10 +5,9 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useSessionListRuntimeNowMs, useSessionListRuntimeWake } from '@/hooks/session/sessionListRuntimeClock';
-import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { storage } from '@/sync/domains/state/storageStore';
-import { presentSessionAwarenessV1, readSessionStatusLifecycleState, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
+import { getSessionStatus, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 
 /** Tab chrome consumes the same Home-scoped summary and awareness answer as Session rows. */
 export function useDestinationInstanceTabPresentations(entries: readonly DestinationInstanceTitleEntry[]): ReadonlyMap<string, DocumentTabPresentation> {
@@ -26,20 +25,13 @@ export function useDestinationInstanceTabPresentations(entries: readonly Destina
         if (!row) return;
         const refreshAtMs = readSessionStatusNextRefreshAtMs(row, nowMs);
         if (refreshAtMs !== null) nextWakeAtMs = nextWakeAtMs === null ? refreshAtMs : Math.min(nextWakeAtMs, refreshAtMs);
-        const presentation = presentSessionAwarenessV1(projectUiSessionAwareness(row, nowMs), {
-            lifecycleState: readSessionStatusLifecycleState(row), disconnectedTextMode: 'offline',
-        });
+        const presentation = getSessionStatus(row, nowMs, { includeTitle: false, disconnectedTextMode: 'offline' });
         let tone: NonNullable<DocumentTabPresentation['status']>['tone'];
-        switch (presentation.state) {
-            case 'thinking':
-            case 'resuming': tone = 'working'; break;
-            case 'permission_required':
-            case 'action_required': tone = 'attention'; break;
-            case 'failed': tone = 'failed'; break;
-            case 'disconnected':
-            case 'recoverable_unservable': tone = 'offline'; break;
-            default: return;
-        }
+        if (presentation.tone === 'danger') tone = 'failed';
+        else if (presentation.tone === 'attention') tone = 'attention';
+        else if (presentation.bucket === 'working') tone = 'working';
+        else if (presentation.bucket === 'offline') tone = 'offline';
+        else return;
         presentations.set(sessionEntries[index].key, { status: { tone, label: presentation.statusText } });
     });
     useSessionListRuntimeWake(nextWakeAtMs, sessionEntries.length > 0);

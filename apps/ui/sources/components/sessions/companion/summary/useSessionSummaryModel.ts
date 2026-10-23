@@ -9,7 +9,6 @@ import { getAgentCore } from '@/agents/catalog/catalog';
 import { buildSessionScmSummary } from '@/components/sessions/sourceControl/status/statusSummary';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { t } from '@/text';
-import { readSessionStatusLifecycleState } from '@/utils/sessions/sessionUtils';
 import { useSessionAgentActivity } from '@/hooks/session/useSessionAgentActivity';
 import { EMPTY_SESSION_LIST_SERVER_KEY } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
@@ -161,7 +160,7 @@ export function useSessionSummaryModel(input: Readonly<{
 
     return projectSessionSummaryCard({
         awareness,
-        lifecycleState: readSessionStatusLifecycleState(awarenessSource),
+        viewer: awarenessSource.viewer,
         agentLabel,
         agentId,
         activity: activity.counts.total > 0

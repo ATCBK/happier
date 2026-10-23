@@ -5,7 +5,7 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-import { createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { buildSessionFromListRenderable } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
@@ -18,6 +18,39 @@ import { readSessionWorkStalled, readSessionWorkStatusFacts, sessionWorkStatusFa
 const NOW = 1_000_000;
 
 describe('readSessionWorkStatusFacts', () => {
+    it('carries admitted C1 attention beside awareness while preserving the existing viewer reference', () => {
+        const quietViewer = createSessionViewerFixture();
+        const row = createSessionListRenderableSessionFixture({ active: true, activeAt: NOW,
+            hasPendingPermissionRequests: true, pendingRequestObservedAt: NOW, viewer: quietViewer });
+        const quiet = readSessionWorkStatusFacts(row, NOW);
+        expect(quiet.viewer).toBe(quietViewer);
+        expect(quiet.attentionType).toBeNull();
+        const viewer = createSessionViewerFixture({ attention: { needsAttention: true,
+            reasons: ['failed', 'permission_required'], primary: 'failed', presentation: 'full' } });
+        const admitted = readSessionWorkStatusFacts({ ...row, viewer }, NOW);
+        expect(admitted.viewer).toBe(viewer);
+        expect(admitted.attentionType).toBe('approval');
+        expect(resolveWorkStatusTone({ kind: 'session', facts: admitted }))
+            .toMatchObject({ state: 'failed', tone: 'danger', attentionType: 'approval' });
+    });
+
+    it.each(['manager', 'continue'] as const)('keeps an admitted %s question quiet using its held request owner', kind => {
+        const questionV1 = kind === 'continue'
+            ? { mode: 'continue' as const, assumption: 'Continue with the safe default', type: 'decision' as const, lasting: false }
+            : { mode: 'wait' as const, type: 'decision' as const, lasting: false };
+        const currentHandler = kind === 'manager' ? { kind: 'session' as const, sessionId: 'manager' } : { kind: 'person' as const };
+        const session = createSessionFixture({ active: true, activeAt: NOW,
+            viewer: createSessionViewerFixture({ attention: { needsAttention: true,
+                reasons: ['user_action_required'], primary: 'user_action_required', presentation: 'full' } }),
+            agentState: { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {},
+                createdAt: NOW, questionV1, currentHandler } } },
+        });
+        const facts = readSessionWorkStatusFacts(session, NOW);
+        expect(facts.currentRequest?.id).toBe('question');
+        expect(facts.requestFollowEvent).toMatchObject({ kind: 'needs_you', type: 'decision', mode: questionV1.mode });
+        expect(resolveWorkStatusTone({ kind: 'session', facts }))
+            .toMatchObject({ attentionType: 'decision', tone: 'neutral' });
+    });
     it('reads layout-1 stopped evidence from authorized owner metadata, leaving recipients offline', () => {
         const metadata = { path: '/repo', host: 'devbox', lifecycleState: 'stopped', lifecycleStateSince: NOW };
         const owner = createSessionOwnerMetadataV1({ metadata });
@@ -47,9 +80,9 @@ describe('readSessionWorkStatusFacts', () => {
         for (const session of [stopped, row, buildSessionFromListRenderable(row)]) {
             const facts = readSessionWorkStatusFacts(session, NOW);
             expect(resolveWorkStatusTone({ kind: 'session', facts }))
-                .toEqual({ bucket: 'offline', tone: 'neutral', word: 'sessionWork.states.stopped' });
+                .toMatchObject({ state: 'stopped', bucket: 'idle', tone: 'neutral', word: 'sessionWork.states.stopped' });
             const status = getSessionStatus(session, NOW, { workingTextMode: 'static' });
-            expect(status).toMatchObject({ state: 'disconnected', isConnected: false, isPulsing: false,
+            expect(status).toMatchObject({ state: 'stopped', isConnected: false, isPulsing: false,
                 statusText: 'sessionWork.states.stopped' });
             expect(sessionWorkStatusFactsFromStatus(session, status).word).toBe(facts.word);
         }
@@ -91,7 +124,7 @@ describe('readSessionWorkStatusFacts', () => {
         });
         const cold = buildSessionFromListRenderable(row, { serverId: 'home-a' });
         const status = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(cold, NOW) });
-        expect(status).toEqual({ bucket: 'offline', tone: 'neutral', word: 'status.offline' });
+        expect(status).toMatchObject({ bucket: 'offline', tone: 'neutral', word: 'status.offline' });
         // The content remains unavailable during hydration; a public runtime word grants no read.
         expect(readSessionWorkStatusFacts(cold, NOW).awareness.encryption).toBe('unknown');
         const hydrated = createSessionFixture({ ...cold, encryptedContentAvailability: 'ready',
@@ -105,7 +138,7 @@ describe('readSessionWorkStatusFacts', () => {
             active: true, presence: undefined,
         });
         const status = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(row, NOW) });
-        expect(status).toEqual({ bucket: 'idle', tone: 'neutral', word: 'status.unknownState' });
+        expect(status).toMatchObject({ bucket: 'idle', tone: 'neutral', word: 'status.unknownState' });
     });
 
     it('keeps observer loss offline, including an idle runtime after a cancelled turn', () => {
@@ -170,7 +203,7 @@ describe('readSessionWorkStatusFacts', () => {
 
     it('never calls a lead settled while its reports are still outstanding (R-10), whoever counts them', () => {
         const lead = createSessionListRenderableSessionFixture({
-            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0 },
+            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: 'thinking' },
         });
         // The server's count of the lead's reports, read from the Session itself.
         const fromAwareness = readSessionWorkStatusFacts(lead, NOW);
@@ -185,7 +218,7 @@ describe('readSessionWorkStatusFacts', () => {
         expect(withOutstandingReports(settled, 0)).toBe(settled);
 
         const doneReports = createSessionListRenderableSessionFixture({
-            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 0, needsYou: 0, stalled: 0 },
+            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 0, needsYou: 0, stalled: 0, finished: 2, attentionPrimary: null },
         });
         expect(readSessionWorkStatusFacts(doneReports, NOW).settled).toBe(true);
     });
@@ -194,7 +227,7 @@ describe('readSessionWorkStatusFacts', () => {
         // An offline lead whose reports still work, with no turn of its own in flight: not settled (R-10),
         // and not stalled either.
         const offlineLead = createSessionListRenderableSessionFixture({
-            presence: 1, active: false, activeAt: 1, managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0 },
+            presence: 1, active: false, activeAt: 1, managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: 'thinking' },
         });
         expect(readSessionWorkStatusFacts(offlineLead, NOW).settled).toBe(false);
         expect(readSessionWorkStalled(offlineLead, NOW)).toBe(false);

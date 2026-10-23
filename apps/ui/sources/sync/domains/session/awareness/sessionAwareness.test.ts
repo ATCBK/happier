@@ -3,8 +3,41 @@ import { SessionWorkflowActivityHeadlineV1Schema } from '@happier-dev/protocol/s
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { buildSessionListRenderableFromSession } from '../listing/sessionListRenderable';
 import { projectUiSessionAwareness } from './sessionAwareness';
+import { SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 describe('UI Session awareness acquisition adapter', () => {
+    it('carries issue-bound recovery once through the keyed row and preserves unchanged row identity', () => {
+        const recovery = SessionUsageLimitRecoveryV1Schema.parse({ v: 1, status: 'waiting',
+            issueFingerprint: 'usage-limit:codex:turn-a:1000:5000', armedAtMs: 1_000,
+            resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0, maxAttempts: 3,
+            lastProbeError: null, selectedAuth: { kind: 'native' },
+        });
+        const session = createSessionFixture({ encryptionMode: 'plain', active: true, presence: 'online', activeAt: 1_000,
+            latestTurnStatus: 'failed', metadata: { path: '/work', sessionUsageLimitRecoveryV1: recovery },
+            lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit',
+                agentId: 'codex', agentTurnId: 'turn-a', occurredAt: 1_000,
+                usageLimit: { v: 1, resetAtMs: 5_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } },
+        });
+        const row = buildSessionListRenderableFromSession(session, undefined, []);
+        expect(row.metadata?.sessionUsageLimitRecoveryV1).toEqual(recovery);
+        expect(buildSessionListRenderableFromSession(session, row, [])).toBe(row);
+        const parse = vi.spyOn(SessionUsageLimitRecoveryV1Schema, 'safeParse');
+        try {
+            for (let index = 0; index < 20; index += 1) {
+                expect(projectUiSessionAwareness(row, 1_001).operational.primary).toBe('usage_limited');
+            }
+            expect(parse).not.toHaveBeenCalled();
+        } finally { parse.mockRestore(); }
+    });
+    it('retains a usage-limited failed turn through detail and list without automatic recovery data', () => {
+        const session = createSessionFixture({ encryptionMode: 'plain', active: true, presence: 'online', activeAt: 1_000,
+            latestTurnStatus: 'failed', latestTurnStatusObservedAt: 1_000,
+            lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: 1_000 },
+        });
+        for (const source of [session, buildSessionListRenderableFromSession(session, undefined, [])]) {
+            expect(projectUiSessionAwareness(source, 1_001).operational.primary).toBe('usage_limited');
+        }
+    });
     it('does not parse absent workflow headlines while projecting ordinary Sessions', () => {
         const session = createSessionFixture({ encryptionMode: 'plain', metadata: { path: '/work', host: 'host' } });
         const parse = vi.spyOn(SessionWorkflowActivityHeadlineV1Schema, 'safeParse');

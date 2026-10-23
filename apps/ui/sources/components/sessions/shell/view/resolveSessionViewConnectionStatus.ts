@@ -1,5 +1,5 @@
 import type { SessionConnectedServicesAuthSwitchRestartState } from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
-import type { SessionState } from '@/utils/sessions/sessionUtils';
+import type { SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import type { SessionGuardComposerState } from './resolveSessionGuardComposerState';
 
@@ -62,7 +62,7 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
     inactiveDetail?: string | null;
     sessionStatusResuming: boolean;
     /** The canonical presented Session state (`presentSessionAwarenessV1`). */
-    sessionStatusState: SessionState;
+    sessionStatusState: SessionAwarenessPresentationStateV1;
     sessionStatusText: string;
     sessionStatusColor: string;
     sessionStatusDotColor: string;
@@ -124,6 +124,10 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
             ...(binding.action ? { providerBindingAction: binding.action } : {}),
         };
     }
+    // Inactive recovery wording explains missing reachability; it must not replace the
+    // canonical presenter's more specific failure, current request or process-terminal fact.
+    const inactiveStatusText = input.sessionStatusState === 'disconnected' || input.sessionStatusState === 'unknown'
+        ? input.inactiveStatusText : null;
     // Before the runtime has been observed there is no status to state: the line stays empty
     // rather than reading "unknown". A restart, a failed switch, an inactive Session or queued
     // input is a real fact and still speaks.
@@ -131,7 +135,7 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
         input.sessionStatusState === 'unknown'
         && !restartPending
         && input.connectedServicesRestartState?.status !== 'failed'
-        && !input.inactiveStatusText
+        && !inactiveStatusText
     ) {
         return queueCountText
             ? { text: queueCountText, color: input.sessionStatusColor, dotColor: input.sessionStatusDotColor, isPulsing: false }
@@ -140,14 +144,14 @@ export function resolveSessionViewConnectionStatus(input: Readonly<{
     const showsInactive = !restartPending
         && input.connectedServicesRestartState?.status !== 'failed'
         && !input.sessionStatusResuming
-        && Boolean(input.inactiveStatusText);
+        && Boolean(inactiveStatusText);
     const statusText = restartPending
         ? input.restartingText
         : input.connectedServicesRestartState?.status === 'failed'
             ? input.switchFailedText
             : input.sessionStatusResuming
                 ? input.sessionStatusText
-                : (input.inactiveStatusText || input.sessionStatusText);
+                : (inactiveStatusText || input.sessionStatusText);
     return {
         // The queue's size rides the ordinary status. A restart or failed switch keeps its own words,
         // and resuming speaks alone: the resume is what delivers the queue.

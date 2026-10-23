@@ -1,4 +1,5 @@
 import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
+import type { SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { selectOldestPendingRequest, type SessionPendingRequest } from '@happier-dev/session-core/pending';
 
 import {
@@ -81,8 +82,7 @@ export type SessionSummaryActivityFacts = Readonly<{
 
 export type SessionSummaryInput = Readonly<{
     awareness: SessionAwarenessProjectionV1;
-    /** Authorized process fact from the shared Session status metadata reader. */
-    lifecycleState?: string;
+    viewer?: SessionViewerProjectionV1;
     /** From the existing Agent catalog presentation; never inferred from metadata here. */
     agentLabel: string | null;
     /** The presentation Agent id, for its mark on the status line. */
@@ -251,8 +251,8 @@ export function projectSessionSummaryCard(input: SessionSummaryInput): SessionSu
         title: input.awareness.title ?? null,
         agentLabel: input.agentLabel,
         agentId: input.agentId ?? null,
-        status: presentSessionAwarenessV1(input.awareness, {
-            lifecycleState: input.lifecycleState, disconnectedTextMode: 'offline',
+        status: presentSessionAwarenessV1({ ...input.awareness, viewer: input.viewer }, {
+            disconnectedTextMode: 'offline',
         }),
         stale: input.awareness.freshness !== 'live',
         availability: input.awareness.availability,
