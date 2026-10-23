@@ -11,6 +11,14 @@ function getUiDir(): string {
     return join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..');
 }
 
+function getInstalledPackageDir(packageName: string, fromDir = getUiDir()): string {
+    const requireFromPackage = createRequire(join(fromDir, 'package.json'));
+    const manifest = requireFromPackage.resolve.paths(packageName)
+        ?.map(root => join(root, packageName, 'package.json')).find(existsSync);
+    if (!manifest) throw new Error(`Missing installed package ${packageName}`);
+    return dirname(realpathSync(manifest));
+}
+
 function loadMetroConfig(uiDir: string, envOverrides: Record<string, string | null | undefined> = {}) {
     const require = createRequire(import.meta.url);
     const configPath = join(uiDir, 'metro.config.js');
@@ -127,8 +135,9 @@ describe('metro.config.js (web)', () => {
                 type: 'sourceFile', filePath: join(fixture, 'node_modules', 'unrelated-peer', 'index.js'),
             });
             if (platform === 'web') {
-                const pierreRoot = join(uiDir, 'node_modules/@pierre/diffs');
-                const themingRoot = join(pierreRoot, 'node_modules/@pierre/theming');
+                const pierreRoot = getInstalledPackageDir('@pierre/diffs');
+                const themingRoot = getInstalledPackageDir('@pierre/theming', pierreRoot);
+                const privateThemingRoot = join(pierreRoot, 'node_modules/@pierre/theming');
                 const theming = JSON.parse(readFileSync(join(themingRoot, 'package.json'), 'utf8'));
                 const expected = resolve(themingRoot, theming.exports['./themes'].import);
                 for (const dev of [true, false]) {
@@ -158,8 +167,9 @@ describe('metro.config.js (web)', () => {
                         { ...pierreContext, isESMImport: false }, '@pierre/theming/themes', 'web',
                     )).toThrow();
                     expect(isBlocked(expected)).toBe(false);
-                    expect(isBlocked(join(themingRoot, '../theming-other/dist/themes.js'))).toBe(true);
-                    expect(isBlocked(join(themingRoot, 'node_modules/react/index.js'))).toBe(true);
+                    expect(isBlocked(join(privateThemingRoot, 'dist/themes.js'))).toBe(false);
+                    expect(isBlocked(join(privateThemingRoot, '../theming-other/dist/themes.js'))).toBe(true);
+                    expect(isBlocked(join(privateThemingRoot, 'node_modules/react/index.js'))).toBe(true);
                     expect(isBlocked(String.raw`C:\repo\apps\ui\node_modules\@pierre\diffs\node_modules\@pierre\theming\dist\themes.js`)).toBe(false);
                     expect(isBlocked(String.raw`C:\repo\apps\ui\node_modules\@pierre\diffs\node_modules\@pierre\theming-other\dist\themes.js`)).toBe(true);
                 }
@@ -249,7 +259,7 @@ describe('metro.config.js (web)', () => {
 
     it('resolves React Native\'s declared private package through the coherent app-level dependency in narrowed native Metro runs', () => {
         const uiDir = getUiDir();
-        const reactNativeDir = resolve(uiDir, 'node_modules/react-native');
+        const reactNativeDir = getInstalledPackageDir('react-native');
         const config = loadMetroConfig(uiDir, {
             CI: '1',
             EXPO_NO_METRO_WORKSPACE_ROOT: '1',
@@ -826,7 +836,7 @@ describe('metro.config.js (web)', () => {
     it('keeps the Worklets Bundle Mode generated-worklet resolver available when explicitly enabled', () => {
         const uiDir = getUiDir();
         const moduleName = 'react-native-worklets/.worklets/metro-fixture.js';
-        const generatedWorkletPath = join(uiDir, 'node_modules', moduleName);
+        const generatedWorkletPath = join(getInstalledPackageDir('react-native-worklets'), '.worklets/metro-fixture.js');
         mkdirSync(dirname(generatedWorkletPath), { recursive: true });
         writeFileSync(generatedWorkletPath, 'export default null;\n');
 
@@ -887,21 +897,23 @@ describe('metro.config.js (web)', () => {
 
     it('does not watch generated Worklets Bundle Mode modules by default', () => {
         const uiDir = getUiDir();
+        const workletsDir = getInstalledPackageDir('react-native-worklets');
         const config = loadMetroConfig(uiDir, { HAPPIER_UI_WORKLETS_BUNDLE_MODE: '0' });
 
         expect(config.watchFolders).toEqual(expect.not.arrayContaining([
-            join(uiDir, 'node_modules/react-native-worklets/__generatedWorklets'),
-            join(uiDir, 'node_modules/react-native-worklets/.worklets'),
+            join(workletsDir, '__generatedWorklets'),
+            join(workletsDir, '.worklets'),
         ]));
     });
 
     it('watches generated Worklets Bundle Mode modules when explicitly enabled', () => {
         const uiDir = getUiDir();
+        const workletsDir = getInstalledPackageDir('react-native-worklets');
         const config = loadMetroConfig(uiDir, { HAPPIER_UI_WORKLETS_BUNDLE_MODE: '1' });
 
         expect(config.watchFolders).toEqual(expect.arrayContaining([
-            join(uiDir, 'node_modules/react-native-worklets/__generatedWorklets'),
-            join(uiDir, 'node_modules/react-native-worklets/.worklets'),
+            join(workletsDir, '__generatedWorklets'),
+            join(workletsDir, '.worklets'),
         ]));
     });
 
