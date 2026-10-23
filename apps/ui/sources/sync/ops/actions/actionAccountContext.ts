@@ -446,7 +446,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const last = artifacts.at(-1);
                 const nextCursor = options.limit !== undefined && artifacts.length === options.limit && last
                     ? encodeArtifactListCursor({ artifactId: last.id, updatedAt: last.updatedAt }) : undefined;
-                return { items, coverage, ...(page.hasUnclassified === undefined ? {} : { hasUnclassified: page.hasUnclassified }),
+                return { items, coverage, ...(page.kindCoverage ? { kindCoverage: page.kindCoverage } : {}),
+                    ...(page.hasUnclassified === undefined ? {} : { hasUnclassified: page.hasUnclassified }),
                     ...(nextCursor ? { nextCursor } : {}) };
         };
         const createArtifactDocument = async ({ artifactId, header, body, savedBy, source, memoryDecisionSource, signal: operationSignal }: ArtifactCreateOperation) => {
