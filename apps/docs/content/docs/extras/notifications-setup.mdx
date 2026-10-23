@@ -25,7 +25,8 @@ On the mobile app, permission and action-request notifications can also expose *
 Current behavior is intentionally conservative:
 
 - tapping the notification opens the targeted session
-- pressing a notification action button also opens the app
+- `Answer` opens the app on the targeted session
+- `Allow` and `Deny` normally open the app; the unreleased Android background-action candidate can respond without opening it when background registration is available
 - Happier only auto-sends a permission response when the notification’s server is already active or already saved on the device
 - if the server is not saved yet, Happier routes you into the safest add/switch flow instead of silently approving on the wrong server
 

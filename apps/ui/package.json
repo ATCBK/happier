@@ -26,7 +26,13 @@
       "searchPaths": [
         "../../node_modules",
         "./node_modules"
-      ]
+      ],
+      "android": {
+        "buildFromSource": [
+          "expo-task-manager",
+          "unimodules-app-loader"
+        ]
+      }
     }
   },
   "scripts": {

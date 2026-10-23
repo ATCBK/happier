@@ -626,6 +626,18 @@ an older binary. Expo SDK 54 action-task delivery does not replace the
 foreground listener. Force-stop, battery restrictions, and native background or
 terminated-state delivery remain subject to physical-device validation.
 
+The SDK 54 dependency patch backports [Expo's Android task-lifetime fix](https://github.com/expo/expo/pull/43821)
+to `expo-task-manager` 14.0.9. Expo's existing event lifecycle keeps React Native
+timers active until the last task event finishes; the app does not add a second
+background service or task lifecycle. The UI package's Android autolinking
+`buildFromSource` declaration includes `expo-task-manager` and its existing
+`unimodules-app-loader` Gradle dependency, so native builds compile the patched
+source instead of its bundled Maven publication. The existing
+postinstall compilation verifier checks that declaration. This patch can be
+removed when the installed SDK includes the upstream fix, as SDK 55 in the 0.3
+line already does. It shares this PR's new native-runtime requirement and cannot
+be delivered to an older binary by OTA alone.
+
 ## Migration history
 
 Migration source has a stricter authoring boundary than ordinary internal code:
