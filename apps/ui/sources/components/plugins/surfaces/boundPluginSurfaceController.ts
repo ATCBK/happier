@@ -59,7 +59,7 @@ import { describePluginExecutionOriginRefusal, resolveReasonCopy } from '@/sync/
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION, readCompletePluginUiResourceDeclarations, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 import {
@@ -1037,15 +1037,19 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             }) : {}),
         },
     });
+    const readCompleteResourceDeclarations = () => {
+        const facts = input.facts.readActionInputFacts?.() ?? input.facts;
+        if (facts.resourceDeclarations !== undefined) return facts.resourceDeclarations;
+        return readCompletePluginUiResourceDeclarations(facts.pluginUiProjection, input.facts.pluginId, daemon?.expectedOccurrenceId);
+    };
     const declaredResourceStore = canReadResource && daemon && accountLifetime
         ? createPluginDeclaredResourceStore({ accountLifetime, pluginId: input.facts.pluginId,
             machineId: daemon.machineId, serverId: daemon.serverId ?? null,
             expectedCallerOccurrenceId: daemon.expectedOccurrenceId,
             createFallbackStore: createOrdinaryResourceStore,
-            get resourceDeclarationsComplete() { return (input.facts.readActionInputFacts?.() ?? input.facts).resourceDeclarations !== undefined; },
+            get resourceDeclarationsComplete() { return readCompleteResourceDeclarations() !== undefined; },
             get resourcesById() {
-                const facts = input.facts.readActionInputFacts?.() ?? input.facts;
-                return facts.resourceDeclarations ?? facts.pluginUiProjection?.resourcesById ?? {};
+                return readCompleteResourceDeclarations() ?? EMPTY_PLUGIN_UI_PROJECTION.resourcesById;
             },
             ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
             ...(input.facts.resourceContext?.kind === 'surface' ? { surfaceContext: input.facts.resourceContext } : {}) })

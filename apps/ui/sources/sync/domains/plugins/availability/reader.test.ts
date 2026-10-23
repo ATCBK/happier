@@ -815,45 +815,73 @@ describe('Plugin Account Availability reader', () => {
         const base = snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response }] });
         const materialization = { ...base.materializations[0]!,
             declaredManifest: response.release!.normalizedManifest, declaredUiEntries: {} };
-        const second = { ...materialization, machineId: 'machine-2', materializationId: 'install-2' };
-        const initial = { ...base, materializations: [materialization, second], snapshots: [
-            { ...base.snapshots[0]!, materializations: [materialization] },
-            { ...base.snapshots[0]!, machineId: second.machineId, materializations: [second] },
-        ] };
+        const materializations = Array.from({ length: 100 }, (_, index) => index === 0 ? materialization : {
+            ...materialization, machineId: `machine-${index + 1}`, materializationId: `install-${index + 1}`,
+        });
+        const initial = { ...base, materializations, snapshots: materializations.map(row => ({
+            ...base.snapshots[0]!, machineId: row.machineId, materializations: [row],
+        })) };
         store.replace({ scope, snapshot: initial });
         const before = store.bind(scope).readInstalledPlugins();
         if (before.kind !== 'available') throw new Error('Fixture installation must be available');
         const normalizations = vi.spyOn(uiProjection, 'normalizePluginInstalledUiDeclarations');
         onTestFinished(() => normalizations.mockRestore());
-        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43, intentReads: [{
-            pluginId: 'com.acme.fixture', response: { ...response, availabilityCursor: 43,
-                intent: { ...response.intent!, revision: 'intent-2' } },
-        }] } });
+        const retainedModels = new Set<unknown>(before.plugins[0]!.installations.map(row => row.uiModel));
+        const entries = vi.spyOn(Object, 'entries');
+        onTestFinished(() => entries.mockRestore());
+        const retainedModelWalks = () => entries.mock.calls.filter(([value]) => retainedModels.has(value)).length;
+        for (let index = 0; index < 20; index += 1) {
+            store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43 + index, intentReads: [{
+                pluginId: 'com.acme.fixture', response: { ...response, availabilityCursor: 43 + index,
+                    intent: { ...response.intent!, revision: 'intent-2' } },
+            }] } });
+        }
         const reader = store.bind(scope);
         const after = reader.readInstalledPlugins();
         if (after.kind !== 'available') throw new Error('Fixture installation must remain available');
-        expect(after.availabilityCursor).toBe(43);
+        expect(after.availabilityCursor).toBe(62);
         expect(reader.readCurrentReleaseSelection({ pluginId: 'com.acme.fixture' }))
-            .toMatchObject({ kind: 'available', availabilityCursor: 43, intent: { revision: 'intent-2' } });
+            .toMatchObject({ kind: 'available', availabilityCursor: 62, intent: { revision: 'intent-2' } });
         expect(after.plugins[0]!.installations[0]!.uiModel).toBe(before.plugins[0]!.installations[0]!.uiModel);
         expect(after.plugins[0]).toBe(before.plugins[0]);
         expect(normalizations).not.toHaveBeenCalled();
         const observed = { ...materialization, observedAt: materialization.observedAt + 1 };
-        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44, materializations: [observed, second] } });
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 63, materializations: [observed, ...materializations.slice(1)] } });
         const observation = reader.readInstalledPlugins();
         if (observation.kind !== 'available') throw new Error('Observed installation must remain available');
         expect(observation.plugins[0]!.installations[0]!.materialization.observedAt).toBe(observed.observedAt);
         expect(normalizations).not.toHaveBeenCalled();
         expect(observation.plugins[0]!.installations[0]!.uiModel).toBe(after.plugins[0]!.installations[0]!.uiModel);
+        expect(retainedModelWalks()).toBe(0);
+        entries.mockClear();
         const changed = { ...initial.materializations[0]!, enabled: true };
-        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 45, materializations: [changed, second], snapshots: [{
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 64, materializations: [changed, ...materializations.slice(1)], snapshots: [{
             ...initial.snapshots[0]!, materializations: [changed],
-        }, initial.snapshots[1]!] } });
+        }, ...initial.snapshots.slice(1)] } });
         const updated = store.bind(scope).readInstalledPlugins();
         if (updated.kind !== 'available') throw new Error('Updated installation must remain available');
         expect(updated.plugins[0]!.installations[0]!.uiModel).not.toBe(after.plugins[0]!.installations[0]!.uiModel);
         expect(updated.plugins[0]!.installations[0]!.uiModel.installedPackagesById['com.acme.fixture']?.enabled).toBe(true);
-        expect(updated.plugins[0]!.installations[1]!.uiModel).toBe(after.plugins[0]!.installations[1]!.uiModel);
+        for (let index = 1; index < materializations.length; index += 1) {
+            expect(updated.plugins[0]!.installations[index]!.uiModel).toBe(after.plugins[0]!.installations[index]!.uiModel);
+        }
+        expect(retainedModelWalks()).toBe(0);
+        expect(before.plugins[0]!.installations[0]!.uiModel.installedPackagesById['com.acme.fixture']?.enabled).toBe(false);
+        expect(normalizations).toHaveBeenCalledTimes(1);
+        entries.mockClear();
+        normalizations.mockClear();
+        const replacement = { ...changed, materializationId: 'install-replacement' };
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 65,
+            materializations: [replacement, ...materializations.slice(1)],
+            snapshots: [{ ...initial.snapshots[0]!, materializations: [replacement] }, ...initial.snapshots.slice(1)],
+        } });
+        const replaced = store.bind(scope).readInstalledPlugins();
+        if (replaced.kind !== 'available') throw new Error('Replacement installation must be available');
+        const replacedModel = replaced.plugins[0]!.installations[0]!.uiModel;
+        expect(replacedModel).not.toBe(updated.plugins[0]!.installations[0]!.uiModel);
+        expect(replacedModel.installedPackagesById['com.acme.fixture']?.source?.locator).toBe('install-replacement');
+        expect(entries.mock.calls.filter(([value]) => value === replacedModel).length).toBe(1);
+        expect(retainedModelWalks()).toBe(0);
         expect(normalizations).toHaveBeenCalledTimes(1);
     });
     it('projects cold portable app and settings destinations from the exact release without reported descriptors or execution authority', () => {

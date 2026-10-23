@@ -831,8 +831,8 @@ function readInstalledPluginsAdmission(
                     contributionPoints: (declaration.contributes.pluginContributionPoints?.length ?? 0) > 0,
                 } } : {}),
             }, registrySources, skills);
+            uiModel = preparePluginUiProjectionOrigins(uiModel);
         }
-        uiModel = preparePluginUiProjectionOrigins(uiModel);
         installations.push(retainUnchangedAvailabilityValue(incumbent, Object.freeze({
             materialization,
             declaration,

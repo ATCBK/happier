@@ -1920,7 +1920,12 @@ function derivePluginUiProjectionUnion(
         // contribution. This prevents a newer replica's brand from shadowing
         // the selected artifact's brand.
         for (const pluginId of admittedPluginIds) {
-            const installedPackage = model.installedPackagesById[pluginId];
+            let installedPackage = model.installedPackagesById[pluginId];
+            if (installedPackage?.resourceDeclarationsComplete
+                && (member.phase !== 'current' || conflictedPluginIds.has(pluginId))) {
+                const { resourceDeclarationsComplete: _coverage, ...retainedPackage } = installedPackage;
+                installedPackage = Object.freeze(retainedPackage);
+            }
             if (installedPackage) {
                 if (selectedMembersByPluginId.get(pluginId) === member) installedPackagesById[pluginId] = installedPackage;
                 else if (!installedPackagesById[pluginId]) installedPackagesById[pluginId] = conflictedPluginIds.has(pluginId)

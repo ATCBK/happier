@@ -10,6 +10,7 @@ import type { PluginUiResourceEntry } from '@happier-dev/plugin-ui/advanced';
 import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 import { selectWidgetPlacementsBySurface } from '@/sync/domains/plugins/ui/widgetContract';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readCompletePluginUiResourceDeclarations } from '@/sync/domains/plugins/ui/projection';
 import { acquirePluginContextualResourceStore, createPluginDeclaredResourceStore } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { resolveDeclarativeDataResourceBinding } from '@/components/plugins/surfaces/declarativeDataSource';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
@@ -156,9 +157,11 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
         if (!machineId || (origin?.serverId && !areServerProfileIdentifiersEquivalent(origin.serverId, account.serverId))) return unavailable();
         const occurrenceId = placement[0].occurrenceId;
         if (typeof occurrenceId !== 'string' || !occurrenceId) return unavailable();
+        const resourcesById = readCompletePluginUiResourceDeclarations(runtime.projection, installedDefinition.surface.pluginId, occurrenceId);
+        if (resourcesById === undefined) return unavailable();
         const store = createPluginDeclaredResourceStore({ accountLifetime: account.accountLifetime,
             pluginId: installedDefinition.surface.pluginId, machineId, serverId: account.serverId,
-            expectedCallerOccurrenceId: occurrenceId, resourcesById: runtime.projection.resourcesById,
+            expectedCallerOccurrenceId: occurrenceId, resourcesById, resourceDeclarationsComplete: true,
             ...(parsedSession?.success ? { sessionId: parsedSession.data.sessionId } : {}) });
         if (!store) return unavailable();
         try {

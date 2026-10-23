@@ -88,7 +88,7 @@ export function widgetProjectionEntry(input: WidgetFixtureEntry): Extract<Plugin
 }
 
 export function widgetInstalledPackage(id: string, displayName: string) {
-    return { id, displayName, enabled: true, source: { kind: 'local', locator: `/plugins/${id}` } };
+    return { id, displayName, enabled: true, source: { kind: 'local' as const, locator: `/plugins/${id}` } };
 }
 
 /** Exact Administration-selected producer for tests that compose the Account union. */
@@ -114,5 +114,5 @@ export function widgetProjectionOf(
         familiesById: {
             pluginUi: { entriesById: Object.fromEntries(raw.map((entry) => [entry.id, entry])) },
         },
-    } as unknown as PluginProjectionV2);
+    } as unknown as PluginProjectionV2, undefined, undefined, { resourceDeclarations: 'complete' });
 }

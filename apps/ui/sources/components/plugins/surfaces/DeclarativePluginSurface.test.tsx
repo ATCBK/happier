@@ -323,6 +323,13 @@ describe('DeclarativePluginSurface ordinary Settings', () => {
             screen.changeTextByTestId('plugin-declarative-field:root.children[0]', 'Source A draft');
         });
 
+        // An equivalent publication is not a new Settings source: keep the
+        // edit committable without another record read.
+        await screen.update(renderModel('source-a'));
+        expect(ordinarySettingsBoundary.read).toHaveBeenCalledTimes(1);
+        expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Source A draft');
+        expect(screen.findByTestId('plugin-declarative-field-save:root.children[0]')?.props.disabled).toBe(false);
+
         await screen.update(renderModel('source-b'));
         await vi.waitFor(() => expect(ordinarySettingsBoundary.read).toHaveBeenCalledTimes(2));
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('Source A draft');
@@ -337,6 +344,40 @@ describe('DeclarativePluginSurface ordinary Settings', () => {
             screen.changeTextByTestId('plugin-declarative-field:root.children[0]', 'Source B draft');
         });
         expect(screen.findByTestId('plugin-declarative-field-save:root.children[0]')?.props.disabled).toBe(false);
+    });
+});
+
+describe('DeclarativePluginSurface action continuity', () => {
+    it('keeps an entered action pending across an equivalent source publication', async () => {
+        let settle = () => {};
+        const pending = new Promise<null>(resolve => { settle = () => resolve(null); });
+        const execute = vi.fn<BoundPluginSurfaceController['dispatchAction']>(() => pending);
+        const accountLifetime = createAccountLifetime();
+        const render = () => {
+            const action = { identity: { pluginId: 'acme.pending', localId: 'refresh' },
+                qualifiedId: 'acme.pending/refresh', occurrenceId: 'pending-source' };
+            const pendingModel = PluginDeclarativeProjectedModelV1Schema.parse({
+                visible: true, requiredHostMethods: [],
+                identity: { pluginId: 'acme.pending', localId: 'panel',
+                    qualifiedId: 'acme.pending/panel', occurrenceId: 'pending-source' },
+                declarativeInventory: { actions: [{ ...action, enabled: true }], destinations: [], settings: [], uiQueries: [] },
+                root: { kind: 'action', path: 'root', order: 0, label: 'Refresh', action, enabled: true },
+            });
+            return <DeclarativePluginSurface pluginId="acme.pending" model={pendingModel}
+                interactionEnabled={true} daemonInteractionEnabled={true}
+                dispatchAction={execute} actionAvailable={true} openSurface={openSurface}
+                openSurfaceAvailable={false} authorityGeneration={1} accountLifetime={accountLifetime} />;
+        };
+        const screen = await renderScreen(render());
+        const testID = 'plugin-declarative-action:acme.pending/refresh';
+        await act(async () => { screen.pressByTestId(testID); });
+        expect(execute).toHaveBeenCalledTimes(1);
+        await screen.update(render());
+        expect(screen.findByTestId(testID)?.props.disabled).toBe(true);
+        await act(async () => { screen.pressByTestId(testID); });
+        expect(execute).toHaveBeenCalledTimes(1);
+        await act(async () => { settle(); });
+        await vi.waitFor(() => expect(screen.findByTestId(testID)?.props.disabled).toBe(false));
     });
 });
 

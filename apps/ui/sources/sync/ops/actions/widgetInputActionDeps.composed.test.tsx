@@ -1043,7 +1043,7 @@ it('admits and refreshes a B-only stored widget using current B inputs and Resou
         if (!account.accountLifetime) throw new Error('Expected canonical Account lifetime');
         const mount = createPluginDeclaredResourceStore({ accountLifetime: account.accountLifetime, pluginId: surface.pluginId,
             machineId: 'machine-b', serverId: scope.serverId, expectedCallerOccurrenceId: 'binding-occurrence', sessionId: b.id,
-            resourcesById: resources('current-b') })!;
+            resourcesById: resources('current-b'), resourceDeclarationsComplete: true })!;
         const mountedEntry = mount.getEntry('current-b-state');
         const releaseMount = mountedEntry.subscribe(() => {}, false);
         try {

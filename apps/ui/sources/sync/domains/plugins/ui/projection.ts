@@ -4,7 +4,7 @@ import type {
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
 import type { PluginActionContributionV2 } from '@happier-dev/protocol';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
-import { PluginProjectedWorkItemsEntryV1Schema, type PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
@@ -16,7 +16,7 @@ import { PluginUiIconTokenV1Schema, type PluginUiIconTokenV1 } from '@happier-de
 import { OpenableContentViewerSelectorV1Schema, type OpenableContentViewerSelectorV1 } from '@happier-dev/protocol/plugins/openableContentViewerV1';
 import { RecipientContractV1Schema } from '@happier-dev/protocol/plugins/recipientContractV1';
 import { VoiceProviderContributionSchema, type VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
-import { PluginProjectedDragSourceEntryV1Schema, PluginProjectedDropTargetEntryV1Schema, type PluginProjectedDragSourceEntryV1, type PluginProjectedDropTargetEntryV1, type PluginProjectionInstalledPackageV2, type PluginProjectedActionV2, type PluginProjectedResourceV2, type PluginProjectedComposerAttachmentEntryV1, type PluginProjectedComposerControlEntryV1, type PluginProjectedComposerRegionEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { type PluginProjectedDragSourceEntryV1, type PluginProjectedDropTargetEntryV1, type PluginProjectionInstalledPackageV2, type PluginProjectedActionV2, type PluginProjectedResourceV2, type PluginProjectedComposerAttachmentEntryV1, type PluginProjectedComposerControlEntryV1, type PluginProjectedComposerRegionEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import type { PluginJsonSchemaValidator } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -65,6 +65,8 @@ export type PluginUiDeclaredExecution = Readonly<{
 }>;
 export type PluginUiInstalledPackageProjection = PluginProjectionInstalledPackageV2 & Readonly<{
     declaredExecution?: PluginUiDeclaredExecution;
+    /** Host-private coverage fact from a full describe, never restored presentation. */
+    resourceDeclarationsComplete?: true;
 }>;
 export type PluginUiDragSourceProjection = PluginProjectedDragSourceEntryV1 & UnknownRecord;
 export type PluginUiDropTargetProjection = PluginProjectedDropTargetEntryV1 & UnknownRecord;
@@ -453,6 +455,18 @@ export const EMPTY_PLUGIN_UI_PROJECTION: PluginUiProjectionModel = Object.freeze
     unknownEntriesById: Object.freeze({}),
 });
 
+/** Full-describe coverage is independent of availability and aggregate generations. */
+export function readCompletePluginUiResourceDeclarations(
+    model: PluginUiProjectionModel | null | undefined,
+    pluginId: string,
+    expectedOccurrenceId: string | undefined,
+): PluginUiProjectionModel['resourcesById'] | undefined {
+    const installed = model?.installedPackagesById[pluginId];
+    if (!model || installed?.resourceDeclarationsComplete !== true) return undefined;
+    if (installed.occurrenceId !== undefined && installed.occurrenceId !== expectedOccurrenceId) return undefined;
+    return model.resourcesById;
+}
+
 function asRecord(value: unknown): UnknownRecord | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as UnknownRecord
@@ -471,11 +485,23 @@ function readStringArray(value: unknown): readonly string[] {
 
 function normalizeInstalledPackagesById(
     installedPackagesById: Readonly<Record<string, PluginUiInstalledPackageProjection>>,
+    resourceDeclarationsComplete: boolean,
+    previous?: PluginUiProjectionModel['installedPackagesById'],
+    previousInput?: PluginUiProjectionNormalizationInput['installedPackagesById'],
 ): Readonly<Record<string, PluginUiInstalledPackageProjection>> {
-    return Object.freeze(Object.fromEntries(Object.entries(installedPackagesById).map(([pluginId, installedPackage]) => [
-        pluginId,
-        Object.freeze({
-            ...installedPackage,
+    return Object.freeze(Object.fromEntries(Object.entries(installedPackagesById).map(([pluginId, installedPackage]) => {
+        const retained = previous?.[pluginId];
+        if (retained && previousInput?.[pluginId] === installedPackage) {
+            if ((retained.resourceDeclarationsComplete === true) === resourceDeclarationsComplete) return [pluginId, retained];
+            const { resourceDeclarationsComplete: _coverage, ...declaration } = retained;
+            return [pluginId, Object.freeze({ ...declaration,
+                ...(resourceDeclarationsComplete ? { resourceDeclarationsComplete: true as const } : {}),
+            })];
+        }
+        const { resourceDeclarationsComplete: _previousCoverage, ...declaration } = installedPackage;
+        return [pluginId, Object.freeze({
+            ...declaration,
+            ...(resourceDeclarationsComplete ? { resourceDeclarationsComplete: true as const } : {}),
             source: Object.freeze({ ...installedPackage.source }),
             ...(installedPackage.declaredExecution ? { declaredExecution: Object.freeze({ ...installedPackage.declaredExecution }) } : {}),
             ...(installedPackage.brand === undefined
@@ -488,8 +514,8 @@ function normalizeInstalledPackagesById(
                             : {}),
                     }),
                 }),
-        }),
-    ])));
+        })];
+    })));
 }
 
 function isTranslations(entry: UnknownRecord): entry is PluginUiTranslationsProjection {
@@ -838,11 +864,13 @@ function isSessionInfoSection(entry: UnknownRecord): entry is PluginUiSessionInf
 function normalizeComposerAttachmentEntriesById(
     entriesById: Readonly<Record<string, PluginProjectedComposerAttachmentEntryV1>> | undefined,
     previous?: PluginUiProjectionModel['composerAttachmentsById'],
+    previousInput?: Readonly<Record<string, PluginProjectedComposerAttachmentEntryV1>>,
 ): Readonly<Record<string, PluginUiComposerAttachmentProjection>> {
     const normalized: Record<string, PluginUiComposerAttachmentProjection> = {};
     for (const [entryId, entry] of Object.entries(entriesById ?? {})) {
         const previousEntry = previous?.[entryId];
         if (previousEntry) {
+            if (previousInput?.[entryId] === entry) { normalized[entryId] = previousEntry; continue; }
             const { valueValidator: _validator, ...declaration } = previousEntry;
             if (sameStrictJsonValue(declaration, entry)) {
                 normalized[entryId] = previousEntry;
@@ -916,62 +944,96 @@ function reconcileProjectionValue<T>(previous: T | undefined, next: T): T {
     return Object.freeze(Array.isArray(next) ? keys.map(key => values[key]) : values) as T;
 }
 
+function retainProjectionEntry<T>(previous: Readonly<Record<string, T>> | undefined, next: Record<string, T>, id: string): void {
+    const entry = previous?.[id];
+    if (entry !== undefined) next[id] = entry;
+}
+
+/** These specific Registry families have already passed their contribution schemas. */
+function normalizeAdmittedProjectionEntries<T extends Readonly<{ id: string }>>(
+    entries: Readonly<Record<string, T>> | undefined,
+    previous: Readonly<Record<string, T>> | undefined,
+    previousInput: Readonly<Record<string, T>> | undefined,
+): Readonly<Record<string, T>> {
+    if (entries !== undefined && entries === previousInput && previous) return previous;
+    const normalized: Record<string, T> = {};
+    for (const [id, entry] of Object.entries(entries ?? {})) {
+        if (entry.id !== id) continue;
+        normalized[id] = previousInput?.[id] === entry && previous?.[id] ? previous[id] : Object.freeze({ ...entry });
+    }
+    return Object.freeze(normalized);
+}
+
 export function normalizePluginUiProjection(
     projection: PluginUiProjectionNormalizationInput | null,
     platform: PluginUiPlatformV1 = resolvePluginUiProjectionPlatform(),
     previous?: PluginUiProjectionModel,
+    coverage?: Readonly<{
+        resourceDeclarations?: 'complete';
+        /** Existing acquisition-owned predecessor; never retained by this projector. */
+        previousInput?: PluginUiProjectionNormalizationInput;
+        previousResourceDeclarations?: 'complete';
+    }>,
 ): PluginUiProjectionModel {
     if (!projection) {
         return EMPTY_PLUGIN_UI_PROJECTION;
     }
 
-    const installedPackagesById = normalizeInstalledPackagesById(projection.installedPackagesById);
-    const diagnostics = Object.freeze([...(projection.diagnostics ?? [])]);
+    const previousInput = coverage?.previousInput;
+    const diagnostics = previous && previousInput && projection.diagnostics === previousInput.diagnostics
+        ? previous.diagnostics : Object.freeze([...(projection.diagnostics ?? [])]);
+    if (previous && previousInput && projection.installedPackagesById === previousInput.installedPackagesById
+        && projection.actionsById === previousInput.actionsById && projection.resourcesById === previousInput.resourcesById
+        && projection.familiesById === previousInput.familiesById
+        && coverage?.resourceDeclarations === coverage?.previousResourceDeclarations) {
+        return projection.generation === previous.generation && diagnostics === previous.diagnostics ? previous
+            : Object.freeze({ ...previous, generation: projection.generation, diagnostics });
+    }
+    const sameFamily = (id: keyof PluginUiProjectionNormalizationInput['familiesById']) => previousInput !== undefined
+        && projection.familiesById[id] === previousInput.familiesById[id];
+    const installedPackagesById = normalizeInstalledPackagesById(projection.installedPackagesById,
+        coverage?.resourceDeclarations === 'complete', previous?.installedPackagesById, previousInput?.installedPackagesById);
     // The daemon Registry has already admitted, qualified, and generation-bound
     // these static families. Preserve those exact maps through the one UI
     // projection normalizer instead of reconstructing descriptors or creating
     // a Composer-local catalog.
-    const composerAttachmentsById = normalizeComposerAttachmentEntriesById(
+    const composerAttachmentsById = previous && sameFamily('composerAttachments') ? previous.composerAttachmentsById : normalizeComposerAttachmentEntriesById(
         projection.familiesById.composerAttachments?.entriesById,
         previous?.composerAttachmentsById,
+        previousInput?.familiesById.composerAttachments?.entriesById,
     );
-    const composerControlsById = Object.freeze({
+    const composerControlsById = previous && sameFamily('composerControls') ? previous.composerControlsById : Object.freeze({
         ...(projection.familiesById.composerControls?.entriesById ?? {}),
     });
-    const composerRegionsById = Object.freeze({
+    const composerRegionsById = previous && sameFamily('composerRegions') ? previous.composerRegionsById : Object.freeze({
         ...(projection.familiesById.composerRegions?.entriesById ?? {}),
     });
     // The daemon Registry has already resolved availability, identity, and
     // execution target. Keep these entries verbatim so the client executable
     // owner consumes one canonical projection rather than rebuilding Actions
     // from a feature-local declaration family.
-    const actionsById = Object.freeze({ ...projection.actionsById });
-    const resourcesById = Object.freeze({ ...projection.resourcesById });
-    const machineProvisionersById = Object.freeze({ ...(projection.familiesById.machineProvisioners?.entriesById ?? {}) });
-    const inputTypesById = Object.freeze({ ...(projection.familiesById.inputTypes?.entriesById ?? {}) });
-    const atmospherePicturesById = Object.freeze({ ...(projection.familiesById.atmospherePictures?.entriesById ?? {}) });
-    const registrySourcesById = Object.freeze({ ...(projection.familiesById.registrySources?.entriesById ?? {}) });
-    const skillsById = Object.freeze({ ...(projection.familiesById.skills?.entriesById ?? {}) });
-    const dragSourcesById: Record<string, PluginUiDragSourceProjection> = {};
-    const workItemsById: Record<string, PluginUiWorkItemsProjection> = {};
-    for (const [id, entry] of Object.entries(projection.familiesById.workItems?.entriesById ?? {})) {
-        const parsed = PluginProjectedWorkItemsEntryV1Schema.safeParse(entry);
-        if (parsed.success && parsed.data.id === id) workItemsById[id] = Object.freeze({ ...parsed.data });
-    }
-    for (const [id, entry] of Object.entries(projection.familiesById.dragSources?.entriesById ?? {})) {
-        const parsed = PluginProjectedDragSourceEntryV1Schema.safeParse(entry);
-        if (parsed.success && parsed.data.id === id) dragSourcesById[id] = Object.freeze({ ...parsed.data });
-    }
-    const dropTargetsById: Record<string, PluginUiDropTargetProjection> = {};
-    for (const [id, entry] of Object.entries(projection.familiesById.dropTargets?.entriesById ?? {})) {
-        const parsed = PluginProjectedDropTargetEntryV1Schema.safeParse(entry);
-        if (parsed.success && parsed.data.id === id) dropTargetsById[id] = Object.freeze({ ...parsed.data });
-    }
+    const actionsById = previous && previousInput?.actionsById === projection.actionsById ? previous.actionsById : Object.freeze({ ...projection.actionsById });
+    const resourcesById = previous && previousInput?.resourcesById === projection.resourcesById ? previous.resourcesById : Object.freeze({ ...projection.resourcesById });
+    const machineProvisionersById = previous && sameFamily('machineProvisioners') ? previous.machineProvisionersById : Object.freeze({ ...(projection.familiesById.machineProvisioners?.entriesById ?? {}) });
+    const inputTypesById = previous && sameFamily('inputTypes') ? previous.inputTypesById : Object.freeze({ ...(projection.familiesById.inputTypes?.entriesById ?? {}) });
+    const atmospherePicturesById = previous && sameFamily('atmospherePictures') ? previous.atmospherePicturesById : Object.freeze({ ...(projection.familiesById.atmospherePictures?.entriesById ?? {}) });
+    const registrySourcesById = previous && sameFamily('registrySources') ? previous.registrySourcesById : Object.freeze({ ...(projection.familiesById.registrySources?.entriesById ?? {}) });
+    const skillsById = previous && sameFamily('skills') ? previous.skillsById : Object.freeze({ ...(projection.familiesById.skills?.entriesById ?? {}) });
+    const workItemsById = normalizeAdmittedProjectionEntries(projection.familiesById.workItems?.entriesById,
+        previous?.workItemsById, previousInput?.familiesById.workItems?.entriesById);
+    const dragSourcesById = normalizeAdmittedProjectionEntries(projection.familiesById.dragSources?.entriesById,
+        previous?.dragSourcesById, previousInput?.familiesById.dragSources?.entriesById);
+    const dropTargetsById = normalizeAdmittedProjectionEntries(projection.familiesById.dropTargets?.entriesById,
+        previous?.dropTargetsById, previousInput?.familiesById.dropTargets?.entriesById);
 
-    const voiceProvidersById: Record<string, PluginVoiceProviderProjection> = {};
+    const voiceProvidersById: Record<string, PluginVoiceProviderProjection> = previous && sameFamily('voiceProviders') ? previous.voiceProvidersById : {};
     const voiceProviderFamily = projection.familiesById.voiceProviders;
-    if (voiceProviderFamily) {
-        for (const rawEntry of Object.values(voiceProviderFamily.entriesById)) {
+    if (voiceProviderFamily && !sameFamily('voiceProviders')) {
+        for (const [entryId, rawEntry] of Object.entries(voiceProviderFamily.entriesById)) {
+            if (previous && previousInput?.familiesById.voiceProviders?.entriesById[entryId] === rawEntry) {
+                retainProjectionEntry(previous.voiceProvidersById, voiceProvidersById, entryId);
+                continue;
+            }
             const entry = asRecord(rawEntry);
             const pluginId = readString(entry?.pluginId);
             const id = readString(entry?.id);
@@ -1042,22 +1104,42 @@ export function normalizePluginUiProjection(
         }));
     }
 
-    const translationsByPluginId: Record<string, PluginUiTranslationsProjection> = {};
-    const sessionHeaderActionsById: Record<string, PluginUiSessionHeaderActionProjection> = {};
-    const searchProvidersById: Record<string, PluginUiSearchProviderProjection> = {};
-    const hostedWebById: Record<string, PluginUiHostedWebProjection> = {};
-    const reactNativeBundlesById: Record<string, PluginUiReactNativeBundleProjection> = {};
-    const surfacePlacementsById: Record<string, PluginUiPhysicalSurfacePlacementProjection> = {};
-    const openableContentViewersById: Record<string, PluginUiOpenableContentViewerProjection> = {};
-    const settingsGroupsById: Record<string, PluginUiSettingsGroupProjection> = {};
-    const settingsPagesById: Record<string, PluginUiSettingsPageProjection> = {};
-    const transcriptActivitiesById: Record<string, PluginUiTranscriptActivityProjection> = {};
-    const sessionInfoSectionsById: Record<string, PluginUiSessionInfoSectionProjection> = {};
-    const unknownEntriesById: Record<string, UnknownRecord> = {};
+    const retainedUi = previous && sameFamily('pluginUi') ? previous : undefined;
+    const translationsByPluginId: Record<string, PluginUiTranslationsProjection> = retainedUi?.translationsByPluginId ?? {};
+    const sessionHeaderActionsById: Record<string, PluginUiSessionHeaderActionProjection> = retainedUi?.sessionHeaderActionsById ?? {};
+    const searchProvidersById: Record<string, PluginUiSearchProviderProjection> = retainedUi?.searchProvidersById ?? {};
+    const hostedWebById: Record<string, PluginUiHostedWebProjection> = retainedUi?.hostedWebById ?? {};
+    const reactNativeBundlesById: Record<string, PluginUiReactNativeBundleProjection> = retainedUi?.reactNativeBundlesById ?? {};
+    const surfacePlacementsById: Record<string, PluginUiPhysicalSurfacePlacementProjection> = retainedUi?.surfacePlacementsById ?? {};
+    const openableContentViewersById: Record<string, PluginUiOpenableContentViewerProjection> = retainedUi?.openableContentViewersById ?? {};
+    const settingsGroupsById: Record<string, PluginUiSettingsGroupProjection> = retainedUi?.settingsGroupsById ?? {};
+    const settingsPagesById: Record<string, PluginUiSettingsPageProjection> = retainedUi?.settingsPagesById ?? {};
+    const transcriptActivitiesById: Record<string, PluginUiTranscriptActivityProjection> = retainedUi?.transcriptActivitiesById ?? {};
+    const sessionInfoSectionsById: Record<string, PluginUiSessionInfoSectionProjection> = retainedUi?.sessionInfoSectionsById ?? {};
+    const unknownEntriesById: Record<string, UnknownRecord> = retainedUi?.unknownEntriesById ?? {};
 
-    for (const rawEntry of Object.values(family.entriesById)) {
+    if (!retainedUi) for (const [entryId, rawEntry] of Object.entries(family.entriesById)) {
         const entry = asRecord(rawEntry);
         if (!entry) {
+            continue;
+        }
+        if (previous && previousInput?.familiesById.pluginUi?.entriesById[entryId] === rawEntry) {
+            const id = readString(entry.id);
+            const pluginId = readString(entry.pluginId);
+            if (entry.contributionKind === 'translations' && pluginId) retainProjectionEntry(previous.translationsByPluginId, translationsByPluginId, pluginId);
+            if (id) {
+                retainProjectionEntry(previous.sessionHeaderActionsById, sessionHeaderActionsById, id);
+                retainProjectionEntry(previous.searchProvidersById, searchProvidersById, id);
+                retainProjectionEntry(previous.hostedWebById, hostedWebById, id);
+                retainProjectionEntry(previous.reactNativeBundlesById, reactNativeBundlesById, id);
+                retainProjectionEntry(previous.surfacePlacementsById, surfacePlacementsById, id);
+                retainProjectionEntry(previous.openableContentViewersById, openableContentViewersById, id);
+                retainProjectionEntry(previous.settingsGroupsById, settingsGroupsById, id);
+                retainProjectionEntry(previous.settingsPagesById, settingsPagesById, id);
+                retainProjectionEntry(previous.transcriptActivitiesById, transcriptActivitiesById, id);
+                retainProjectionEntry(previous.sessionInfoSectionsById, sessionInfoSectionsById, id);
+                retainProjectionEntry(previous.unknownEntriesById, unknownEntriesById, id);
+            }
             continue;
         }
         if (isTranslations(entry)) {
@@ -1205,7 +1287,7 @@ export function normalizePluginUiProjection(
     // than making each mounted selector copy the same shallow-frozen graph.
     let ownedTranslations: Record<string, PluginUiTranslationsProjection> | undefined;
     for (const [pluginId, entry] of Object.entries(reconciled.translationsByPluginId)) {
-        if (entry.bundles === undefined) continue;
+        if (entry.bundles === undefined || entry.bundles === previous?.translationsByPluginId[pluginId]?.bundles) continue;
         const bundles = projectNativeJsonValueForTransport(entry.bundles);
         if (bundles === entry.bundles) continue;
         ownedTranslations ??= { ...reconciled.translationsByPluginId };

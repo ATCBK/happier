@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema, type PluginProjectedSettingsV2, type PluginProjectionV2 } from '@happier-dev/protocol';
 import { createProjectedAgentLocalAuthPlugin } from '@/agents/catalog/localAuth/createProjectedAgentLocalAuthPlugin';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import * as strictJsonProjection from '@happier-dev/protocol/json/strictJsonValue';
+import { PluginUiSurfaceBindingV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import * as projectionNormalizer from '@/sync/domains/plugins/ui/projection';
 import * as descriptorProjection from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 
@@ -50,16 +53,80 @@ describe('daemon contribution registry projection adapters', () => {
         expect(projectNativeJsonValueForTransport(bundles)).toBe(bundles);
     });
 
-    it('retains unchanged ready maps when a projection without pluginUi changes only delivery generation', () => {
+    it('projects a 100-plugin catalog only on changed UI arrivals, without requesting ownership of admitted bundles again', () => {
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 20,
-            actionsById: { 'acme.review/refresh': { id: 'refresh', pluginId: 'acme.review', occurrenceId: 'review-current',
-                title: 'Refresh', scopes: ['session'], surfaces: ['plugin'], execution: { target: 'daemon' }, dangerLevel: 'writesRemote' } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries([
+                ...Array.from({ length: 100 }, (_, index) => {
+                    const pluginId = `acme.arrival-${index}`;
+                    return [`translations:${pluginId}`, { id: `translations:${pluginId}`, pluginId,
+                        occurrenceId: `occurrence-${index}`, contributionKind: 'translations', locales: ['en'],
+                        bundles: { en: { title: `Plugin ${index}`, detail: 'An admitted translation bundle' } } }];
+                }),
+                ...Array.from({ length: 100 }, (_, index) => {
+                    const entry = widgetProjectionEntry({ pluginId: `acme.arrival-${index}`, localId: 'panel', target: 'app' });
+                    return [entry.id, entry];
+                }),
+            ]) } },
         });
-        const first = publishDaemonMergedProjectionInputs({ projection });
-        const changed = publishDaemonMergedProjectionInputs({ projection: { ...projection, generation: 21 } }, first);
-        expect(changed.pluginUiProjection.generation).toBe(21);
-        expect(changed.pluginUiProjection.actionsById).toBe(first.pluginUiProjection.actionsById);
-        expect(changed.pluginUiProjection.composerAttachmentsById).toBe(first.pluginUiProjection.composerAttachmentsById);
+        let published = publishDaemonMergedProjectionInputs({ projection });
+        const first = published.pluginUiProjection;
+        const admittedBundles = new Set(Object.values(first.translationsByPluginId).map(entry => entry.bundles));
+        const json = vi.spyOn(strictJsonProjection, 'projectNativeJsonValueForTransport');
+        const bindingAdmission = vi.spyOn(PluginUiSurfaceBindingV1Schema, 'safeParse');
+        const bundleOwnershipRequests = () => json.mock.calls.filter(([value]) => value !== null && typeof value === 'object' && Object.hasOwn(value, 'en')).length;
+        try {
+            // Decoded equal replies and unrelated Agent/generation arrivals
+            // do not reconstruct the authored UI graph.
+            for (let arrival = 1; arrival <= 20; arrival++) {
+                const reply = PluginProjectionV2Schema.parse({ ...structuredClone(projection), generation: projection.generation + arrival,
+                    agentsById: { review: { id: 'review', title: `Unrelated Agent observation ${arrival}`,
+                        identity: { pluginId: 'acme.agent', localId: 'review' },
+                        capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } },
+                });
+                published = publishDaemonMergedProjectionInputs({ projection: reply }, published);
+                expect(published.pluginProjectionV2?.generation).toBe(reply.generation);
+                expect(published.pluginUiProjection === first).toBe(true);
+                expect(published.pluginUiProjection.translationsByPluginId).toBe(first.translationsByPluginId);
+                expect(publishDaemonMergedProjectionInputs({ projection: structuredClone(reply) }, published)).toBe(published);
+            }
+            expect.soft(json.mock.calls.filter(([value]) => admittedBundles.has(value))).toHaveLength(0);
+            expect.soft(bundleOwnershipRequests()).toBe(0);
+            expect.soft(bindingAdmission.mock.calls.length).toBe(0);
+            json.mockClear(); bindingAdmission.mockClear();
+
+            const edited = PluginProjectionV2Schema.parse({ ...projection, generation: projection.generation + 20,
+                familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                ...projection.familiesById.pluginUi!.entriesById,
+                'translations:acme.arrival-0': { ...projection.familiesById.pluginUi!.entriesById['translations:acme.arrival-0'],
+                    bundles: { en: { title: 'Edited at the same generation' } } },
+            } } } });
+            published = publishDaemonMergedProjectionInputs({ projection: edited }, published);
+            expect(published.pluginUiProjection.translationsByPluginId['acme.arrival-0']?.bundles)
+                .toEqual({ en: { title: 'Edited at the same generation' } });
+            expect(published.pluginUiProjection.translationsByPluginId['acme.arrival-99'])
+                .toBe(first.translationsByPluginId['acme.arrival-99']);
+            expect.soft(json.mock.calls.filter(([value]) => admittedBundles.has(value))).toHaveLength(0);
+            expect.soft(bundleOwnershipRequests()).toBe(1);
+            expect.soft(bindingAdmission.mock.calls.length).toBe(0);
+            json.mockClear(); bindingAdmission.mockClear();
+
+            const changedWidget = widgetProjectionEntry({ pluginId: 'acme.arrival-0', localId: 'panel', target: 'app', title: 'Edited widget' });
+            const widgetEdit = PluginProjectionV2Schema.parse({ ...edited, familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                ...edited.familiesById.pluginUi!.entriesById, [changedWidget.id]: changedWidget,
+            } } } });
+            published = publishDaemonMergedProjectionInputs({ projection: widgetEdit }, published);
+            expect(published.pluginUiProjection.surfacePlacementsById[changedWidget.id]?.display.title).toBe('Edited widget');
+            expect(bindingAdmission.mock.calls.length).toBe(1);
+            expect(bundleOwnershipRequests()).toBe(0);
+
+            const withdrawn = PluginProjectionV2Schema.parse({ v: 2, generation: edited.generation });
+            published = publishDaemonMergedProjectionInputs({ projection: withdrawn }, published);
+            expect(published.pluginUiProjection.translationsByPluginId).toEqual({});
+            expect(first.translationsByPluginId['acme.arrival-0']?.bundles)
+                .toEqual({ en: { title: 'Plugin 0', detail: 'An admitted translation bundle' } });
+        } finally {
+            json.mockRestore(); bindingAdmission.mockRestore();
+        }
     });
 
     it('owns immutable adapted rows without freezing or retaining aliases to the raw V2 input', () => {
@@ -100,20 +167,30 @@ describe('daemon contribution registry projection adapters', () => {
     });
 
     it('keeps same-generation selected replies response-local instead of borrowing omitted full-projection rows', () => {
-        const full = publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({
+        const installedPackagesById = { 'acme.review': { id: 'acme.review', displayName: 'Review', enabled: true,
+            source: { kind: 'local', locator: '/plugins/review' } } };
+        const full = publishDaemonMergedProjectionInputs({ resourceDeclarations: 'complete', projection: PluginProjectionV2Schema.parse({
             v: 2, generation: 17,
+            installedPackagesById,
             familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
                 'translations:acme.review': { id: 'translations:acme.review', pluginId: 'acme.review',
                     occurrenceId: 'review-occurrence',
                     contributionKind: 'translations', locales: ['en'], bundles: { en: { title: 'Review' } } },
             } } },
         }) });
-        const selectedProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 17 });
+        expect(full.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBe(true);
+        const selectedProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 17, installedPackagesById });
         const selected = publishDaemonMergedProjectionInputs({ projection: selectedProjection }, full);
         expect(selected.pluginProjectionV2).toBe(selectedProjection);
         expect(selected.pluginUiProjection.translationsByPluginId).toEqual({});
         expect(full.pluginUiProjection.translationsByPluginId['acme.review']).toBeDefined();
         expect(selected.pluginUiProjection).not.toBe(full.pluginUiProjection);
+        expect(selected.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBeUndefined();
+        // Identical payloads are not evidence that a selected read is a full census.
+        const complete = publishDaemonMergedProjectionInputs({ projection: selectedProjection, resourceDeclarations: 'complete' }, selected);
+        expect(complete.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBe(true);
+        const partial = publishDaemonMergedProjectionInputs({ projection: selectedProjection }, complete);
+        expect(partial.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBeUndefined();
     });
 
     it('retains pathless contextual Resources without turning their ids into filenames', () => {
@@ -127,6 +204,19 @@ describe('daemon contribution registry projection adapters', () => {
         expect(adapted.pluginProjectionById['acme.review']?.resources).toEqual([
             { id: 'live-status', resourceKind: 'config', scope: 'session', digest: null, contentType: 'application/json' },
         ]);
+        const first = publishDaemonMergedProjectionInputs({ projection, resourceDeclarations: 'complete' });
+        const changed = publishDaemonMergedProjectionInputs({ resourceDeclarations: 'complete', projection: PluginProjectionV2Schema.parse({
+            ...projection, resourcesById: { 'acme.review/live-status': { ...projection.resourcesById['acme.review/live-status'], contentType: 'text/plain' } },
+        }) }, first);
+        expect(changed.pluginUiProjection.resourcesById['acme.review/live-status']?.contentType).toBe('text/plain');
+        expect(changed.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBe(true);
+        expect(first.pluginUiProjection.resourcesById['acme.review/live-status']?.contentType).toBe('application/json');
+        const withdrawn = publishDaemonMergedProjectionInputs({ resourceDeclarations: 'complete', projection: PluginProjectionV2Schema.parse({
+            ...projection, resourcesById: {},
+        }) }, changed);
+        expect(withdrawn.pluginUiProjection.resourcesById).toEqual({});
+        expect(withdrawn.pluginUiProjection.installedPackagesById['acme.review']?.resourceDeclarationsComplete).toBe(true);
+        expect(projectionNormalizer.readCompletePluginUiResourceDeclarations(withdrawn.pluginUiProjection, 'acme.review', undefined)).toEqual({});
     });
     it('resolves every localized Settings label through the shared plugin text owner', () => {
         const settings: PluginProjectedSettingsV2 = {

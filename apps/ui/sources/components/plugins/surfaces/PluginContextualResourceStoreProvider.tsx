@@ -245,7 +245,7 @@ export function createPluginDeclaredResourceStore(input: Omit<PluginContextualRe
 }>) | null {
     const readDeclarations = () => Object.values(input.resourcesById).filter(row => row.pluginId === input.pluginId);
     const isScopedNamespace = (rows: ReturnType<typeof readDeclarations>) => (
-        (rows.length > 0 || input.resourceDeclarationsComplete === true) && rows.every(row => row.scope !== undefined)
+        input.resourceDeclarationsComplete === true && rows.every(row => row.scope !== undefined)
     );
     // Preserve the incumbent ordinary transport until scoped declarations
     // actually arrive. Once admitted, their withdrawal cannot reopen it.

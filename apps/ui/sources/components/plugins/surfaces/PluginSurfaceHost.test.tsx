@@ -11338,6 +11338,8 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             occurrenceId: mountedTarget.occurrenceId,
             projectionGeneration: 77,
             projection: exactBPresentationProjection,
+            resourcesById: { summary: { id: 'review-summary', pluginId: surface.contributor.pluginId,
+                resourceKind: 'config', contentType: 'application/json', scope: 'surface' } },
             targetedContributions,
             targetedSurfaceMounts: [targetedMount],
         });
@@ -14495,13 +14497,19 @@ describe('installed Session widget through the mounted plugin controller', () =>
             materializationId: 'public-widget-materialization', serverIdentityId: 'srv_server_1',
         });
         const actionsById = { [`${pluginId}/review-summary`]: action };
-        const target = primeExactTargetedContributions({ pluginId, occurrenceId, actionsById });
+        const resourceDeclaration = publicAuthoringDefinition.resources?.['review-session-status'];
+        if (!resourceDeclaration || resourceDeclaration.source !== 'dynamic') throw new Error('Public widget Resource declaration is required');
+        const resourcesById: PluginProjectionV2['resourcesById'] = {
+            'review-session-status': { id: 'review-session-status', pluginId,
+                resourceKind: resourceDeclaration.kind, contentType: resourceDeclaration.contentType, scope: resourceDeclaration.scope },
+        };
+        const target = primeExactTargetedContributions({ pluginId, occurrenceId, actionsById, resourcesById });
         const placementId = `surfacePlacement:${pluginId}:${declaration.id}`;
         const bundleId = `reactNativeBundle:${pluginId}:${declaration.renderer}`;
         const identity = { ...generatedReactNativeCacheIdentity, pluginId, contributionId: declaration.renderer };
         const artifactGraph = generatedReactNativeArtifactGraph;
         const projected = PluginProjectionV2Schema.parse({
-            v: 2, generation: 1, actionsById,
+            v: 2, generation: 1, actionsById, resourcesById,
             familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
                 [placementId]: {
                     id: placementId, pluginId, occurrenceId, contributionKind: 'surfacePlacement',

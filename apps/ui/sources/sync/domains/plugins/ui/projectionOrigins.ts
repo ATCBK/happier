@@ -229,14 +229,17 @@ function prepareAccountOrigin(value: unknown, pluginId: unknown): unknown {
 }
 
 /** Called by live, warm and Availability acquisition, never by a render/read. */
-export function preparePluginUiProjectionOrigins(model: PluginUiProjectionModel): PluginUiProjectionModel {
+export function preparePluginUiProjectionOrigins(model: PluginUiProjectionModel, previous?: PluginUiProjectionModel): PluginUiProjectionModel {
     const updates: Record<string, unknown> = {};
     let changed = false;
     for (const [key, value] of Object.entries(model)) {
+        if (value === asRecord(previous)?.[key]) continue;
         const map = asRecord(value);
         if (!map) continue;
+        const previousMap = asRecord(asRecord(previous)?.[key]);
         let nextMap: Record<string, unknown> | undefined;
         for (const [id, value] of Object.entries(map)) {
+            if (value === previousMap?.[id]) continue;
             const entry = asRecord(value);
             if (!entry) continue;
             const executionOrigin = prepareDirectOrigin(entry.executionOrigin);

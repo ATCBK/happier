@@ -65,11 +65,24 @@ const ownedProjectionInput = Symbol('daemonMergedProjectionInput');
 type OwnedProjectionInput = Readonly<{
     owner: DaemonMergedProjectionInputs;
     projection: PluginProjectionV2;
+    resourceDeclarations?: 'complete';
     composerSurfaceCatalog: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[] | undefined;
     automationEligibleEvents: DaemonContributionRegistryProjectionAutomationEligibleEventsV1 | undefined;
     composerSelections: readonly Readonly<{ row: DaemonPluginUiComposerSurfaceCatalogEntryV1; publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>[];
     setupSelections: readonly Readonly<{ row: DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1; publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>[];
 }>;
+
+/** Own only changed wire fields; equality is decided once before deriving presentation. */
+function publishProjectionFields<T extends Readonly<Record<string, unknown>>>(input: T, previous?: T): T {
+    const fields: Readonly<Record<string, unknown>> = Object.fromEntries(Object.entries(input).flatMap(([key, value]) =>
+        value === undefined ? [] : [[key, previous && Object.hasOwn(previous, key) && sameStrictJsonValue(previous[key], value)
+            ? previous[key] : projectNativeJsonValueForTransport(value)]]));
+    if (previous && Object.keys(previous).length === Object.keys(fields).length
+        && Object.entries(fields).every(([key, value]) => previous[key] === value)) return previous;
+    // These are schema-admitted DTO fields. Protocol supplies immutable native
+    // JSON ownership; retained children are already owned and are not recopied.
+    return projectNativeJsonValueForTransport(fields) as T;
+}
 
 function publishPluginProjectionEntries(
     entries: Readonly<Record<string, PluginProjectionEntry>>,
@@ -102,6 +115,8 @@ function publishPluginProjectionEntries(
  * It never writes the full Machine cache, so a selected reply cannot replace a full snapshot. */
 export function publishDaemonMergedProjectionInputs(params: Readonly<{
     projection: PluginProjectionV2;
+    /** Only the full-describe caller supplies declaration-set coverage. */
+    resourceDeclarations?: 'complete';
     composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
     automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
 }>, previous?: DaemonMergedProjectionInputs): DaemonMergedProjectionInputs {
@@ -109,29 +124,47 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
     const candidate = previous ? Object.getOwnPropertyDescriptor(previous, ownedProjectionInput)?.value as OwnedProjectionInput | undefined : undefined;
     const prior = candidate?.owner === previous ? candidate : undefined;
     const ownedPrevious = prior ? previous : undefined;
-    if (ownedPrevious?.pluginUiProjectionPlatform === platform
-        && sameStrictJsonValue(prior?.projection, params.projection)
-        && sameStrictJsonValue(prior?.composerSurfaceCatalog, params.composerSurfaceCatalog)
-        && sameStrictJsonValue(prior?.automationEligibleEvents, params.automationEligibleEvents)) return ownedPrevious;
     // The describe/selected-read transport already used the strict V2 schema.
     // Keep its public raw identity, but never use its mutable graph as our prior
     // comparison authority or lend its aliases to ready descriptive slices.
-    const projectionSnapshot: unknown = projectNativeJsonValueForTransport(params.projection);
-    // Native JSON copying preserves the already schema-admitted V2 shape.
-    const projection = projectionSnapshot as PluginProjectionV2;
+    const familiesById = publishProjectionFields(Object.fromEntries(Object.entries(params.projection.familiesById).flatMap(([id, family]) => {
+        if (!family) return [];
+        const before = prior?.projection.familiesById[id as keyof PluginProjectionV2['familiesById']];
+        return [[id, publishProjectionFields({ ...family,
+            entriesById: publishProjectionFields(family.entriesById, before?.entriesById),
+        }, before)]];
+    })) as PluginProjectionV2['familiesById'], prior?.projection.familiesById);
+    const projection = publishProjectionFields({ ...params.projection,
+        installedPackagesById: publishProjectionFields(params.projection.installedPackagesById, prior?.projection.installedPackagesById),
+        agentsById: publishProjectionFields(params.projection.agentsById, prior?.projection.agentsById),
+        actionsById: publishProjectionFields(params.projection.actionsById, prior?.projection.actionsById),
+        toolsById: publishProjectionFields(params.projection.toolsById, prior?.projection.toolsById),
+        commandsById: publishProjectionFields(params.projection.commandsById, prior?.projection.commandsById),
+        resourcesById: publishProjectionFields(params.projection.resourcesById, prior?.projection.resourcesById),
+        settingsById: publishProjectionFields(params.projection.settingsById, prior?.projection.settingsById),
+        familiesById,
+    }, prior?.projection);
     const composerSurfaceCatalog = params.composerSurfaceCatalog === undefined ? undefined
         : prior?.composerSurfaceCatalog && sameStrictJsonValue(prior.composerSurfaceCatalog, params.composerSurfaceCatalog)
             ? prior.composerSurfaceCatalog : projectNativeJsonValueForTransport(params.composerSurfaceCatalog) as readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
     const automationEligibleEvents = params.automationEligibleEvents === undefined ? undefined
         : prior?.automationEligibleEvents && sameStrictJsonValue(prior.automationEligibleEvents, params.automationEligibleEvents)
             ? prior.automationEligibleEvents : projectNativeJsonValueForTransport(params.automationEligibleEvents) as DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
+    if (ownedPrevious?.pluginUiProjectionPlatform === platform
+        && prior?.resourceDeclarations === params.resourceDeclarations
+        && prior?.projection === projection && prior?.composerSurfaceCatalog === composerSurfaceCatalog
+        && prior?.automationEligibleEvents === automationEligibleEvents) return ownedPrevious;
     const rawAdapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
     const adapted = projectNativeJsonValueForTransport({
         ...rawAdapted,
         pluginProjectionById: publishPluginProjectionEntries(rawAdapted.pluginProjectionById, ownedPrevious?.pluginProjectionById),
     }) as ReturnType<typeof adaptDaemonContributionRegistryProjectionToMergedProjectionInputs>;
-    const pluginUiProjection = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
-        ownedPrevious?.pluginUiProjectionPlatform === platform ? ownedPrevious.pluginUiProjection : undefined));
+    const previousUi = ownedPrevious?.pluginUiProjectionPlatform === platform ? ownedPrevious.pluginUiProjection : undefined;
+    const pluginUiProjection = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform, previousUi, {
+        resourceDeclarations: params.resourceDeclarations,
+        previousResourceDeclarations: prior?.resourceDeclarations,
+        previousInput: previousUi ? prior?.projection : undefined,
+    }), previousUi);
     const composerSelections = (composerSurfaceCatalog ?? []).map(row => ({ row,
         publication: prior?.composerSelections.find(previous => previous.row.contribution.pluginId === row.contribution.pluginId
             && previous.row.contribution.localId === row.contribution.localId && previous.row.occurrenceId === row.occurrenceId
@@ -171,7 +204,8 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
         ...(composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog }),
         ...(automationEligibleEvents === undefined ? {} : { automationEligibleEvents }),
     };
-    Object.defineProperty(published, ownedProjectionInput, { value: Object.freeze({ owner: published, projection, composerSurfaceCatalog, automationEligibleEvents,
+    Object.defineProperty(published, ownedProjectionInput, { value: Object.freeze({ owner: published, projection,
+        ...(params.resourceDeclarations ? { resourceDeclarations: params.resourceDeclarations } : {}), composerSurfaceCatalog, automationEligibleEvents,
         composerSelections, setupSelections }) });
     return Object.freeze(published);
 }

@@ -372,6 +372,31 @@ describe('resolveProjectedPluginUiClientExecutables', () => {
         expect(resolve(malformedOccurrence)).toEqual([]);
     });
 
+    it('admits an exact current native target without an unrelated catalog generation', () => {
+        const source = singleActionProjection();
+        const currentAction = source.actionsById[firstActionKey];
+        const currentBundle = source.reactNativeBundlesById[firstBundleKey];
+        if (!currentAction || !currentBundle) throw new Error('first projected client Action missing');
+        const { generation: catalogGeneration, ...currentOrigin } = hostOrigin;
+        void catalogGeneration;
+        const withOrigin = (interactionEnabled: boolean): PluginUiProjectionModel => Object.freeze({
+            ...source,
+            actionsById: Object.freeze({ [firstActionKey]: Object.freeze({
+                ...currentAction,
+                [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: Object.freeze({ ...currentOrigin, interactionEnabled }),
+            }) }),
+            reactNativeBundlesById: Object.freeze({ [firstBundleKey]: Object.freeze({
+                ...currentBundle,
+                [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: Object.freeze({ ...currentOrigin, interactionEnabled }),
+            }) }),
+        });
+
+        expect(resolve(withOrigin(true))).toMatchObject([{
+            pluginId, occurrenceId: currentAction.occurrenceId, target, executionOrigin: origin,
+        }]);
+        expect(resolve(withOrigin(false))).toEqual([]);
+    });
+
     it('groups every current Action sharing one exact executable target into one activation input', () => {
         const resolved = resolve(projection());
 

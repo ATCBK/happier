@@ -11,7 +11,8 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { createPluginActionInputSelectionFactsPublication } from './pluginActionInputSelectionFacts';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
-import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginInstalledUiDeclarations, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import {
     PluginUiSelectActionInputResultV1Schema,
@@ -142,22 +143,37 @@ const FACTS = {
 const TARGETED_RESOURCE_MOUNT_INSTANCE_KEY = 'targeted-surface:v1:review:mount-a';
 
 describe('mounted host Resource admission', () => {
-    it('keeps ordinary Resource transport when nonempty full-describe rows have no complete census', async () => {
-        const readResource = vi.fn<PluginSurfaceResourceReadTransport>(async (_machineId, input) => ({
-            supported: true, result: { ok: true, resource: input.resource, kind: 'asset', contentType: 'application/json',
-                digest: `sha256:${'a'.repeat(64)}`, bytesBase64: 'e30=' },
-        }));
-        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
-            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, resourcesById: { 'acme.browser/stale': {
-                id: 'stale', pluginId: 'acme.browser', resourceKind: 'config', scope: 'global',
-            } } },
-        }, binding: { readResource } });
-        try {
-            await expect(controller.hostApi.handleRequest(request('readResource', { resource: 'state' }))).resolves.toMatchObject({
-                contentType: 'application/json', bytesBase64: 'e30=',
-            });
-            expect(readResource).toHaveBeenCalled();
-        } finally { controller.dispose(); }
+    it('distinguishes complete current full-describe Resource sets from absent, partial and retired sources', async () => {
+        const installed = { ...widgetInstalledPackage('acme.browser', 'Browser'), occurrenceId: FACTS.occurrenceId };
+        const orphanRows = { 'acme.browser/stale': {
+            id: 'stale', pluginId: 'acme.browser', resourceKind: 'config' as const, scope: 'global' as const,
+        } };
+        const cases = [
+            { name: 'current full describe, known empty', complete: true,
+                projection: widgetProjectionOf([], { 'acme.browser': installed }) },
+            { name: 'plugin absent from the describe', complete: false,
+                projection: { ...EMPTY_PLUGIN_UI_PROJECTION, resourcesById: orphanRows } },
+            { name: 'partial installed UI declarations', complete: false,
+                projection: normalizePluginInstalledUiDeclarations({}, 'web', installed) },
+            { name: 'full describe from a retired occurrence', complete: false,
+                projection: widgetProjectionOf([], { 'acme.browser': { ...installed, occurrenceId: 'retired-occurrence' } }, orphanRows) },
+        ];
+        for (const fixture of cases) {
+            const readResource = vi.fn<PluginSurfaceResourceReadTransport>(async (_machineId, input) => ({
+                supported: true, result: { ok: true, resource: input.resource, kind: 'asset', contentType: 'application/json',
+                    digest: `sha256:${'a'.repeat(64)}`, bytesBase64: 'e30=' },
+            }));
+            const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+                pluginUiProjection: fixture.projection,
+            }, binding: { readResource } });
+            try {
+                const result = await controller.hostApi.handleRequest(request('readResource', { resource: 'state' }));
+                expect(readResource.mock.calls.length, fixture.name).toBe(fixture.complete ? 0 : 1);
+                expect(result, fixture.name).toMatchObject(fixture.complete
+                    ? { code: 'unavailable', diagnostics: ['plugin_resource_not_found'] }
+                    : { contentType: 'application/json', bytesBase64: 'e30=' });
+            } finally { controller.dispose(); }
+        }
     });
 
     it('uses a complete targeted empty Resource set instead of a stale full-describe declaration', async () => {

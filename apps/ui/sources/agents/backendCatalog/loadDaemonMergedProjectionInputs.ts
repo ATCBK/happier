@@ -462,6 +462,7 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
             ? newerPublished.inputs : undefined;
         const inputs = publishDaemonMergedProjectionInputs({
             projection: res.projection,
+            resourceDeclarations: 'complete',
             ...(res.composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog: res.composerSurfaceCatalog }),
             ...(res.automationEligibleEvents === undefined ? {} : { automationEligibleEvents: res.automationEligibleEvents }),
         }, previousInputs);

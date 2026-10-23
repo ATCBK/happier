@@ -403,6 +403,8 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         const account = createAccountLifetime('account-a');
         const projection = {
             ...daemonProjection(7),
+            installedPackagesById: { 'acme.one': { id: 'acme.one', displayName: 'One', enabled: true,
+                source: { kind: 'local', locator: '/plugins/one' } } },
             familiesById: { pluginUi: { family: 'pluginUi' as const, entriesById: {
                 'translations:acme.one': { id: 'translations:acme.one', pluginId: 'acme.one', occurrenceId: 'one', contributionKind: 'translations' as const, locales: ['en'], bundles: { en: { title: 'One' } } },
                 'translations:acme.two': { id: 'translations:acme.two', pluginId: 'acme.two', occurrenceId: 'two', contributionKind: 'translations' as const, locales: ['en'], bundles: { en: { title: 'Two' } } },
@@ -413,6 +415,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             const params = { ...projectionScope, accountLifetime: account.lifetime };
             const first = await loadDaemonMergedProjectionInputs(params);
             expect(first?.pluginUiProjection.translationsByPluginId['acme.one']).toBeDefined();
+            expect(first?.pluginUiProjection.installedPackagesById['acme.one']?.resourceDeclarationsComplete).toBe(true);
             expect(normalize.mock.results.filter(result => result.type === 'return' && result.value === first?.pluginUiProjection)).toHaveLength(1);
             const initialNormalizations = normalize.mock.calls.length;
             for (let i = 0; i < 100; i++) {

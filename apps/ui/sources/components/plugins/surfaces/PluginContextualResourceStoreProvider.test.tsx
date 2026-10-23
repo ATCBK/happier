@@ -33,6 +33,7 @@ import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
 import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from '@/components/widgets/definitions/WidgetSnapshotConfirmPanel';
 import { t } from '@/text';
+import { normalizePluginInstalledUiDeclarations } from '@/sync/domains/plugins/ui/projection';
 import { WidgetDefinitionV1Schema } from '@happier-dev/protocol/widgets/widgetDefinitionV1';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -509,7 +510,8 @@ describe('PluginContextualResourceStoreProvider', () => {
             { 'acme.composer': { ...widgetInstalledPackage('acme.composer', 'Composer'), occurrenceId: 'occurrence-42', executionOrigin } }, resources);
         const projected = unionPluginUiProjections([{ machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
             projection: model, phase: 'current', interactionEnabled: true }], new Map([['acme.composer', executionOrigin]]));
-        const store = createPluginDeclaredResourceStore({ ...binding(account.lifetime), resourcesById: model.resourcesById })!;
+        const store = createPluginDeclaredResourceStore({ ...binding(account.lifetime), resourcesById: model.resourcesById,
+            resourceDeclarationsComplete: true })!;
         const entry = store.getEntry(RESOURCE_ID);
         const release = entry.subscribe(() => {}, false);
         await vi.waitFor(() => { expect(entry.getSnapshot().digest).toBe(`sha256:${'a'.repeat(64)}`); });
@@ -655,8 +657,10 @@ describe('PluginContextualResourceStoreProvider', () => {
         const account = await createAccountLifetime({ accountId: 'account-a' });
         const exactBinding = binding(account.lifetime);
         let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {};
+        let resourceDeclarationsComplete = false;
         const store = createPluginDeclaredResourceStore({ ...exactBinding,
             get resourcesById() { return resourcesById; },
+            get resourceDeclarationsComplete() { return resourceDeclarationsComplete; },
             createFallbackStore: () => createPluginUiResourceStore({
                 pluginId: exactBinding.pluginId, accountLifetime: account.lifetime,
                 client: createPluginContextualResourceReadClient({ pluginId: exactBinding.pluginId,
@@ -666,6 +670,7 @@ describe('PluginContextualResourceStoreProvider', () => {
         try {
             const ordinary = store.getEntry(RESOURCE_ID);
             expect((await ordinary.refresh()).value).toBeDefined();
+            resourceDeclarationsComplete = true;
             resourcesById = { state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId,
                 resourceKind: 'config', scope: 'global' } };
             expect(ordinary.getSnapshot().value).toBeUndefined();
@@ -688,7 +693,8 @@ describe('PluginContextualResourceStoreProvider', () => {
         let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {
             state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId, resourceKind: 'config', scope: 'global' },
         };
-        const store = createPluginDeclaredResourceStore({ ...exactBinding, get resourcesById() { return resourcesById; } })!;
+        const store = createPluginDeclaredResourceStore({ ...exactBinding, resourceDeclarationsComplete: true,
+            get resourcesById() { return resourcesById; } })!;
         try {
             expect((await store.getEntry(RESOURCE_ID).refresh()).value).toBeDefined();
             const read = createPluginSurfaceResourceReadHandler({ pluginId: exactBinding.pluginId,
@@ -704,7 +710,9 @@ describe('PluginContextualResourceStoreProvider', () => {
         const account = await createAccountLifetime({ accountId: 'account-a' });
         const exactBinding = binding(account.lifetime);
         let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = {};
+        let resourceDeclarationsComplete = false;
         const store = createPluginDeclaredResourceStore({ ...exactBinding, get resourcesById() { return resourcesById; },
+            get resourceDeclarationsComplete() { return resourceDeclarationsComplete; },
             createFallbackStore: () => createPluginUiResourceStore({ pluginId: exactBinding.pluginId,
                 accountLifetime: account.lifetime, client: {
                     ...createPluginContextualResourceReadClient({ pluginId: exactBinding.pluginId,
@@ -721,6 +729,7 @@ describe('PluginContextualResourceStoreProvider', () => {
                 payload: { subscriptionId: 'ordinary-transition', resource: RESOURCE_ID } })).resolves.toMatchObject({ digest: `sha256:${'a'.repeat(64)}` });
             await vi.waitFor(() => expect(rpc.nextSignals).toHaveLength(1));
             expect(events).toEqual([]);
+            resourceDeclarationsComplete = true;
             resourcesById = { state: { id: RESOURCE_ID, pluginId: exactBinding.pluginId, resourceKind: 'config', scope: 'global' } };
             store.reconcile();
             expect(events).toEqual([expect.objectContaining({ kind: 'error', diagnostics: ['plugin_resource_not_found'] })]);
@@ -734,7 +743,7 @@ describe('PluginContextualResourceStoreProvider', () => {
         const requestSurface = { pluginId: 'acme.composer', contributionId: 'widget', surfaceId: 'widget-native',
             placement: 'appSurface' as const, platform: 'ios' as const, channel: 'internal' as const,
             resourceScope: [], diagnostics: [] };
-        let projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, {});
+        let projection = normalizePluginInstalledUiDeclarations({}, 'ios', widgetInstalledPackage('acme.composer', 'Composer'));
         const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
             accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
             sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
@@ -756,7 +765,8 @@ describe('PluginContextualResourceStoreProvider', () => {
             machineResourceRpc.read.mockImplementationOnce(() => new Promise<ReturnType<typeof resourceResponse>>(resolve => { finishRead = resolve; }));
             const pending = adapter.api.readResource(RESOURCE_ID);
             await vi.waitFor(() => expect(machineResourceRpc.read).toHaveBeenCalledTimes(1));
-            projection = { ...projection, resourcesById: { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', scope: 'global' } } };
+            projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') },
+                { state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', scope: 'global' } });
             controller.updateMountedBindings?.({});
             expect(events).toEqual([expect.objectContaining({ kind: 'error', diagnostics: ['plugin_resource_not_found'] })]);
             expect(rpc.nextSignals[0]?.aborted).toBe(true);
@@ -774,7 +784,8 @@ describe('PluginContextualResourceStoreProvider', () => {
         const declaration = { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config' as const,
             scope: 'global' as const };
         let resourcesById: import('@/sync/domains/plugins/ui/projection').PluginUiProjectionModel['resourcesById'] = { state: declaration };
-        const base = { ...binding(account.lifetime), sessionId: 'session-1', get resourcesById() { return resourcesById; } };
+        const base = { ...binding(account.lifetime), sessionId: 'session-1', resourceDeclarationsComplete: true,
+            get resourcesById() { return resourcesById; } };
         const store = createPluginDeclaredResourceStore(base)!;
         const other = createPluginDeclaredResourceStore({ ...base, resourcesById })!;
         const retained = store.getEntry(RESOURCE_ID);
@@ -804,7 +815,7 @@ describe('PluginContextualResourceStoreProvider', () => {
             path: 'global-state', contentType: 'application/json', scope: 'global' as const },
             session: { id: 'session-state', pluginId: 'acme.composer', resourceKind: 'config' as const,
                 path: 'session-state', contentType: 'application/json', scope: 'session' as const } };
-        const base = { ...binding(account.lifetime), resourcesById: resources };
+        const base = { ...binding(account.lifetime), resourcesById: resources, resourceDeclarationsComplete: true };
         const app = createPluginDeclaredResourceStore(base)!;
         const sessionA = createPluginDeclaredResourceStore({ ...base, sessionId: 'session-a' })!;
         const sessionB = createPluginDeclaredResourceStore({ ...base, sessionId: 'session-b' })!;
@@ -1229,7 +1240,7 @@ describe('PluginContextualResourceStoreProvider', () => {
         const requestSurface = { pluginId: 'acme.composer', contributionId: 'widget', surfaceId: 'widget-native-scope',
             placement: 'appSurface' as const, platform: 'ios' as const, channel: 'internal' as const,
             resourceScope: [], diagnostics: [] };
-        let projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, {});
+        let projection = normalizePluginInstalledUiDeclarations({}, 'ios', widgetInstalledPackage('acme.composer', 'Composer'));
         const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
             accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
             sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
@@ -1278,8 +1289,9 @@ describe('PluginContextualResourceStoreProvider', () => {
             for (const [index, scope] of (['global', 'session'] as const).entries()) {
                 const previous = controller.resourceStore!.getEntry(RESOURCE_ID);
                 marker = ['b', 'c'][index]!;
-                projection = { ...projection, resourcesById: { state: { id: RESOURCE_ID, pluginId: 'acme.composer',
-                    resourceKind: 'config', scope } } };
+                projection = widgetProjectionOf([], { 'acme.composer': widgetInstalledPackage('acme.composer', 'Composer') }, {
+                    state: { id: RESOURCE_ID, pluginId: 'acme.composer', resourceKind: 'config', contentType: 'application/json', scope },
+                });
                 await act(async () => { controller.updateMountedBindings?.({}); tree.update(render()); });
                 await vi.waitFor(() => expect(snapshot?.digest).toBe(`sha256:${['b', 'c'][index]!.repeat(64)}`));
                 expect(machineResourceRpc.read).toHaveBeenLastCalledWith('machine-1', expect.objectContaining({
