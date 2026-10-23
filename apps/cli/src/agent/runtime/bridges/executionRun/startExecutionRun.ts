@@ -126,7 +126,7 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function markExecutionRunStartFailure<T>(
   error: T,
-  runCreation: 'noRunCreated' | 'outcomeUnknown',
+  runCreation: 'noRunCreated',
 ): T {
   if (error && typeof error === 'object') {
     const currentDetails = (error as { details?: unknown }).details;
@@ -363,6 +363,12 @@ export async function startExecutionRun(args: StartExecutionRunArgs): Promise<Ex
   const releasePreparation = args.budgetRegistry?.retainExecutionRunPreparation(runId, args.params.intent, args.params.requesterWorkAttributionV1);
   try {
     return await startAdmittedExecutionRun(args, runId, requestBoundRunId);
+  } catch (error) {
+    // Start acknowledges creation, not successful execution or initial-input
+    // delivery. Keep a known Run observable even when its initialization fails.
+    const created = args.runs.get(runId);
+    if (created) return projectExistingExecutionRunStartResult(created);
+    throw markExecutionRunStartFailure(error, 'noRunCreated');
   } finally {
     releasePreparation?.();
   }
@@ -1586,7 +1592,7 @@ async function startAdmittedExecutionRun(
     // encourage a duplicate Run start. A typed definitive rejection follows
     // normal failure settlement below.
     if (retainedInitialPendingCustodyAttempted && retainedInitialPendingCustodyOutcomeUnknown) {
-      throw markExecutionRunStartFailure(e, 'outcomeUnknown');
+      throw e;
     }
     args.budgetRegistry?.releaseExecutionRun(runId);
     const error = projectExecutionRunError(e, { runId });
@@ -1632,6 +1638,6 @@ async function startAdmittedExecutionRun(
         // best effort
       }
     }
-    throw markExecutionRunStartFailure(e, 'outcomeUnknown');
+    throw e;
   }
 }

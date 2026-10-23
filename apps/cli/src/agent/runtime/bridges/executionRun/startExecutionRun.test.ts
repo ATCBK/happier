@@ -1778,7 +1778,7 @@ describe('startExecutionRun', () => {
     });
 
     try {
-      await expect(startExecutionRun({
+      const started = await startExecutionRun({
         params: {
           sessionId: 'parent_session_1',
           intent: 'delegate',
@@ -1800,11 +1800,17 @@ describe('startExecutionRun', () => {
         controllers,
         enqueueMarkerWrite: async () => {},
         writeActivityMarker: async () => {},
-        finishRun: async () => {},
+        finishRun: async (runId, next) => {
+          const current = runs.get(runId);
+          if (current) runs.set(runId, { ...current, ...next });
+        },
         executeBoundedRun: async () => {},
         send: async () => ({ ok: true }),
         voiceAgentManager,
-      })).rejects.toThrow('runtime creation failed');
+      });
+      expect(runs.get(started.runId)).toMatchObject({
+        runId: started.runId, callId: started.callId, sidechainId: started.sidechainId, status: 'failed',
+      });
 
       expect(budgetRegistry.getInFlightSnapshot()).toEqual({
         executionRuns: 0,

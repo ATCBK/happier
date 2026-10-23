@@ -331,11 +331,14 @@ describe('execution run start transcript custody', () => {
       .mockRejectedValueOnce(new Error('pending admission outcome unknown'))
       .mockImplementationOnce(async () => await retryDisposition);
     const existingRunIds = new Set(runs.keys());
-    await expect(startExecutionRun(args)).rejects.toMatchObject({
-      details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } },
-    });
+    const unresolvedStart = await startExecutionRun(args);
     const unresolvedRunId = [...runs.keys()].find((runId) => !existingRunIds.has(runId));
     expect(unresolvedRunId).toBeTruthy();
+    expect(unresolvedStart).toMatchObject({
+      runId: unresolvedRunId,
+      callId: runs.get(unresolvedRunId!)?.callId,
+      sidechainId: runs.get(unresolvedRunId!)?.sidechainId,
+    });
     expect(runs.get(unresolvedRunId!)?.status).toBe('running');
     expect(controllers.has(unresolvedRunId!)).toBe(true);
     const unresolvedController = controllers.get(unresolvedRunId!);
@@ -389,9 +392,10 @@ describe('execution run start transcript custody', () => {
       code: 'session_input_unauthorized',
     });
     const idsBeforeRejected = new Set(runs.keys());
-    await expect(startExecutionRun(args)).rejects.toThrow('session_input_unauthorized');
+    const rejectedStart = await startExecutionRun(args);
     const rejectedRunId = [...runs.keys()].find((runId) => !idsBeforeRejected.has(runId));
     expect(rejectedRunId).toBeTruthy();
+    expect(rejectedStart.runId).toBe(rejectedRunId);
     expect(runs.get(rejectedRunId!)).toMatchObject({
       status: 'failed',
       error: { code: 'session_input_unauthorized' },
@@ -560,10 +564,14 @@ describe('execution run start transcript custody', () => {
       voiceAgentManager,
     };
     try {
-      await expect(startExecutionRun(args)).rejects.toMatchObject({
-        details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } },
-      });
-      expect([...runs.values()]).toEqual([expect.objectContaining({ status: 'failed' })]);
+      const failedStart = await startExecutionRun(args);
+      expect([...runs.values()]).toEqual([expect.objectContaining({
+        runId: failedStart.runId,
+        callId: failedStart.callId,
+        sidechainId: failedStart.sidechainId,
+        status: 'failed',
+        error: expect.objectContaining({ code: 'execution_run_transcript_custody_unavailable' }),
+      })]);
       expect(controllers.size).toBe(0);
       expect(createRuntime).not.toHaveBeenCalled();
       expect(budgetRegistry.getInFlightSnapshot().executionRuns).toBe(0);
