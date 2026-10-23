@@ -129,6 +129,7 @@ async function createFakeMonorepo(rootDir) {
   await mkdir(join(rootDir, 'apps', 'ui'), { recursive: true });
   await mkdir(join(rootDir, 'apps', 'server'), { recursive: true });
   await writeFile(join(rootDir, 'package.json'), JSON.stringify({ name: 'fake-root', private: true }) + '\n');
+  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await writeFile(join(rootDir, 'apps', 'cli', 'package.json'), JSON.stringify({ name: 'fake-cli', private: true }) + '\n');
   await writeFile(join(rootDir, 'apps', 'ui', 'package.json'), JSON.stringify({ name: 'fake-ui', private: true }) + '\n');
   await writeFile(join(rootDir, 'apps', 'server', 'package.json'), JSON.stringify({

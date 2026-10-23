@@ -30,18 +30,35 @@ async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) 
     private: true,
     packageManager: 'pnpm@12.14.0',
   }) + '\n', 'utf-8');
-  await writeFile(join(tmp, 'pnpm-lock.yaml'), '# fixture lockfile\n', 'utf-8');
+  await writeFile(join(tmp, 'pnpm-lock.yaml'), [
+    "lockfileVersion: '9.0'",
+    'settings:',
+    '  autoInstallPeers: true',
+    '  excludeLinksFromLockfile: false',
+    'importers:',
+    '  .: {}',
+    '  apps/cli: {}',
+    '  apps/server: {}',
+    '  apps/ui:',
+    '    dependencies:',
+    "      '@happier-dev/fixture-workspace':",
+    '        specifier: workspace:*',
+    '        version: link:../../packages/fixture-workspace',
+    '  packages/fixture-workspace: {}',
+    '',
+  ].join('\n'), 'utf-8');
   await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   await writeFile(join(tmp, 'retained-inventory.js'), 'export const inventory = [];\n', 'utf-8');
   await writeFile(join(uiDir, 'package.json'), JSON.stringify({
     name: 'happier-ui',
     private: true,
-    dependencies: { '@happier-dev/fixture-workspace': '0.0.0' },
+    dependencies: { '@happier-dev/fixture-workspace': 'workspace:*' },
   }) + '\n', 'utf-8');
   await writeFile(join(tmp, 'apps', 'cli', 'package.json'), JSON.stringify({ name: 'happier-cli', private: true }) + '\n', 'utf-8');
   await writeFile(join(tmp, 'apps', 'server', 'package.json'), JSON.stringify({ name: 'happier-server', private: true }) + '\n', 'utf-8');
   await writeFile(join(fixturePackageDir, 'package.json'), JSON.stringify({
     name: '@happier-dev/fixture-workspace',
+    version: '0.0.0',
     private: true,
     type: 'module',
     main: './dist/index.js',
@@ -70,11 +87,15 @@ async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) 
   ].join('\n') + '\n', 'utf-8');
   await chmod(expoBin, 0o755);
 
-  // The fixture supplies the installed package-manager boundary above; let
-  // the real dependency owner admit that tree for both full and scriptless readers.
+  // The external installer produces metadata after the real dependency owner
+  // clears an unadmitted worker tree, then that owner publishes admission.
   await withDependencyRefresh({
     installDir: tmp, componentDir: uiDir, env: createExpoBaseEnv(tmp),
-  }, async () => {});
+  }, async () => {
+    await mkdir(join(tmp, 'node_modules'), { recursive: true });
+    await writeFile(join(tmp, 'node_modules', '.modules.yaml'),
+      'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n');
+  });
 
   return { tmp, uiDir, workspaceBuildMarker, expoStartedMarker };
 }

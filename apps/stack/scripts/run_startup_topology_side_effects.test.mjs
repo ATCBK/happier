@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runNodeCapture as runNode } from './testkit/core/run_node_capture.mjs';
 import { sanitizeStackTestRunnerEnv } from './utils/test/test_env.mjs';
+import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(dirname(dirname(scriptsDir)));
@@ -25,8 +26,10 @@ test(`dev isolates a cold Expo ${failure} failure instead of terminating the dis
     await writeFile(join(fakeRepo, 'apps', app, 'package.json'), JSON.stringify({ name: `fixture-${app}` }));
   }
   await writeFile(join(fakeRepo, 'package.json'), '{"private":true}');
+  await mkdir(join(fakeRepo, 'node_modules'), { recursive: true });
   await writeFile(join(fakeRepo, 'pnpm-lock.yaml'), '# fixture');
-  await writeFile(join(fakeRepo, 'pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(join(fakeRepo, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
+  const fakePm = writeFakeBin({ root: tempRoot, name: 'pnpm', content: '#!/bin/sh\nexit 0\n' });
   if (failure === 'preflight') {
     await mkdir(join(fakeRepo, 'apps/ui/scripts'));
     await writeFile(join(fakeRepo, 'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'), `
@@ -40,6 +43,8 @@ test(`dev isolates a cold Expo ${failure} failure instead of terminating the dis
     '--no-daemon', '--no-watch', '--no-dev-targets', '--no-browser'], {
     cwd: repoRoot, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: tempRoot, repoDir: fakeRepo }),
+      PATH: `${fakePm.binDir}:${process.env.PATH}`,
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
       CI: '1', HAPPIER_STACK_RUNTIME_MODE: 'source',
       HAPPIER_STACK_REPO_DIR: fakeRepo, HAPPIER_STACK_STACK: 'last-green-qa',
       HAPPIER_STACK_STORAGE_DIR: join(tempRoot, 'stacks'),
@@ -147,6 +152,7 @@ test('run proves a projected proxy PID when proxy metadata is missing and never 
   await mkdir(baseDir, { recursive: true });
   await mkdir(binDir, { recursive: true });
   await writeFile(join(fakeRepo, 'package.json'), JSON.stringify({ name: 'fake-root', private: true }) + '\n');
+  await writeFile(join(fakeRepo, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await writeFile(join(fakeRepo, 'apps', 'server', 'package.json'), JSON.stringify({
     name: 'fake-server', private: true, scripts: { start: 'node server.mjs' },
   }) + '\n');
@@ -168,7 +174,7 @@ case "$*" in
   *) exec /bin/ps "$@" ;;
 esac
 `);
-  await writeFile(join(binDir, 'pnpm'), '#!/bin/sh\nprintf "pnpm:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\ncase "$*" in *install*) exit 0 ;; *) exit 1 ;; esac\n');
+  await writeFile(join(binDir, 'pnpm'), '#!/bin/sh\nprintf "pnpm:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\ncase "$*" in --version) printf "12.14.0\\n" ;; *install*) exit 0 ;; *) exit 1 ;; esac\n');
   await writeFile(join(binDir, 'docker'), '#!/bin/sh\nprintf "docker:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\nexit 0\n');
   await Promise.all(['lsof', 'ps', 'pnpm', 'docker'].map((name) => chmod(join(binDir, name), 0o755)));
   await writeFile(runtimeStatePath, JSON.stringify({

@@ -353,11 +353,12 @@ test('expoExec builds workspace dist deps for the projectDir (not the runnerDir)
   });
 
   const argvLog = await readFile(outputPath, 'utf-8');
-  // The stubbed pnpm writes all invocations to OUTPUT_PATH; we assert that protocol build ran.
-  assert.match(
-    argvLog,
-    new RegExp(`${escapeRegExp(join(root, 'packages', 'protocol'))} :: run --silent build`),
-  );
+  // Builds consume a source capture, then publish back to the project closure.
+  // Assert the package selected, the excluded runner, and the published bytes.
+  assert.match(argvLog, /\/packages\/protocol :: run --silent build(?:\n|$)/u);
+  assert.doesNotMatch(argvLog, new RegExp(`${escapeRegExp(root)} :: run --silent build(?:\\n|$)`));
+  assert.equal(await readFile(join(protocolDir, 'dist', 'rpcErrors.js'), 'utf8'), 'export const ok = true;\n');
+  assert.equal(await readFile(join(protocolDir, 'dist', 'index.d.ts'), 'utf8'), 'export declare const ok: boolean;\n');
 });
 
 test('expoExec falls back to the monorepo root expo bin when runnerDir lacks node_modules/.bin', async (t) => {

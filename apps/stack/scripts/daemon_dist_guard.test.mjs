@@ -35,6 +35,8 @@ import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './utils/proc/
 import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
 import { installWorkspaceAdmissionProcessFixture } from './testkit/core/native_admission_fixture.mjs';
 import { spawnTestProcess } from './testkit/core/spawn_test_process.mjs';
+import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
+import { withDependencyRefresh } from './utils/proc/dependency_refresh.mjs';
 
 const CLI_DIST_BUILD_MANIFEST_MODULE_URL = new URL(
   '../../../packages/cli-common/cliDistBuildManifest.cjs',
@@ -164,14 +166,47 @@ async function writeHappyMonorepoMarkers(rootDir) {
 }
 
 async function prepareCurrentSourceCliFixture(rootDir, cliDir) {
-  await writeFile(join(rootDir, 'package.json'), '{ "private": true }\n', 'utf-8');
-  await writeFile(join(rootDir, 'pnpm-lock.yaml'), '# test lock\n', 'utf-8');
-  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages:\n');
-  await mkdir(join(rootDir, 'node_modules'), { recursive: true });
-  await writeFile(join(rootDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
-  await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
+  const { packageManager } = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8'));
+  const version = /^pnpm@([^+]+)/u.exec(packageManager)[1];
+  await writeFile(join(rootDir, 'package.json'), JSON.stringify({ private: true, packageManager }) + '\n', 'utf-8');
+  await writeFile(join(rootDir, 'pnpm-lock.yaml'), [
+    "lockfileVersion: '9.0'",
+    'settings:',
+    '  autoInstallPeers: true',
+    '  excludeLinksFromLockfile: false',
+    'importers:',
+    '  .: {}',
+    '  apps/cli: {}',
+    '  apps/server: {}',
+    '  apps/ui: {}',
+    '',
+  ].join('\n'), 'utf-8');
+  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
+  // Only the installer executable is simulated. The real refresh owner records
+  // readiness before the dist manifest captures these fixture inputs.
+  const pm = writeFakeBin({ root: rootDir, name: 'pnpm', content: `#!/usr/bin/env node
+const { mkdirSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }
+if (process.argv[2] !== 'install') process.exit(97);
+mkdirSync(join(process.cwd(), 'node_modules'), { recursive: true });
+writeFileSync(join(process.cwd(), 'node_modules/.modules.yaml'), ${JSON.stringify(`packageManager: pnpm@${version}\nlayoutVersion: 5\nnodeLinker: hoisted\n`)});
+` });
+  const dependencyEnv = { npm_execpath: pm.binPath };
+  await withDependencyRefresh({
+    installDir: rootDir,
+    componentDir: cliDir,
+    env: buildDaemonDistGuardEnv({ ...dependencyEnv,
+      HAPPIER_STACK_REPO_DIR: rootDir,
+      HAPPIER_STACK_HOME_DIR: join(rootDir, '.stack-home'),
+      HAPPIER_STACK_STORAGE_DIR: join(rootDir, '.stacks'),
+      HAPPIER_DEV_TARGET_EXECUTION: '1',
+    }),
+  }, ({ env }) => {
+    execFileSync(pm.binPath, ['install', '--frozen-lockfile'], { cwd: rootDir, env, stdio: 'pipe' });
+  });
   writeStubCliDistBuildManifest(cliDir);
+  return dependencyEnv;
 }
 
 test('source admission exposes an unchanged runnable prior dist as degraded when the current build fails', async (t) => {
@@ -614,7 +649,7 @@ test('source daemon holds publication through profile and start but releases it 
   let shouldShutdown = false;
   try {
     await writeHappyMonorepoMarkers(tmp);
-    await prepareCurrentSourceCliFixture(tmp, cliDir);
+    const dependencyEnv = await prepareCurrentSourceCliFixture(tmp, cliDir);
     await mkdir(cliHomeDir, { recursive: true });
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
@@ -631,6 +666,7 @@ test('source daemon holds publication through profile and start but releases it 
       'fixture must exercise the source-dist admission path',
     );
     const env = buildDaemonDistGuardEnv({
+      ...dependencyEnv,
       HAPPIER_STACK_REPO_DIR: tmp,
       HAPPIER_HOME_DIR: cliHomeDir,
       HAPPIER_STACK_HOME_DIR: join(tmp, 'hstack-home'),
@@ -759,7 +795,7 @@ test('ordinary source restart derives its daemon closure inside the final public
   let restartError = null;
   try {
     await writeHappyMonorepoMarkers(tmp);
-    await prepareCurrentSourceCliFixture(tmp, cliDir);
+    const dependencyEnv = await prepareCurrentSourceCliFixture(tmp, cliDir);
     await mkdir(cliHomeDir, { recursive: true });
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
@@ -767,6 +803,7 @@ test('ordinary source restart derives its daemon closure inside the final public
       JSON.parse(await readFile(join(cliDir, 'dist', '.build-manifest.json'), 'utf-8')).fingerprint,
     );
     const env = buildDaemonDistGuardEnv({
+      ...dependencyEnv,
       HAPPIER_STACK_REPO_DIR: tmp,
       HAPPIER_HOME_DIR: cliHomeDir,
       HAPPIER_STACK_HOME_DIR: join(tmp, 'hstack-home'),
@@ -2494,9 +2531,10 @@ test('startLocalDaemonWithAuth waits on the active checkout lock for stale symli
     const staleCliBin = await writeStubHappyCli({ cliDir: staleCliDir });
     await rm(join(staleCliDir, 'dist'), { recursive: true, force: true });
     await symlink(join(activeCliDir, 'dist'), join(staleCliDir, 'dist'), 'dir');
-    await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
+    const dependencyEnv = await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
     const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
       env: buildDaemonDistGuardEnv({
+        ...dependencyEnv,
         HAPPIER_STACK_REPO_DIR: activeRoot,
         HAPPIER_STACK_CLI_BUILD: '1',
       }),
@@ -2943,7 +2981,7 @@ test('startLocalDaemonWithAuth repoints stale fixture cliBin to the active check
     const staleCliBin = await writeStubHappyCli({ cliDir: staleCliDir });
     await tagStubCliDistLaunchSource({ cliDir: activeCliDir, tag: 'active' });
     await tagStubCliDistLaunchSource({ cliDir: staleCliDir, tag: 'stale' });
-    await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
+    const dependencyEnv = await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
 
     const cliHomeDir = join(tmp, 'stack', 'cli');
     const markerPath = join(tmp, 'daemon-launch-source.txt');
@@ -2954,6 +2992,7 @@ test('startLocalDaemonWithAuth repoints stale fixture cliBin to the active check
 
     const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
       env: buildDaemonDistGuardEnv({
+        ...dependencyEnv,
         HAPPIER_STACK_REPO_DIR: activeRoot,
         HAPPIER_STACK_CLI_BUILD: '1',
         HAPPIER_TEST_DAEMON_SOURCE_MARKER: markerPath,
@@ -3061,7 +3100,7 @@ test('stopLocalDaemon uses active checkout dist when stale cliBin dist is missin
     await writeDelayedStopStubHappyCli({ cliDir: activeCliDir });
     const staleCliBin = await writeStubHappyCli({ cliDir: staleCliDir });
     await rm(join(staleCliDir, 'dist'), { recursive: true, force: true });
-    await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
+    const dependencyEnv = await prepareCurrentSourceCliFixture(activeRoot, activeCliDir);
 
     const cliHomeDir = join(tmp, 'stack', 'cli');
     const eventsPath = join(tmp, 'daemon-events.log');
@@ -3072,6 +3111,7 @@ test('stopLocalDaemon uses active checkout dist when stale cliBin dist is missin
 
     const { env } = await installWorkspaceAdmissionProcessFixture(t, tmp, {
       env: buildDaemonDistGuardEnv({
+        ...dependencyEnv,
         HAPPIER_STACK_REPO_DIR: activeRoot,
         HAPPIER_STACK_CLI_BUILD: '1',
         HAPPIER_TEST_DAEMON_EVENTS_PATH: eventsPath,

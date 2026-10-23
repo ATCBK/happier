@@ -572,6 +572,9 @@ test('invalid-auth reseed does not fall back to main when configured seed creden
   try {
     const storageDir = join(tmp, 'storage');
     const cliDir = join(tmp, 'apps', 'cli');
+    const binDir = join(tmp, 'bin');
+    await mkdir(binDir, { recursive: true });
+    await writeStubPnpm({ binDir });
 
     const stub = `
 import { spawn } from 'node:child_process';
@@ -723,6 +726,7 @@ if (sub === 'start') {
       ...process.env,
       ...FAST_DAEMON_START_VERIFY_ENV,
       HAPPIER_STACK_REPO_DIR: tmp,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
       HAPPIER_STACK_STORAGE_DIR: storageDir,
       HAPPIER_STACK_STACK: 'dev',
       HAPPIER_STACK_AUTH_SEED_FROM: 'dev-auth',
@@ -786,6 +790,9 @@ test('invalid-auth auto-reseed does not overwrite manually-authenticated credent
   try {
     const storageDir = join(tmp, 'storage');
     const cliDir = join(tmp, 'apps', 'cli');
+    const binDir = join(tmp, 'bin');
+    await mkdir(binDir, { recursive: true });
+    await writeStubPnpm({ binDir });
 
     const stub = `
 import { spawn } from 'node:child_process';
@@ -898,6 +905,7 @@ if (sub === 'start') {
       ...process.env,
       ...FAST_DAEMON_START_VERIFY_ENV,
       HAPPIER_STACK_REPO_DIR: tmp,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
       HAPPIER_STACK_STORAGE_DIR: storageDir,
       HAPPIER_STACK_STACK: 'dev',
       HAPPIER_STACK_AUTH_SEED_FROM: 'dev-auth',
