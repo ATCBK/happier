@@ -288,8 +288,9 @@ export async function retainRepositoryCheckpointInitialEvidence(input: Readonly<
         evidence = { state: 'unavailable', reason: input.captured.error };
     } else {
         const olderRefs = await runGitCheckpointCommand({ cwd: input.cwd,
-            args: ['for-each-ref', '--format=%(refname)', `${buildRepositoryCheckpointScopePrefix(input.scopeId)}message-start/`] });
-        if (!input.recovered && (!olderRefs.success || olderRefs.stdout.split('\n').some((ref) => ref && ref !== input.checkpointRef.ref))) {
+            args: ['for-each-ref', '--format=%(refname)', buildRepositoryCheckpointScopePrefix(input.scopeId)] });
+        if (!input.recovered && (!olderRefs.success || olderRefs.stdout.split('\n').some((ref) => ref !== input.checkpointRef.ref
+            && parseRepositoryCheckpointRef({ scopeId: input.scopeId, ref })?.phase === 'message-start'))) {
             await writeJsonAtomic(join(await evidenceDirectory(input.cwd, input.scopeId), 'initial.json'), {
                 state: 'unavailable', reason: 'Historical initial checkpoint receipt requires recovery from canonical session evidence', recoverable: true,
             });

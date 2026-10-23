@@ -4,7 +4,7 @@ import { resolveRepositoryCheckpointAvailability } from './availability';
 import { pruneRepositoryCheckpointRefs } from './cleanup';
 import { diffGitRepositoryCheckpoints } from './gitRepositoryCheckpointDiff';
 import { REPOSITORY_CHECKPOINT_RECEIPT_IDS } from './receipts';
-import { buildRepositoryCheckpointRef, buildRepositoryCheckpointRefs } from './refs';
+import { buildRepositoryCheckpointRef, buildRepositoryCheckpointRefs, parseRepositoryCheckpointRef } from './refs';
 import type { RepositoryCheckpointRef } from './types';
 import { scmDiffSummaryCacheStore } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheStore';
 
@@ -29,12 +29,18 @@ describe('repository checkpoint primitives', () => {
         expect(refs.messageStart?.ref).not.toContain('session/one');
     });
 
-    it('rejects checkpoint ids that are not valid hidden Git ref suffixes', () => {
-        for (const turnId of ['turn:2', '../turn', 'turn.lock', 'bad?name', '@{bad}', '.hidden']) {
-            expect(() => buildRepositoryCheckpointRefs({ scopeId: 'session-safe', turnId })).toThrow(
-                'checkpointId is not a safe checkpoint ref id',
-            );
+    it('round-trips opaque ids without colliding with supported safe refs', () => {
+        const scopeId = 'session-safe';
+        for (const checkpointId of ['plugin-input-v1:first-id', 'turn:2', '../turn', 'turn.lock', 'bad?name', '@{bad}', '.hidden', 'turn:🪁', 'turn:\ud800']) {
+            const encoded = buildRepositoryCheckpointRef({ scopeId, phase: 'message-start', checkpointId });
+            expect(parseRepositoryCheckpointRef({ scopeId, ref: encoded.ref })).toEqual(encoded);
+            const lookalikeId = `encoded/message-start/${encoded.ref.split('/').at(-1)}`;
+            const safe = buildRepositoryCheckpointRef({ scopeId, phase: 'message-start', checkpointId: lookalikeId });
+            expect(safe.ref).not.toBe(encoded.ref);
+            expect(parseRepositoryCheckpointRef({ scopeId, ref: safe.ref })?.checkpointId).toBe(lookalikeId);
+            expect(parseRepositoryCheckpointRef({ scopeId, ref: `refs/happier/checkpoints/${encoded.encodedScope}/message-start/${checkpointId}` })).toBeNull();
         }
+        expect(() => buildRepositoryCheckpointRefs({ scopeId, messageId: ' ' })).toThrow('checkpointId must not be empty');
     });
 
     it('rejects checkpoint phases outside the CHKPT-1 capture set', () => {

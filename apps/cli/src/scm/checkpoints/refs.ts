@@ -49,6 +49,18 @@ function assertSupportedCheckpointPhase(value: string): asserts value is Reposit
     }
 }
 
+function buildCheckpointRefSuffix(phase: RepositoryCheckpointCapturePhase, checkpointId: string): string {
+    assertNonEmpty(checkpointId, 'checkpointId');
+    try {
+        assertSafeCheckpointId(checkpointId, 'checkpointId');
+        return `${phase}/${checkpointId}`;
+    } catch {
+        // A separate root cannot collide with any supported phase/id ref.
+        // UTF-16 preserves the opaque JavaScript identity without replacement.
+        return `encoded/${phase}/${Buffer.from(checkpointId, 'utf16le').toString('base64url')}`;
+    }
+}
+
 export function encodeRepositoryCheckpointScope(scopeId: string): string {
     assertNonEmpty(scopeId, 'scopeId');
     return Buffer.from(scopeId, 'utf8').toString('base64url');
@@ -65,13 +77,13 @@ export function buildRepositoryCheckpointRef(input: {
 }): RepositoryCheckpointRef {
     const encodedScope = encodeRepositoryCheckpointScope(input.scopeId);
     assertSupportedCheckpointPhase(input.phase);
-    assertSafeCheckpointId(input.checkpointId, 'checkpointId');
+    const suffix = buildCheckpointRefSuffix(input.phase, input.checkpointId);
     return {
         scopeId: input.scopeId,
         encodedScope,
         phase: input.phase,
         checkpointId: input.checkpointId,
-        ref: `${CHECKPOINT_REF_ROOT}/${encodedScope}/${input.phase}/${input.checkpointId}`,
+        ref: `${CHECKPOINT_REF_ROOT}/${encodedScope}/${suffix}`,
     };
 }
 
@@ -116,7 +128,9 @@ export function parseRepositoryCheckpointRef(input: {
     const prefix = `${CHECKPOINT_REF_ROOT}/${encodedScope}/`;
     if (!input.ref.startsWith(prefix)) return null;
 
-    const rest = input.ref.slice(prefix.length);
+    const suffix = input.ref.slice(prefix.length);
+    const encoded = suffix.startsWith('encoded/');
+    const rest = encoded ? suffix.slice('encoded/'.length) : suffix;
     const slashIndex = rest.indexOf('/');
     if (slashIndex <= 0) return null;
 
@@ -127,9 +141,18 @@ export function parseRepositoryCheckpointRef(input: {
         return null;
     }
 
-    const checkpointId = rest.slice(slashIndex + 1);
+    const idSuffix = rest.slice(slashIndex + 1);
+    let checkpointId = idSuffix;
     try {
-        assertSafeCheckpointId(checkpointId, 'checkpointId');
+        if (encoded) {
+            if (!/^[A-Za-z0-9_-]+$/.test(idSuffix)) return null;
+            const bytes = Buffer.from(idSuffix, 'base64url');
+            if (bytes.length % 2 !== 0 || bytes.toString('base64url') !== idSuffix) return null;
+            checkpointId = bytes.toString('utf16le');
+            if (buildRepositoryCheckpointRef({ scopeId: input.scopeId, phase, checkpointId }).ref !== input.ref) return null;
+        } else {
+            assertSafeCheckpointId(checkpointId, 'checkpointId');
+        }
     } catch {
         return null;
     }
