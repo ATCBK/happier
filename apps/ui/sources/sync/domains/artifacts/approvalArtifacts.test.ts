@@ -108,6 +108,76 @@ function durableApprovalBody(sessionId: string) {
 }
 
 describe('listOpenApprovalArtifactsForSession', () => {
+    it('admits only replaced header/body snapshots and retains unaffected entries across a scale-shaped publication', () => {
+        const target = { serverId: 'server-a', sessionId: 'retained-session' };
+        const stored = (index: number) => {
+            const body = ApprovalRequestV1Schema.parse({ ...approvalBody(target.sessionId),
+                origin: { kind: 'transcript_tool_call', sessionId: target.sessionId, toolCallId: `call-${index}` } });
+            return artifact(`retained-${index}`, buildApprovalRequestArtifactHeaderV1(body, { legacyServerId: target.serverId }), body);
+        };
+        const retained = Array.from({ length: 139 }, (_, index) => stored(index));
+        const unrelated = Array.from({ length: 861 }, (_, index) => artifact(`note-${index}`,
+            { title: 'Note', kind: 'prompt_doc.v2' }, { markdown: 'Unrelated' }));
+        const project = (rows: readonly DecryptedArtifact[]) => listTranscriptApprovalArtifactsForSession(rows, target);
+        // Observe the real strict reader without replacing its schema/header admission.
+        const admit = vi.spyOn(approvalAdmission, 'approvalArtifactBodyMatchesHeaderV1');
+        try {
+            const initial = project([...retained, ...unrelated]);
+            expect(initial).toHaveLength(139);
+            expect(admit).toHaveBeenCalledTimes(139);
+            admit.mockClear();
+            const incoming = stored(139);
+            const added = project([...retained, ...unrelated, incoming]);
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(added.slice(0, 139).every((entry, index) => entry === initial[index])).toBe(true);
+            expect(listOpenApprovalArtifactsForSession(retained, target).every((entry, index) => entry === initial[index])).toBe(true);
+            expect(admit).toHaveBeenCalledTimes(1);
+
+            const before = retained[42]!;
+            const changedBody = ApprovalRequestV1Schema.parse({ ...approvalBody(target.sessionId),
+                origin: { kind: 'transcript_tool_call', sessionId: target.sessionId, toolCallId: 'replacement-call' } });
+            const changed = { ...before, body: JSON.stringify(changedBody), bodyVersion: 2 };
+            const rows = [...retained.slice(0, 42), changed, ...retained.slice(43), incoming];
+            admit.mockClear();
+            const updated = project(rows);
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(updated[42]).not.toBe(added[42]);
+            expect(updated[42]?.approval.origin?.toolCallId).toBe('replacement-call');
+            expect(updated.every((entry, index) => index === 42 || entry === added[index])).toBe(true);
+
+            admit.mockClear();
+            const metadataOnly = { ...changed, updatedAt: 3 };
+            const refreshed = project(rows.map(row => row === changed ? metadataOnly : row));
+            expect(admit).not.toHaveBeenCalled();
+            expect(refreshed[42]?.artifact).toBe(metadataOnly);
+            expect(refreshed[42]?.approval).toBe(updated[42]?.approval);
+            expect(refreshed.every((entry, index) => index === 42 || entry === updated[index])).toBe(true);
+
+            const withdrawn = project(rows.filter(row => row !== changed));
+            expect(admit).not.toHaveBeenCalled();
+            expect(withdrawn).not.toContain(updated[42]);
+            expect(withdrawn.every(entry => updated.includes(entry))).toBe(true);
+            expect(listTranscriptApprovalArtifactsForSession(rows, { ...target, serverId: 'server-b' })).toEqual([]);
+            expect(admit).not.toHaveBeenCalled();
+
+            // A replacement header must pass strict duplicated-field checks even with a retained body.
+            const invalidHeader = { ...metadataOnly, header: { ...metadataOnly.header, title: 'Mismatched header' }, headerVersion: 2 };
+            expect(project([invalidHeader])).toEqual([]);
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(project([invalidHeader])).toEqual([]);
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(project([metadataOnly])[0]).toBe(refreshed[42]);
+            const otherHome = { ...metadataOnly,
+                header: buildApprovalRequestArtifactHeaderV1(changedBody, { legacyServerId: 'server-b' }) };
+            admit.mockClear();
+            expect(project([otherHome])).toEqual([]);
+            const other = listTranscriptApprovalArtifactsForSession([otherHome], { ...target, serverId: 'server-b' });
+            expect(other[0]?.artifact).toBe(otherHome);
+            expect(other[0]?.approval).not.toBe(refreshed[42]?.approval);
+            expect(admit).toHaveBeenCalledTimes(1);
+        } finally { admit.mockRestore(); }
+    });
+
     it('does not re-admit unchanged unrelated approvals for a Session or closed Inbox entries', () => {
         const other = ApprovalRequestV1Schema.parse(approvalBody('other-session'));
         const open = artifact('other', buildApprovalRequestArtifactHeaderV1(other, { legacyServerId: 'server-a' }), other);

@@ -47,15 +47,38 @@ function collectSessionReferencesFromUnknownArray(
     }
 }
 
-function parseApprovalRequestArtifact(artifact: DecryptedArtifact): ApprovalRequest | null {
-    const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, typeof artifact.body === 'string' ? artifact.body : null);
-    return parsed?.family === 'built_in' ? parsed.request : null;
+type ApprovalArtifactSnapshot = Readonly<{
+    header: NonNullable<DecryptedArtifact['header']>;
+    body: string | null;
+    parsed: ParsedApprovalArtifactBodyV1 | null;
+    sessionEntry: OpenApprovalArtifactForSession | null;
+}>;
+
+// The Artifact producer retains unchanged header/body slices. Admit that immutable input once,
+// including refusals; metadata-only snapshots reuse admission, not membership or presentation.
+// Each header retains only its current body. Weak keys release removed snapshots with their owner.
+const admittedApprovalBodies = new WeakMap<ApprovalArtifactSnapshot['header'], Pick<ApprovalArtifactSnapshot, 'body' | 'parsed'>>();
+const approvalArtifactSnapshots = new WeakMap<DecryptedArtifact, ApprovalArtifactSnapshot>();
+
+function readApprovalArtifactSnapshot(artifact: DecryptedArtifact): ApprovalArtifactSnapshot | null {
+    const header = artifact.header;
+    if (!header) return null;
+    const body = typeof artifact.body === 'string' ? artifact.body : null;
+    const previous = approvalArtifactSnapshots.get(artifact);
+    if (previous?.header === header && previous.body === body) return previous;
+    const admitted = admittedApprovalBodies.get(header);
+    const parsed = admitted?.body === body ? admitted.parsed : approvalArtifactBodyMatchesHeaderV1(header, body);
+    if (!admitted || admitted.body !== body) admittedApprovalBodies.set(header, { body, parsed });
+    const snapshot: ApprovalArtifactSnapshot = { header, body, parsed,
+        sessionEntry: parsed?.family === 'built_in' ? { artifact, approval: parsed.request } : null };
+    approvalArtifactSnapshots.set(artifact, snapshot);
+    return snapshot;
 }
 
 function readOpenApprovalInboxArtifact(artifact: DecryptedArtifact) {
     if (artifact.draft === true || artifact.header?.approvalStatus !== 'open'
         || !Object.values(APPROVAL_ARTIFACT_KINDS_V1).some(kind => kind === artifact.header?.kind)) return null;
-    const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, typeof artifact.body === 'string' ? artifact.body : null);
+    const parsed = readApprovalArtifactSnapshot(artifact)?.parsed;
     return parsed?.request.status === 'open' ? parsed : null;
 }
 
@@ -118,7 +141,7 @@ function readDiscussionRequesterApproval(
     discussion: ApprovalDiscussionAddress,
 ): DiscussionRequesterApproval | null {
     if (artifact.draft === true || typeof artifact.body !== 'string') return null;
-    const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
+    const parsed = readApprovalArtifactSnapshot(artifact)?.parsed;
     if (!parsed || parsed.family === 'execution_run_host_action') return null;
     const request = parsed.family === 'target_action' ? parsed.request : parsed.request.v === 2 ? parsed.request : null;
     if (!request) return null;
@@ -268,14 +291,15 @@ function listSessionApprovalArtifacts(
         if (!collectApprovalLinkedSessionReferences(artifact).some(reference => (
             referenceMatchesTarget(reference, target, knownSessionAddresses)
         ))) return [];
-        const approval = parseApprovalRequestArtifact(artifact);
-        if (!approval) return [];
+        const entry = readApprovalArtifactSnapshot(artifact)?.sessionEntry;
+        if (!entry) return [];
+        const { approval } = entry;
         if (approval.status === 'open' ? artifact.header?.approvalStatus !== 'open' : !keepsSettled?.(approval)) return [];
         if (!collectApprovalLinkedSessionReferences(artifact, approval).some((reference) => (
             referenceMatchesTarget(reference, target, knownSessionAddresses)
         ))) return [];
 
-        return [{ artifact, approval }];
+        return [entry];
     });
 }
 
@@ -288,7 +312,7 @@ export function collectOpenApprovalSessionReferences(
         if (artifact.header?.kind !== 'approval_request.v1') continue;
         if (artifact.header?.approvalStatus !== 'open') continue;
 
-        const approval = parseApprovalRequestArtifact(artifact);
+        const approval = readApprovalArtifactSnapshot(artifact)?.sessionEntry?.approval;
         // The list badge is an index projection and must survive the normal
         // header-before-body hydration window. Once a body is present it must
         // validate and remain open; malformed or closed bodies fail closed.

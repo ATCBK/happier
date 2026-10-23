@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as approvalAdmission from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { act } from 'react-test-renderer';
 import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
@@ -9,6 +10,7 @@ import type { AutomationDefinition } from '@/sync/domains/automations/automation
 import {
     useEnabledAutomationsCountForSession,
     useOpenApprovalArtifactsForSession,
+    useTranscriptApprovalArtifactsForSession,
     useOpenApprovalSessionReferences,
 } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -91,6 +93,36 @@ afterEach(() => {
 });
 
 describe('useOpenApprovalSessionReferences', () => {
+    it('shares admitted request identities across real open/transcript producers when one approval arrives', async () => {
+        const previous = storage.getState();
+        const target = { serverId: 'server-a', sessionId: 'producer-cost-session' };
+        const make = (index: number) => artifact(`producer-cost-${index}`, { title: 'Approve', serverId: target.serverId },
+            approvalBody(target.sessionId, 'session.list'));
+        const retained = Array.from({ length: 139 }, (_, index) => make(index));
+        const presentations = [] as const;
+        storage.setState({ isDataReady: true, artifacts: Object.fromEntries(retained.map(row => [row.id, row])) });
+        const admit = vi.spyOn(approvalAdmission, 'approvalArtifactBodyMatchesHeaderV1');
+        try {
+            const hook = await renderHook(() => ({ open: useOpenApprovalArtifactsForSession(target),
+                transcript: useTranscriptApprovalArtifactsForSession(target, presentations) }));
+            const initial = hook.getCurrent();
+            expect(initial.open).toHaveLength(139);
+            const incoming = make(139);
+            admit.mockClear();
+            await act(async () => storage.setState(state => ({ artifacts: { ...state.artifacts, [incoming.id]: incoming } })));
+            const added = hook.getCurrent();
+            expect(admit).toHaveBeenCalledTimes(1);
+            expect(added.open.slice(0, 139).every((entry, index) => entry === initial.open[index])).toBe(true);
+            expect(added.transcript.every((entry, index) => entry === added.open[index])).toBe(true);
+            expect(added.transcript.slice(0, 139).every((entry, index) => entry === initial.transcript[index])).toBe(true);
+            await hook.unmount();
+        } finally {
+            admit.mockRestore();
+            await standardCleanup();
+            storage.setState(previous);
+        }
+    });
+
     it('projects only non-draft open approval session ids and ignores unrelated artifact churn', async () => {
         const previousState = storage.getState();
         try {
