@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { PluginUiExecuteActionRequestV1Schema } from '@happier-dev/protocol/plugins/ui/client';
+import { PluginUiExecuteActionRequestV1Schema, PluginUiHostApiSurfaceContextV1Schema, PluginUiSelectActionInputResultV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import { getActionSpec } from '@happier-dev/protocol';
 import {
     type PluginUiHostApiSurfaceContextV1,
@@ -28,7 +28,7 @@ describe('linked Session activity over the hosted transport', () => {
             subscribe(listener) { receive = listener; return { dispose() {} }; },
             send(message) {
                 if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                    apiVersion: '1.0.0', methods: ['readSession'], surface });
+                    apiVersion: '1.0.0', methods: ['readSession'],  });
                 if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
                     requestId: message.requestId, method: message.method, result: {
                         sessionId: 'linked', lifecycle: 'active', runtime: 'idle', operational: 'none',
@@ -51,7 +51,7 @@ describe('caller-owned Action admission over the hosted transport', () => {
             subscribe(listener) { receive = listener; return { dispose() {} }; },
             send(message) {
                 if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                    apiVersion: '1.0.0', methods: ['admitAction'], surface });
+                    apiVersion: '1.0.0', methods: ['admitAction'],  });
                 if (message.kind === 'request') {
                     expect(PluginUiExecuteActionRequestV1Schema.parse(message.payload)).toEqual({ action: 'save', input: { id: 'view-a' } });
                     receive?.({ wireVersion: 1, kind: 'result', identity, requestId: message.requestId, method: message.method,
@@ -109,7 +109,7 @@ describe('plugin UI domain client transport adapter', () => {
             subscribe(listener) { receive = listener; return { dispose() {} }; },
             send(message) {
                 if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                    apiVersion: '1.0.0', methods: ['executeAction'], surface });
+                    apiVersion: '1.0.0', methods: ['executeAction'],  });
                 if (message.kind !== 'request') return;
                 const request = PluginUiExecuteActionRequestV1Schema.parse(message.payload);
                 const action = request.action;
@@ -143,7 +143,7 @@ describe('plugin UI domain client transport adapter', () => {
             subscribe(listener) { receive = listener; return { dispose() {} }; },
             send(message) {
                 if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                    apiVersion: '1.0.0', methods: ['readResource'], surface });
+                    apiVersion: '1.0.0', methods: ['readResource'],  });
                 if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
                     requestId: message.requestId, method: message.method,
                     result: JSON.stringify(message.payload) === JSON.stringify({ resource: reference })
@@ -164,7 +164,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                        apiVersion: '1.0.0', methods: ['widgetArea'], surface });
+                        apiVersion: '1.0.0', methods: ['widgetArea'],  });
                     else if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
                         requestId: message.requestId, method: message.method,
                         result: { ok: false, errorCode: 'widget_area_not_declared', error: 'widget_area_not_declared' } });
@@ -183,7 +183,7 @@ describe('plugin UI domain client transport adapter', () => {
         const api = await createPluginUiHostApiClientFromTransport({ identity, transport: {
             subscribe(listener) { receive = listener; return { dispose() {} }; },
             send(message) {
-                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['readEntityDragItem', 'updateEntityDragDrop'], surface });
+                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['readEntityDragItem', 'updateEntityDragDrop'],  });
                 if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity, requestId: message.requestId, method: message.method, result: message.method === 'readEntityDragItem' ? null : { accepted: true } });
             },
         } });
@@ -205,7 +205,7 @@ describe('plugin UI domain client transport adapter', () => {
                 subscribe(listener) { receive = listener; return { dispose() {} }; },
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
-                        apiVersion: '1.0.0', methods: ['readStoredImage'], surface });
+                        apiVersion: '1.0.0', methods: ['readStoredImage'],  });
                     else if (message.kind === 'request' && message.method === 'readStoredImage') {
                         reads += 1;
                         requests.push(message.payload);
@@ -248,7 +248,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['openNewSession'],
-                            surface,
                         });
                     } else if (message.kind === 'request' && message.method === 'openNewSession') {
                         expect(message.payload).toEqual({ prompt: 'Repair CI' });
@@ -289,7 +288,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['confirm'], surface,
+                        methods: ['confirm'],
                     });
                     if (message.kind === 'request' && message.method === 'confirm') receive?.({
                         wireVersion: 1, kind: 'result', identity, requestId: message.requestId,
@@ -325,7 +324,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['openNewSession'],
-                            surface,
                         });
                     } else if (message.kind === 'request') {
                         receive?.({
@@ -392,7 +390,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'watchContext'],
-                            surface: protocolSurface,
                         });
                     }
                     if (message.kind === 'request' && message.method === 'context') {
@@ -418,20 +415,28 @@ describe('plugin UI domain client transport adapter', () => {
             },
         });
 
-        const observed: SurfaceContext[] = [];
-        const watch = await api.watchContext((context) => observed.push(context));
-        receive?.({
-            wireVersion: 1,
-            kind: 'subscription',
-            identity,
-            subscriptionId: 'surface-context-subscription',
-            event: { surface: protocolSurface, activity: { active: true } },
-        });
+        // The render snapshot already admits its nested strict surface. Observe
+        // call-through work rather than replace the real transport/parser path.
+        const readmission = vi.spyOn(PluginUiHostApiSurfaceContextV1Schema, 'safeParse');
+        try {
+            const observed: SurfaceContext[] = [];
+            const watch = await api.watchContext((context) => observed.push(context));
+            receive?.({
+                wireVersion: 1,
+                kind: 'subscription',
+                identity,
+                subscriptionId: 'surface-context-subscription',
+                event: { surface: protocolSurface, activity: { active: true } },
+            });
 
-        await expect(api.context()).resolves.toEqual(sdkSurface);
-        expect(observed).toEqual([sdkSurface]);
-        expect(observed[0]?.page).toEqual({ columnVisible: true });
-        watch.dispose();
+            await expect(api.context()).resolves.toEqual(sdkSurface);
+            expect(observed).toEqual([sdkSurface]);
+            expect(observed[0]?.page).toEqual({ columnVisible: true });
+            expect(readmission).not.toHaveBeenCalled();
+            watch.dispose();
+        } finally {
+            readmission.mockRestore();
+        }
     });
 
     it('rejects malformed current-UI enrichment before it can disappear at the host boundary', async () => {
@@ -454,7 +459,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['publishCurrentUiContext'],
-                            surface,
                         });
                     }
                 },
@@ -543,7 +547,6 @@ describe('plugin UI domain client transport adapter', () => {
                                 'setComposerDecorations',
                                 'acquireComposerInputLock',
                             ],
-                            surface,
                         });
                         return;
                     }
@@ -672,7 +675,7 @@ describe('plugin UI domain client transport adapter', () => {
                 sent.push(message);
                 if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
                     apiVersion: '1.0.0', methods: ['readComposer', 'watchComposer', 'applyComposer', 'focusComposer',
-                        'setComposerDecorations', 'acquireComposerInputLock', 'pickComposerMedia'], surface });
+                        'setComposerDecorations', 'acquireComposerInputLock', 'pickComposerMedia'],  });
                 if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
                     requestId: message.requestId, method: message.method,
                     result: { status: 'unavailable', reason: 'notFound' } });
@@ -726,7 +729,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['pickComposerMedia', 'inspectComposerContent', 'releaseComposerContent'],
-                            surface,
                         });
                         return;
                     }
@@ -795,7 +797,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: [],
-                            surface,
                         });
                     }
                 },
@@ -824,7 +825,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'executeAction', 'readResource', 'watchContext', 'watchResource', 'openSurface', 'diagnostic', 'readClipboard', 'writeClipboard', 'openExternalLink'],
-                            surface,
                         });
                     }
                     if (message.kind === 'request' && message.method === 'context') {
@@ -873,7 +873,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context'],
-                            surface,
                         });
                     }
                     if (message.kind === 'request' && message.method === 'context') {
@@ -944,7 +943,6 @@ describe('plugin UI domain client transport adapter', () => {
                         identity,
                         apiVersion: '1.0.0',
                         methods: ['context', 'watchContext'],
-                        surface: hostSurface,
                     });
                     if (message.kind === 'request' && message.method === 'context') receive?.({
                         wireVersion: 1,
@@ -1089,7 +1087,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'selectActionInput', 'executeAction'],
-                            surface: targetedSurface,
                         });
                     }
                     if (message.kind === 'request') {
@@ -1103,7 +1100,7 @@ describe('plugin UI domain client transport adapter', () => {
                                 ? {
                                     kind: 'submitted',
                                     action: operation.action,
-                                    input: { repository: 'happier-dev/happier' },
+                                    input: { repository: 'happier-dev/happier', options: { branch: 'main' } },
                                     selection: {
                                         target: {
                                             pluginId: targetedSurface.targetedContributions.target.pluginId,
@@ -1129,27 +1126,40 @@ describe('plugin UI domain client transport adapter', () => {
             },
         });
 
-        const selected = await api.selectActionInput({
-            operation,
-        });
-        if (selected.kind !== 'submitted') throw new Error('expected submitted selection');
-        await api.executeAction(selected.action, selected.input);
-        const selectedExecute = sent.at(-1);
-        expect(selectedExecute).toMatchObject({
-            kind: 'request',
-            method: 'executeAction',
-            payload: { action: operation.action, input: selected.input },
-            targetedOperation: operation,
-        });
+        const readmission = vi.spyOn(PluginUiSelectActionInputResultV1Schema, 'parse');
+        try {
+            const selected = await api.selectActionInput({ operation });
+            if (selected.kind !== 'submitted') throw new Error('expected submitted selection');
+            expect(() => Object.assign(selected.input.options ?? {}, { branch: 'changed-by-author' })).toThrow(TypeError);
+            expect(() => Object.assign(selected.selection.target.sourceCustody, { registeredRootId: 'changed-by-author' })).toThrow(TypeError);
+            expect(Object.isFrozen(selected.presentation)).toBe(false);
+            Object.assign(selected.presentation, { machineDisplayName: 'Changed by author' });
+            await api.executeAction(selected.action, selected.input);
+            const selectedExecute = sent.at(-1);
+            expect(selectedExecute).toMatchObject({
+                kind: 'request',
+                method: 'executeAction',
+                payload: { action: operation.action, input: selected.input },
+                targetedOperation: operation,
+                selectedActionInput: {
+                    input: { repository: 'happier-dev/happier', options: { branch: 'main' } },
+                    selection: { target: { sourceCustody: { registeredRootId: 'fixture-root' } } },
+                    presentation: { machineDisplayName: 'Development Mac' },
+                },
+            });
 
-        await api.executeAction({ ...selected.action }, selected.input);
-        const reconstructedExecute = sent.at(-1);
-        expect(reconstructedExecute).toMatchObject({
-            kind: 'request',
-            method: 'executeAction',
-            payload: { action: operation.action, input: selected.input },
-        });
-        expect(reconstructedExecute).not.toHaveProperty('targetedOperation');
+            await api.executeAction({ ...selected.action }, selected.input);
+            const reconstructedExecute = sent.at(-1);
+            expect(reconstructedExecute).toMatchObject({
+                kind: 'request',
+                method: 'executeAction',
+                payload: { action: operation.action, input: selected.input },
+            });
+            expect(reconstructedExecute).not.toHaveProperty('targetedOperation');
+            expect(readmission).not.toHaveBeenCalled();
+        } finally {
+            readmission.mockRestore();
+        }
     });
 
     it('relays the explicit selected-operation carrier when a different Action consumes it', async () => {
@@ -1246,7 +1256,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['selectActionInput', 'executeAction'],
-                            surface: targetedSurface,
                         });
                     }
                     if (message.kind === 'request') {
@@ -1410,7 +1419,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['selectActionInput'],
-                            surface: targetedSurface,
                         });
                     }
                     if (message.kind === 'request' && message.method === 'selectActionInput') {
@@ -1478,7 +1486,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'selectActionInput'],
-                            surface,
                         });
                     }
                     if (message.kind === 'request' && message.method === 'selectActionInput') {
@@ -1526,7 +1533,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     sent.push(message);
                     if (message.kind === 'negotiate') {
-                        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['selectActionInput'], surface });
+                        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['selectActionInput'],  });
                     }
                     if (message.kind === 'request' && message.method === 'selectActionInput') {
                         queueMicrotask(() => receive?.({
@@ -1568,7 +1575,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['executeAction'],
-                            surface,
                         });
                     }
                     if (message.kind === 'request') {
@@ -1617,7 +1623,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['executeAction'],
-                            surface,
                         });
                     }
                     if (message.kind === 'request') {
@@ -1669,7 +1674,6 @@ describe('plugin UI domain client transport adapter', () => {
                                 identity,
                                 apiVersion: '1.0.0',
                                 methods: ['context'],
-                                surface: surfaceContext,
                             });
                         }
                         if (message.kind === 'request' && message.method === 'context') {
@@ -1722,7 +1726,6 @@ describe('plugin UI domain client transport adapter', () => {
                                 identity,
                                 apiVersion: '1.0.0',
                                 methods: ['context'],
-                                surface: surfaceContext,
                             });
                         }
                         if (message.kind === 'request' && message.method === 'context') {
@@ -1780,7 +1783,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'executeAction'],
-                            surface,
                         });
                     }
                 },
@@ -1826,7 +1828,6 @@ describe('plugin UI domain client transport adapter', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context', 'watchContext'],
-                            surface,
                         });
                     }
                 },
@@ -1882,7 +1883,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context', 'watchContext'], surface,
+                        methods: ['context', 'watchContext'],
                     });
                 },
                 subscribe(listener) { receive = listener; return { dispose: () => undefined }; },
@@ -1937,7 +1938,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context', 'watchContext'], surface,
+                        methods: ['context', 'watchContext'],
                     });
                 },
                 subscribe(listener) { receive = listener; return { dispose: () => undefined }; },
@@ -1980,7 +1981,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context', 'watchContext'], surface,
+                        methods: ['context', 'watchContext'],
                     });
                 },
                 subscribe(listener) { receive = listener; return { dispose: () => undefined }; },
@@ -2021,7 +2022,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context', 'watchContext', 'diagnostic'], surface,
+                        methods: ['context', 'watchContext', 'diagnostic'],
                     });
                 },
                 subscribe(listener) { receive = listener; return { dispose: () => undefined }; },
@@ -2103,7 +2104,7 @@ describe('plugin UI domain client transport adapter', () => {
         void pending.then((value) => settlements.push(value), (error: unknown) => settlements.push(error));
         await vi.advanceTimersByTimeAsync(30_001);
         expect(settlements).toEqual([]);
-        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'], surface });
+        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'],  });
         const api = await pending;
         await expect(api.context()).resolves.toEqual(surface);
         cancellation.abort();
@@ -2158,7 +2159,7 @@ describe('plugin UI domain client transport adapter', () => {
         const error = pending.catch((cause: unknown) => cause);
         cancellation.abort();
         await expect(error).resolves.toMatchObject({ code: 'aborted' });
-        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'], surface });
+        receive?.({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'],  });
         expect(disposal).toHaveBeenCalledOnce();
         expect(disconnected.mock.calls).toEqual([['aborted']]);
     });
@@ -2176,7 +2177,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['executeAction'], surface,
+                        methods: ['executeAction'],
                     });
                 },
             },
@@ -2202,7 +2203,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['executeAction'], surface,
+                        methods: ['executeAction'],
                     });
                 },
             },
@@ -2214,24 +2215,33 @@ describe('plugin UI domain client transport adapter', () => {
         expect(sent.filter((message) => message.kind === 'request')).toHaveLength(1);
     });
 
-    it('rejects unknown and malformed optional surface context fields during negotiation', async () => {
+    it('admits version-only negotiation and validates the current context read', async () => {
         let transportDisposals = 0;
-        await expect(createPluginUiHostApiClientFromTransport({
+        let receive: ((message: unknown) => void) | undefined;
+        const malformedSurface = { ...surface, session: { id: 42 }, ambientCredential: 'secret' };
+        const api = await createPluginUiHostApiClientFromTransport({
             authorPlugin: { id: 'com.acme.fixture', version: '1.0.0' },
             identity,
             transport: {
                 subscribe(listener) {
+                    receive = listener;
                     queueMicrotask(() => listener({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
                         methods: ['context'],
-                        surface: { ...surface, session: { id: 42 }, ambientCredential: 'secret' },
                     }));
                     return { dispose: () => { transportDisposals += 1; } };
                 },
-                send: () => undefined,
+                send(message) {
+                    if (message.kind === 'request') receive?.({
+                        wireVersion: 1, kind: 'result', identity, requestId: message.requestId,
+                        method: message.method, result: { surface: malformedSurface, activity: { active: true } },
+                    });
+                },
             },
-        })).rejects.toMatchObject({ code: 'invalid_payload' });
-        expect(transportDisposals).toBe(1);
+        });
+        expect(api.version().apiVersion).toBe('1.0.0');
+        await expect(api.context()).rejects.toMatchObject({ code: 'invalid_payload' });
+        expect(transportDisposals).toBe(0);
     });
 
     it('never abandons a human-held operation on the handshake deadline', async () => {
@@ -2249,7 +2259,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['selectActionInput'], surface,
+                        methods: ['selectActionInput'],
                     });
                 },
             },
@@ -2288,7 +2298,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['executeAction'], surface,
+                        methods: ['executeAction'],
                     });
                 },
             },
@@ -2359,7 +2369,6 @@ describe('plugin UI domain client transport adapter', () => {
                         receive?.({
                             wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
                             methods: ['openNewSession', 'executeAction', 'applyComposer', 'confirm', 'readResource', 'openSurface'],
-                            surface,
                         });
                     }
                 },
@@ -2396,7 +2405,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['executeAction'], surface,
+                        methods: ['executeAction'],
                     });
                 },
             },
@@ -2450,7 +2459,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['executeAction', 'readClipboard'], surface,
+                        methods: ['executeAction', 'readClipboard'],
                     });
                 },
             },
@@ -2478,7 +2487,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context'], surface,
+                        methods: ['context'],
                     });
                 },
             },
@@ -2512,7 +2521,7 @@ describe('plugin UI domain client transport adapter', () => {
                     if (message.kind === 'negotiate') {
                         receive?.({
                             wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                            methods: ['openSurface'], surface: embeddedSurface,
+                            methods: ['openSurface'],
                         });
                         return;
                     }
@@ -2576,7 +2585,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
-                        wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['openSurface'], surface,
+                        wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['openSurface'],
                     });
                     if (message.kind === 'request') receive?.({
                         wireVersion: 1, kind: 'result', identity, requestId: message.requestId, method: message.method, result: null,
@@ -2605,7 +2614,7 @@ describe('plugin UI domain client transport adapter', () => {
                     if (message.kind === 'negotiate') {
                         receive?.({
                             wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                            methods: ['openConnectedAccounts'], surface,
+                            methods: ['openConnectedAccounts'],
                         });
                         return;
                     }
@@ -2650,7 +2659,7 @@ describe('plugin UI domain client transport adapter', () => {
                     if (message.kind === 'negotiate') {
                         receive?.({
                             wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                            methods: ['replacePageLocation'], surface,
+                            methods: ['replacePageLocation'],
                         });
                         return;
                     }
@@ -2700,7 +2709,7 @@ describe('plugin UI domain client transport adapter', () => {
                     if (message.kind === 'negotiate') {
                         receive?.({
                             wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                            methods: ['replacePageLocation'], surface,
+                            methods: ['replacePageLocation'],
                         });
                         return;
                     }
@@ -2717,7 +2726,7 @@ describe('plugin UI domain client transport adapter', () => {
         await expect(api.replacePageLocation('a')).rejects.toMatchObject({ code: 'invalid_payload' });
     });
 
-    it('does not expose the negotiated surface snapshot as an unadvertised context method', async () => {
+    it('does not expose an unadvertised context method after negotiation', async () => {
         let receive: ((message: unknown) => void) | undefined;
         const api = await createPluginUiHostApiClientFromTransport({
             authorPlugin: { id: 'com.acme.fixture', version: '1.0.0' },
@@ -2726,7 +2735,7 @@ describe('plugin UI domain client transport adapter', () => {
                 subscribe(listener) { receive = listener; return { dispose: () => undefined }; },
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
-                        wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: [], surface,
+                        wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: [],
                     });
                 },
             },
@@ -2743,7 +2752,7 @@ describe('plugin UI domain client transport adapter', () => {
                 subscribe(listener) {
                     queueMicrotask(() => listener({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '2.0.0',
-                        methods: ['context'], surface,
+                        methods: ['context'],
                     }));
                     return { dispose: () => undefined };
                 },
@@ -2759,8 +2768,8 @@ describe('plugin UI domain client transport adapter', () => {
             transport: {
                 subscribe(listener) {
                     queueMicrotask(() => {
-                        listener({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'], surface });
-                        listener({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'], surface: { ...surface, locale: 'fr' } });
+                        listener({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'],  });
+                        listener({ wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'],  });
                     });
                     return { dispose: () => undefined };
                 },
@@ -2784,7 +2793,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['statOpenableContent', 'readOpenableContent'], surface,
+                        methods: ['statOpenableContent', 'readOpenableContent'],
                     });
                 },
             },
@@ -2846,7 +2855,7 @@ describe('plugin UI domain client transport adapter', () => {
                 send(message) {
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['readResource'], surface,
+                        methods: ['readResource'],
                     });
                 },
             },
@@ -2879,7 +2888,6 @@ describe('plugin UI domain client transport adapter', () => {
                         identity,
                         apiVersion: '1.0.0',
                         methods: ['watchResource'],
-                        surface,
                     });
                 },
             },
@@ -2938,7 +2946,7 @@ describe('plugin UI domain client transport adapter', () => {
                     // makes the `unsupported_method` control below decisive.
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['readResource'], surface,
+                        methods: ['readResource'],
                     });
                 },
             },
@@ -2976,7 +2984,7 @@ describe('plugin UI domain client transport adapter', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') receive?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['watchContext'], surface,
+                        methods: ['watchContext'],
                     });
                 },
             },

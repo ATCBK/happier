@@ -1,17 +1,16 @@
 /** @moduleRealm any */
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
-import { PluginUiRendererChainBindingV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/rendererChainBinding';
 import type { PluginUiRendererChainBindingV1 } from '@happier-dev/protocol';
 
 import type { TargetedContributionRendererDeclaration } from './targetedContributionAdmission.js';
 
 export type PluginUiRendererChainResolution<TRenderer extends TargetedContributionRendererDeclaration> =
     | Readonly<{ ok: true; rendererChain: readonly TRenderer[] }>
-    | Readonly<{ ok: false; code: 'renderer_not_found' | 'renderer_chain_invalid' }>;
+    | Readonly<{ ok: false; code: 'renderer_not_found' }>;
 
+/** Identifiers have already been admitted by manifest normalization. */
 export function buildPluginUiRendererContributionKey(pluginId: string, localId: string): string {
-    return buildQualifiedPluginContributionKey(createPluginContributionIdentity({ pluginId, localId }));
+    return buildQualifiedPluginContributionKey({ pluginId, localId });
 }
 
 /**
@@ -25,23 +24,13 @@ export function resolvePluginUiRendererChain<TRenderer extends TargetedContribut
     contributorPluginId: string;
     renderersByQualifiedId: ReadonlyMap<string, TRenderer>;
 }>): PluginUiRendererChainResolution<TRenderer> {
-    const binding = PluginUiRendererChainBindingV1Schema.safeParse(input.binding);
-    if (!binding.success) {
-        return Object.freeze({ ok: false, code: 'renderer_chain_invalid' });
-    }
-    const localIds = [binding.data.renderer, ...(binding.data.fallbackRenderers ?? [])];
+    const localIds = [input.binding.renderer, ...(input.binding.fallbackRenderers ?? [])];
     const rendererChain: TRenderer[] = [];
     for (const localId of localIds) {
         const renderer = input.renderersByQualifiedId.get(
             buildPluginUiRendererContributionKey(input.contributorPluginId, localId),
         );
         if (!renderer) return Object.freeze({ ok: false, code: 'renderer_not_found' });
-        if (renderer.pluginId !== input.contributorPluginId
-            || renderer.identity.pluginId !== input.contributorPluginId
-            || renderer.identity.localId !== localId
-            || renderer.definition.id !== localId) {
-            return Object.freeze({ ok: false, code: 'renderer_chain_invalid' });
-        }
         rendererChain.push(renderer);
     }
     return Object.freeze({ ok: true, rendererChain: Object.freeze(rendererChain) });

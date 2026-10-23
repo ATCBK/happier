@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
-export const CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES = Object.freeze({
+export const CONNECTED_ACCOUNT_NATIVE_HOME_STATE_FILES = Object.freeze<Record<'primary' | 'legacy', string>>({
   primary: '.happier-state-sharing.json',
   legacy: '.happier-codex-home-sharing.json',
 });

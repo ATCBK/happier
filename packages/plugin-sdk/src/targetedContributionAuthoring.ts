@@ -27,8 +27,7 @@ export type PluginTargetedContributionSourceCustodyV1 =
         packagedRuntime: Readonly<
             | { kind: 'cli_version_root'; versionRootId: string }
             | { kind: 'pinned_runner_snapshot'; snapshotId: string }
-            | { kind: 'app_bundle'; bundleId: string }
-            | { kind: 'source_declaration'; packageName: string; declarationDigest: string }
+            | { kind: 'source_declaration'; packageName: string }
         >;
     }>
     | Readonly<{

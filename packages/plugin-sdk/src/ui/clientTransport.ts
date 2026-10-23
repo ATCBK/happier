@@ -1,8 +1,8 @@
-import { PluginUiWidgetAreaRequestV1Schema, PluginUiWidgetAreaResultV1Schema, PluginUiWatchEntityDragDropRequestV1Schema, PluginUiEntityDragDropStateV1Schema, PLUGIN_UI_HOST_API_COMPATIBLE_RANGE_V1, PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1, PLUGIN_UI_HOST_METHODS_V1, PluginUiReadEntityDragItemRequestV1Schema, PluginUiReadEntityDragItemResultV1Schema, PluginUiUpdateEntityDragDropRequestV1Schema, PluginUiUpdateEntityDragDropResultV1Schema, PluginUiAcquireComposerInputLockRequestV1Schema, PluginUiActiveComposerResultV1Schema, PluginUiApplyComposerRequestV1Schema, PluginUiFocusComposerRequestV1Schema, PluginUiInspectComposerContentRequestV1Schema, PluginUiJsonObjectV1Schema, PluginUiOpenNewSessionRequestV1Schema, PluginUiOpenConnectedAccountsRequestV1Schema, PluginUiReadComposerRequestV1Schema, PluginUiPickComposerMediaRequestV1Schema, PluginUiPublishCurrentUiContextRequestV1Schema, PluginUiReleaseComposerContentRequestV1Schema, PluginUiReplacePageLocationRequestV1Schema, PluginUiReplacePageLocationResultV1Schema, PluginUiSetComposerDecorationsRequestV1Schema, PluginUiWatchComposerRequestV1Schema, PluginUiReadSessionRequestV1Schema, PluginUiReadStoredImageRequestV1Schema, PluginUiReadStoredImageResultV1Schema, PluginUiReadSessionResultV1Schema, PluginUiRespondToSessionPermissionRequestV1Schema, PluginUiRespondToSessionPermissionResultV1Schema, PluginUiWatchSessionRequestV1Schema, PluginLiveStreamReferenceV1Schema, PluginUiLiveStreamViewingV1Schema, PluginUiExecuteActionRequestV1Schema, PluginUiHostApiSurfaceContextV1Schema, PluginUiHostApiRenderContextSnapshotV1Schema, PluginUiSelectActionInputRequestV1Schema, PluginUiSelectActionInputResultV1Schema, PluginUiEphemeralInputSettlementV1Schema, PluginUiSelectedActionInputCarrierV1Schema, PluginUiHostApiWireEnvelopeV1Schema, pluginUiHostApiWireIdentitiesEqual, PluginUiResourceSubscriptionEventV1Schema } from '@happier-dev/protocol/plugins/ui/client';
+import { PluginUiWidgetAreaRequestV1Schema, PluginUiWidgetAreaResultV1Schema, PluginUiWatchEntityDragDropRequestV1Schema, PluginUiEntityDragDropStateV1Schema, PLUGIN_UI_HOST_API_COMPATIBLE_RANGE_V1, PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1, PLUGIN_UI_HOST_METHODS_V1, PluginUiReadEntityDragItemRequestV1Schema, PluginUiReadEntityDragItemResultV1Schema, PluginUiUpdateEntityDragDropRequestV1Schema, PluginUiUpdateEntityDragDropResultV1Schema, PluginUiAcquireComposerInputLockRequestV1Schema, PluginUiActiveComposerResultV1Schema, PluginUiApplyComposerRequestV1Schema, PluginUiFocusComposerRequestV1Schema, PluginUiInspectComposerContentRequestV1Schema, PluginUiJsonObjectV1Schema, PluginUiOpenNewSessionRequestV1Schema, PluginUiOpenConnectedAccountsRequestV1Schema, PluginUiReadComposerRequestV1Schema, PluginUiPickComposerMediaRequestV1Schema, PluginUiPublishCurrentUiContextRequestV1Schema, PluginUiReleaseComposerContentRequestV1Schema, PluginUiReplacePageLocationRequestV1Schema, PluginUiReplacePageLocationResultV1Schema, PluginUiSetComposerDecorationsRequestV1Schema, PluginUiWatchComposerRequestV1Schema, PluginUiReadSessionRequestV1Schema, PluginUiReadStoredImageRequestV1Schema, PluginUiReadStoredImageResultV1Schema, PluginUiReadSessionResultV1Schema, PluginUiRespondToSessionPermissionRequestV1Schema, PluginUiRespondToSessionPermissionResultV1Schema, PluginUiWatchSessionRequestV1Schema, PluginLiveStreamReferenceV1Schema, PluginUiLiveStreamViewingV1Schema, PluginUiExecuteActionRequestV1Schema, PluginUiHostApiRenderContextSnapshotV1Schema, PluginUiSelectActionInputRequestV1Schema, PluginUiSelectActionInputResultV1Schema, PluginUiEphemeralInputSettlementV1Schema, PluginUiSelectedActionInputCarrierV1Schema, PluginUiHostApiWireEnvelopeV1Schema, pluginUiHostApiWireIdentitiesEqual, PluginUiResourceSubscriptionEventV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import { ComposerDecorationResultV1Schema, ComposerFocusResultV1Schema, ComposerReadResultV1Schema, ComposerSnapshotV1Schema, ComposerTransactionResultV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
 import { ComposerContentHandleV1Schema, ComposerContentInspectWireResultV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { OpenableContentReadResultV1Schema, OpenableContentStatResultV1Schema } from '@happier-dev/protocol/plugins/openableContent';
-import type { PluginUiHostApiWireEnvelopeV1, PluginUiHostApiWireIdentityV1, PluginUiHostMethodV1 as ProtocolPluginUiHostMethodV1, PluginUiSelectActionInputResultV1, PluginUiHostApiSurfaceContextV1, PluginUiTargetedContributionOperationV1 } from '@happier-dev/protocol/plugins/ui/client';
+import type { PluginUiHostApiWireEnvelopeV1, PluginUiHostApiWireIdentityV1, PluginUiHostMethodV1 as ProtocolPluginUiHostMethodV1, PluginUiSelectActionInputResultV1, PluginUiTargetedContributionOperationV1 } from '@happier-dev/protocol/plugins/ui/client';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import { PluginError } from '../errors.js';
@@ -71,10 +71,6 @@ type CanonicalHostMethod = PluginUiCanonicalHostMethodFor<
     Exclude<keyof PluginUiHostApi, 'version'>,
     ProtocolPluginUiHostMethodV1
 >;
-
-type CanonicalSurfaceContext = PluginUiHostApiSurfaceContextV1
-    & MutuallyAssignable<PluginUiHostApiSurfaceContextV1, SurfaceContext>
-    & MutuallyAssignable<SurfaceContext, PluginUiHostApiSurfaceContextV1>;
 
 export interface PluginUiHostApiClientTransport {
     send(message: PluginUiHostApiWireEnvelopeV1): void | Promise<void>;
@@ -250,14 +246,6 @@ function requireTransportJsonObject(value: unknown, label: string): JsonValue {
     }
     return parsed.data;
 }
-function readSurface(value: JsonValue): SurfaceContext {
-    const parsed = PluginUiHostApiSurfaceContextV1Schema.safeParse(value);
-    if (!parsed.success) {
-        throw new PluginUiHostApiClientError('invalid_payload', 'Host returned an invalid surface context.');
-    }
-    const surface: CanonicalSurfaceContext = parsed.data;
-    return surface;
-}
 function readRenderContextSnapshot(value: JsonValue): Readonly<{
     surface: SurfaceContext;
     activity: Readonly<{ active: boolean }>;
@@ -267,7 +255,7 @@ function readRenderContextSnapshot(value: JsonValue): Readonly<{
         throw new PluginUiHostApiClientError('invalid_payload', 'Host returned an invalid render context snapshot.');
     }
     return Object.freeze({
-        surface: readSurface(parsed.data.surface),
+        surface: parsed.data.surface,
         activity: Object.freeze({ active: parsed.data.activity.active }),
     });
 }
@@ -437,7 +425,7 @@ export async function createPluginUiHostApiClientFromTransport(
     const issuedInjectedSubscriptionIds = options.createSubscriptionId === undefined ? undefined : new Set<string>();
     let online = true;
     let terminalError: PluginUiHostApiClientError | undefined;
-    let negotiated: { version: PluginUiHostApiVersion; surface: SurfaceContext } | undefined;
+    let negotiated: { version: PluginUiHostApiVersion } | undefined;
     const requestedApiRange = options.apiRange ?? PLUGIN_UI_HOST_API_COMPATIBLE_RANGE_V1;
     let negotiationTimeout: ReturnType<typeof setTimeout> | undefined;
     let resolveNegotiation!: () => void;
@@ -523,7 +511,6 @@ export async function createPluginUiHostApiClientFromTransport(
                         // availability; it no longer selects a semantic branch.
                         methods: message.methods.filter(isAdvertisableHostMethod),
                     },
-                    surface: readSurface(message.surface),
                 };
                 resolveNegotiation();
             } catch (error) {
@@ -781,12 +768,6 @@ export async function createPluginUiHostApiClientFromTransport(
     }
 
     const initial = negotiated;
-    // Hosted-web and injected-native contexts have the same one live snapshot
-    // contract: a validated context watch event replaces the negotiated value
-    // before it reaches its listener. A direct host read replaces that same
-    // value too, so retiring the final watch listener cannot freeze later
-    // `context()` calls. The host remains the producer and currentness owner.
-    let currentSurface = initial.surface;
     const api = {
         version: () => initial.version,
         publishCurrentUiContext: (enrichment) => {
@@ -805,7 +786,6 @@ export async function createPluginUiHostApiClientFromTransport(
                 throw new PluginUiHostApiClientError('invalid_payload', 'Host context response is missing.');
             }
             const next = readRenderContextSnapshot(result);
-            currentSurface = next.surface;
             options.onContextActivity?.(next.activity);
             return next.surface;
         },
@@ -815,7 +795,6 @@ export async function createPluginUiHostApiClientFromTransport(
                 undefined,
                 (value) => {
                     const next = readRenderContextSnapshot(value);
-                    currentSurface = next.surface;
                     options.onContextActivity?.(next.activity);
                     listener(next.surface);
                 },
@@ -894,15 +873,8 @@ export async function createPluginUiHostApiClientFromTransport(
                 );
             }
             if (result.data.kind === 'submitted' && 'operation' in payload.data) {
-                const retainedResult = PluginUiSelectActionInputResultV1Schema.parse(
-                    JSON.parse(JSON.stringify(result.data)),
-                );
-                if (retainedResult.kind !== 'submitted') {
-                    throw new PluginUiHostApiClientError(
-                        'invalid_payload',
-                        'Host returned an invalid selectActionInput result.',
-                    );
-                }
+                // Strict admission above establishes this JSON-only shape; detach the private settlement without admitting it again.
+                const retainedResult = JSON.parse(JSON.stringify(result.data)) as typeof result.data;
                 const selectedActionInput = Object.freeze({
                     operation: payload.data.operation,
                     result: retainedResult,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { definePlugin } from '../../definePlugin.js';
 import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
@@ -9,6 +9,8 @@ import { defineProtocolLiteral, defineProtocolObject, defineProtocolString } fro
 import { selectCurrentTargetedContribution } from '../../services/targetedContributions.js';
 import { QualifiedConnectedAccountRefSchema } from '../../connected-accounts/index.js';
 import { PluginUiSelectedActionInputCarrierV1Schema } from '@happier-dev/protocol/plugins/ui/selectedActionInput';
+import { PluginTargetedContributionV1Schema } from '@happier-dev/protocol/plugins/contributions/targeted';
+import { PluginUiRendererChainBindingV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/rendererChainBinding';
 import {
     createManifestTargetedContributionsService,
     mergeTargetedContributionManifestDeclarations,
@@ -293,16 +295,16 @@ describe('portable targeted contribution admission', () => {
         }, current).contributorOccurrenceId).toBe(account.occurrenceId);
     });
 
-    it('retains privately issued bundled source custody when a public nested bundle identity is mutated', async () => {
+    it('retains privately issued bundled source custody when a public nested package identity is mutated', async () => {
         const declarations = rows().map((row, index) => index === 1 ? { ...row, sourceCustody: {
-            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app-bundle-a' },
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/actions-a' },
         } } : row);
         const operation = (await readContributions(declarations))[0]!.operations.inspect;
         const custody = operation.identity.contributor.sourceCustody;
         if (custody.kind !== 'bundled_first_party') throw new Error('Expected the real bundled Account source shape');
-        Reflect.set(custody.packagedRuntime, 'bundleId', 'app-bundle-b');
+        Reflect.set(custody.packagedRuntime, 'packageName', '@acme/actions-b');
         const changed = declarations.map((row, index) => index === 1 ? { ...row, sourceCustody: {
-            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app-bundle-b' },
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/actions-b' },
         } } : row);
         expect(() => requireAdmittedTargetedOperationExecutionBinding(operation, {
             plugin: { id: target.manifest.id }, occurrenceId: declarations[0]!.occurrenceId,
@@ -311,13 +313,13 @@ describe('portable targeted contribution admission', () => {
 
     it('does not expose mutable host custody state through public descriptor snapshots', async () => {
         const declarations = rows().map(row => ({ ...row, sourceCustody: {
-            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: row.manifest.id },
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const, packageName: row.manifest.id },
         } }));
         const { targetSourceCustody, contributorSourceCustody } = await admittedOperation(declarations);
         const original = declarations.map(row => normalizePluginSourceCustodyV1(row.sourceCustody));
         for (const custody of [targetSourceCustody, contributorSourceCustody]) {
             if (custody.kind !== 'bundled_first_party') throw new Error('Expected the bundled host custody shape');
-            Reflect.set(custody.packagedRuntime, 'bundleId', 'replacement-bundle');
+            Reflect.set(custody.packagedRuntime, 'packageName', '@acme/replacement');
         }
         expect(declarations.map(row => row.sourceCustody)).toEqual(original);
     });
@@ -359,24 +361,33 @@ describe('portable targeted contribution admission', () => {
         const pluginId = source.manifest.id;
         const action = rows()[1]!.manifest.contributes.actions[0]!;
         const occurrences = ['account-source', 'machine-source'];
-        const resolved = resolveAdmittedTargetedContributions({
-            pluginContributionPoints: parsed.manifest.contributes.pluginContributionPoints.map(definition => ({
-                pluginId: detailTarget.manifest.id, occurrenceId: 'account-target', definition,
-            })),
-            targetedPluginContributions: occurrences.map(occurrenceId => ({ pluginId, occurrenceId, definition: {
+        const targetedPluginContributions = occurrences.map(occurrenceId => ({ pluginId, occurrenceId,
+            definition: PluginTargetedContributionV1Schema.parse({
                 id: occurrenceId, target: { pluginId: detailTarget.manifest.id, pointId: 'sources' },
                 protocol: { id: 'source-detail', version: 1 }, operations: { inspect: action.id }, surfaces: { detail: { renderer: 'detail' } },
-            } })),
-            actions: occurrences.map(occurrenceId => ({ pluginId, occurrenceId, definition: projectTargetedContributionActionDefinition(action) })),
-            uiRenderersV2: occurrences.map(occurrenceId => ({ pluginId, occurrenceId,
-                identity: createPluginContributionIdentity({ pluginId, localId: 'detail' }),
-                definition: { id: 'detail', sourceOccurrence: occurrenceId },
-            })),
-            occurrenceIdsByPluginId: {},
-        });
-        const snapshot = resolved.read({ targetPluginId: detailTarget.manifest.id, pointId: 'sources', protocol: { id: 'source-detail', version: 1 } });
-        expect(snapshot?.contributions.map(entry => [entry.contributor.occurrenceId, entry.surfaces[0]?.rendererChain[0]?.definition.sourceOccurrence]))
-            .toEqual(occurrences.map(occurrenceId => [occurrenceId, occurrenceId]));
+            }),
+        }));
+        const readmission = vi.spyOn(PluginUiRendererChainBindingV1Schema, 'safeParse');
+        try {
+            const resolved = resolveAdmittedTargetedContributions({
+                pluginContributionPoints: parsed.manifest.contributes.pluginContributionPoints.map(definition => ({
+                    pluginId: detailTarget.manifest.id, occurrenceId: 'account-target', definition,
+                })),
+                targetedPluginContributions,
+                actions: occurrences.map(occurrenceId => ({ pluginId, occurrenceId, definition: projectTargetedContributionActionDefinition(action) })),
+                uiRenderersV2: occurrences.map(occurrenceId => ({ pluginId, occurrenceId,
+                    identity: createPluginContributionIdentity({ pluginId, localId: 'detail' }),
+                    definition: { id: 'detail', sourceOccurrence: occurrenceId },
+                })),
+                occurrenceIdsByPluginId: {},
+            });
+            const snapshot = resolved.read({ targetPluginId: detailTarget.manifest.id, pointId: 'sources', protocol: { id: 'source-detail', version: 1 } });
+            expect(snapshot?.contributions.map(entry => [entry.contributor.occurrenceId, entry.surfaces[0]?.rendererChain[0]?.definition.sourceOccurrence]))
+                .toEqual(occurrences.map(occurrenceId => [occurrenceId, occurrenceId]));
+            expect(readmission).not.toHaveBeenCalled();
+        } finally {
+            readmission.mockRestore();
+        }
     });
 
     it('keeps Machine roles of a mixed source when no Account release of that source is selected', async () => {

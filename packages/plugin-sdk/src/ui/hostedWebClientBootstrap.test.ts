@@ -129,7 +129,7 @@ describe('hosted-web UI client bootstrap', () => {
             wireMessages.push(wire);
             if (wire.kind === 'negotiate') hostPort.postMessage({
                 version: 1, direction: 'hostToFrame', sequence: envelope.sequence, identity, kind: 'hostApi',
-                payload: { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface },
+                payload: { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'],  },
             });
             if (wire.kind === 'request' && wire.method === 'context') hostPort.postMessage({
                 version: 1, direction: 'hostToFrame', sequence: envelope.sequence, identity, kind: 'hostApi',
@@ -186,7 +186,7 @@ describe('hosted-web UI client bootstrap', () => {
         expect(harness.posted.map(({ message }) => PluginHostedWebBridgeEnvelopeV1Schema.parse(message).kind)).toEqual(['ready']);
         hostPort.postMessage({ version: 1, direction: 'hostToFrame', sequence: 10, identity, kind: 'hostApi', payload: accountData
             ? { wireVersion: 1, identity, kind: 'disconnected', reason: 'retired' }
-            : { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface },
+            : { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'],  },
         });
         expect(context.signal.aborted).toBe(true);
         expect(laterContext.signal.aborted).toBe(true);
@@ -222,7 +222,7 @@ describe('hosted-web UI client bootstrap', () => {
                 if (envelope.kind === 'ready') { push('bootstrap', bootstrapMessage().payload); return; }
                 if (envelope.kind !== 'hostApi') return;
                 const wire = envelope.payload;
-                if (wire.kind === 'negotiate') push('hostApi', { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface });
+                if (wire.kind === 'negotiate') push('hostApi', { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'],  });
                 else if (wire.kind === 'request' || wire.kind === 'subscribe') {
                     if (wire.kind === 'subscribe') subscriptionId = wire.subscriptionId;
                     push('hostApi', { wireVersion: 1, identity, kind: 'result', requestId: wire.requestId, method: wire.method, ...(wire.method === 'context' ? { result: { surface, activity: { active: true } } } : {}) });
@@ -477,7 +477,6 @@ describe('hosted-web UI client bootstrap', () => {
                     identity,
                     apiVersion: '1.0.0',
                     methods: ['context'],
-                    surface: { placement: 'settingsPage' },
                 } },
         });
         expect(received).toHaveBeenCalledWith(expect.objectContaining({ kind: 'negotiated', identity }));
@@ -524,7 +523,6 @@ describe('hosted-web UI client bootstrap', () => {
                 identity: wireIdentity,
                 apiVersion: '1.0.0',
                 methods: ['context'],
-                surface: { placement: 'settingsPage' },
             } });
         harness.dispatch({
             source: harness.parent,

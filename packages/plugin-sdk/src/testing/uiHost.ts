@@ -1057,8 +1057,7 @@ async function createPluginUiTestkitInternal<TSurface>(
     let retirement: Promise<void> | undefined;
     let fixtureRevision = 1;
     // The fixture host owns one current context snapshot from admission onward.
-    // Negotiation and the later canonical `context` request must project this
-    // exact fact; the client must never be asked to supply a fallback value.
+    // Canonical context reads and watches project this exact host-owned fact.
     let currentSurface = options.surfaceContext;
 
     const methods = PLUGIN_UI_HOST_METHODS_V1
@@ -1824,7 +1823,6 @@ async function createPluginUiTestkitInternal<TSurface>(
                 identity,
                 apiVersion,
                 methods: negotiatedMethods,
-                surface: currentSurface,
             });
             return;
         }

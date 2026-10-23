@@ -48,7 +48,7 @@ export const createPluginUiHostApiClient = async (
  *
  * - `plugin` comes from installed source metadata; `surface.mount` is the one
  *   host-stamped destination-or-embedded mount fact;
- * - `surface` is the negotiated snapshot; use `hostApi.watchContext` for changes;
+ * - `surface` comes from the current host context; use `hostApi.watchContext` for changes;
  * - `launchInput` / `subPath` are the host's bounded launch facts, absent when
  *   the surface was opened without them;
  * - `signal` aborts when the host retires the surface or the client goes

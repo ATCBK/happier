@@ -42,7 +42,7 @@ describe('hosted-web plugin UI public client factory', () => {
                     sent.push(message);
                     if (message.kind === 'negotiate') listener?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context'], surface,
+                        methods: ['context'],
                     });
                     if (message.kind === 'request' && message.method === 'context') listener?.({
                         wireVersion: 1, kind: 'result', identity,
@@ -79,7 +79,6 @@ describe('hosted-web plugin UI public client factory', () => {
                             identity,
                             apiVersion: '1.0.0',
                             methods: ['context'],
-                            surface,
                         } });
                 }
                 if (payload?.kind === 'request' && payload.method === 'context'
@@ -158,7 +157,7 @@ describe('hosted-web plugin UI public client factory', () => {
                 send(message) {
                     if (message.kind === 'negotiate') listener?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context', 'notify'], surface,
+                        methods: ['context', 'notify'],
                     });
                     if (message.kind === 'request' && message.method === 'context') listener?.({
                         wireVersion: 1, kind: 'result', identity,
@@ -206,7 +205,7 @@ describe('hosted-web plugin UI public client factory', () => {
                 send(message: PluginUiHostApiWireEnvelopeV1) {
                     if (message.kind === 'negotiate') listener?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context'], surface,
+                        methods: ['context'],
                     });
                     if (message.kind === 'request' && message.method === 'context') listener?.({
                         wireVersion: 1, kind: 'result', identity,
@@ -238,7 +237,7 @@ describe('hosted-web plugin UI public client factory', () => {
                 send(message: PluginUiHostApiWireEnvelopeV1) {
                     if (message.kind === 'negotiate') listener?.({
                         wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0',
-                        methods: ['context'], surface,
+                        methods: ['context'],
                     });
                     if (message.kind === 'request' && message.method === 'context') listener?.({
                         wireVersion: 1, kind: 'result', identity,
