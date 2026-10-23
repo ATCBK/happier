@@ -3488,7 +3488,7 @@ export class ApiMachineClient {
             return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
         }
         const operation = 'producer' in publication ? 'workflow_result'
-            : publication.terminalReturn && publication.replyReturn?.workflow ? 'terminal_return' : 'approved_replay';
+            : !publication.draftReview && publication.terminalReturn && publication.replyReturn?.workflow ? 'terminal_return' : 'approved_replay';
         const request = DiscussionMachinePublicationV2Schema.safeParse({
             v: operation === 'terminal_return' ? 2 : 1, operation,
             machineId: this.machine.id, publication,
