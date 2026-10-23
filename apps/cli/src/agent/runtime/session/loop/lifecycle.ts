@@ -1034,7 +1034,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
         onExit: requestTerminalExit,
       };
-      const reactModule = import('react');
+      const reactModule = import('react').then(module => ({ ...module.default, ...module }));
       const displayElement = shouldMountRemoteOnlyTerminalDisplay
         ? Promise.all([
             reactModule,

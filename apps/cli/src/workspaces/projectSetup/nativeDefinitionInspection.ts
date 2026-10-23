@@ -100,7 +100,8 @@ async function inspectDefinitionReads(root: string, files: readonly Readonly<{ f
                     if (match) add(file, 'just', match[1]);
                 }
             } else if (/^Taskfile\.(?:dist\.)?ya?ml$/.test(format) || /^(?:docker-)?compose\.ya?ml$/.test(format)) {
-                const value: unknown = (await import('yaml')).parse(content);
+                const yaml = await import('yaml');
+                const value: unknown = { ...yaml.default, ...yaml }.parse(content);
                 if (!isNativeDefinitionRecord(value)) throw new Error('invalid_definition');
                 if (format.startsWith('Taskfile')) {
                     named(file, 'taskfile', value.tasks);

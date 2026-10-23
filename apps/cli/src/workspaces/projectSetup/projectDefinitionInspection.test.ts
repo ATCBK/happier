@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { discoverLocalServiceRunTargets } from '@/daemon/local/services/launch/runTargets';
-import { inspectProjectDefinitions } from './projectDefinitionInspection';
+import { inspectProjectDefinitions, inspectProjectToolFacts } from './projectDefinitionInspection';
 import { resolveNativePackageManager } from './nativePackageScripts';
 
 const roots: string[] = [];
@@ -19,6 +19,30 @@ async function fixture(files: Record<string, string>): Promise<string> {
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe('inspectProjectDefinitions', () => {
+    it('resolves each host tool once per inspection while retaining every file requirement and refreshing the next request', async () => {
+        const tools = Array.from({ length: 128 }, (_, index) => [
+            { tool: 'node', file: `packages/p${index}/package.json`, requestedVersion: index % 2 === 0 ? '22' : '24' },
+            { tool: 'mise', file: `packages/p${index}/mise.toml` },
+        ]).flat();
+        const detection = { entries: [], environments: [], devcontainers: [], coverage: 'complete' as const, diagnostics: [], tools };
+        const probes: string[] = [];
+        let observation: 'available' | 'unavailable' | 'unresolved' = 'available';
+        // Installed-tool lookup is an OS boundary. Requirement projection stays real.
+        const io = { async resolveTool(tool: string, request: Readonly<{ cwd: string }>) {
+            probes.push(`${tool}:${request.cwd}`);
+            if (observation === 'unresolved') throw new Error('Tool lookup unavailable');
+            return observation === 'available' ? { executablePath: `/installed/${tool}`, version: 'installed-version' } : null;
+        } };
+        for (const availability of ['available', 'unavailable', 'unresolved'] as const) {
+            observation = availability;
+            probes.length = 0;
+            const facts = await inspectProjectToolFacts({ root: '/project', detection, candidates: [], io });
+            expect(facts).toEqual(tools.map(tool => ({ ...tool, availability,
+                ...(availability === 'available' ? { version: 'installed-version' } : {}) })));
+            expect(probes).toEqual(['node:/project', 'mise:/project']);
+        }
+    });
+
     it.each(['npm', 'yarn', 'pnpm', 'bun'] as const)('shares %s declaration, version and root with Services without copying bodies', async (manager) => {
         const root = await fixture({
             'package.json': JSON.stringify({ name: 'root', packageManager: `${manager}@1.2.3` }),
