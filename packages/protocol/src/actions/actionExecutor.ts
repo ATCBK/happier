@@ -772,6 +772,18 @@ function resolveSessionSpawnNewCreationKey(
   return creationKey;
 }
 
+function resolveSessionMessageSendLocalId(
+  data: Readonly<Record<string, unknown>>,
+  ctx: ActionExecutorContext,
+): string | null {
+  const explicitLocalId = PendingLocalIdSchema.safeParse(data.localId);
+  if (explicitLocalId.success) return explicitLocalId.data;
+  const actionRequestId = readNonEmptyString(ctx.actionRequestId);
+  return actionRequestId
+    ? PendingLocalIdSchema.parse(`action-request:${actionRequestId}`)
+    : null;
+}
+
 /**
  * A deferred Session spawn must retain the same durable creation identity that
  * a live API invocation derives from its host-stamped request id. The approval
@@ -9546,6 +9558,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ? data.providerConnectionId
             : undefined;
           const { permissionModeOverride, sessionInputSource } = sessionMessageSendAdmission;
+          const retainedLocalId = actionCaller.kind === 'plugin'
+            ? null
+            : resolveSessionMessageSendLocalId(data, ctx);
           const structuredSubagentInput = data.kind === 'sessionSubagentLaunch'
             ? resolveSubagentLaunchStructuredSend(data.launch)
             : data.kind === 'sessionSubagentCommand'
