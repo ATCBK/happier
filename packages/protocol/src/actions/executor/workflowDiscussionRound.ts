@@ -10,6 +10,7 @@ import type { DiscussionOpenedMessageV1 } from '../../discussions/actions.js';
 import { readWorkflowDiscussionContextV1 } from '../../workflows/workflowDiscussionContextV1.js';
 import type { WorkflowBlock } from '../../workflows/workflowV1.js';
 import type { WorkflowInvocationBindingRowV1 } from '../../workflows/workflowInvocationStructureV1.js';
+import { readWorkflowInvocationMembersV1 } from '../../workflows/workflowInvocationMembersV1.js';
 
 /** No round store: derive only from authorized, committed invocation and reply facts. */
 export async function executeWorkflowDiscussionRoundProjectV1(input: unknown, context: ActionExecutorContext,
@@ -19,6 +20,13 @@ export async function executeWorkflowDiscussionRoundProjectV1(input: unknown, co
   const unavailable = (): ActionExecuteResult => ({ ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' });
   if (!binding) return unavailable();
   const { opened, invocation, readInvocation, readMembers, readChildHistory } = binding;
+  const readInheritedMembers = async (parentRecordIds: string[], memberOrdinal?: string) => readWorkflowInvocationMembersV1({
+    parentRecordIds, ...(memberOrdinal === undefined ? {} : { memberOrdinal }), readParent: readInvocation,
+    readChildren: parents => memberOrdinal === undefined ? readChildHistory(parents)
+      : Promise.all(parents.map(parent => readMembers(parent, memberOrdinal))).then(pages => pages.flat()),
+    indexOf: (row: WorkflowInvocationBindingRowV1) => row.index,
+  });
+  const readSlot = async (parent: string, ordinal: string) => (await readInheritedMembers([parent], ordinal)).get(parent)!;
   if (invocation.index.parentRecordId === null) return unavailable();
   // Conditionals retain their enclosing invocation scope. Follow only the
   // selected paths containing the requested block, including enclosing peers.
@@ -38,11 +46,11 @@ export async function executeWorkflowDiscussionRoundProjectV1(input: unknown, co
     };
     const readIn = async (blocks: readonly WorkflowBlock[], parent: string): Promise<WorkflowInvocationBindingRowV1[]> => {
       const candidates = await Promise.all(blocks.flatMap((block, ordinal) => {
-        if (block.id === blockId) return [readMembers(parent, String(ordinal))];
+        if (block.id === blockId) return [readSlot(parent, String(ordinal))];
         if (block.kind !== 'if' || !contains([...block.then, ...block.otherwise])) return [];
         return [(async () => {
-          const conditional = (await readMembers(parent, String(ordinal))).find(row => row.progress.blockKind === 'if'
-            && row.progress.invocationPath.blockId === block.id && row.index.lifecycle !== 'superseded');
+          const conditional = (await readSlot(parent, String(ordinal))).find(row => row.progress.blockKind === 'if'
+            && row.progress.invocationPath.blockId === block.id && row.index.lifecycle !== 'superseded' && row.index.lifecycle !== 'skipped');
           const progress = conditional?.progress.container;
           return conditional && progress?.kind === 'if'
             ? await readIn(progress.selected === 'then' ? block.then : block.otherwise, conditional.index.id) : [];
@@ -71,7 +79,7 @@ export async function executeWorkflowDiscussionRoundProjectV1(input: unknown, co
       if (loop.index > 0) {
         const scope = invocation.progress.invocationPath.scope.map(part => part.kind === 'iteration' && part.blockId === loop.blockId
           ? { ...part, index: loop.index - 1 } : part);
-        const previousFrame = (await readMembers(loop.ownerKey, String(loop.index - 1))).find(row =>
+        const previousFrame = (await readSlot(loop.ownerKey, String(loop.index - 1))).find(row =>
           row.index.lifecycle !== 'superseded' && row.index.lifecycle !== 'skipped'
           && row.progress.frame?.ownerBlockId === loop.blockId
           && row.progress.frame.source.kind === 'iteration' && row.progress.frame.source.index === String(loop.index - 1));
@@ -122,10 +130,21 @@ export async function executeWorkflowDiscussionRoundProjectV1(input: unknown, co
     const visited = new Set([collection.index.id]);
     let parents = [collection.index.id];
     while (parents.length) {
-      const children = await readChildHistory(parents);
+      const members = await readInheritedMembers(parents);
+      // Completed item collections declare their exact membership. A missing
+      // page/slot cannot become an empty, all-passed round.
+      for (const parentId of parents) {
+        const parent = await readInvocation(parentId);
+        if (!parent) return unavailable();
+        const container = parent.progress.container;
+        if (!parent.progress.frame && container?.kind === 'loop' && container.mode === 'items'
+          && BigInt(members.get(parentId)!.length) !== BigInt(container.itemCount)) return unavailable();
+      }
+      const children = [...members.values()].flat();
       parents = [];
       for (const row of children) {
-        if (row.index.lifecycle === 'superseded' || row.index.lifecycle === 'skipped') continue;
+        if (row.index.lifecycle === 'superseded') return unavailable();
+        if (row.index.lifecycle === 'skipped') continue;
         if (visited.has(row.index.id)) return unavailable();
         visited.add(row.index.id);
         if (row.progress.blockKind === 'step') descendants.push(row);

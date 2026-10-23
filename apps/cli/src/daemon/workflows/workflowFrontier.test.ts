@@ -365,8 +365,9 @@ describe('recorded durable workflow frontier', () => {
     }
   });
 
-  it('measures admission and one-at-a-time resolution of 500 parked item holds', async () => {
-    const itemCount = 500;
+  it('bounds reads across admission and one-at-a-time parked item hold restarts', async () => {
+    const fullMeasurement = process.env.HAPPIER_WORKFLOW_SCALE_MEASUREMENT === '1';
+    const itemCount = fullMeasurement ? 500 : 12;
     const loop: WorkflowBlock = { kind: 'loop', id: 'parked-items', repetition: { kind: 'items',
       items: { kind: 'literal', value: Array.from({ length: itemCount }, (_, index) => index) },
       execution: 'parallel', maxConcurrent: 2, failurePolicy: 'fail_stop' },
@@ -408,9 +409,9 @@ describe('recorded durable workflow frontier', () => {
     expect(held.result.state).toBe('waiting_for_review');
     expect(f.boundary.rows().filter(row => row.index.lifecycle === 'waiting_for_review')).toHaveLength(2);
     const wakes: Array<Readonly<{ resolution: ReturnType<typeof measure>['metrics']; restart: ReturnType<typeof measure>['metrics'] }>> = [];
-    // The normal owner suite samples the beginning of the retained set. The
-    // explicit measurement run resolves all 500 in order over these same bytes.
-    const wakeCount = process.env.HAPPIER_FIN_PERF_FULL_HOLDS === '1' ? itemCount : 4;
+    // The default count contract completes every cycle at small scale. The
+    // explicit measurement configuration exercises the same journey at 500.
+    const wakeCount = itemCount;
     for (let wake = 0; wake < wakeCount; wake++) {
       await f.boundary.execute({ operation: 'transition', runId, expectedRevision: held.result.parkRevision,
         state: 'waiting_for_review', checkpointEnvelope: f.boundary.checkpointEnvelope() });
@@ -432,6 +433,8 @@ describe('recorded durable workflow frontier', () => {
       const parentPages = f.boundary.calls.slice(restartCallsAt).filter(call => call.operation === 'invocations.list'
         && call.parentRecordId !== undefined && call.lifecycles === undefined).map(call => JSON.stringify(call));
       expect(new Set(parentPages).size).toBe(parentPages.length);
+      expect(resolution.metrics.requests).toBe(5);
+      expect(resolution.metrics.openedEnvelopes).toBe(4);
       expect(f.boundary.rows().filter(row => row.index.lifecycle === 'waiting_for_review')).toHaveLength(Math.min(2, itemCount - wake - 1));
     }
     await new Promise<void>(resolve => process.stdout.write(

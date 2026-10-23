@@ -12,6 +12,7 @@ import { openAutomationTemplateStoredV1 } from '@happier-dev/protocol/automation
 import { convertLegacyAutomationRecipeToInlineWorkflowV1 } from '@happier-dev/protocol/automations/automationLegacyWorkflowV1';
 import { WorkflowAcceptedSnapshotV1Schema, WorkflowResolvedInputsV1Schema, type WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 import { materializeWorkflowAcceptedSnapshotV1, workflowRequiresMachineStartCapacityV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { readWorkflowInvocationMembersV1 } from '@happier-dev/protocol/workflows';
 import { resolveWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionResolverV1';
 import { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1 } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
 import { countWorkflowStepsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
@@ -107,6 +108,7 @@ type RunStorageSnapshot = Readonly<{
   checkpointEnvelope: string | null;
   resultEnvelope: string | null;
   keyCensus: WorkflowRunRecipientCensusResponseV1;
+  rootProgress?: unknown;
 }>;
 
 export function projectWorkflowRootSettlementLifecycle(
@@ -177,6 +179,7 @@ function parseRunSnapshot(value: unknown): RunStorageSnapshot {
     checkpointEnvelope: record.checkpointEnvelope,
     resultEnvelope: record.resultEnvelope,
     keyCensus: WorkflowRunRecipientCensusResponseV1Schema.parse(record.keyCensus),
+    rootProgress: record.rootProgress,
   };
 }
 
@@ -233,11 +236,14 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
     return store;
   }
 
-  private async loadInvocation(invocationId: string): Promise<void> {
-    const detailResponse = asRecord(await this.params.storage.execute({ operation: 'invocations.get', runId: this.params.runId, invocationId }));
+  private async loadInvocation(invocationId: string, snapshotRow?: unknown): Promise<void> {
+    const detailResponse: Readonly<Record<string, unknown>> = snapshotRow === undefined
+      ? asRecord(await this.params.storage.execute({ operation: 'invocations.get', runId: this.params.runId, invocationId }))
+      : { invocation: snapshotRow };
     const invocation = asRecord(detailResponse.invocation);
     const detailIndex = asRecord(invocation.index);
     const index = WorkflowRunInvocationIndexV1Schema.parse(detailIndex);
+    if (index.id !== invocationId || index.runId !== this.params.runId) throw new Error('workflow_storage_response_invalid');
     const contentEnvelope = invocation.contentEnvelope;
     if (typeof contentEnvelope !== 'string') throw new Error('workflow_storage_response_invalid');
     const opened = openWorkflowProgressStoredEnvelopeV1({
@@ -394,37 +400,63 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
     return record ? this.persisted.get(record.key) : undefined;
   };
   readCurrent = async ({ runId, blockId, parentKey, memberOrdinal }: Parameters<WorkflowCoordinatorStore['readCurrent']>[0]) => {
-    let parent = parentKey ? this.records.get(parentKey) : undefined;
-    if (parentKey && !parent) return undefined;
-    for (;;) {
-      const parentRecordId = parent?.recordId ?? this.params.rootRecordId;
-      if (memberOrdinal !== undefined) await this.loadParentSlot(parentRecordId, memberOrdinal);
-      const selected = this.currentSlots.get(`${parentRecordId}:${memberOrdinal}`);
-      if (selected?.runId === runId && selected.blockId === blockId) return selected;
-      // Like current-member enumeration, exact lookup inherits the nearest
-      // unreplaced slot across every recorded structural recovery.
-      if (!parent?.previousAttemptRecordId) return undefined;
-      parent = await this.readByLogicalInvocation(parent.previousAttemptRecordId);
-      if (!parent) return undefined;
-    }
+    const parent = parentKey ? this.records.get(parentKey) : undefined;
+    if ((parentKey && !parent) || memberOrdinal === undefined) return undefined;
+    const parentRecordId = parent?.recordId ?? this.params.rootRecordId;
+    const members = await readWorkflowInvocationMembersV1({ parentRecordIds: [parentRecordId], memberOrdinal,
+      readParent: this.readInvocationBindingRow,
+      readChildren: async parents => {
+        await Promise.all(parents.map(id => this.loadParentSlot(id, memberOrdinal)));
+        return parents.flatMap(id => {
+          const selected = this.currentSlots.get(`${id}:${memberOrdinal}`);
+          const index = selected && this.persisted.get(selected.key)?.index;
+          return index ? [index] : [];
+        });
+      }, indexOf: index => index });
+    const index = members.get(parentRecordId)![0];
+    const selected = index ? await this.readByLogicalInvocation(index.id) : undefined;
+    return selected?.runId === runId && selected.blockId === blockId ? selected : undefined;
   };
 
   listCurrentMembers = async (parentKey: string): Promise<readonly WorkflowRunInvocationIndexV1[]> => {
-    let parent = this.records.get(parentKey);
-    if (!parent) throw new Error('workflow_parent_invocation_missing');
-    const members = new Map<string, WorkflowRunInvocationIndexV1>();
-    // A recovered structural frame inherits only slots not replaced under its
-    // new parent identity. Enumerating indices does not open their content.
-    while (parent) {
-      let cursor: string | undefined;
-      do {
-        const page = asRecord(await this.params.storage.execute({ operation: 'invocations.list', runId: this.params.runId,
-          parentRecordId: parent.recordId, ...(cursor ? { cursor } : {}), pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES }));
-        const indices = Array.isArray(page.invocations) ? page.invocations.map((value) => WorkflowRunInvocationIndexV1Schema.parse(value)) : [];
-        for (const index of indices) if (!members.has(index.memberOrdinal)) members.set(index.memberOrdinal, index);
-        cursor = typeof page.nextCursor === 'string' ? page.nextCursor : undefined;
-      } while (cursor);
-      parent = parent.previousAttemptRecordId ? await this.readByLogicalInvocation(parent.previousAttemptRecordId) : undefined;
+    // Loop progress already owns these admitted indices for this claimed
+    // store. remember() updates their slots on every local frame mutation;
+    // a fresh claim constructs a new store and acquires its own projection.
+    const projection = this.progressMembers.get(parentKey);
+    if (projection) return [...projection.members.values()].sort((left, right) => BigInt(left.memberOrdinal) < BigInt(right.memberOrdinal) ? -1
+      : BigInt(left.memberOrdinal) > BigInt(right.memberOrdinal) ? 1 : 0);
+    const owner = this.records.get(parentKey);
+    if (!owner) throw new Error('workflow_parent_invocation_missing');
+    const selected = await readWorkflowInvocationMembersV1({ parentRecordIds: [owner.recordId],
+      readParent: this.readInvocationBindingRow,
+      readChildren: async parents => (await Promise.all(parents.map(async parentRecordId => {
+        const indices: WorkflowRunInvocationIndexV1[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = asRecord(await this.params.storage.execute({ operation: 'invocations.list', runId: this.params.runId,
+            parentRecordId, ...(cursor ? { cursor } : {}), pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES }));
+          if (!Array.isArray(page.invocations)) throw new Error('workflow_storage_response_invalid');
+          indices.push(...page.invocations.map(value => WorkflowRunInvocationIndexV1Schema.parse(value)));
+          cursor = typeof page.nextCursor === 'string' ? page.nextCursor : undefined;
+        } while (cursor);
+        return indices;
+      }))).flat(), indexOf: index => index });
+    const members = new Map(selected.get(owner.recordId)!.map(index => [index.memberOrdinal, index]));
+    if (owner.container?.kind === 'loop') {
+      // A local parallel frame may commit while the initial page is in flight.
+      // Reconcile once where the membership projection is admitted, whichever
+      // consumer (scheduling or progress) requested it first.
+      for (const row of this.currentSlots.values()) {
+        const index = this.persisted.get(row.key)?.index;
+        if (index?.parentRecordId === owner.recordId) {
+          const prior = members.get(index.memberOrdinal);
+          if (!prior || prior.parentRecordId !== index.parentRecordId
+            || BigInt(index.attempt) > BigInt(prior.attempt)
+            || (index.attempt === prior.attempt && BigInt(index.contentRevision) >= BigInt(prior.contentRevision))) members.set(index.memberOrdinal, index);
+        }
+      }
+      this.progressMembers.set(parentKey, { members,
+        completed: [...members.values()].filter(index => index.lifecycle === 'completed').length });
     }
     return [...members.values()].sort((left, right) => BigInt(left.memberOrdinal) < BigInt(right.memberOrdinal) ? -1
       : BigInt(left.memberOrdinal) > BigInt(right.memberOrdinal) ? 1 : 0);
@@ -787,19 +819,9 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
     if (total === undefined) return undefined;
     let projection = this.progressMembers.get(invocation.key);
     if (!projection) {
-      const members = new Map((await this.listCurrentMembers(invocation.key)).map(index => [index.memberOrdinal, index]));
-      // A local parallel frame may commit while the initial page is in flight.
-      for (const row of this.currentSlots.values()) {
-        const index = this.persisted.get(row.key)?.index;
-        if (index?.parentRecordId === invocation.recordId) {
-          const prior = members.get(index.memberOrdinal);
-          if (!prior || prior.parentRecordId !== index.parentRecordId
-            || BigInt(index.attempt) > BigInt(prior.attempt)
-            || (index.attempt === prior.attempt && BigInt(index.contentRevision) >= BigInt(prior.contentRevision))) members.set(index.memberOrdinal, index);
-        }
-      }
-      projection = { members, completed: [...members.values()].filter(index => index.lifecycle === 'completed').length };
-      this.progressMembers.set(invocation.key, projection);
+      await this.listCurrentMembers(invocation.key);
+      projection = this.progressMembers.get(invocation.key);
+      if (!projection) throw new Error('workflow_loop_projection_missing');
     }
     // nextMemberIndex is the admission frontier, never a completion count.
     return { completed: projection.completed, total };
@@ -1084,7 +1106,14 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
   readControl = async () => {
     const snapshot = parseRunSnapshot(await this.params.storage.execute({ operation: 'get', runId: this.params.runId }));
     this.params.revision = Math.max(this.params.revision, snapshot.run.revision);
-    const root = await this.refreshRootIndex();
+    if (snapshot.rootProgress !== undefined && snapshot.rootProgress !== null) {
+      await this.loadInvocation(this.params.rootRecordId, snapshot.rootProgress);
+    } else {
+      // A snapshot without the root projection still uses the exact row
+      // reader; a prior in-memory root is never fresh control evidence.
+      await this.refreshRootIndex();
+    }
+    const root = this.rootIndex;
     if (root?.lifecycle === 'cancel_requested' || root?.lifecycle === 'cancelled') {
       return 'cancel_requested' as const;
     }

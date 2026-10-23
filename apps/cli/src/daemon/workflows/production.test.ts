@@ -2321,13 +2321,13 @@ describe('production workflow coordinator', () => {
     expect(execute.mock.calls.some(([operation]) => operation.operation === 'invocations.list')).toBe(false);
   });
 
-  it('reloads an unaffected completed child through successive recovered structural parents after restart', async () => {
+  it.each(['inherited', 'replacement', 'skipped'] as const)('selects the nearest child slot through successive recovered structural parents after restart (%s)', async selection => {
     const rootId = 'root-structural-recovery';
     const oldParentId = 'parallel-old';
     const middleParentId = 'parallel-middle';
     const newParentId = 'parallel-new';
     const childId = 'successful-child';
-    const makeIndex = (id: string, sequence: string, parentRecordId: string | null, memberOrdinal: string, attempt: string, lifecycle: 'running' | 'pending' | 'completed' | 'superseded') => ({
+    const makeIndex = (id: string, sequence: string, parentRecordId: string | null, memberOrdinal: string, attempt: string, lifecycle: 'running' | 'pending' | 'completed' | 'superseded' | 'skipped') => ({
       id, runId, sequence, parentRecordId, memberOrdinal, attempt, contentRevision: '0', lifecycle, createdAt: now, updatedAt: now,
     });
     const rootIndex = makeIndex(rootId, '0', null, '0', '0', 'running');
@@ -2335,6 +2335,8 @@ describe('production workflow coordinator', () => {
     const middleParentIndex = makeIndex(middleParentId, '2', rootId, '0', '1', 'superseded');
     const newParentIndex = makeIndex(newParentId, '3', rootId, '0', '2', 'pending');
     const childIndex = makeIndex(childId, '4', oldParentId, '0', '0', 'completed');
+    const replacement = makeIndex('replacement-child', '5', newParentId, '0', '1', selection === 'skipped' ? 'skipped' : 'completed');
+    const selectedChild = selection === 'inherited' ? childIndex : replacement;
     const progress = (index: ReturnType<typeof makeIndex>, blockId: string, blockKind: 'root' | 'parallel' | 'step', previousAttemptRecordId?: string) =>
       serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
         mode: 'plain', binding: {
@@ -2344,7 +2346,7 @@ describe('production workflow coordinator', () => {
         },
         progress: {
           kind: 'happier.workflow-progress.v1', invocationPath: { blockId, scope: [] }, blockKind,
-          attempt: index.attempt, logicalInvocationRecordId: blockId === 'parallel-1' ? oldParentId : index.id,
+          attempt: index.attempt, logicalInvocationRecordId: blockId === 'parallel-1' ? oldParentId : blockKind === 'step' ? childId : index.id,
           ...(previousAttemptRecordId ? { previousAttemptRecordId } : {}),
           ...(blockKind === 'parallel' ? { container: { kind: 'parallel' as const, nextBranchOrdinal: '0' } } : {}),
           ...(blockKind === 'step' ? { result: 'kept', replyOutcome: { kind: 'answer' as const,
@@ -2359,7 +2361,11 @@ describe('production workflow coordinator', () => {
     ]);
     const execute = vi.fn(async (operation: Readonly<Record<string, unknown>>) => {
       if (operation.operation === 'invocations.get') return { invocation: details.get(String(operation.invocationId)) };
+      if (operation.operation === 'invocations.list') return { invocations: operation.parentRecordId === oldParentId ? [childIndex]
+        : operation.parentRecordId === newParentId && selection !== 'inherited' ? [replacement] : [] };
       if (operation.operation === 'invocations.current') {
+        if (operation.parentRecordId === newParentId && selection !== 'inherited') return { invocation: {
+          index: replacement, contentEnvelope: progress(replacement, 'successful-step', 'step', childId) } };
         if (operation.parentRecordId === newParentId || operation.parentRecordId === middleParentId) return { invocation: null };
         if (operation.parentRecordId === oldParentId) return { invocation: { index: childIndex, contentEnvelope: progress(childIndex, 'successful-step', 'step') } };
       }
@@ -2377,10 +2383,12 @@ describe('production workflow coordinator', () => {
       runId, blockId: 'successful-step', scope: [],
       parentKey: workflowInvocationKey({ runId, blockId: 'parallel-1', scope: [], attempt: 2 }),
       memberOrdinal: '0',
-    })).resolves.toMatchObject({ recordId: childId, lifecycle: 'completed', result: 'kept',
+    })).resolves.toMatchObject({ recordId: selectedChild.id, lifecycle: selectedChild.lifecycle, result: 'kept',
       replyOutcome: { kind: 'answer', result: { sessionId: 'reviewer-session', messageId: 'committed-answer' } } });
+    await expect(store.listCurrentMembers(workflowInvocationKey({ runId, blockId: 'parallel-1', scope: [], attempt: 2 })))
+      .resolves.toEqual([selectedChild]);
     expect(execute.mock.calls.filter(([operation]) => operation.operation === 'invocations.current')
-      .map(([operation]) => operation.parentRecordId)).toEqual([newParentId, middleParentId, oldParentId]);
+      .map(([operation]) => operation.parentRecordId)).toEqual(selection === 'inherited' ? [newParentId, middleParentId, oldParentId] : [newParentId]);
   });
 
   it('reads user cancellation only from the root control fact, not a descendant fail-stop request', async () => {

@@ -2,6 +2,7 @@ export * from './workflowReferenceV1.js';
 export * from './workflowIdsV1.js';
 export * from './workflowInvocationIdentityV1.js';
 export * from './workflowInvocationStructureV1.js';
+export * from './workflowInvocationMembersV1.js';
 export * from './workflowDefinitionRefV1.js';
 export * from './workflowDefinitionResolverV1.js';
 export * from './workflowPluginSourceV1.js';
