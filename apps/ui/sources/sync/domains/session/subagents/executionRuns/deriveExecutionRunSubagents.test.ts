@@ -250,3 +250,15 @@ describe('deriveExecutionRunSubagents status derivation', () => {
         expect(subagents[0]?.status).toBe('running');
     });
 });
+
+describe('deriveExecutionRunSubagents display title', () => {
+    it('names an unlabelled Run by what it is for, never by its id', () => {
+        const [summary, other] = deriveExecutionRunSubagents({ messages: [
+            createRunToolMessage({ id: 'm-summary', runId: 'run_b7a65528', state: 'completed', input: { intent: 'scm_diff_summary' } }),
+            createRunToolMessage({ id: 'm-other', runId: 'run_c19f0a77', state: 'completed' }),
+        ] });
+        expect(summary?.display.title).toBe('Change summary');
+        expect(other?.display.title).toBe('Agent run');
+        expect(JSON.stringify([summary?.display, other?.display])).not.toContain('run_');
+    });
+});

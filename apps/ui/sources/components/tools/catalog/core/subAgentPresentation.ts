@@ -6,6 +6,7 @@ import {
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
+import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
 import { describeEffectiveModelMode } from '@/sync/domains/models/describeEffectiveModelMode';
 import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
 import type { ToolCall } from "@happier-dev/session-core/messages";
@@ -124,6 +125,10 @@ export function resolveSubagentToolPresentation(params: {
     const isManagedRun = params.tool.name === 'SubAgentRun';
     const managedTarget = isManagedRun ? resolveManagedTarget(input) : null;
     const agentId = managedTarget?.agentId ?? resolveAgentIdFromFlavor(params.metadata?.flavor);
+
+    if (isManagedRun && input.intent === 'scm_diff_summary') {
+        return { title: resolveExecutionRunTitle({ intent: input.intent }), iconAgentId: agentId };
+    }
 
     const explicitModelId = isManagedRun
         ? readNonBlankString(asRecord(input.requestedConfiguration)?.modelId)

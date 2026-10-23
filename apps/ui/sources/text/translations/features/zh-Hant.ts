@@ -9089,7 +9089,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { 'zh-Hant': {
         untitledRun: '智慧代理執行',
-        intentTitles: { review: '審查', plan: '計畫', delegate: '委派任務' },
+        intentTitles: { review: '審查', plan: '計畫', delegate: '委派任務', scmDiffSummary: '變更摘要' },
         thisMachine: '這台機器',
         menu: {
             cancelResponse: '取消這次回覆',

@@ -27,6 +27,7 @@ export const coreSubAgentRunTools = {
             if (summary) return summary;
 
             const intent = typeof input?.intent === 'string' ? input.intent.trim() : '';
+            if (intent === 'scm_diff_summary') return null;
             const backendId = typeof input?.backendId === 'string' ? input.backendId.trim() : '';
             if (intent && backendId) return `${intent} · ${backendId}`;
             if (intent) return intent;

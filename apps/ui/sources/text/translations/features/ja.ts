@@ -9094,7 +9094,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { ja: {
         untitledRun: 'エージェントの実行',
-        intentTitles: { review: 'レビュー', plan: 'プラン', delegate: '委任したタスク' },
+        intentTitles: { review: 'レビュー', plan: 'プラン', delegate: '委任したタスク', scmDiffSummary: '変更の概要' },
         thisMachine: 'このマシン',
         menu: {
             cancelResponse: 'この応答をキャンセル',

@@ -2,6 +2,7 @@ import { isExecutionRunActive } from '@happier-dev/protocol/execution/runs/respo
 
 import type { Message } from "@happier-dev/session-core/messages";
 import { isExecutionRunAddressableRecipient } from '@/sync/domains/executionRuns/isExecutionRunAddressableRecipient';
+import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
 
 import type { SessionSubagent, SessionSubagentActiveExecutionRunState, SessionSubagentStatus } from '../types';
 import {
@@ -70,7 +71,8 @@ export function deriveExecutionRunSubagents(params: Readonly<{
                 ? 'running'
                 : transcriptState?.status ?? 'unknown'
                 );
-        const displayTitle = transcriptState?.displayLabel ?? runId;
+        // What the Run is for, never its id: the id is plumbing, and it reaches recipient chips and cards.
+        const displayTitle = transcriptState?.displayLabel ?? resolveExecutionRunTitle({ intent: transcriptState?.intent ?? null });
         const canOpen = Boolean(transcriptState?.sidechainId);
         const canSend = isExecutionRunAddressableRecipient({
             status: effectiveStatus,

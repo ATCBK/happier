@@ -9130,7 +9130,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { ru: {
         untitledRun: 'Запуск агента',
-        intentTitles: { review: 'Ревью', plan: 'План', delegate: 'Поручение' },
+        intentTitles: { review: 'Ревью', plan: 'План', delegate: 'Поручение', scmDiffSummary: 'Сводка изменений' },
         thisMachine: 'этой машине',
         menu: {
             cancelResponse: 'Отменить этот ответ',

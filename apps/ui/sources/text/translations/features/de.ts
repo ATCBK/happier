@@ -9092,7 +9092,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { de: {
         untitledRun: 'Agent-Lauf',
-        intentTitles: { review: 'Review', plan: 'Plan', delegate: 'Delegierte Aufgabe' },
+        intentTitles: { review: 'Review', plan: 'Plan', delegate: 'Delegierte Aufgabe', scmDiffSummary: 'Änderungsübersicht' },
         thisMachine: 'diesem Rechner',
         menu: {
             cancelResponse: 'Diese Antwort abbrechen',

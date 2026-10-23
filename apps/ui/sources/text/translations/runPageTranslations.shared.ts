@@ -14,7 +14,7 @@ export type Reviewer = Readonly<{ reviewer: string }>;
 
 export type RunPageTranslations = Readonly<{
     untitledRun: string;
-    intentTitles: Readonly<{ review: string; plan: string; delegate: string }>;
+    intentTitles: Readonly<{ review: string; plan: string; delegate: string; scmDiffSummary: string }>;
     thisMachine: string;
     menu: Readonly<{
         cancelResponse: string;
@@ -124,7 +124,7 @@ export type RunPageTranslations = Readonly<{
 
 export const runPageTranslationsEnglish = { en: {
         untitledRun: 'Agent run',
-        intentTitles: { review: 'Review', plan: 'Plan', delegate: 'Delegated task' },
+        intentTitles: { review: 'Review', plan: 'Plan', delegate: 'Delegated task', scmDiffSummary: 'Change summary' },
         thisMachine: 'this machine',
         menu: {
             cancelResponse: 'Cancel this response',

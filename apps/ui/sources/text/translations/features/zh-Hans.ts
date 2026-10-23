@@ -9089,7 +9089,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { 'zh-Hans': {
         untitledRun: '智能体运行',
-        intentTitles: { review: '审查', plan: '计划', delegate: '委派任务' },
+        intentTitles: { review: '审查', plan: '计划', delegate: '委派任务', scmDiffSummary: '变更摘要' },
         thisMachine: '这台机器',
         menu: {
             cancelResponse: '取消本次回复',

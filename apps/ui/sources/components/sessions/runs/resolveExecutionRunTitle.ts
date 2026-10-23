@@ -7,13 +7,14 @@ import { t } from '@/text';
  * else its kind of work. Never its id — a tab, a header or a menu row that reads "run 7f3a…" names
  * plumbing, not the work (agents lab RP1, audit §3.2).
  */
-export function resolveExecutionRunTitle(run: Pick<ExecutionRunPublicState, 'display' | 'intent'>): string {
+export function resolveExecutionRunTitle(run: Readonly<{ display?: Pick<NonNullable<ExecutionRunPublicState['display']>, 'title'> | null; intent?: string | null }>): string {
     const displayTitle = run.display?.title?.trim();
     if (displayTitle) return displayTitle;
     switch (run.intent) {
         case 'review': return t('runPage.intentTitles.review');
         case 'plan': return t('runPage.intentTitles.plan');
         case 'delegate': return t('runPage.intentTitles.delegate');
+        case 'scm_diff_summary': return t('runPage.intentTitles.scmDiffSummary');
         default: return t('runPage.untitledRun');
     }
 }

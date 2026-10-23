@@ -9106,7 +9106,7 @@ type RunPageTranslations = Shared_runPageTranslations.RunPageTranslations;
 
 const runPageTranslations = { fr: {
         untitledRun: 'Exécution d’agent',
-        intentTitles: { review: 'Revue', plan: 'Plan', delegate: 'Tâche déléguée' },
+        intentTitles: { review: 'Revue', plan: 'Plan', delegate: 'Tâche déléguée', scmDiffSummary: 'Résumé des modifications' },
         thisMachine: 'cette machine',
         menu: {
             cancelResponse: 'Annuler cette réponse',
