@@ -1,16 +1,18 @@
 import { DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1, DiscussionListQueryV1Schema, type DiscussionDetailsResponseV1, type DiscussionListResponseV1, type DiscussionMessagesResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '@happier-dev/protocol/discussions/replyTargets';
 import type { DiscussionSummaryV1, DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
-import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, validateDiscussionDocContentSource } from './docPassages';
+import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, validateDiscussionDocContentSource, type DiscussionDocSource } from './docPassages';
 import { inReadSnapshot, type Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import { resolveDiscussionContextInTx, resolveDiscussionContextsInTx, discussionCandidateWhere, type DiscussionContext } from './access';
+import { resolveDiscussionContextInTx, resolveDiscussionContextsInTx, discussionCandidateWhere, discussionCandidateSql, type DiscussionContext } from './access';
 import { buildDiscussionListCursorPredicate, decodeDiscussionListCursorV1, encodeDiscussionListCursorV1 } from './pagination';
 import { DISCUSSION_MESSAGE_SELECT, DISCUSSION_SELECT, loadDiscussionViewerFactsInTx, projectDiscussionAccountActorsInTx, projectDiscussionCapabilitiesV1, projectDiscussionMessageV1, projectDiscussionSummaryV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionRow, type DiscussionMessageRow } from './projection';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 import { readHeldDiscussionPendingInputsInTx } from '@/app/session/pending/pendingMessageService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { admitDiscussionSecondOpinionSourceInTx } from './secondOpinion';
+import { prismaRuntime as sql, getDbProviderFromEnv } from '@/storage/prisma';
+import { discussionJsonText, discussionSqlName as name } from './readSql';
 
 /** Only the authenticated runtime/original supplies an executable destination. */
 function contentDestination(authentication: SessionAccessAuthentication) {
@@ -67,7 +69,7 @@ export async function projectDiscussionsForViewerInTx(tx: Tx, input: Readonly<{
                 if (!readable.ok) {
                     if (readable.error !== 'discussion_content_unavailable' && readable.error !== 'discussion_access_forbidden') return readable;
                     firstMessages.set(discussion.id, null);
-                } else firstMessages.set(discussion.id, readable.value[0] ?? null);
+                } else firstMessages.set(discussion.id, readable.value.messages[0] ?? null);
             }
             // Scoped summaries disclose only the exact admitted root, never latest content.
             continue;
@@ -108,7 +110,7 @@ export async function projectReadableMessagesInTx(tx: Tx, input: Reader & Readon
     discussionId: string; context: DiscussionContext;
     rows: readonly DiscussionMessageRow[];
     unavailableDocSources?: 'omit';
-}>): Promise<DiscussionResult<DiscussionMessageV1[]>> {
+}>): Promise<DiscussionResult<Readonly<{ messages: DiscussionMessageV1[]; docSources: ReadonlyMap<string, DiscussionDocSource | null> }>>> {
     for (const row of input.rows) {
         const failure = validateDiscussionStoredMessage(row, input.context.storageMode);
         if (failure) return discussionFailure(failure);
@@ -141,12 +143,12 @@ export async function projectReadableMessagesInTx(tx: Tx, input: Reader & Readon
         discussionId: input.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
     })));
     const held = await readHeldDiscussionPendingInputsInTx(tx, addresses);
-    return discussionSuccess(messages.map(message => {
+    return discussionSuccess({ docSources: sources.value, messages: messages.map(message => {
         const deliveries = (message.addressingV1?.participantSessionIds ?? []).flatMap(participantSessionId => held.has(deriveDiscussionFollowInputLocalIdV1({
             discussionId: input.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
         })) ? [{ participantSessionId, disposition: 'held' as const, code: 'session_input_target_unavailable' as const }] : []);
         return deliveries.length ? { ...message, participantDeliveryV1: deliveries } : message;
-    }));
+    }) });
 }
 
 /** Internal exact read on the supplied transaction; no second codec or transaction. */
@@ -159,7 +161,7 @@ export async function readDiscussionMessageInTx(tx: Tx, input: Reader & Readonly
     const row = await tx.discussionMessage.findFirst({ where: { discussionId: input.discussionId, id: input.messageId }, select: DISCUSSION_MESSAGE_SELECT });
     if (!row) return discussionFailure('discussion_not_found');
     const projected = await projectReadableMessagesInTx(tx, { ...input, context, rows: [row] });
-    return projected.ok ? discussionSuccess(projected.value[0]!) : projected;
+    return projected.ok ? discussionSuccess(projected.value.messages[0]!) : projected;
 }
 
 /** Candidate grants narrow before paging; current admission still decides every returned row. */
@@ -178,12 +180,27 @@ export async function listDiscussions(input: Reader & Readonly<{
         // Access may disappear between candidate discovery and read. Continue
         // keyset traversal rather than making a denied row hide later results.
         for (;;) {
+            // SQLite's Prisma connector has no JSON-path filter. Select exact
+            // Doc candidates in SQL on every provider before ORM/page admission.
+            const at = frontier ? new Date(frontier.at) : null;
+            const position = getDbProviderFromEnv(process.env, 'postgres') === 'sqlite' && at ? at.getTime() : at;
+            const scopedIds = input.anchorDocArtifactId === undefined ? null : await tx.$queryRaw<{ id: string }[]>(sql.sql`
+                SELECT d.${name('id')} AS id FROM ${name('Discussion')} d
+                WHERE ${discussionCandidateSql(input.actorAccountId)} AND d.${name('archivedAt')} IS NULL
+                    AND ${discussionJsonText(sql.sql`d.${name('anchorV1')}`, ['kind'])} = 'doc'
+                    AND ${discussionJsonText(sql.sql`d.${name('anchorV1')}`, ['doc', 'ref', 'artifactId'])} = ${input.anchorDocArtifactId}
+                    ${input.anchorSessionId ? sql.sql`AND d.${name('anchorSessionId')} = ${input.anchorSessionId}` : sql.empty}
+                    ${input.creationLocalId ? sql.sql`AND d.${name('createdByAccountId')} = ${input.actorAccountId} AND d.${name('creationLocalId')} = ${input.creationLocalId}` : sql.empty}
+                    ${frontier ? sql.sql`AND (d.${name('lastMessageAt')} < ${position} OR (d.${name('lastMessageAt')} = ${position} AND d.${name('id')} < ${frontier.id}))` : sql.empty}
+                ORDER BY d.${name('lastMessageAt')} DESC, d.${name('id')} DESC LIMIT ${take + 1}`);
+            if (scopedIds?.length === 0) return discussionSuccess({ discussions, nextCursor: null });
             const rows = await tx.discussion.findMany({
                 where: {
-                    ...discussionCandidateWhere(input.actorAccountId), archivedAt: input.state === 'archived' ? { not: null } : null,
+                    AND: [discussionCandidateWhere(input.actorAccountId), ...(frontier ? [buildDiscussionListCursorPredicate(frontier)] : [])],
+                    archivedAt: input.state === 'archived' ? { not: null } : null,
+                    ...(scopedIds ? { id: { in: scopedIds.map(row => row.id) } } : {}),
                     ...(input.anchorSessionId ? { anchorSessionId: input.anchorSessionId } : {}),
                     ...(input.creationLocalId ? { createdByAccountId: input.actorAccountId, creationLocalId: input.creationLocalId } : {}),
-                    ...(frontier ? buildDiscussionListCursorPredicate(frontier) : {}),
                 }, select: DISCUSSION_SELECT, orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }], take: take + 1,
             });
             if (rows.length === 0) return discussionSuccess({ discussions, nextCursor: null });
@@ -251,7 +268,7 @@ export async function readDiscussionMessages(input: Reader & Readonly<{
             if (rows.length === 0) break;
             const projected = await projectReadableMessagesInTx(tx, { ...input, context, rows, unavailableDocSources: 'omit' });
             if (!projected.ok) return projected;
-            messages.push(...projected.value);
+            messages.push(...projected.value.messages);
             frontier = rows[rows.length - 1]!.seq;
             if (rows.length < remaining) break;
         }

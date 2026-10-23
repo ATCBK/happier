@@ -7,6 +7,8 @@ import { readArtifactForCallerInTx, resolveArtifactAudienceInTx } from '@/app/ar
 import { artifactContextStorageAdapter } from '@/app/artifacts/artifactContextInjection';
 import type { Tx } from '@/storage/inTx';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
+import { getDbProviderFromEnv, prismaRuntime as sql } from '@/storage/prisma';
+import { discussionJsonText, discussionSqlName as name } from './readSql';
 
 export type DiscussionDocSource = DiscussionDocPassageReplyTargetV1['doc'];
 
@@ -34,6 +36,7 @@ export async function resolveDiscussionDocSourcesInTx(tx: Tx, input: Readonly<{
 }>): Promise<DiscussionResult<ReadonlyMap<string, DiscussionDocSource | null>>> {
     const targets = new Map<string, ReturnType<typeof DiscussionReplyTargetV1Schema.parse> | null>();
     let rows = input.messages;
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
     for (;;) {
         for (const row of rows) {
             const parsed = row.replyTargetV1 == null ? null : DiscussionReplyTargetV1Schema.safeParse(row.replyTargetV1);
@@ -43,9 +46,43 @@ export async function resolveDiscussionDocSourcesInTx(tx: Tx, input: Readonly<{
         const missing = [...new Set([...targets.values()].flatMap(target =>
             target?.kind === 'message' && !targets.has(target.messageId) ? [target.messageId] : []))];
         if (missing.length === 0) break;
-        rows = await tx.discussionMessage.findMany({ where: { discussionId: input.discussionId, id: { in: missing } },
-            select: { id: true, replyTargetV1: true } });
-        if (rows.length !== missing.length) return discussionFailure('discussion_invalid_reply_target');
+        if (provider === 'mysql') {
+            // MySQL's configured recursive-CTE depth can reject valid deep
+            // threads. Retain its existing transport; PG/SQLite recurse below.
+            rows = await tx.discussionMessage.findMany({ where: { discussionId: input.discussionId, id: { in: missing } },
+                select: { id: true, replyTargetV1: true } });
+            if (rows.length !== missing.length) return discussionFailure('discussion_invalid_reply_target');
+            continue;
+        }
+        // One JSON parameter avoids PostgreSQL's 32,767-bind boundary,
+        // regardless of the number of roots or ancestor depth.
+        const ids = JSON.stringify(missing);
+        const seeds = provider === 'sqlite' ? sql.sql`SELECT value AS id FROM json_each(${ids})`
+            : sql.sql`SELECT value AS id FROM jsonb_array_elements_text(${ids}::jsonb)`;
+        const inherited: { id: string; replyTargetV1: unknown }[] = await tx.$queryRaw(sql.sql`WITH RECURSIVE ancestors(id) AS (
+            ${seeds}
+            UNION
+            SELECT parent.${name('id')} FROM ancestors a
+            JOIN ${name('DiscussionMessage')} m ON m.${name('id')} = a.id AND m.${name('discussionId')} = ${input.discussionId}
+            JOIN ${name('DiscussionMessage')} parent ON parent.${name('id')} = ${discussionJsonText(sql.sql`m.${name('replyTargetV1')}`, ['messageId'])}
+                AND parent.${name('discussionId')} = ${input.discussionId}
+            WHERE ${discussionJsonText(sql.sql`m.${name('replyTargetV1')}`, ['kind'])} = 'message'
+        ) SELECT m.${name('id')}, m.${name('replyTargetV1')} FROM ${name('DiscussionMessage')} m
+            JOIN ancestors a ON a.id = m.${name('id')} WHERE m.${name('discussionId')} = ${input.discussionId}`);
+        // Raw SQLite JSON arrives as text; PG returns its native JSON value.
+        try {
+            for (const row of inherited) {
+                if (targets.has(row.id)) continue;
+                const value = provider === 'sqlite' && typeof row.replyTargetV1 === 'string' ? JSON.parse(row.replyTargetV1) as unknown : row.replyTargetV1;
+                const parsed = value == null ? null : DiscussionReplyTargetV1Schema.safeParse(value);
+                if (parsed && !parsed.success) return discussionFailure('discussion_invalid_reply_target');
+                targets.set(row.id, parsed?.success ? parsed.data : null);
+            }
+        } catch { return discussionFailure('discussion_invalid_reply_target'); }
+        if (missing.some(id => !targets.has(id)) || [...targets.values()].some(target => target?.kind === 'message' && !targets.has(target.messageId))) {
+            return discussionFailure('discussion_invalid_reply_target');
+        }
+        break;
     }
     const sources = new Map<string, DiscussionDocSource | null>();
     for (const row of input.messages) {

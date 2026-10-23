@@ -17,7 +17,10 @@ import { projectResourceRecipientEnvelope, resourceGrantRelationsSelect, resolve
     type ResourceGrantStorageAdapter } from "@/app/teams/resourceGrantAccess";
 import type { Tx } from "@/storage/inTx";
 import { inReadSnapshot, TransactionReplayRequiredError } from '@/storage/inTx';
-import { getDbProviderFromEnv } from '@/storage/prisma';
+import { getDbProviderFromEnv, prismaRuntime as sql } from '@/storage/prisma';
+import { discussionSqlName as name } from './readSql';
+import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES, ENCRYPTED_DATA_KEY_ENVELOPE_V1_VERSION_BYTE } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
 import { beforeAccountChangePublication } from '@/app/changes/markAccountChanged';
 import { fenceSessionAccountCursorAudienceInTx, readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 
@@ -351,6 +354,56 @@ export function discussionCandidateWhere(accountId: string): Prisma.DiscussionWh
         { teamGrants: { some: { team: { memberships: { some: { accountId } } } } } },
         { groupGrants: { some: { teamGroup: { memberships: { some: { teamMembership: { accountId } } } } } } },
     ] };
+}
+
+/** SQL projection of the same reachability prefilter for correlated/paged reads.
+ * Neither adapter admits content: resolveDiscussionContextsInTx remains the authority.
+ * The caller's Discussion table is aliased as d.
+ */
+export function discussionCandidateSql(accountId: string): Prisma.Sql {
+    return sql.sql`(d.${name('ownerAccountId')} = ${accountId}
+        OR EXISTS (SELECT 1 FROM ${name('DiscussionAccountGrant')} g
+            WHERE g.${name('discussionId')} = d.${name('id')} AND g.${name('accountId')} = ${accountId})
+        OR EXISTS (SELECT 1 FROM ${name('DiscussionTeamGrant')} g JOIN ${name('TeamMembership')} m ON m.${name('teamId')} = g.${name('teamId')}
+            WHERE g.${name('discussionId')} = d.${name('id')} AND m.${name('accountId')} = ${accountId})
+        OR EXISTS (SELECT 1 FROM ${name('DiscussionGroupGrant')} g
+            JOIN ${name('TeamGroupMembership')} gm ON gm.${name('teamGroupId')} = g.${name('teamGroupId')}
+            JOIN ${name('TeamMembership')} m ON m.${name('id')} = gm.${name('teamMembershipId')}
+            WHERE g.${name('discussionId')} = d.${name('id')} AND m.${name('accountId')} = ${accountId}))`;
+}
+
+/** Preserve the Account-wide incomplete fact without loading every ready resource.
+ * SQL only selects structurally unusable envelope candidates; ordinary live
+ * grant/credential/mode admission still decides whether any is visible.
+ */
+export async function hasDiscussionWithUnavailableKeyInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication;
+}>): Promise<boolean> {
+    if (!await isDiscussionCredentialCurrentInTx(tx, input)) return false;
+    const account = await tx.account.findUnique({ where: { id: input.accountId }, select: RECIPIENT_READINESS_SELECT });
+    if (!account) return false;
+    const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
+    const envelopeShape = (column: Prisma.Sql) => sql.sql`(LENGTH(${column}) = ${ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES}
+        AND SUBSTR(${column}, 1, 1) = ${new Uint8Array([ENCRYPTED_DATA_KEY_ENVELOPE_V1_VERSION_BYTE])})`;
+    const ready = readiness.status === 'available' ? sql.sql`(
+        (d.${name('ownerAccountId')} = ${input.accountId} AND ${envelopeShape(sql.sql`d.${name('dataEncryptionKey')}`)})
+        OR (d.${name('ownerAccountId')} <> ${input.accountId} AND EXISTS (
+            SELECT 1 FROM ${name('DiscussionKeyEnvelope')} k WHERE k.${name('discussionId')} = d.${name('id')}
+            AND k.${name('recipientAccountId')} = ${input.accountId}
+            AND k.${name('recipientContentPublicKeyFingerprint')} = ${readiness.binding.contentPublicKeyFingerprint}
+            AND ${envelopeShape(sql.sql`k.${name('encryptedDataKey')}`)})))` : sql.sql`1 = 0`;
+    let after: string | null = null;
+    for (;;) {
+        const rows: { id: string }[] = await tx.$queryRaw(sql.sql`SELECT d.${name('id')} AS id FROM ${name('Discussion')} d
+            WHERE ${discussionCandidateSql(input.accountId)} AND d.${name('archivedAt')} IS NULL
+            AND d.${name('encryptionMode')} = 'e2ee' AND NOT (${ready})
+            ${after === null ? sql.empty : sql.sql`AND d.${name('id')} > ${after}`}
+            ORDER BY d.${name('id')} ASC LIMIT ${DISCUSSION_DEFAULT_PAGE_SIZE_V1}`);
+        if (!rows.length) return false;
+        const contexts = await resolveDiscussionContextsInTx(tx, { ...input, discussionIds: rows.map(row => row.id) });
+        if ([...contexts.values()].some(context => !context.keyReadiness)) return true;
+        after = rows.at(-1)!.id;
+    }
 }
 
 /** A disclosure audience describes entitlement, independently of one request's credentials. */

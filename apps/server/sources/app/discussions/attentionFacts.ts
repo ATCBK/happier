@@ -9,13 +9,15 @@ import type { SessionAccessAuthentication } from "@/app/session/access/sessionAc
 import { DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1, type DiscussionAttentionQueryV1,
     type DiscussionAttentionResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { DocEditProposalDispositionV1Schema } from '@happier-dev/protocol/discussions/models';
-import { discussionCandidateWhere, resolveDiscussionContextsInTx } from './access';
-import { DISCUSSION_SELECT, DISCUSSION_MESSAGE_SELECT, discussionUnreadMessagesWhere } from './projection';
+import { discussionCandidateWhere, discussionCandidateSql, resolveDiscussionContextsInTx, hasDiscussionWithUnavailableKeyInTx } from './access';
+import { DISCUSSION_SELECT, DISCUSSION_MESSAGE_SELECT, discussionUnreadMessageSql, type DiscussionMessageRow, type DiscussionRow } from './projection';
 import { projectDiscussionsForViewerInTx, projectReadableMessagesInTx } from './queries';
 import { decodeDiscussionListCursorV1, encodeDiscussionListCursorV1 } from './pagination';
-import { resolveDiscussionDocSourcesInTx } from './docPassages';
 import { admitArtifactEditProposalDecisionDocInTx } from '@/app/artifacts/artifactEditProposalService';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
+import { prismaRuntime as sql, getDbProviderFromEnv } from '@/storage/prisma';
+import { discussionSqlName as name } from './readSql';
+import type { DiscussionContext } from './access';
 
 /**
  * One Home/Account attention page over original messages, private read cursors and
@@ -27,22 +29,50 @@ export async function readDiscussionAttention(input: Readonly<{
     return inReadSnapshot(async tx => {
         const cursor = input.cursor === undefined ? null : decodeDiscussionListCursorV1(input.cursor);
         if (input.cursor !== undefined && !cursor) return discussionFailure('discussion_invalid_content');
-        const candidates = await tx.discussion.findMany({ where: { ...discussionCandidateWhere(input.actorAccountId), archivedAt: null }, select: DISCUSSION_SELECT });
-        const contexts = await resolveDiscussionContextsInTx(tx, { discussionIds: candidates.map(row => row.id),
-            accountId: input.actorAccountId, authentication: input.authentication });
-        const discussions = candidates.filter(row => contexts.get(row.id)?.keyReadiness);
-        let incomplete = candidates.some(row => contexts.has(row.id) && !contexts.get(row.id)!.keyReadiness);
+        let incomplete = await hasDiscussionWithUnavailableKeyInTx(tx, { accountId: input.actorAccountId, authentication: input.authentication });
+        const take = Math.min(input.limit ?? DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1);
+        const contexts = new Map<string, DiscussionContext>();
+        const discussionsById = new Map<string, DiscussionRow>();
+        const rows: DiscussionMessageRow[] = [];
+        let frontier = cursor;
+        // Storage answers unread/open demand before any context/cursor census.
+        // Denied or keyless candidates still pass through the live admission owner.
+        for (;;) {
+            const disposition = sql.sql`m.${name('docEditProposalDispositionV1')}`;
+            const provider = getDbProviderFromEnv(process.env, 'postgres');
+            const open = provider === 'sqlite' ? sql.sql`json(${disposition}) = ${JSON.stringify({ state: 'open' })}`
+                : provider === 'mysql' ? sql.sql`${disposition} = CAST(${JSON.stringify({ state: 'open' })} AS JSON)`
+                : sql.sql`${disposition} = ${JSON.stringify({ state: 'open' })}::jsonb`;
+            const at = frontier ? new Date(frontier.at) : null;
+            const position = provider === 'sqlite' && at ? at.getTime() : at;
+            const ids: { id: string }[] = await tx.$queryRaw(sql.sql`SELECT m.${name('id')} AS id FROM ${name('DiscussionMessage')} m
+                JOIN ${name('Discussion')} d ON d.${name('id')} = m.${name('discussionId')}
+                LEFT JOIN ${name('DiscussionReadState')} c ON c.${name('discussionId')} = d.${name('id')} AND c.${name('accountId')} = ${input.actorAccountId}
+                WHERE ${discussionCandidateSql(input.actorAccountId)} AND d.${name('archivedAt')} IS NULL
+                AND (${open} OR ${discussionUnreadMessageSql(input.actorAccountId)})
+                ${frontier ? sql.sql`AND (m.${name('createdAt')} < ${position} OR (m.${name('createdAt')} = ${position} AND m.${name('id')} < ${frontier.id}))` : sql.empty}
+                ORDER BY m.${name('createdAt')} DESC, m.${name('id')} DESC LIMIT ${take + 1 - rows.length}`);
+            if (!ids.length) break;
+            const messages = await tx.discussionMessage.findMany({ where: { id: { in: ids.map(row => row.id) } },
+                select: DISCUSSION_MESSAGE_SELECT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
+            const discussionIds = [...new Set(messages.map(row => row.discussionId))];
+            const candidates = await tx.discussion.findMany({ where: { id: { in: discussionIds } }, select: DISCUSSION_SELECT });
+            const current = await resolveDiscussionContextsInTx(tx, { discussionIds,
+                accountId: input.actorAccountId, authentication: input.authentication });
+            for (const row of candidates) {
+                const context = current.get(row.id);
+                if (context?.keyReadiness) { discussionsById.set(row.id, row); contexts.set(row.id, context); }
+            }
+            rows.push(...messages.filter(row => contexts.has(row.discussionId)));
+            if (rows.length > take) break;
+            const last = messages.at(-1)!;
+            frontier = { v: 1, at: last.createdAt.getTime(), id: last.id };
+        }
+        const discussions = [...discussionsById.values()];
         if (!discussions.length) return discussionSuccess({ discussions: [], nextCursor: null, incomplete });
         const cursors = await tx.discussionReadState.findMany({ where: { accountId: input.actorAccountId,
             discussionId: { in: discussions.map(row => row.id) } }, select: { discussionId: true, lastReadSeq: true } });
         const lastReadByDiscussion = new Map(cursors.map(row => [row.discussionId, row.lastReadSeq]));
-        const take = Math.min(input.limit ?? DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1);
-        const rows = await tx.discussionMessage.findMany({ where: { AND: [
-            { discussionId: { in: discussions.map(row => row.id) } },
-            { OR: [{ docEditProposalDispositionV1: { equals: { state: 'open' } } },
-                discussionUnreadMessagesWhere({ viewerAccountId: input.actorAccountId, cursors })] },
-            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.at) } }, { createdAt: new Date(cursor.at), id: { lt: cursor.id } }] }] : []),
-        ] }, select: DISCUSSION_MESSAGE_SELECT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: take + 1 });
         const selected = rows.slice(0, take);
         const entries: DiscussionAttentionResponseV1['discussions'] = [];
         const active = discussions.filter(row => selected.some(message => message.discussionId === row.id));
@@ -54,14 +84,12 @@ export async function readDiscussionAttention(input: Readonly<{
             const readable = await projectReadableMessagesInTx(tx, { ...input, discussionId: discussion.id,
                 context: contexts.get(discussion.id)!, rows: sourceRows, unavailableDocSources: 'omit' });
             if (!readable.ok) return readable;
-            incomplete ||= readable.value.length !== sourceRows.length;
-            const sources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: discussion.id, messages: sourceRows });
-            if (!sources.ok) return sources;
+            incomplete ||= readable.value.messages.length !== sourceRows.length;
             const decisions = new Map<string, Promise<boolean>>();
             const occurrences: DiscussionAttentionResponseV1['discussions'][number]['occurrences'] = [];
-            for (const message of readable.value) {
+            for (const message of readable.value.messages) {
                 const disposition = DocEditProposalDispositionV1Schema.safeParse(message.docEditProposalDispositionV1);
-                const source = sources.value.get(message.id);
+                const source = readable.value.docSources.get(message.id);
                 let decision = false;
                 if (disposition.success && disposition.data.state === 'open' && source) {
                     let admitted = decisions.get(source.ref.artifactId);

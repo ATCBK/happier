@@ -68,6 +68,16 @@ import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeBindi
 import { MessageBuffer } from '../../../../cli/src/ui/ink/messageBuffer';
 import { createInitialHostRuntimeActivityMutation } from '../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { createDiscussionFollowInputIntake } from '../../../../cli/src/agent/runtime/session/follow/discussionFollowInput';
+import { createMutableApiSessionClientFixture } from '../../../../cli/src/testkit/backends/sessionFixtures';
+import { runWithServerHttpBaseUrl } from '../../../../cli/src/api/client/serverHttpBaseUrl';
+import { installAxiosFastifyAdapter } from '../../../../cli/src/testkit/http/axiosAdapter';
+import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
+import { registerSessionListingRoutes } from '@/app/api/routes/session/registerSessionListingRoutes';
+import { registerSessionLookupByTagsRoute } from '@/app/api/routes/session/registerSessionLookupByTagsRoute';
+import { registerSessionFollowRoutes } from '@/app/api/routes/session/registerSessionFollowRoutes';
+import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
+import { SessionPendingEnqueueByMachineRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 
 const document = (text: string) => ({ v: 1 as const, parts: [{ t: 'text' as const, text }] });
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -1935,6 +1945,85 @@ describe('First-class Discussions service (SQLite)', () => {
         expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
             principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: watcher.id,
         }))).observations).toEqual([]);
+    });
+    it('delivers a native Discussion-origin addressed post through the real Follow intake and Pending owner', async () => {
+        const { owner, discussionId } = await fixture();
+        const source = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const target = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        for (const session of [source, target]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const initial = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: {
+            ...postRequest('Person-started question'), mentionedSessionIds: [source.id], content: { t: 'plain', v: { v: 1,
+                parts: [{ t: 'mention', participant: { kind: 'session', sessionId: source.id } }] } } } });
+        if (!initial.ok) throw new Error(initial.error);
+        const originalAddressing = { discussionId, messageId: initial.value.message.id, throughSeq: initial.value.message.seq, participantSessionId: source.id };
+        const sourceInputId = deriveDiscussionFollowInputLocalIdV1(originalAddressing);
+        const sourceTurnId = 'discussion-origin-native-turn';
+        const { socket, machine } = await publisherSocket(owner.id, source.id);
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: target.id, data: 'encrypted' } });
+        const serverId = await getOrCreateServerIdentityId();
+        const host = buildTrustedHostSessionInputAdmissionV1('agent');
+        const request = SessionInputRequestV1Schema.parse({ ...host.request, discussionAddressing: originalAddressing, replyIntent: { mode: 'return' },
+            actionRequestAttributionV1: { requestRef: sourceInputId, requester: { serverId, accountId: owner.id },
+                persona: { serverId, sessionId: source.id }, origin: { kind: 'discussion', discussion: { serverId, discussionId }, messageId: initial.value.message.id } } });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine', discussionAddressing: originalAddressing,
+            admittedTarget: { homeId: serverId, accountId: owner.id, sessionId: source.id, machineId: machine.id, installationId: machine.installationId } });
+        await db.sessionMessage.create({ data: { sessionId: source.id, localId: sourceInputId, seq: 1, messageRole: 'user', acceptedTurnId: sourceTurnId,
+            inputAdmissionReceipt: receipt, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Original question' },
+                meta: withSessionInputAuthorityV1({ [SESSION_MESSAGE_PROVENANCE_META_KEY]: host.provenance },
+                    settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'read-only', inputAdmissionReceipt: receipt })) } } } });
+        await db.sessionTurn.create({ data: { sessionId: source.id, turnId: sourceTurnId, status: 'completed', startedAt: 1n, updatedAt: 2n,
+            transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1] }) } });
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId, sourceInputId, via: 'action' as const, discussionAddressing: originalAddressing };
+        let response: unknown;
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: source.id, discussionId, sourceSession,
+            request: { ...postRequest('Agent question'), mentionedSessionIds: [target.id], content: { t: 'plain', v: { v: 1,
+                parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } } } }, (value: unknown) => { response = value; });
+        const posted = DiscussionAgentPostResponseV1Schema.parse(response);
+        expect(posted).toMatchObject({ ok: true });
+        if (!posted.ok) throw new Error(posted.error);
+        const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: target.id }));
+        const observation = observed.observations.find(row => 'source' in row);
+        if (!observation || !('source' in observation)) throw new Error('Addressed target observation missing');
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        // Only authentication and the Machine socket are replaced. Resource
+        // reads, opening, protected admission and database acceptance are real.
+        app.decorate('authenticate', async (httpRequest: FastifyRequest) => {
+            httpRequest.userId = owner.id; httpRequest.authAuthority = 'present_user'; httpRequest.authTokenKind = 'account';
+        });
+        registerDiscussionRoutes(app); registerAccountEncryptionRoutes(app); registerSessionListingRoutes(app);
+        registerSessionLookupByTagsRoute(app); registerSessionFollowRoutes(app); registerSessionMessageRoutes(app);
+        const origin = 'http://discussion-follow-composed.test';
+        const restoreHttp = installAxiosFastifyAdapter({ app, origin });
+        const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: owner.id })).toString('base64url')}.fixture`, encryption: null };
+        const admissions: string[] = [];
+        const session = createMutableApiSessionClientFixture({ sessionId: target.id, overrides: {
+            getServerBinding: () => ({ serverId, serverUrl: origin }),
+            getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+                sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+                capabilities: { serverIdentity: { serverIdentityId: serverId } } }) }),
+            runSessionFollowSourceRequest: ({ request: read }) => runWithServerHttpBaseUrl(origin, read),
+            getMachineAdmissionTransport: () => async payload => {
+                const result = await enqueuePendingMessageByAuthenticatedMachine({ ...SessionPendingEnqueueByMachineRequestV1Schema.parse(payload),
+                    accountId: owner.id, sourceMachineId: machine.id });
+                admissions.push(result.status === 'rejected' ? result.code : result.status);
+                return result;
+            },
+        } });
+        try {
+            // Current placement is supplied by the real Session read owner.
+            await db.session.update({ where: { id: target.id }, data: { active: true,
+                metadata: JSON.stringify({ machineId: machine.id, path: '/repo', claudeSessionId: 'target-native' }) } });
+            const intake = createDiscussionFollowInputIntake({ session, credentials });
+            expect(await intake({ observation, signal: new AbortController().signal }), JSON.stringify(admissions)).toBe(true);
+            const localId = deriveDiscussionFollowInputLocalIdV1(observation.addressing);
+            expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: target.id, localId } } }))
+                .toMatchObject({ replyProgress: { sourceSession, discussion: observation.addressing }, inputAdmissionReceipt: { discussionAddressing: observation.addressing } });
+            expect((await db.sessionFollowEdge.findFirstOrThrow({ where: { destinationSessionId: target.id, sourceDiscussionId: discussionId } })).deliveredTranscriptSeq)
+                .toBe(posted.value.message.seq);
+        } finally { restoreHttp(); await app.close(); }
     });
     it('commits one immutable addressed set and cutoff, with reply addressing and silent negative controls', async () => {
         const { owner, discussionId } = await fixture();

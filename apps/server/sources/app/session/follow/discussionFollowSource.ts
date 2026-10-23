@@ -41,7 +41,7 @@ export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input
         const readable = await projectReadableMessagesInTx(tx, { actorAccountId: input.accountId,
             authentication: input.authentication, discussionId: source.discussionId, context, rows });
         if (!readable.ok) return null;
-        for (const message of readable.value) {
+        for (const message of readable.value.messages) {
             const producer = message.producerV1;
             // These are protected append-owner facts: an absent producer is
             // admitted only for present-user ingress, never authored metadata.

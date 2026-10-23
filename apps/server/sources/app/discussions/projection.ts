@@ -8,6 +8,8 @@ import type { DiscussionContext } from './access';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '@happier-dev/protocol/discussions/replyTargets';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { getActivePrismaRuntime } from "@/storage/prisma";
+import { prismaRuntime as sql } from '@/storage/prisma';
+import { discussionSqlName as name } from './readSql';
 import type { Tx } from "@/storage/inTx";
 import type { Prisma } from '@prisma/client';
 import { projectAuthenticatedAccountActorsById } from '@/app/session/messages/projectSessionMessageAccountActors';
@@ -342,6 +344,15 @@ export function discussionUnreadMessagesWhere(params: Readonly<{
         OR: [{ authorAccountId: { not: params.viewerAccountId } }, { authorAccountId: null },
             { producerV1: { not: getActivePrismaRuntime().DbNull } }],
     }] };
+}
+
+/** Correlated equivalent of the cursor predicate for demand-bounded attention.
+ * m is the message and c is this viewer's LEFT JOINed private read state.
+ */
+export function discussionUnreadMessageSql(viewerAccountId: string): Prisma.Sql {
+    return sql.sql`(c.${name('lastReadSeq')} IS NOT NULL AND m.${name('seq')} > c.${name('lastReadSeq')}
+        AND (m.${name('authorAccountId')} <> ${viewerAccountId} OR m.${name('authorAccountId')} IS NULL
+            OR m.${name('producerV1')} IS NOT NULL))`;
 }
 
 export async function countUnreadMessagesInTx(tx: Tx, params: Readonly<{
