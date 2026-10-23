@@ -58,6 +58,38 @@ afterEach(() => {
 });
 
 describe('useHomeSettingsWithCompanion', () => {
+    it('keeps an accepted companion mutation when an older reload answers later', async () => {
+        const { useHomeSettingsWithCompanion } = await import('./useHomeSettingsWithCompanion');
+        const { getHomeReachability, setHomeIrohMode } = await import('@/sync/ops/home/homeGovernanceOperations');
+        const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://companion-adoption.example', accountId: 'account-admin' });
+        const scope = { serverId, accountId: 'account-admin' };
+        const reachPath = '/v1/home/reachability/get';
+        const read = (current: typeof scope) => getHomeReachability({ scope: current });
+        const original = homeReachabilityFixture();
+        const accepted = homeReachabilityFixture({ iroh: { ...original.iroh, mode: 'disabled', state: 'retired', endpointId: null } });
+        harness.answer(serverId, SETTINGS_GET, { body: homeSettingsProjectionFixture({ revision: 3 }) });
+        harness.answer(serverId, reachPath, { body: original });
+        const hook = await renderHook(() => useHomeSettingsWithCompanion(scope, true, read));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().companion?.iroh.mode).toBe('enabled'));
+        const held = createDeferred<void>();
+        harness.answer(serverId, reachPath, { body: original, respondAfter: held.promise });
+        await act(async () => { await hook.getCurrent().reload(); });
+        await waitForHomeGovernance(() => expect(harness.requestsFor(reachPath)).toHaveLength(2));
+        expect(hook.getCurrent().companionLoading).toBe(true);
+        harness.answer(serverId, '/v1/home/reachability/iroh/set', { body: accepted });
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        await act(async () => {
+            const mutation = await setHomeIrohMode({ scope, mode: 'disabled' });
+            expect(mutation).toMatchObject({ kind: 'succeeded' });
+            if (mutation.kind === 'succeeded') hook.getCurrent().adoptCompanion(mutation.value);
+        });
+        expect(hook.getCurrent()).toMatchObject({ companion: { iroh: { mode: 'disabled' } }, companionLoading: false, companionFailure: null });
+        await act(async () => { held.resolve(); });
+        expect(hook.getCurrent()).toMatchObject({ companion: { iroh: { mode: 'disabled' } }, companionLoading: false, companionFailure: null });
+        expect(harness.requestsFor(reachPath)).toHaveLength(2);
+    });
+
     it('refreshes only a demanded companion when a sibling writer adopts settings', async () => {
         const { useHomeSettingsWithCompanion } = await import('./useHomeSettingsWithCompanion');
         const { useHomeSettings } = await import('./useHomeSettings');

@@ -112,7 +112,9 @@ export function useHomeSettingsWithCompanion<TCompanion>(
     }, [capturedScope]);
 
     const adoptCompanion = React.useCallback((companion: TCompanion) => {
-        if (currentScopeKey.current === scopeKey) setState({ scopeKey, companion, companionLoading: false, companionFailure: null });
+        if (currentScopeKey.current !== scopeKey) return;
+        generation.current += 1;
+        setState({ scopeKey, companion, companionLoading: false, companionFailure: null });
     }, [scopeKey]);
 
     return React.useMemo(() => Object.freeze({
