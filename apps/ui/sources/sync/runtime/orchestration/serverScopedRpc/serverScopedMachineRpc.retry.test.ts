@@ -211,6 +211,72 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
         expect(boundary.requests).toEqual([]);
     });
 
+    it.each(['disconnect', 'decode', 'malformed', 'refusal'] as const)('preserves canonical Stop custody after native %s', async outcome => {
+        const { stopSessionUsingCanonicalStrategy } = await import('@/sync/ops/sessionStopStrategy');
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const sessionId = 'uncertain-stop-session';
+        const session = createSessionFixture({ id: sessionId, serverId: home.id, active: true,
+            metadata: { path: '/repo', host: 'tester.local', machineId: 'machine-1' } });
+        storage.setState({ sessions: { [sessionId]: session } });
+        boundary.setRpcAckResponder(async request => {
+            expect(request.method).toBe(RPC_METHODS.STOP_SESSION);
+            if (outcome === 'refusal') return { ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN };
+            if (outcome === 'decode') return { ok: true, result: 'invalid-encrypted-response' };
+            if (outcome === 'malformed') {
+                const decoded = await decodeRequest(request);
+                return { ok: true, result: await socketRpcCodec.encodeResponse(content, null, decoded.callId) };
+            }
+            const physical = boundary.socketBoundaries.find(socket => socket.serverUrl === request.serverUrl);
+            if (!physical) throw new Error('Expected issued Stop socket');
+            physical.trigger('disconnect', 'transport close');
+            // Native Socket.IO rejects outstanding ACKs when its namespace closes.
+            throw new Error('socket has been disconnected');
+        });
+
+        const result = await stopSessionUsingCanonicalStrategy({ sessionId, serverId: home.id,
+            scope: { serverId: home.id, accountId: 'account-a' } });
+
+        expect(result).toMatchObject(outcome !== 'refusal'
+            ? { success: false, reason: 'requested', recovery: 'wait_for_inactive' }
+            : { success: false, reason: 'failed', errorCode: RPC_ERROR_CODES.FORBIDDEN });
+        expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.STOP_SESSION]);
+        expect(storage.getState().sessions[sessionId]?.active).toBe(true);
+    });
+
+    it.each(['disconnect', 'malformed', 'refusal'] as const)('preserves runner Stop custody after native %s', async outcome => {
+        const { stopSessionUsingCanonicalStrategy } = await import('@/sync/ops/sessionStopStrategy');
+        const { createSessionFixture, createPlainSessionCurrentProjectionRecordFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const runnerHome = await boundary.addHome('https://runner-stop.example.test', 'account-a');
+        const sessionId = 'runner-stop-session';
+        const metadata = { path: '/repo', host: 'unmatched.local' };
+        storage.setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId,
+            serverId: runnerHome.id, active: true, metadata }) }, machines: {} });
+        boundary.setHttpResponder(async input => {
+            const url = new URL(String(input));
+            return url.pathname === `/v2/sessions/${sessionId}`
+                ? Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId, active: true, metadata }) })
+                : null;
+        });
+        boundary.setRpcAckResponder(async request => {
+            expect(request.method).toBe('killSession');
+            if (outcome === 'refusal') return { ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN };
+            if (outcome === 'malformed') return { ok: true, result: null };
+            const physical = boundary.socketBoundaries.find(socket => socket.serverUrl === request.serverUrl);
+            if (!physical) throw new Error('Expected issued runner Stop socket');
+            physical.trigger('disconnect', 'transport close');
+            throw new Error('socket has been disconnected');
+        });
+
+        expect(await stopSessionUsingCanonicalStrategy({ sessionId, serverId: runnerHome.id }))
+            .toMatchObject(outcome !== 'refusal'
+                ? { success: false, reason: 'requested', recovery: 'wait_for_inactive' }
+                : { success: false, reason: 'failed', errorCode: RPC_ERROR_CODES.FORBIDDEN });
+        expect(boundary.requests.map(request => request.method)).toEqual(['killSession']);
+        expect(storage.getState().sessions[sessionId]?.active).toBe(true);
+    });
+
     it.each(['reply', 'cancel'] as const)('keeps canonical Stop under the admitted operation lifetime: %s', async outcome => {
         const { stopSessionViaDaemonMachineRpc } = await import('@/sync/ops/sessionStopStrategy');
         const { StopSessionResultSchema } = await import('@happier-dev/protocol/sessionStop');
@@ -238,7 +304,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             expect(boundary.requests).toHaveLength(1);
             if (outcome === 'cancel') controller.abort();
             else reply.resolve();
-            await expect(pending).resolves.toMatchObject({ type: outcome === 'cancel' ? 'failed' : 'stopped' });
+            await expect(pending).resolves.toMatchObject({ type: outcome === 'cancel' ? 'requested' : 'stopped' });
             expect(boundary.requests).toHaveLength(1);
         } finally {
             reply.resolve();

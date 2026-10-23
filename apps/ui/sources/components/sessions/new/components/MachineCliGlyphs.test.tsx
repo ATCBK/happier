@@ -88,6 +88,25 @@ describe('MachineCliGlyphs', () => {
         expect(navigation.push).toHaveBeenCalledWith(`/settings/machines/${machine.id}?serverId=${encodeURIComponent(server.id)}`);
     });
 
+    it('gives an installed Agent without a brand mark the neutral mark instead of an empty slot', async () => {
+        const server = await upsertServerProfile({ serverUrl: 'https://glyph-unmarked.example.test' });
+        const scope = { serverId: server.id, accountId: 'glyph-account' };
+        const machine = createMachineFixture({ id: 'glyph-unmarked', active: true, activeAt: Date.now(), daemonStateVersion: 1 });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        const item: MachineAgentInventoryItem = {
+            agentId: 'cursor', title: 'Cursor', installed: true, version: '1', latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'unknown', loginSupport: 'status_only' },
+            platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [],
+        };
+        machineAgentInventoryStore.publish(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id), {
+            status: 'ready', items: [item, { ...item, agentId: 'custom-acp', title: 'Custom ACP Agent' }], lastCheckedAt: 12,
+        });
+        const tree = await renderScreen(React.createElement(MachineCliGlyphs, {
+            machineId: machine.id, serverId: server.id, isOnline: true, autoDetect: false,
+        }));
+        await vi.waitFor(() => expect(tree.findAllByType('AgentIcon').map((node) => node.props.agentId)).toEqual(['cursor', null]));
+    });
+
     it('ignores machine heartbeats but updates every mounted row when inventory changes, including after reopening', async () => {
         const server = await upsertServerProfile({ serverUrl: 'https://glyph-subscription.example.test' });
         const scope = { serverId: server.id, accountId: 'glyph-account' };

@@ -148,8 +148,8 @@ function presentCurrentTarget(
 ): CurrentTargetPresentation {
     if (state.kind === 'unselected') {
         return {
-            title: unselectedTitle ?? t(compact ? 'newSession.selectMachineTitle' : 'newSession.noMachineSelected'),
-            detail: compact ? undefined : t('common.unavailable'),
+            // Administration and install targets, not sessions: nothing is chosen yet, which is not unavailable.
+            title: unselectedTitle ?? t('settingsPlugins.targetSelection.chooseMachine'),
             selected: false,
             gone: false,
         };

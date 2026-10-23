@@ -555,10 +555,14 @@ describe('machine contribution registry projection ops', () => {
 
     it('reads only the target slice and accepts the daemon’s current occurrence tag', async () => {
         const reloaded = { pluginId: 'acme.preview', occurrenceId: 'target-generation-b' } as const;
+        const resourceDeclarationsByPluginId = { 'acme.preview': { 'acme.preview/status': {
+            id: 'status', pluginId: 'acme.preview', resourceKind: 'config', scope: 'global', occurrenceId: reloaded.occurrenceId,
+        } }, 'acme.external': {} };
         machineRpcWithServerScopeMock.mockResolvedValueOnce({
             status: 'current',
             targetedContributions: targetedSnapshot(reloaded),
             targetedSurfaceMounts: [],
+            resourceDeclarationsByPluginId,
         });
         const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
 
@@ -573,6 +577,7 @@ describe('machine contribution registry projection ops', () => {
             supported: true,
             targetedContributions: targetedSnapshot(reloaded),
             targetedSurfaceMounts: [],
+            resourceDeclarationsByPluginId,
         });
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,

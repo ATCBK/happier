@@ -57,7 +57,7 @@ import {
 } from './temporaryComputerTargetIdentity';
 import { showTemporaryComputerExpiryModal } from './TemporaryComputerExpiryModal';
 import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import {
     managedMachineSelectionOptionId,
     type ManagedMachineSelectionDraft,
@@ -377,7 +377,13 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
     const resolveMachinePlacementFacts = params.workerPlacement && (purpose === 'finite' || purpose === 'service-start')
         ? demandedWorkerFacts : params.resolveMachinePlacementFacts;
     const { theme } = useUnistyles();
-    const reachabilityRevision = useMachineReachabilityRevision();
+    const readPresenceMachines = React.useCallback(() => params.groups.flatMap(group => group.machines), [params.groups]);
+    const readPresence = React.useCallback((nowMs: number) => JSON.stringify(params.groups.map(group =>
+        group.machines.map(machine => describeMachinePresenceLine(machine, nowMs, undefined, scopeForServer(group.serverId))),
+    )), [params.groups, scopeForServer]);
+    // The same owner that admits requests wakes the row's label, disabled state
+    // and buckets on recovery/withdrawal/expiry without rebuilding on heartbeats.
+    const presenceKey = useMachinePresenceSnapshot(readPresenceMachines, readPresence);
 
     // The row handlers are BEHAVIOUR, not data, so they are held in a ref and
     // invoked through stable wrappers instead of being memo dependencies.
@@ -1095,7 +1101,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
         };
     }, [
         params.autoDetectCliGlyphs,
-        reachabilityRevision,
+        presenceKey,
         purpose,
         resolveMachinePlacementFacts,
         params.workerSubject?.scriptName,
@@ -1153,7 +1159,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
             const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, group.serverId), machine, scopeForServer(group.serverId));
             return eligibility.eligible && eligibility.managedWake ? [[machine.id, eligibility.managedWake]] : [];
         })),
-    ])), [params.groups, purpose, resolveMachinePlacementFacts, reachabilityRevision, scopeForServer]);
+    ])), [params.groups, purpose, resolveMachinePlacementFacts, presenceKey, scopeForServer]);
     const offlineOnlyMachineIdsByServerId = React.useMemo(() => Object.fromEntries(params.groups.map(group => [group.serverId,
         group.machines.filter(machine => isBlockedOnlyByPresence(
             resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, group.serverId), machine, scopeForServer(group.serverId)),
@@ -1162,6 +1168,6 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
     ])),
     // Request reachability changes presence without any Machine row change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [params.groups, purpose, resolveMachinePlacementFacts, reachabilityRevision, scopeForServer]);
+    [params.groups, purpose, resolveMachinePlacementFacts, presenceKey, scopeForServer]);
     return { ...model, managedWakeByServerId, offlineOnlyMachineIdsByServerId };
 }

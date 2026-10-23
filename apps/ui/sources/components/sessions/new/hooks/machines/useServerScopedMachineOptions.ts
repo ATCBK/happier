@@ -55,6 +55,10 @@ function normalizeServerIds(ids: ReadonlyArray<string>): string[] {
 function buildServerScopedMachine(machine: Machine, params: Readonly<{ serverId: string; serverName: string }>): ServerScopedMachine {
     return {
         ...machine,
+        // Semantic inventory stays stable across heartbeats. Keep its receipt
+        // fields attached to the source instead of freezing an old lease here.
+        get activeAt() { return machine.activeAt; },
+        get updatedAt() { return machine.updatedAt; },
         serverId: params.serverId,
         serverName: params.serverName,
     };

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import type { AgentId } from '@/agents/catalog/catalog';
+import { hasAgentIconMark, type AgentId } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
 import { Typography } from '@/constants/Typography';
@@ -28,7 +28,9 @@ export const MachineCliLogoRow = React.memo(function MachineCliLogoRow(props: Re
             {display.visible.map((agentId) => (
                 <View key={agentId} style={stylesheet.logoSlot}>
                     <AgentIcon
-                        agentId={agentId}
+                        // An Agent without a brand mark of its own (a custom ACP Agent) keeps its slot as the
+                        // neutral mark; an empty slot reads as a missing icon and squeezes the row's name.
+                        agentId={hasAgentIconMark(agentId, theme) ? agentId : null}
                         size={CLI_LOGO_SIZE}
                         color={theme.colors.text.secondary}
                         style={{ transform: [{ scale: getAgentPickerIconScale(agentId) }] }}

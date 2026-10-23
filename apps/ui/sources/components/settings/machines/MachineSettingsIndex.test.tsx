@@ -9,6 +9,14 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 import type { WidgetAreaPresetV1 } from '@happier-dev/protocol/widgets';
 import { recordMachineCollectionVisit } from './collection/machineCollectionVisit';
+import {
+  captureMachinePresenceObservation,
+  clearMachineRequestReachabilityForTest,
+  recordMachineRequestFailed,
+  recordMachineRequestSucceeded,
+  resolveMachineReachability,
+  withdrawMachinePresenceForScope,
+} from '@/sync/domains/machines/reachability/machineReachability';
 
 (
   globalThis as typeof globalThis & {
@@ -203,7 +211,40 @@ async function renderPage() {
   return screen.tree;
 }
 
-afterEach(() => standardCleanup());
+afterEach(() => { standardCleanup(); clearMachineRequestReachabilityForTest(); });
+
+it.each(['index', 'rail'] as const)('refreshes a retained offline %s roster row when a heartbeat restores canonical reachability', async (surface) => {
+  const now = Date.now();
+  const scope = { serverId: 'srv_a', accountId: 'account-a' };
+  const retained = { ...machine('studio', 'Studio', 'studio.local'), activeAt: now - 80_000 };
+  await setMachines([{ serverId: scope.serverId, serverName: 'Home A', status: 'idle', machines: [retained] }]);
+  storage.getState().applyMachines([retained], false, { sourceServerId: scope.serverId });
+  recordMachineRequestSucceeded({ ...scope, machineId: retained.id, observedAtMs: now - 2_101 });
+  const { MachinesColumn } = await import('@/components/machines/collection/MachinesColumn');
+  const tree = surface === 'index' ? await renderPage() : (await renderScreen(<MachinesColumn />)).tree;
+  const testID = surface === 'index' ? 'machines.index.row.machine:srv_a:studio' : 'settings.machines.row.srv_a.studio';
+  const row = () => tree.findAll(node => node.props.testID === testID
+    && typeof node.props.onPress === 'function')[0]!;
+  expect(row().props.accessibilityLabel).toContain('settingsOverview.machineOffline');
+  const before = storage.getState().machineListByServerId[scope.serverId];
+
+  await act(async () => {
+    storage.getState().applyMachines([{ ...retained, activeAt: now - 20_286 }], false, { sourceServerId: scope.serverId });
+  });
+  // Real heartbeat-only publication retains the semantic roster inputs. The
+  // mounted row must still project the owner's fresh verdict without reopening.
+  expect(storage.getState().machineListByServerId[scope.serverId]).toBe(before);
+  expect(resolveMachineReachability(scope, storage.getState().machines.studio!)).toBe('reachable');
+  expect(row().props.accessibilityLabel).toContain('settingsOverview.machineOnline');
+  await act(async () => { recordMachineRequestFailed({ ...scope, machineId: retained.id }); });
+  expect(row().props.accessibilityLabel).toContain('settingsOverview.machineUnreachableFromHome');
+  await act(async () => { recordMachineRequestSucceeded({ ...scope, machineId: retained.id }); });
+  expect(row().props.accessibilityLabel).toContain('settingsOverview.machineOnline');
+  await act(async () => { withdrawMachinePresenceForScope(scope); });
+  expect(row().props.accessibilityLabel).toContain('common.unknown');
+  await act(async () => { captureMachinePresenceObservation(scope)([retained.id]); });
+  expect(row().props.accessibilityLabel).toContain('settingsOverview.machineOnline');
+});
 
 it('keeps Collection row owners quiet across unchanged Machine publications and updates the changed row', async () => {
   const alpha = machine('a', 'Alpha', 'alpha.local');

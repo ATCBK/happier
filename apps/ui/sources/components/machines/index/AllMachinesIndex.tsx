@@ -17,7 +17,6 @@ import {
 } from '@/components/settings/machines/collection/MachineCollectionList';
 import { readLastVisitedMachine, recordMachineCollectionVisit } from '@/components/settings/machines/collection/machineCollectionVisit';
 import {
-    buildMachineCollection,
     machineCollectionHref,
     machineCollectionRowKey,
     machinePageHref,
@@ -42,7 +41,7 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineCollection } from '@/components/settings/machines/collection/useMachineCollection';
 import { useReconciledStableRows } from '@/hooks/session/reconcileStableRows';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
@@ -110,23 +109,21 @@ function AllMachinesIndexBody() {
     const viewModel = useMachinesSettingsViewModel();
     const addOptions = useMachineAddOptions(viewModel.visibleMachineGroups);
     const thisComputerMachineId = useThisComputerMachineId();
-    const presenceMachines = React.useMemo(() => viewModel.visibleMachineGroups.flatMap(group => group.machines), [viewModel.visibleMachineGroups]);
-    const nowMs = useMachinePresenceNowMs(presenceMachines);
+    const nowMs = Date.now();
     const [view, setView] = useMachinesIndexView();
     // The search survives opening a machine and coming back (phones push the page), like the list column's.
     const [query, setQuery] = React.useState(() => readLastVisitedMachine()?.query ?? '');
 
-    const collection = React.useMemo(() => buildMachineCollection({
-        nowMs,
+    const collection = useMachineCollection({
         groups: viewModel.visibleMachineGroups,
         groupedByHome: viewModel.showMachinesGroupedByServer,
         managedByServerId: viewModel.managedByServerId,
-    }), [nowMs, viewModel.managedByServerId, viewModel.reachabilityRevision, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups]);
+    });
     // The same groups the list column draws (one list model): Your machines, Created by Happier, Shared
     // with you, each Home. Retired created machines stay in the column's archive, not in the fleet.
     const sections = React.useMemo(() => collection.sections.filter(section => !section.archived), [collection.sections]);
     // What each machine publishes (plan 20): the fleet sentence and Needs you first.
-    const attention = React.useMemo(() => collectMachineAttention(viewModel.visibleMachineGroups, nowMs), [nowMs, viewModel.reachabilityRevision, viewModel.visibleMachineGroups]);
+    const attention = React.useMemo(() => collectMachineAttention(viewModel.visibleMachineGroups), [collection, viewModel.reachabilityRevision, viewModel.visibleMachineGroups]);
     const needsYouSubjectKeys = useReconciledStableRows(selectAttentionSubjects(attention.entries).map(entry => entry.key), String);
     const needsYouKeys = React.useMemo(() => new Set(needsYouSubjectKeys), [needsYouSubjectKeys]);
     const fleetTitle = describeFleetTitle({ subjects: attention.entries, reportingCount: attention.reportingCount });

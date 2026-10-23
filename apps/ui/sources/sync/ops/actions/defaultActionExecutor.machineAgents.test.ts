@@ -2,7 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonAgentInstallStartResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import { AccountSettingsV2UpdateRequestSchema, BUILT_IN_ROLES_V1, RoleActionOutputSchemasV1, readLegacyRolesV1 } from '@happier-dev/protocol';
+import { AccountSettingsV2UpdateRequestSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER, BUILT_IN_ROLES_V1, RoleActionOutputSchemasV1,
+    buildRoleArtifactHeaderV1, encodePlainArtifactStoredContent, readLegacyRolesV1 } from '@happier-dev/protocol';
+import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainV2SessionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -90,6 +93,37 @@ describe('UI machine Agent inventory Action transport', () => {
         }, { surface: 'ui', serverId, signal })).toEqual({ ok: true, result: page });
         expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'machine',
             method: RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH, payload: { rootPath: '/project', query: 'needle', regex: false } }));
+    });
+
+    it.each([false, true])('lists Role content without reading unrelated Artifact bodies (unclassified=%s)', async unclassified => {
+        const serverId = await addHome({ name: 'Selected Roles Home', serverUrl: `https://selected-roles-${unclassified}.test`, accountId: 'alice' });
+        const rows = harness.artifacts(serverId);
+        const seed = (id: string, header: Record<string, unknown>, kind: Artifact['kind'], body: string) => rows.replaceStoredRow({
+            id, kind, ownerAccountId: 'alice', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+            header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        });
+        for (let index = 0; index < 48; index++) seed(`other-${index}`, { kind: 'memory_doc.v1', title: 'Unrelated' }, 'other', 'Unrelated body');
+        seed('prompt', { kind: 'prompt', title: 'Prompt' }, 'prompt', 'Unrelated prompt');
+        seed('role-selected', buildRoleArtifactHeaderV1(BUILT_IN_ROLES_V1.reviewer), 'other', JSON.stringify(BUILT_IN_ROLES_V1.reviewer));
+        seed('role-legacy', buildRoleArtifactHeaderV1(BUILT_IN_ROLES_V1.builder), unclassified ? null : 'other', JSON.stringify(BUILT_IN_ROLES_V1.builder));
+        const urls: URL[] = [];
+        network.setHttpResponder(async (input, init) => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') urls.push(url);
+            return harness.request(input, init);
+        });
+        const result = await createDefaultActionExecutor().execute('roles.list', {}, { surface: 'ui', serverId });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.error);
+        const roles = RoleActionOutputSchemasV1['roles.list'].parse(result.result).items;
+        expect(roles).toContainEqual(expect.objectContaining({ roleId: 'role-selected', role: BUILT_IN_ROLES_V1.reviewer }));
+        expect(roles).toContainEqual(expect.objectContaining({ roleId: 'role-legacy', role: BUILT_IN_ROLES_V1.builder }));
+        expect(urls.filter(url => url.searchParams.get('includeBody') === 'true')).toHaveLength(0);
+        expect(harness.requestsFor('/v1/artifacts/read').flatMap(request => ArtifactReadBatchInputV1Schema.parse(request.input).artifactIds).sort())
+            .toEqual(['role-legacy', 'role-selected']);
+        expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['other', null] : ['other']);
     });
 
     it('lists and mutates Account roles through the ordinary UI executor without a running Session', async () => {
@@ -239,7 +273,7 @@ describe('UI machine Agent inventory Action transport', () => {
         let dispatched!: () => void;
         const pendingResponse = new Promise<void>((resolve) => { release = resolve; });
         const reachedTransport = new Promise<void>((resolve) => { dispatched = resolve; });
-        harness.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { select: () => {
+        harness.answer(serverId, 'GET /v1/artifacts?limit=500&kind=other', { select: () => {
             dispatched();
             return { body: [], respondAfter: pendingResponse };
         } });

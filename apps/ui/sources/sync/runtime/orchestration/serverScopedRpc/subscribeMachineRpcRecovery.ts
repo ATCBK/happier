@@ -9,7 +9,7 @@ export function subscribeMachineRpcRecovery(input: Readonly<{
     machineId: string;
     serverId?: string | null;
     expectedAccountId?: string | null;
-}>, recover: () => void): () => void {
+}>, recover: (revalidate?: boolean) => void): () => void {
     const matchesHome = (serverId: string) => areServerProfileIdentifiersEquivalent(
         input.serverId ?? getActiveServerSnapshot().serverId, serverId,
     );
@@ -19,11 +19,11 @@ export function subscribeMachineRpcRecovery(input: Readonly<{
         // The connection owner clears failed reachability after publishing status.
         void Promise.resolve().then(() => {
             const scope = apiSocket.getMachineRequestScope();
-            if (scope && matchesHome(scope.serverId) && matchesAccount(scope.accountId)) recover();
+            if (scope && matchesHome(scope.serverId) && matchesAccount(scope.accountId)) recover(true);
         });
     });
     const detachConcurrent = subscribeHomeAccountChange(event => {
-        if (event.source === 'connected' && matchesHome(event.serverId)) recover();
+        if (event.source === 'connected' && matchesHome(event.serverId)) recover(true);
     });
     const detachMachine = subscribeMachineRequestRecovery((scope, machineId) => {
         if (machineId === input.machineId && matchesHome(scope.serverId) && matchesAccount(scope.accountId)) recover();

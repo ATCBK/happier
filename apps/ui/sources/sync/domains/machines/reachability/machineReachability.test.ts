@@ -144,6 +144,16 @@ describe('machine reachability', () => {
         expect(listener).toHaveBeenCalledTimes(1);
         recordMachineRequestFailed({ ...scope, machineId: 'machine', observedAtMs: 45 });
         expect(listener).toHaveBeenCalledTimes(2);
+        // A retained successful reply (even refreshed after withdrawal) is not
+        // an Account inventory/presence observation. Only fresh ingress restores it.
+        recordMachineRequestSucceeded({ ...scope, machineId: 'machine', observedAtMs: 46 });
+        withdrawMachinePresenceForScope(scope);
+        const machine = { id: 'machine', active: true, activeAt: 47 };
+        recordMachineRequestSucceeded({ ...scope, machineId: machine.id, observedAtMs: 48 });
+        expect(readMachineRequestReachabilityObservation(scope, machine.id)?.outcome).toBe('succeeded');
+        expect(resolveMachineReachability(scope, machine, 48)).toBe('unknown');
+        captureMachinePresenceObservation(scope)([machine.id]);
+        expect(resolveMachineReachability(scope, machine, 48)).toBe('reachable');
         unsubscribe();
     });
 

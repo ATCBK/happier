@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierCollectionListMark, HappierPressable, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { useAuth } from '@/auth/context/AuthContext';
-import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineCollection } from '@/components/settings/machines/collection/useMachineCollection';
 import { MachinePresenceCounts } from '@/components/machines/MachinePresenceCounts';
 import { useMachineAddPaths, useThisComputerMachineId } from '@/components/machines/add/useMachineAddPaths';
 import {
@@ -16,7 +16,6 @@ import {
 import {
     MACHINES_ADD_ROUTE,
     buildMachineAddHref,
-    buildMachineCollection,
     machineCollectionHref,
     machineCollectionRowKey,
     machinesIndexHref,
@@ -89,16 +88,14 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
     const addOptions = useMachineAddOptions(model.visibleMachineGroups);
     const addPaths = useMachineAddPaths();
     const thisComputerMachineId = useThisComputerMachineId();
-    const presenceMachines = React.useMemo(() => model.visibleMachineGroups.flatMap(group => group.machines), [model.visibleMachineGroups]);
-    const nowMs = useMachinePresenceNowMs(presenceMachines);
-    const collection = React.useMemo(() => buildMachineCollection({
-        nowMs,
+    const nowMs = Date.now();
+    const collection = useMachineCollection({
         groups: model.visibleMachineGroups,
         groupedByHome: model.showMachinesGroupedByServer,
         managedByServerId: model.managedByServerId,
-    }), [nowMs, model.visibleMachineGroups, model.showMachinesGroupedByServer, model.managedByServerId, model.reachabilityRevision]);
+    });
     // What each machine publishes (plan 20): the sentence title, Needs you first, then everything else.
-    const attention = React.useMemo(() => collectMachineAttention(model.visibleMachineGroups), [model.reachabilityRevision, model.visibleMachineGroups]);
+    const attention = React.useMemo(() => collectMachineAttention(model.visibleMachineGroups), [collection, model.reachabilityRevision, model.visibleMachineGroups]);
     const needsYouKeys = React.useMemo(() => new Set(selectAttentionSubjects(attention.entries).map(entry => entry.key)), [attention.entries]);
     // The glance is about machines: archived recovery rows stay in the collection's own list; a machine
     // listed under Needs you is not listed again below it.

@@ -8,6 +8,7 @@ vi.mock('@/text', async () => {
 import {
   clearMachineRequestReachabilityForTest,
   recordMachineRequestFailed,
+  recordMachineRequestSucceeded,
   withdrawMachinePresenceForScope,
   captureMachinePresenceObservation,
 } from '@/sync/domains/machines/reachability/machineReachability';
@@ -64,7 +65,9 @@ describe('describeMachinePresenceLine', () => {
   });
 
   it('reads Online for a fresh heartbeat this Home can reach', () => {
-    const line = describeMachinePresenceLine(fresh, now, null, scope);
+    // Round 18: a 20,286 ms-old heartbeat and a scoped reply 2,101 ms ago.
+    recordMachineRequestSucceeded({ ...scope, machineId: fresh.id, observedAtMs: now - 2_101 });
+    const line = describeMachinePresenceLine({ ...fresh, activeAt: now - 20_286 }, now, null, scope);
     expect(line.online).toBe(true);
     expect(line.label).toBe('t:settingsOverview.machineOnline');
   });

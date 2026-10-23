@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { Pressable } from 'react-native';
-import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineCollection } from './useMachineCollection';
 import { useGlobalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -27,7 +27,6 @@ import { useCollectionDraftTitle } from '@/components/ui/lists/collection/Collec
 import {
     MACHINES_ADD_ROUTE,
     MACHINES_THIS_COMPUTER_ROUTE,
-    buildMachineCollection,
     isMachineCollectionRowSelected,
     machineCollectionHref,
     managedMachineConsentKey,
@@ -190,8 +189,6 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const pathname = usePathname().replace(/\/+$/, '');
     const params = useGlobalSearchParams<{ serverId?: string | string[] }>();
     const { viewModel, addOptions } = props;
-    const presenceMachines = React.useMemo(() => viewModel.visibleMachineGroups.flatMap(group => group.machines), [viewModel.visibleMachineGroups]);
-    const nowMs = useMachinePresenceNowMs(presenceMachines);
     const isDesktop = isDesktopHost();
     const rail = props.variant === 'rail';
     // Rows stay in the door the list stands in; configuration rows always open in Settings (MPG-2).
@@ -208,12 +205,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const selectedKey = rail ? resolveSelectedMachineCollectionKey(pathname, { serverId: readParam(params.serverId) }) : null;
 
     const [query, setQuery] = React.useState(() => readLastVisitedMachine()?.query ?? '');
-    const unfiltered = React.useMemo(
-        () => buildMachineCollection({ groups: viewModel.visibleMachineGroups,
-            groupedByHome: viewModel.showMachinesGroupedByServer, managedByServerId: viewModel.managedByServerId,
-            presetsByServerId: viewModel.presetsByServerId }),
-        [viewModel.visibleMachineGroups, viewModel.showMachinesGroupedByServer, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision],
-    );
+    const unfiltered = useMachineCollection({
+        groups: viewModel.visibleMachineGroups,
+        groupedByHome: viewModel.showMachinesGroupedByServer,
+        managedByServerId: viewModel.managedByServerId,
+        presetsByServerId: viewModel.presetsByServerId,
+    });
     const total = unfiltered.count;
     const searchable = total > SEARCH_THRESHOLD;
     const teamServerIds = React.useMemo(() => Object.entries(viewModel.presetsByServerId ?? {})
@@ -232,15 +229,15 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         return prompt && reference?.kind === 'managedMachine' ? [managedMachineConsentKey(operation.serverId, reference.id)] : [];
     }).sort().join('\n');
     const awaitingConsent = React.useMemo(() => new Set(awaitingConsentKey ? awaitingConsentKey.split('\n') : []), [awaitingConsentKey]);
-    const collection = React.useMemo(() => buildMachineCollection({
-        nowMs, awaitingConsent,
+    const collection = useMachineCollection({
+        awaitingConsent,
         groups: viewModel.visibleMachineGroups,
         groupedByHome: viewModel.showMachinesGroupedByServer,
         query: searchable ? query : '',
         managedByServerId: viewModel.managedByServerId,
         presetsByServerId: viewModel.presetsByServerId,
         teamNamesByServerId,
-    }), [nowMs, awaitingConsent, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
+    });
 
     // The column is an open surface: its online machines' summaries stay live while it shows (one batched demand).
     const demandKeys = React.useMemo(() => rail ? collection.sections.flatMap(section => section.rows)

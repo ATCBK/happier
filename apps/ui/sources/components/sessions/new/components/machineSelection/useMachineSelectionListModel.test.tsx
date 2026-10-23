@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded, resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { buildMachineDestinationModel as buildScopedMachineDestinationModel, resolveMachineDestinationPurposeEligibility } from './buildMachineDestinationModel';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ServerScopedMachine, ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
@@ -186,6 +186,59 @@ function firstStaticOption(model: ReturnType<typeof UseMachineSelectionListModel
 }
 
 describe('useMachineSelectionListModel', () => {
+    it('expires a New Session roster row through the canonical presence deadline without another publication', async () => {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        vi.setSystemTime(Date.now());
+        const rendered = await renderModel(createFixture(), makeHandlers());
+        try {
+            expect(firstStaticOption(rendered.getCurrent()).disabled).toBe(false);
+            await act(async () => { vi.advanceTimersByTime(60_001); });
+            expect(firstStaticOption(rendered.getCurrent()).subtitle).toContain('settingsOverview.machineOffline');
+            expect(firstStaticOption(rendered.getCurrent()).disabled).toBe(true);
+        } finally { await rendered.unmount(); vi.useRealTimers(); }
+    });
+
+    it('keeps the New Session roster on current presence across retained scoped inventory and heartbeat renewal', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { useServerScopedMachineOptions } = await import('@/components/sessions/new/hooks/machines/useServerScopedMachineOptions');
+        const now = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(now);
+        const machine = { ...createMachine('retained-roster'), activeAt: now - 20_286 };
+        const fixture: Fixture = { machines: [machine], groups: [], recent: [], favorites: [] };
+        const params = buildParams(fixture, makeHandlers());
+        const allowedServerIds = ['server-a'];
+        const activeMachines: Machine[] = [];
+        storage.getState().applyMachines([machine], true, { sourceServerId: fixtureScope.serverId });
+        recordMachineRequestSucceeded({ ...fixtureScope, machineId: machine.id, observedAtMs: now - 2_101 });
+        const rendered = await renderHook(() => {
+            const groups = useServerScopedMachineOptions({ allowedServerIds, activeServerId: 'server-a', activeMachines, inventoryPurpose: 'launch' });
+            return useMachineSelectionListModel({ ...params, groups, showFavorites: false, showRecent: false });
+        });
+        try {
+            expect(firstStaticOption(rendered.getCurrent()).subtitle).toContain('settingsOverview.machineOnline');
+            const onlineModel = rendered.getCurrent();
+            const inventory = storage.getState().machineListByServerId[fixtureScope.serverId];
+            for (let tick = 1; tick <= 3; tick++) {
+                vi.setSystemTime(now + tick * 20_000);
+                await act(async () => storage.getState().applyMachines([
+                    { ...machine, activeAt: Date.now() - 20_286 },
+                ], false, { sourceServerId: fixtureScope.serverId }));
+            }
+            expect(storage.getState().machineListByServerId[fixtureScope.serverId]).toBe(inventory);
+            expect(rendered.getCurrent()).toBe(onlineModel);
+            // Force the real model to observe the same request failure/recovery
+            // edges as authoring. A copied heartbeat must not turn recovery Offline.
+            await act(async () => { recordMachineRequestFailed({ ...fixtureScope, machineId: machine.id }); });
+            await act(async () => { recordMachineRequestSucceeded({ ...fixtureScope, machineId: machine.id }); });
+            const current = storage.getState().machineListByServerId[fixtureScope.serverId]![0]!;
+            expect(resolveMachineReachability(fixtureScope, current)).toBe('reachable');
+            const row = firstStaticOption(rendered.getCurrent());
+            expect(row.subtitle).toContain('settingsOverview.machineOnline');
+            expect(row.disabled).toBe(false);
+        } finally { await rendered.unmount(); vi.useRealTimers(); }
+    });
+
     it.each(['all', 'recent', 'favorites', 'shared'] as const)('agrees on %s row admission, pinned buckets and the automatic shortcut after request failure/recovery', async placement => {
         const machine: Machine = { ...createMachine('reachable-machine'), ...(placement === 'shared' ? {
             isShared: true, access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use' as const,

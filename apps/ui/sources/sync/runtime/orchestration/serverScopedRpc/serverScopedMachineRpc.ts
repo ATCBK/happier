@@ -340,7 +340,9 @@ async function machineRpcWithServerTransport<R, A>(
                 return result;
             } catch (error) {
                 const noEffect = readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE;
-                if (noEffect) onNoEffect();
+                // Only this issued call's bound refusal can retire its effect
+                // uncertainty. A later preparation's notSent cannot do so.
+                if (noEffect || socketRpcAbortScope.issued && readRpcRequestDisposition(error) === 'notSent') onNoEffect();
                 if (params.waitForResultOnCancel && params.signal?.aborted && socketRpcAbortScope.issued) throw error;
                 if (exactIssuanceAttempted || (params.method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE && socketRpcAbortScope.issued)) {
                     throw error;
@@ -597,7 +599,8 @@ async function machineRpcWithServerTransport<R, A>(
         } catch (error) {
             lastError = error;
             const rpcErrorCode = readRpcErrorCode(error);
-            if (rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) onNoEffect();
+            if (rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+                || socketRpcAbortScope.issued && readRpcRequestDisposition(error) === 'notSent') onNoEffect();
             if (params.method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE && socketRpcAbortScope.issued) {
                 throw createPrivateContinuationTransportError(error, true);
             }

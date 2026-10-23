@@ -101,6 +101,7 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
             : presentation.summary ?? '';
         return Modal.confirm(presentation.title ?? t('approvals.untitled'), message,
             { ...(presentation.confirmLabel ? { confirmText: presentation.confirmLabel } : {}),
+                ...(presentation.destructive ? { destructive: true } : {}),
                 ...(context.signal ? { signal: context.signal } : {}) });
     };
     const target = React.useMemo(() => ({ serverId: scope.serverId, machineId }), [scope.serverId, machineId]);

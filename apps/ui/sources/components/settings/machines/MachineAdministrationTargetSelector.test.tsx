@@ -83,8 +83,26 @@ describe('MachineAdministrationTargetSelector', () => {
         );
         const chip = screen.findHostByTestId('header.target.chip');
         const label = chip?.props.accessibilityLabel ?? chip?.props['aria-label'];
-        expect(label).toContain('newSession.selectMachineTitle');
+        expect(label).toContain('settingsPlugins.targetSelection.chooseMachine');
         expect(label).not.toContain('newSession.noMachineSelected');
+    });
+
+    it('labels an unselected install or administration section as a machine to choose, not a session start or an unavailable machine', async () => {
+        const { MachineAdministrationTargetSelector } = await import('./MachineAdministrationTargetSelector');
+        const { selection } = createSelection();
+        const screen = await renderScreen(
+            <MachineAdministrationTargetSelector
+                selection={{ ...selection, selectedTarget: null, state: { kind: 'unselected', candidates: selection.candidates } }}
+                presentation="section"
+                groupTitle="Install on"
+                testIDPrefix="install.target"
+            />,
+        );
+        const current = screen.findHostByTestId('install.target.current');
+        const label = String(current?.props.accessibilityLabel ?? current?.props['aria-label'] ?? '');
+        expect(label).toContain('settingsPlugins.targetSelection.chooseMachine');
+        expect(label).not.toContain('newSession.noMachineSelected');
+        expect(label).not.toContain('common.unavailable');
     });
 
     it('opens the shared machine list from the header chip and keeps the domain availability decision', () => withPopoverWebGlobals(async () => {

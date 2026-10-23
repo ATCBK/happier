@@ -2,7 +2,7 @@ import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonPlugin
 import { DaemonPluginStructuredMessageActionExecuteRequestSchema, type DaemonPluginStructuredMessageActionExecuteRequest } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import type { PluginActionInvocationSurfaceV2 } from '@happier-dev/plugin-sdk/actions';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
-import type { DaemonPluginTargetedSourceDeclarationV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { DaemonPluginTargetedSourceDeclarationV1, DaemonPluginUiResourceDeclarationsByPluginIdV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { preparePluginContributionPointDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/targeted';
 import {
     DaemonPluginSettingsWatchRequestSchema,
@@ -96,6 +96,7 @@ export type MachinePluginUiTargetedContributionsReadResult =
         supported: true;
         targetedContributions: PluginUiTargetedContributionsV1;
         targetedSurfaceMounts: readonly DaemonPluginUiTargetedSurfaceMountV1[];
+        resourceDeclarationsByPluginId?: DaemonPluginUiResourceDeclarationsByPluginIdV1;
     }>
     | Readonly<{
         supported: false;
@@ -426,6 +427,7 @@ export async function machinePluginUiTargetedContributionsRead(
                 supported: true,
                 targetedContributions: parsed.targetedContributions,
                 targetedSurfaceMounts: parsed.targetedSurfaceMounts,
+                resourceDeclarationsByPluginId: parsed.resourceDeclarationsByPluginId,
             };
         } catch (error) {
             if (isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error)) {
