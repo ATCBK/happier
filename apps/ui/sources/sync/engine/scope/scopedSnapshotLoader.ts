@@ -63,9 +63,22 @@ export type ScopedSnapshotLoadMaintenance = Readonly<{
     isMaintenanceCurrent: () => boolean;
 }>;
 
-export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(params: Readonly<{
+export type ScopedSnapshotLoad<TTarget> = Readonly<{ target: TTarget; context: ScopedSnapshotLoadContext }>;
+
+type ScopedSnapshotReader<TTarget> = Readonly<{
     /** Reads the target and publishes the outcome into the domain's store. */
     load: (target: TTarget, context: ScopedSnapshotLoadContext) => Promise<void | ScopedSnapshotLoadMaintenance>;
+    loadMany?: never;
+    loadGroupKey?: never;
+}> | Readonly<{
+    load?: never;
+    /** Reads the synchronously demanded set before any asynchronous admission. */
+    loadMany: (loads: readonly ScopedSnapshotLoad<TTarget>[]) => Promise<void>;
+    /** Exact independent read boundary, e.g. captured Account and application. */
+    loadGroupKey: (target: TTarget) => string;
+}>;
+
+export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(params: ScopedSnapshotReader<TTarget> & Readonly<{
     /**
      * Whether a newly observed target needs a read. The domain decides this from
      * its own store during one uninterrupted observation period. Returning
@@ -111,6 +124,35 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     let unsubscribeWake: (() => void) | null = null;
     let unsubscribeCredentials: (() => void) | null = null;
 
+    type PendingLoad = ScopedSnapshotLoad<TTarget> & {
+        resolve: () => void;
+        reject: (error: unknown) => void;
+    };
+    const pendingLoads = new Map<string, PendingLoad[]>();
+
+    function readTarget(target: TTarget, context: ScopedSnapshotLoadContext): Promise<void | ScopedSnapshotLoadMaintenance> {
+        if (params.load) return params.load(target, context);
+        const loadMany = params.loadMany;
+        const key = params.loadGroupKey(target);
+        return new Promise<void>((resolve, reject) => {
+            const pending = pendingLoads.get(key);
+            if (pending) {
+                pending.push({ target, context, resolve, reject });
+                return;
+            }
+            const loads = [{ target, context, resolve, reject }];
+            pendingLoads.set(key, loads);
+            // Observation, refresh and a wake supply their ready targets in one
+            // turn. Collect them here, before settings/approval can split ticks.
+            queueMicrotask(() => {
+                pendingLoads.delete(key);
+                void loadMany(loads).then(() => {
+                    for (const load of loads) load.resolve();
+                }, error => { for (const load of loads) load.reject(error); });
+            });
+        });
+    }
+
     function loadOnce(target: TTarget): Promise<void> {
         const existing = inFlight.get(target.key);
         if (existing) return existing;
@@ -140,7 +182,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                             joinedIncumbentMaintenance = true;
                             return true;
                         };
-                        const result = await Promise.resolve().then(async () => await params.load(observed.get(target.key)?.target ?? target, {
+                        const result = await Promise.resolve().then(async () => await readTarget(observed.get(target.key)?.target ?? target, {
                             isCurrent,
                             async readWithMaintenance({ read, publish, getPublication }) {
                                 let finishRead!: () => void;

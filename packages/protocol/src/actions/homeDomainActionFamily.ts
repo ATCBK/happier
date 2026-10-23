@@ -27,7 +27,7 @@ import { TeamErrorV1Schema } from '../teams/errors.js';
 import { TeamIdentityErrorV1Schema } from '../teams/identity/errors.js';
 import { HOME_IDENTITY_ACTION_IDS_V1, type HomeIdentityActionIdV1 } from '../teams/identity/actionIds.js';
 import { TeamDirectoryErrorV1Schema } from '../teams/directory/v1.js';
-import { TeamCredentialResourceErrorV1Schema } from '../teams/credentials/resourceV1.js';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceErrorV1Schema } from '../teams/credentials/resourceV1.js';
 import { ManagedIdentityProviderErrorV1Schema } from '../identity/providers.js';
 import { ManagedGitHubAppErrorV1Schema } from '../identity/githubApps.js';
 import { AccountDirectoryRouteErrorResponseV1Schema } from '../auth/accountDirectory.js';
@@ -182,11 +182,17 @@ export function bindHomeDomainActionHttpRequestV1(
   actionId: HomeDomainActionIdV1,
   input: unknown,
 ): HomeDomainHttpRequestV1 {
-  return bindHomeDomainHttpRequestV1({
+  const request = bindHomeDomainHttpRequestV1({
     transport: homeDomainActionTransportV1(actionId),
     inputSchema: homeDomainActionInputSchemaV1(actionId),
     input,
   });
+  // Both closed input shapes belong to the same admitted Action. Finite Team
+  // probes keep their route; known catalog sets use the existing discovery route.
+  return actionId === 'teams.credentials.entitled.list' && request.body
+    && typeof request.body === 'object' && 'teamIds' in request.body
+    ? { ...request, path: TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1 }
+    : request;
 }
 
 /** Prepared disclosure bodies have a distinct closed grammar, using the same row's transport. */

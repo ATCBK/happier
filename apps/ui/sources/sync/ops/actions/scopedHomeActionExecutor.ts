@@ -23,7 +23,7 @@ const executorsByScope = new Map<
 export function scopedHomeActionExecutor(
     scope: ServerAccountScope,
     options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending'> & Readonly<{
-        /** Invocation-local cancellation of a snapshot loader's admitted catalog page walk. */
+        /** Invocation-local currentness, checked after admission before a snapshot read dispatches. */
         homeDomainReadCurrentness?: () => boolean;
     }>,
 ): ReturnType<typeof createFrontDoorActionExecute> {

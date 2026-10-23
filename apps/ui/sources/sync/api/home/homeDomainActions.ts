@@ -12,7 +12,6 @@ import {
 import {
     TeamCredentialErrorCodeV1Schema,
     teamCredentialErrorHttpStatusV1,
-    type TeamCredentialResourceReadInputV1,
     TeamErrorCodeV1Schema,
     teamErrorHttpStatusV1,
 } from '@happier-dev/protocol/teams';
@@ -20,7 +19,6 @@ import {
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import { homeDomainFailureKindForHttpStatus, requestHomeDomain, type HomeDomainFailure } from './homeServerActionTransport';
-import { requestTeamCredentialCatalogDiscovery } from './teamCredentialCatalogDiscovery';
 
 /**
  * The UI's Home family port.
@@ -214,15 +212,9 @@ export function createHomeDomainActionExecutorForScope(
         const spec = getActionSpec(actionId);
         const request = preparedRequest ? bindPublicProfilePreparedHttpRequestV1(actionId, preparedRequest)
             : bindHomeDomainActionHttpRequestV1(actionId, input);
-        if (actionId === 'teams.credentials.entitled.list' && readCurrentness
-            && !(input as TeamCredentialResourceReadInputV1).cursor) {
-            // The original Action schema, settings, approval and scope have all
-            // admitted this input before reaching the HTTP dependency.
-            const result = await requestTeamCredentialCatalogDiscovery({ scope,
-                input: input as TeamCredentialResourceReadInputV1, shouldContinue: readCurrentness,
-                ...(signal ? { signal } : {}) });
-            return result.ok ? result.value : toActionFailure(actionId, result.failure);
-        }
+        // A snapshot's demand can end while Account settings/approval admit the
+        // read. Recheck its owner immediately before issuing the transport.
+        if (readCurrentness?.() === false) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         const result = await requestHomeDomain<unknown, string>({
             scope,
             method: request.method,

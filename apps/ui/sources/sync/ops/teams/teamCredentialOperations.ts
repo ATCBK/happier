@@ -1,6 +1,8 @@
 import {
     TeamCredentialResourceActivityPageV1Schema,
     TeamCredentialResourceEntitledPageV1Schema,
+    TeamCredentialResourceDiscoveryPageV1Schema,
+    type TeamCredentialResourceDiscoveryPageV1,
     TeamCredentialResourceMutationResultV1Schema,
     TeamCredentialResourcePageV1Schema,
     TeamCredentialResourceSummaryV1Schema,
@@ -166,15 +168,13 @@ export function getTeamCredentialResource(params: Readonly<{
     });
 }
 
-/** Recipient-safe choices retain their exact Action admission before transport batching. */
+/** Finite recipient probes retain their exact Team and page. */
 export function listEntitledTeamCredentialResources(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
     application?: ProviderBrokerApplicationBindingV1;
     signal?: AbortSignal;
     cursor?: string | null;
-    /** The snapshot loader's existing page-walk lifetime; finite probes omit it. */
-    shouldContinue?: () => boolean;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceEntitledPageV1>> {
     return runTeamAction({
         scope: params.scope,
@@ -183,7 +183,24 @@ export function listEntitledTeamCredentialResources(params: Readonly<{
             ...(params.cursor ? { cursor: params.cursor } : {}) },
         parse: value => TeamCredentialResourceEntitledPageV1Schema.parse(value),
         ...(params.signal ? { signal: params.signal } : {}),
-        ...(params.shouldContinue ? { executorOptions: { homeDomainReadCurrentness: params.shouldContinue } } : {}),
+    });
+}
+
+/** One known catalog set receives one admission under the existing read Action. */
+export function discoverEntitledTeamCredentialResources(params: Readonly<{
+    scope: ServerAccountScope;
+    teamIds: readonly string[];
+    application?: ProviderBrokerApplicationBindingV1;
+    cursor?: string;
+    shouldContinue: () => boolean;
+}>): Promise<TeamCredentialOutcome<TeamCredentialResourceDiscoveryPageV1>> {
+    return runTeamAction({
+        scope: params.scope,
+        actionId: 'teams.credentials.entitled.list',
+        input: { teamIds: params.teamIds, ...(params.application ? { application: params.application } : {}),
+            ...(params.cursor ? { cursor: params.cursor } : {}) },
+        parse: value => TeamCredentialResourceDiscoveryPageV1Schema.parse(value),
+        executorOptions: { homeDomainReadCurrentness: params.shouldContinue },
     });
 }
 

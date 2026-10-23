@@ -30,8 +30,8 @@ const EMPTY_RESOURCES: readonly TeamCredentialResourceCatalogEntryV1[] = Object.
 /**
  * Recipient-safe model catalog for the exact Home selected by Session authoring.
  * The Team directory owns membership discovery and each Team resource loader
- * owns eligibility/currentness. Their transport gathers Account/application
- * discovery before HTTP; this hook only composes their projections.
+ * owns eligibility/currentness. The snapshot loader gathers Account/application
+ * discovery before Action admission; this hook only composes their projections.
  */
 export function useHomeTeamCredentialModelCatalog(input: Readonly<{
     serverId: string | null | undefined;

@@ -42,6 +42,12 @@ describe('Account-scoped Team credential catalog demand', () => {
         } });
         home.answer(serverId, LIST, { body: { resources: [], nextCursor: null } });
         home.answer(serverId, DISCOVER, { body: { resources: [], nextCursor: null, failures: [] } });
+        // Real admission awaits an Account settings HTTP read. Independently
+        // settled responses must not split one known catalog demand into N reads.
+        home.answer(serverId, '/v2/account/settings', { select: () => ({
+            respondAfter: new Promise<void>(resolve => setImmediate(resolve)),
+            body: { content: null, version: 0 },
+        }) });
 
         const catalog = await renderHook(() => useHomeTeamCredentialModelCatalog({ serverId, enabled: true,
             agentTargetKey: 'agent:happier.agent.codex/codex', declarationProjection: null }));
@@ -49,6 +55,9 @@ describe('Account-scoped Team credential catalog demand', () => {
         // Generic Connected Account discovery plus the two bundled Codex applications;
         // physical request count must be independent of Team membership count.
         expect(catalogRequests()).toHaveLength(3);
+        for (const request of home.requestsFor(DISCOVER)) {
+            expect(request.input).toMatchObject({ teamIds: Array.from({ length: teamCount }, (_, index) => `team-${index}`) });
+        }
 
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
         try {
@@ -149,17 +158,69 @@ describe('Account-scoped Team credential catalog demand', () => {
         temporary.forEach(release => release());
     });
 
+    it('withdraws an abandoned set while real asynchronous Action admission is pending', async () => {
+        const serverId = await home.addHome({ name: 'Pending Home', serverUrl: 'https://catalog-abandoned.example.test',
+            accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
+        const held = createDeferred<void>();
+        home.answer(serverId, '/v2/account/settings', { respondAfter: held.promise, body: { content: null, version: 0 } });
+        home.answer(serverId, DISCOVER, { body: { resources: [], nextCursor: null, failures: [] } });
+        const addresses = ['team-1', 'team-2'].map(teamId => ({ serverId: scope.serverId, teamId }));
+        const releases = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        const completed = Promise.all(addresses.map(address => refreshTeamCredentialResourceCatalog(scope, address)));
+        await waitForHomeGovernance(() => expect(home.requestsFor('/v2/account/settings').length).toBeGreaterThan(0));
+        releases.forEach(release => release());
+        held.resolve();
+        await completed;
+        expect(catalogRequests()).toHaveLength(0);
+        for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.selectionCurrent).toBe(false);
+    });
+
+    it('settles an independent Home without waiting for another Home catalog', async () => {
+        const scopes = [];
+        for (const name of ['held', 'ready']) {
+            const serverId = await home.addHome({ name, serverUrl: `https://catalog-${name}.example.test`,
+                accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });
+            scopes.push({ serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' });
+        }
+        const held = createDeferred<void>();
+        home.answer(scopes[0]!.serverId, DISCOVER, { respondAfter: held.promise, body: { resources: [], failures: [], nextCursor: null } });
+        home.answer(scopes[1]!.serverId, DISCOVER, { body: { resources: [], failures: [], nextCursor: null } });
+        const addresses = scopes.map(scope => ({ serverId: scope.serverId, teamId: 'team-1' }));
+        const releases = scopes.map((scope, index) => observeTeamCredentialResourceCatalog(scope, addresses[index]!));
+        const waiting = refreshTeamCredentialResourceCatalog(scopes[0]!, addresses[0]!);
+        let completed = false;
+        const ready = refreshTeamCredentialResourceCatalog(scopes[1]!, addresses[1]!).then(() => { completed = true; });
+        try {
+            await waitForHomeGovernance(() => {
+                expect(getTeamCredentialResourceCatalogSnapshot(scopes[1]!, addresses[1]!)?.selectionCurrent).toBe(true);
+                expect(completed).toBe(true);
+            });
+        } finally {
+            releases.forEach(release => release());
+            held.resolve();
+            await Promise.all([waiting, ready]);
+        }
+    });
+
     it('keeps the original read Action policy ahead of discovery transport', async () => {
         const serverId = await home.addHome({ name: 'Policy Home', serverUrl: 'https://catalog-policy.example.test',
             accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true, currentAccount: true });
         await home.requireUiApproval(serverId, 'teams.credentials.entitled.list');
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
-        const address = { serverId: scope.serverId, teamId: 'team-1' };
-        const release = observeTeamCredentialResourceCatalog(scope, address);
-        await waitForHomeGovernance(() => expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.status).toBe('error'));
+        const addresses = Array.from({ length: 6 }, (_, index) => ({ serverId: scope.serverId, teamId: `team-${index}` }));
+        const releases = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await waitForHomeGovernance(() => {
+            for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.status).toBe('error');
+        });
         expect(home.requestsFor(DISCOVER)).toHaveLength(0);
         expect(home.requestsFor(LIST)).toHaveLength(0);
-        expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.selectionCurrent).toBe(false);
-        release();
+        for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.selectionCurrent).toBe(false);
+        expect(home.artifacts(serverId).list()).toHaveLength(1);
+        const artifact = home.artifacts(serverId).list()[0]!;
+        expect(JSON.parse(home.artifacts(serverId).readPlainBody(artifact.id)!)).toMatchObject({
+            actionId: 'teams.credentials.entitled.list', actionArgs: { teamIds: addresses.map(address => address.teamId) },
+        });
+        releases.forEach(release => release());
     });
 });

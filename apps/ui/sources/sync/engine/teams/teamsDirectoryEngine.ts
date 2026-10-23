@@ -9,8 +9,10 @@ import {
     type TeamCredentialResourceListFilterV1,
     type TeamMembersListFilterV1,
     type TeamsListInputV1,
+    type TeamCredentialResourceCatalogEntryV1,
 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
@@ -36,7 +38,7 @@ import { listTeamMembers } from '@/sync/ops/teams/teamMemberReadOperations';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
     getTeamCredentialResource,
-    listEntitledTeamCredentialResources,
+    discoverEntitledTeamCredentialResources,
     listTeamCredentialResources,
 } from '@/sync/ops/teams/teamCredentialOperations';
 import {
@@ -744,11 +746,6 @@ type TeamCredentialResourceCatalogTarget = ScopedLoadTarget & Readonly<{
     application?: ProviderBrokerApplicationBindingV1;
 }>;
 
-function readRecipientCatalogNextCursor(page: object): string | null {
-    if (!('nextCursor' in page)) return null;
-    return typeof page.nextCursor === 'string' ? page.nextCursor : null;
-}
-
 function credentialResourceCatalogTargetFor(
     scope: ServerAccountScope,
     address: TeamAddress,
@@ -765,53 +762,54 @@ function credentialResourceCatalogTargetFor(
 }
 
 const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentialResourceCatalogTarget>({
-    load: async ({ scope, address, application }, loadContext) => {
-        beginTeamCredentialResourceCatalogLoad(scope, address, application);
-        let outcome: Awaited<ReturnType<typeof listEntitledTeamCredentialResources>>;
+    loadGroupKey: ({ scope, application }) => JSON.stringify([serverAccountScopeKeySuffix(scope), application ?? null]),
+    loadMany: async group => {
+        for (const load of group) {
+            const { scope, address, application } = load.target;
+            beginTeamCredentialResourceCatalogLoad(scope, address, application);
+        }
+        const { scope, application } = group[0]!.target;
+        const teamIds = [...new Set(group.map(load => load.target.address.teamId))];
+        const resourcesByTeam = new Map<string, TeamCredentialResourceCatalogEntryV1[]>();
+        const failures = new Map<string, HomeDomainFailure>();
+        let failure: HomeDomainFailure | undefined;
+        let cursor: string | null = null;
         try {
-            outcome = await listEntitledTeamCredentialResources({ scope, address, shouldContinue: loadContext.isCurrent,
-                ...(application ? { application } : {}) });
-        } catch {
-            applyTeamCredentialResourceCatalogFailure({
-                scope,
-                address,
-                application,
-                error: { kind: 'unknown', retryable: true },
-            });
-            return;
-        }
-        if (!loadContext.isCurrent()) return;
-        if (outcome.kind === 'succeeded') {
-            const resources = [...outcome.value.resources];
-            let cursor = readRecipientCatalogNextCursor(outcome.value);
-            while (cursor && loadContext.isCurrent()) {
-                const continuation = await listEntitledTeamCredentialResources({ scope, address, cursor, ...(application ? { application } : {}) });
-                if (continuation.kind !== 'succeeded') {
-                    applyTeamCredentialResourceCatalogFailure({
-                        scope, address, application, error: toSnapshotError(continuation.failure),
-                    });
-                    return;
+            do {
+                if (!group.some(load => load.context.isCurrent())) return;
+                const outcome = await discoverEntitledTeamCredentialResources({ scope, teamIds,
+                    shouldContinue: () => group.some(load => load.context.isCurrent()),
+                    ...(application ? { application } : {}), ...(cursor ? { cursor } : {}) });
+                if (outcome.kind === 'failed') {
+                    failure = outcome.failure;
+                    break;
                 }
-                resources.push(...continuation.value.resources);
-                cursor = readRecipientCatalogNextCursor(continuation.value);
-            }
-            if (!loadContext.isCurrent()) return;
-            applyTeamCredentialResourceCatalog({
-                scope,
-                address,
-                application,
-                resources,
-                observedAt: Date.now(),
-                current: loadContext.isCurrent(),
-            });
-            return;
+                for (const refusal of outcome.value.failures) {
+                    failures.set(refusal.teamId, homeDomainFailureFromActionFailure({ errorCode: refusal.error },
+                        'teams.credentials.entitled.list'));
+                }
+                for (const resource of outcome.value.resources) {
+                    const resources = resourcesByTeam.get(resource.teamId);
+                    if (resources) resources.push(resource);
+                    else resourcesByTeam.set(resource.teamId, [resource]);
+                }
+                cursor = outcome.value.nextCursor;
+            } while (cursor !== null);
+        } catch {
+            failure = { kind: 'unknown', retryable: true, code: null };
         }
-        applyTeamCredentialResourceCatalogFailure({
-            scope,
-            address,
-            application,
-            error: toSnapshotError(outcome.failure),
-        });
+        for (const { target: { address }, context } of group) {
+            if (!context.isCurrent()) continue;
+            // A later page failure cannot replace an already answered Team refusal.
+            const refused = failures.get(address.teamId) ?? failure;
+            if (refused) applyTeamCredentialResourceCatalogFailure({
+                scope, address, application, error: toSnapshotError(refused),
+            });
+            else applyTeamCredentialResourceCatalog({
+                scope, address, application, resources: resourcesByTeam.get(address.teamId) ?? [],
+                observedAt: Date.now(), current: context.isCurrent(),
+            });
+        }
     },
     shouldLoadOnObserve: ({ scope, address, application }) => {
         const current = getTeamCredentialResourceCatalogSnapshot(scope, address, application);
