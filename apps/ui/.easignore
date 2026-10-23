@@ -14,7 +14,9 @@ dist/
 web-build/
 public/monaco/
 public/vendor/*
-!public/vendor/kokoro/
+# No trailing slash: EAS copies match directories without one, so a
+# directory-only negation would leave the kokoro folder excluded.
+!public/vendor/kokoro
 public/vendor/kokoro/*
 !public/vendor/kokoro/kokoroTtsWorker.js
 # The shared voice resolver is imported by native sources (sources/voice/kokoro/voices).
