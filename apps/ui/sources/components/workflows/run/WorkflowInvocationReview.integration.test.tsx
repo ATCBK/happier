@@ -14,7 +14,6 @@ import {
     StrictJsonValueSchema,
     type WorkflowRunInvocationIndexV1,
 } from '@happier-dev/protocol';
-import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
 import { changeTextTestInstance, findAllHostTestInstances, invokeTestInstanceHandler, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { ModalProvider, useModal } from '@/modal';
 import { ScopedAuthoringComposer } from '@/components/sessions/authoring/ScopedAuthoringComposer';
@@ -24,6 +23,8 @@ import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { storage, useSession } from '@/sync/domains/state/storage';
@@ -53,6 +54,8 @@ vi.mock('expo-router', () => routerMock.module);
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 const machineRpc = vi.hoisted(() => vi.fn<WorkflowActionTransport>(async () => { throw new Error('offline_machine'); }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
+type PlanStartBoundary = Extract<Parameters<typeof createExternalActionAccountHttpBoundary>[0], { requesterInvocation?: 'required' }>;
+const startPlan = vi.fn<PlanStartBoundary['execute']>(async () => { throw new Error('offline_machine'); });
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
@@ -99,6 +102,8 @@ afterEach(async () => {
     for (const dispose of disposals.splice(0).reverse()) await dispose();
     machineRpc.mockReset();
     machineRpc.mockImplementation(async () => { throw new Error('offline_machine'); });
+    startPlan.mockReset();
+    startPlan.mockImplementation(async () => { throw new Error('offline_machine'); });
     routerMock.spies.push.mockClear();
     routerMock.resetParams();
 });
@@ -162,7 +167,20 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
     const exactRead = createDeferred<void>();
     const planRunId = deriveWorkflowPlanRunId(runId, heldId);
     const admittedPlans = new Map<string, typeof admittedPlanSnapshot>();
-    const account = await restoreServerAccountForTest({ serverUrl: `https://review-${crypto.randomUUID()}.test`, accountId: actorAccountId, request: async (url, init) => {
+    const serverUrl = `https://review-${crypto.randomUUID()}.test`;
+    const serverIdentityId = 'srv_workflow-review-integration';
+    const accountToken = createAccountTokenForTests(actorAccountId, { currentAccount: true });
+    const external = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId: actorAccountId,
+        machineId: 'machine-a', actionId: 'workflow.run.start', tokenEpoch: 0,
+        execute: (input, context) => startPlan(input, context) });
+    const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId: actorAccountId,
+        credentials: { token: accountToken }, request: async (url, init) => {
+        if (new URL(String(url)).pathname === '/v1/actions/workflow.run.start') {
+            expect(new Headers(init?.headers).get('authorization') === `Bearer ${accountToken}`,
+                'Run start uses the actor Account credential').toBe(true);
+        }
+        const handled = await external.handle(new URL(String(url)), init);
+        if (handled) return handled;
         const path = new URL(String(url)).pathname;
         if (path === '/health') return json({});
         if (path === '/v1/features') return json({ features: { automations: { enabled: true }, workflows: { enabled: boundary.workflowsEnabled } }, capabilities: {
@@ -272,6 +290,7 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
         createNodeMock: () => Object.assign(new EventTarget(), {
             // WebDropTargetView attaches/removes real DOM drag listeners on its
             // host ref; retain EventTarget behavior rather than mocking that owner.
+            ownerDocument: new EventTarget(),
             getBoundingClientRect: () => ({ x: 40, y: 400, left: 40, top: 400, right: 360, bottom: 560, width: 320, height: 160 }),
             contains: () => false,
             focus: () => {},
@@ -321,10 +340,8 @@ function editorPromptInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
     return findAllHostTestInstances(screen.findByType(ScopedAuthoringComposer),
         (node) => node.props.testID === 'new-session-composer-input' || node.props['data-testid'] === 'new-session-composer-input').at(-1);
 }
-// Opening the real editor legitimately probes Machine capabilities. Only the
-// targeted start is an admission; these assertions must not count read probes.
-const admissions = () => machineRpc.mock.calls.filter(([request]) =>
-    TargetedActionRpcRequestV1Schema.safeParse(request.payload).success);
+// Count actual HTTP Action executions; Machine capability reads are not admissions.
+const admissions = () => startPlan.mock.calls;
 
 describe('Review through the real Account Action owner and HTTP storage boundary', () => {
     it('presents Plan validation failure with the card message and announcement semantics', async () => {
@@ -397,6 +414,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...progress, unknown: true }).success).toBe(false);
         expect(h.onSettled).toHaveBeenCalledWith(expect.objectContaining({ state: 'queued' }));
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it.each(['history_not_readable', 'encryption_setup_required'] as const)('retains %s from the initial Run read and offers only its real recovery', async (runReadError) => {
         const h = await harness({ runScreen: true, runReadError });
@@ -475,6 +493,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         ]);
         expect(h.readProgress().result).toBeUndefined();
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it.each(['view', 'owner', 'edit'] as const)('Run controls consume the effective %s access through the real detail read', async (access) => {
         const h = await harness({ runScreen: true, access });
@@ -506,6 +525,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         }
         expect(h.operations.filter(op => op.operation === 'invocations.complete_review')).toHaveLength(0);
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it.each(['owner', 'edit'] as const)('retains the published review controls for effective %s access', async (access) => {
         const h = await harness({ access });
@@ -562,8 +582,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
     ])('routes Cancel, edit, Run through explicit Edit first (accepted: $acceptEdit, refused: $refuseReview) before any admission', async ({ acceptEdit, refuseReview }) => {
         const h = await harness({ plan: true, planProposal: true });
         h.boundary.refuse = refuseReview;
-        machineRpc.mockImplementation(async request => {
-            const input = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input);
+        startPlan.mockImplementation(async raw => {
+            const input = WorkflowRunStartRequestV1Schema.parse(raw);
             h.admitPlan(input);
             return WorkflowRunStartResultV1Schema.parse({ run: { ...h.run, id: input.runId, state: 'queued' }, admission: 'created' });
         });
@@ -589,8 +609,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
                 followUp: { kind: 'editing' } });
             expect(h.screen.findByTestId('workflow-run-inputs-run')).toBeNull();
             expect(editorPromptInput(h.screen)?.props.value).toBe('Implement my edited proposal');
-            machineRpc.mockImplementation(async request => {
-                const input = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input);
+            startPlan.mockImplementation(async raw => {
+                const input = WorkflowRunStartRequestV1Schema.parse(raw);
                 expect(input.runId).not.toBe(h.planRunId);
                 expect(input.source).toMatchObject({ kind: 'inline', definition: { blocks: [{ document: { text: 'Implement my edited proposal' } }] } });
                 return WorkflowRunStartResultV1Schema.parse({ run: { ...h.run, id: input.runId, state: 'queued' }, admission: 'created' });
@@ -616,6 +636,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.rows.get(heldId)?.index).toMatchObject({ lifecycle: 'completed', contentRevision: '9' });
         expect(h.onSettled).toHaveBeenCalledWith(expect.objectContaining({ state: 'queued' }));
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it('records offline Generate intent without Machine preflight or replacing the shown value', async () => {
         const h = await harness();
@@ -626,6 +647,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.rows.get(heldId)?.index.lifecycle).toBe('waiting_for_review');
         expect(h.onSettled).toHaveBeenCalled();
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it('requires and forwards the parent exact-attempt acknowledgment for stopped uncertain prior effects', async () => {
         // This held shape is produced/accepted by the canonical protocol review-owner test.
@@ -640,6 +662,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.readProgress()).toMatchObject({ uncertainPriorEffects: { activity: 'stopped' },
             review: { decision: { kind: 'generate', requestedFromContentRevision: '7' } } });
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it('withholds Generate when a newer publication invalidates the parent acknowledgment token', async () => {
         const h = await harness({ uncertainPriorEffects: true, acknowledged: true });
@@ -653,6 +676,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.readProgress().review?.decision).toBeUndefined();
         expect(h.onSettled).not.toHaveBeenCalled();
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it.each([false, true])('keeps failed Wait values and shows the problem within the card (compact: %s)', async (compact) => {
         const h = await harness({ wait: true, compact });
@@ -711,14 +735,13 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.onSettled).toHaveBeenCalledWith(expect.objectContaining({ state: 'queued' }));
         expect(h.operations.filter(op => op.operation === 'invocations.complete_review')).toHaveLength(1);
         expect(machineRpc).not.toHaveBeenCalled();
+        expect(startPlan).not.toHaveBeenCalled();
     });
     it('starts the reviewed Plan through the real Run-now controller before completing the source hold', async () => {
         const h = await harness({ plan: true, planProposal: true });
-        machineRpc.mockImplementation(async request => {
-            const targeted = TargetedActionRpcRequestV1Schema.parse(request.payload);
-            const input = WorkflowRunStartRequestV1Schema.parse(targeted.input);
-            expect(request).toMatchObject({ accountId, machineId: 'machine-a' });
-            expect(targeted.target).toMatchObject({ kind: 'machine', machineId: 'machine-a', project: { directory: '/repo' } });
+        startPlan.mockImplementation(async (raw, context) => {
+            const input = WorkflowRunStartRequestV1Schema.parse(raw);
+            expect(context.target).toMatchObject({ kind: 'machine', machineId: 'machine-a', project: { directory: '/repo' } });
             expect(input).toMatchObject({ runId: h.planRunId, source: { kind: 'inline', definition: h.proposal } });
             expect(h.readProgress().review?.decision).toBeUndefined();
             h.events.push('plan.admitted');
@@ -729,7 +752,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         await openPlanRunComposer(h.screen);
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-run-inputs-run')).not.toBeNull());
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
-        await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle).toBe('completed'));
+        await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle, h.screen.getTextContent()).toBe('completed'));
         expect(h.events).toEqual(['plan.admitted', 'invocations.complete_review']);
         expect(h.readProgress().review?.decision).toEqual({ kind: 'use_result', requestedFromContentRevision: '7',
             followUp: { kind: 'run_started', runId: h.planRunId } });
@@ -738,9 +761,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
     });
     it('reconciles the exact admitted Plan after a lost Machine admission response without starting it again', async () => {
         const h = await harness({ plan: true, planProposal: true });
-        machineRpc.mockImplementation(async request => {
-            const targeted = TargetedActionRpcRequestV1Schema.parse(request.payload);
-            const input = WorkflowRunStartRequestV1Schema.parse(targeted.input);
+        startPlan.mockImplementation(async raw => {
+            const input = WorkflowRunStartRequestV1Schema.parse(raw);
             expect(input.runId).toBe(h.planRunId);
             h.admitPlan(input);
             throw new Error('admission_response_lost_after_commit');
@@ -761,8 +783,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         const proposalB = WorkflowDefinitionV1Schema.parse({ ...h.proposal, blocks: [{ ...h.proposal.blocks[0],
             document: { text: 'Implement the new proposal B', references: [], attachments: [] } }] });
         const valueB = StrictJsonValueSchema.parse({ document: 'Updated plan B', proposal: proposalB });
-        machineRpc.mockImplementation(async request => {
-            const input = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input);
+        startPlan.mockImplementation(async raw => {
+            const input = WorkflowRunStartRequestV1Schema.parse(raw);
             h.admitPlan(input);
             // Publication races the lost reply: reconciliation must not attach
             // proposal A's admitted Run to the now-current proposal B.
@@ -790,8 +812,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
             expect(h.readProgress().review?.decision).toEqual({ kind: 'use_result', requestedFromContentRevision: '8' });
         } else {
             let newRunId = '';
-            machineRpc.mockImplementation(async request => {
-                const input = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input);
+            startPlan.mockImplementation(async raw => {
+                const input = WorkflowRunStartRequestV1Schema.parse(raw);
                 expect(input.source).toEqual({ kind: 'inline', definition: proposalB });
                 expect(input.runId).not.toBe(h.planRunId);
                 newRunId = input.runId;
@@ -815,8 +837,8 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         const h = await harness({ plan: true, planProposal: true, ownedOrigin: true });
         expect(h.readOrigin()?.id).toBe(originSessionId);
         expect(isSessionAccessOwner(h.readOrigin()?.access, h.readOrigin()?.accessLevel)).toBe(true);
-        machineRpc.mockImplementation(async request => {
-            h.admitPlan(WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input));
+        startPlan.mockImplementation(async raw => {
+            h.admitPlan(WorkflowRunStartRequestV1Schema.parse(raw));
             return WorkflowRunStartResultV1Schema.parse({
                 run: { ...h.run, id: h.planRunId, state: 'queued', origin: { kind: 'direct', originSessionId } }, admission: 'created',
             });
@@ -860,12 +882,12 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         await vi.waitFor(() => expect(h.rows.get(heldId)?.index.lifecycle).toBe('completed'));
         // Inspect the actual request after normal boundary success so a
         // contract failure cannot be swallowed by the start controller.
-        const targeted = TargetedActionRpcRequestV1Schema.parse(admissions().at(-1)?.[0].payload);
-        const input = WorkflowRunStartRequestV1Schema.parse(targeted.input);
+        const admitted = admissions().at(-1)!;
+        const input = WorkflowRunStartRequestV1Schema.parse(admitted[0]);
         expect(input.runId).toBe(h.planRunId);
         // Approved 06 §3.5: origin remains the owned Session regardless
         // of whether completion delivery back to that Session is enabled.
-        expect(targeted.defaultSessionId).toBe(originSessionId);
+        expect(admitted[1].invocation.defaultSessionId).toBe(originSessionId);
         if (reportBack) {
             expect(input.onComplete).toEqual({ kind: 'originating_session' });
         } else {

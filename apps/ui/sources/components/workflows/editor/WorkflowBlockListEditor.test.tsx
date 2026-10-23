@@ -11,10 +11,27 @@ import type { ResolveSessionActionFieldOptions } from '@/components/sessions/act
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
+import { createRenderCommitCounter } from '@/dev/testkit/performance/counts';
+
+const promptCosts = vi.hoisted(() => new Map<string, ReturnType<typeof createRenderCommitCounter>>());
 
 vi.mock('react-native', async () => {
+    const React = await import('react');
+    const { createRenderCommitCounter, useRenderCommitCounter } = await import('@/dev/testkit/performance/counts');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    const native = createReactNativeWebMock();
+    // Count mounted Wait prompt content at the native boundary; the editor,
+    // immutable draft updates and the real composer remain unmocked.
+    const View = React.forwardRef<React.ComponentRef<typeof native.View>, React.ComponentProps<typeof native.View>>((props, ref) => {
+        const counter = React.useMemo(() => {
+            const value = createRenderCommitCounter();
+            if (/^workflow-editor-wait-cost-\d+$/.test(props.testID ?? '')) promptCosts.set(props.testID!, value);
+            return value;
+        }, [props.testID]);
+        useRenderCommitCounter(counter);
+        return React.createElement(native.View, { ...props, ref });
+    });
+    return { ...native, View };
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
@@ -88,6 +105,7 @@ afterAll(async () => {
 
 afterEach(async () => {
     await standardCleanup();
+    promptCosts.clear();
     portalBoundary?.restore();
     portalBoundary = undefined;
     restorePopoverGlobals?.();
@@ -225,6 +243,39 @@ async function renderList(harness: Harness, options: Readonly<{
     });
     return renderScreen(element, { createNodeMock: options.createNodeMock });
 }
+
+it.each([8, 500])('keeps unaffected prompt content quiet for one keystroke in a %s-item editor', async count => {
+    const harness = await loadHarness();
+    const initial = buildDraft(harness, Array.from({ length: count }, (_, index) => ({
+        kind: 'wait', id: `cost-${index}`, document: { text: 'Review', references: [], attachments: [] },
+    })));
+    let current = initial;
+    function Controlled() {
+        const [draft, setDraft] = React.useState(initial);
+        const [custody] = React.useState(() => harness.createWorkflowAuthoringComposerCustody(initial.draftId));
+        current = draft;
+        return <harness.WorkflowBlockListEditor draft={draft} list={{ kind: 'root' }} blocks={draft.blocks} depth={0}
+            composerScope={MACHINE_COMPOSER_SCOPE} composerCustody={custody} selectedBlockId={null}
+            validation={harness.validateWorkflowEditorDraft(draft)} onChange={setDraft} onSelect={() => {}} onCustomize={() => {}} />;
+    }
+    const screen = await renderScreen(<Controlled />);
+    await flushHookEffects();
+    expect(promptCosts.size).toBe(count);
+    for (const counter of promptCosts.values()) counter.reset();
+    await act(async () => {
+        screen.findByTestId('new-session-composer-input')?.props.onChange({ nativeEvent: {
+            text: 'Reviewx', selection: { start: 7, end: 7 }, eventCount: 1,
+        } });
+    });
+    await flushHookEffects();
+    expect(current.blocks[0]?.kind === 'wait' && current.blocks[0].document.text).toBe('Reviewx');
+    const edited = promptCosts.get('workflow-editor-wait-cost-0')!.read();
+    const unaffected = [...promptCosts].filter(([id]) => id !== 'workflow-editor-wait-cost-0')
+        .reduce((sum, [, counter]) => sum + counter.read().renders, 0);
+    console.info('Workflow editor key cost', { items: count, edited: edited.renders, unaffected });
+    expect(edited.renders).toBeGreaterThan(0);
+    expect(unaffected).toBe(0);
+});
 
 it('shows editable names on every kind and evaluator without replacing catalog Action identity', async () => {
     const harness = await loadHarness();

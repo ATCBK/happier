@@ -10,6 +10,7 @@ import {
 } from '@/dev/testkit';
 import { reportPopoverContentLayout } from '@/dev/testkit/harness/popoverHarness';
 import { projectWorkflowInvocationStructure } from './workflowInvocationStructure';
+import * as invocationStructure from './workflowInvocationStructure';
 import {
   createWorkflowDefinitionFixture,
   createWorkflowInvocationIndexFixture,
@@ -205,6 +206,33 @@ async function renderContent(overrides: Partial<ContentProps> = {}) {
     },
   };
 }
+
+it('does no Map-only projection work for a 500-item Run while Activity is shown, then projects current facts on open', async () => {
+  // Observe the real projection without replacing any internal domain logic.
+  const mapProjection = vi.spyOn(invocationStructure, 'projectWorkflowFlowRunStates');
+  const definition = createWorkflowDefinitionFixture({ blocks: Array.from({ length: 500 }, (_, index) => ({
+    kind: 'wait', id: `wait-${index}`, document: { text: 'Review', references: [], attachments: [] },
+  })) });
+  const invocations = Array.from({ length: 500 }, (_, index) => createWorkflowInvocationIndexFixture({
+    id: `item-${index}`, sequence: String(index), memberOrdinal: String(index),
+  }));
+  const props: ContentProps = {
+    active: false, run: createWorkflowRunSummaryFixture(), definition, invocations,
+    invocationsLoaded: true, invocationHistoryComplete: true, firstFailedInvocationId: null,
+    firstFailedInvocationResolution: 'resolved', selectedInvocationId: null, onSelectInvocation: vi.fn(),
+    view: 'activity', onChangeView: vi.fn(),
+  };
+  try {
+    const screen = await renderContent(props);
+    expect(mapProjection).toHaveBeenCalledTimes(0);
+    const changed = invocations.map((row, index) => index === 250 ? { ...row, lifecycle: 'succeeded' as const } : row);
+    await screen.update(<WorkflowRunContent {...props} invocations={changed} />);
+    expect(mapProjection).toHaveBeenCalledTimes(0);
+    await screen.update(<WorkflowRunContent {...props} invocations={changed} view="flow" />);
+    expect(mapProjection).toHaveBeenCalledTimes(1);
+    expect(mapProjection.mock.calls[0]?.[0].invocations[250]?.lifecycle).toBe('succeeded');
+  } finally { mapProjection.mockRestore(); }
+});
 
 it('renders For-each value names and stopped occurrence facts through the real Run body', async () => {
   const definition = createWorkflowDefinitionFixture({
