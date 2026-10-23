@@ -34,6 +34,35 @@ function missing(artifactIds: readonly string[]): Response {
 }
 
 describe('Artifact read acquisition', () => {
+    it('separates concurrent header and full demands while sharing each exact header set', async () => {
+        const issued: unknown[] = [];
+        const release = createDeferred<void>();
+        const artifact = { id: ids[0]!, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            publicAudience: 'none', header: encodePlainArtifactStoredContent({ title: 'Header' }),
+            headerVersion: 1, bodyVersion: 1, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            seq: 1, createdAt: 1, updatedAt: 1 };
+        const readTransport = capturedRead(async (_path, init) => {
+            const input = JSON.parse(String(init?.body));
+            issued.push(input);
+            await release.promise;
+            return input.projection === 'headers'
+                ? Response.json({ projection: 'headers', items: [{ artifactId: artifact.id, ok: true, artifact }] })
+                : Response.json({ items: [{ artifactId: artifact.id, ok: true,
+                    artifact: { ...artifact, body: encodePlainArtifactStoredContent({ body: 'Full' }) }, recipientCensus: null }] });
+        });
+        const headers = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
+        const duplicate = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport, projection: 'headers' });
+        const full = fetchArtifactReadBatch({ token: 'same-authority' }, [artifact.id], { readTransport });
+        release.resolve();
+        const [headerItems, duplicateItems, fullItems] = await Promise.all([headers, duplicate, full]);
+        expect(issued).toHaveLength(2);
+        expect(issued).toEqual(expect.arrayContaining([{ artifactIds: [artifact.id], projection: 'headers' }, { artifactIds: [artifact.id] }]));
+        expect(headerItems).toEqual(duplicateItems);
+        expect(headerItems[0]).not.toHaveProperty('recipientCensus');
+        expect(headerItems[0]).not.toHaveProperty('artifact.body');
+        expect(fullItems[0]).toHaveProperty('artifact.body');
+    });
+
     it.each([200, 409, 400])('does not lend pre-write or in-write observations after mutation settlement (%s)', async status => {
         const oldStarted = createDeferred<void>();
         const writeStarted = createDeferred<void>();
