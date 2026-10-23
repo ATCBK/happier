@@ -148,7 +148,7 @@ export function ProjectSessionsWidgetBody(
           action={{
             label: t('common.retry'),
             onPress: () => {
-              void query.refresh();
+              void query.retry();
             },
           }}
         />
