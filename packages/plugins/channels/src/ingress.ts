@@ -7140,6 +7140,17 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
     || !pluginJsonValuesEqual(input.checkpoint.value.payload.opaqueToken, input.checkpointAfter)
     || input.checkpoint.value.payload.lastOccurrenceId !== input.lastOccurrenceId
     || input.checkpoint.value.payload.nextPollNotBeforeMs !== input.nextPollNotBeforeMs;
+  // A wholly unchanged observation has no effect to fence. Collection
+  // mutations require a put/delete; assertion-only batches are invalid.
+  // Actual progress below still commits all authority assertions atomically.
+  if (!writesConnection && !writesCheckpoint && censusSettlements.every(settlement => settlement.kind === 'assert')) {
+    return updateResult({
+      kind: 'unchanged',
+      connectionId: input.connectionId,
+      revision: connection.row.revision,
+      authorityEpoch: connection.value.payload.authorityEpoch,
+    });
+  }
   const now = Date.now();
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   const operations: readonly PluginCollectionMutation<JsonRecord>[] = [

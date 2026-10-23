@@ -7983,7 +7983,6 @@ describe('Conversation checkpointed-poll ingress', () => {
     let poll = 0;
     let mutationPublications = 0;
     let checkpointId: string | undefined;
-    let completedPollAssertions = 0;
     let retainedMemberId: string | undefined;
     let retainedMemberReads = 0;
     let freshConnectionReads = 0;
@@ -8000,12 +7999,9 @@ describe('Conversation checkpointed-poll ingress', () => {
       },
       afterBatch: ({ operations }) => {
         if (operations.some(operation => operation.kind !== 'assert')) {
-          // The real Data mutation publisher emits only for changed rows,
-          // never for an assertion-only successful atomic batch.
+          // The real Data mutation publisher emits only for changed rows.
           mutationPublications += 1;
           queueMicrotask(() => { for (const notify of changes) notify(); });
-        } else if (operations.some(operation => operation.kind === 'assert' && operation.rowId === checkpointId)) {
-          completedPollAssertions += 1;
         }
       },
     });
@@ -8046,25 +8042,28 @@ describe('Conversation checkpointed-poll ingress', () => {
         } as unknown as PluginServices,
       };
       running = supervisor.run(context);
-      await vi.waitFor(() => expect(completedPollAssertions).toBeGreaterThan(0), { interval: 0 });
       await pollParked;
       await vi.advanceTimersByTimeAsync(0);
+      expect(poll).toBeGreaterThan(3);
       expect(retainedMemberReads).toBeGreaterThan(0);
       const parkedMemberReads = retainedMemberReads;
       const parkedPublications = mutationPublications;
       const authorityReads = freshConnectionReads;
+      const parkedPolls = poll;
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(() => expect(completedPollAssertions).toBeGreaterThan(1), { interval: 0 });
+      await vi.waitFor(() => expect(poll).toBeGreaterThan(parkedPolls), { interval: 0 });
       expect(retainedMemberReads).toBe(parkedMemberReads);
       expect(mutationPublications).toBe(parkedPublications);
       expect(freshConnectionReads).toBeGreaterThan(authorityReads);
     } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
   });
 
-  it.each(['connection', 'checkpoint'] as const)('fences an unchanged checkpoint against a concurrent %s change at the final atomic batch', async authority => {
+  it.each(['connection', 'checkpoint'] as const)('fences checkpoint progress against a concurrent %s change at the final atomic batch', async authority => {
     let race = false;
     let raced = false;
-    const harness = createIngressHarness({ beforeBatch: ({ rows }) => {
+    const harness = createIngressHarness({ getPollResult: () => ({
+      kind: 'checkpointOnly', checkpointAfterBatch: { cursor: race ? 'advanced' : 'baseline' },
+    }), beforeBatch: ({ rows }) => {
       if (!race || raced) return;
       raced = true;
       const rowId = authority === 'connection' ? 'connection-1' : currentCheckpoint(rows)?.rowId;
@@ -8237,20 +8236,8 @@ describe('Conversation checkpointed-poll ingress', () => {
           payload: expect.objectContaining({ checkpointCoveredAt: 1_000 }),
         }) }),
       ]));
-      expect(checkpointBatches[1]).toEqual(expect.arrayContaining([
-        {
-          kind: 'assert',
-          rowId: coveredCheckpoint.rowId,
-          expectedRevision: coveredCheckpoint.revision,
-        },
-        {
-          kind: 'assert',
-          rowId: coveredCensus.rowId,
-          expectedRevision: coveredCensus.revision,
-        },
-      ]));
-      expect(checkpointBatches[1]?.some(isIngressCensusPut)).toBe(false);
-      expect(checkpointBatches[1]?.some(isCheckpointPut)).toBe(false);
+      expect(checkpointBatches).toHaveLength(1);
+      expect(currentCheckpoint(harness.rows)).toEqual(coveredCheckpoint);
       expect(harness.rows.get(coveredCensus.rowId)).toEqual(coveredCensus);
     } finally {
       vi.useRealTimers();
