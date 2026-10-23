@@ -31,6 +31,10 @@ import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { NativeComposerInputHandle } from '@/components/ui/forms/nativeComposerInput';
+import { createRenderCommitCounter } from '@/dev/testkit/performance/counts';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+
+const editorCosts = vi.hoisted(() => ({ views: new Map<string, ReturnType<typeof createRenderCommitCounter>>() }));
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -161,10 +165,24 @@ const MACHINE_COMPOSER_SCOPE = {
 };
 
 vi.mock('react-native', async () => {
+    const React = await import('react');
+    const { createRenderCommitCounter, useRenderCommitCounter } = await import('@/dev/testkit/performance/counts');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
+    const native = await createReactNativeWebMock({
         useWindowDimensions: () => windowDimensions,
     });
+    // Observe executions and layout commits at the native boundary. The real
+    // editor, menus, composers, inspector and store subscriptions run beneath it.
+    const View = React.forwardRef<React.ComponentRef<typeof native.View>, React.ComponentProps<typeof native.View>>((props, ref) => {
+        const counter = React.useMemo(() => {
+            const value = createRenderCommitCounter();
+            if (props.testID) editorCosts.views.set(props.testID, value);
+            return value;
+        }, [props.testID]);
+        useRenderCommitCounter(counter);
+        return React.createElement(native.View, { ...props, ref });
+    });
+    return { ...native, View };
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('react-native-unistyles', async () => {
@@ -377,6 +395,80 @@ async function renderBody(
     } as never);
     return renderScreen(element, renderOptions);
 }
+
+it.each([8, 500])('measures the real %s-root editor and isolates unchanged Wait rows', async count => {
+    const harness = await loadHarness();
+    const { useWorkflowAuthoringHost } = await import('./useWorkflowAuthoringHost');
+    const machines = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `diag185-machine-${index}` }));
+    getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])) });
+    const initial = harness.createWorkflowEditorDraft({ draftId: 'diag185', name: 'Review', blocks: Array.from({ length: count }, (_, index) => ({
+        kind: 'wait', id: `diag185-${index}`, document: { text: 'Review', references: [], attachments: [] },
+    })) });
+    let current = initial;
+    let commits = 0;
+    const stringifies = vi.spyOn(JSON, 'stringify');
+    function Controlled() {
+        const [draft, setDraft] = React.useState(initial);
+        const [selected, select] = React.useState<string | null>(null);
+        const host = useWorkflowAuthoringHost({ serverId: null, projectTarget: null });
+        current = draft;
+        return <React.Profiler id="DIAG185" onRender={() => { commits += 1; }}>
+            <harness.WorkflowEditorBody draft={draft} onChange={setDraft} machineName="Mac Studio"
+                {...host} selectedBlockId={selected} onSelectBlock={select}
+                onCustomizeBlock={select} view="steps" onChangeView={() => {}} onSave={() => {}} />
+        </React.Profiler>;
+    }
+    editorCosts.views.clear();
+    const screen = await renderScreen(<Controlled />);
+    await flushHookEffects();
+    const measure = (phase: string) => {
+        const rows = [...editorCosts.views].filter(([id]) => /^workflow-editor-wait-diag185-\d+$/.test(id));
+        const result = { phase, roots: count, commits,
+            viewFibers: [...editorCosts.views.values()].reduce((sum, counter) => sum + counter.read().renders, 0),
+            rowFibers: rows.reduce((sum, [, counter]) => sum + counter.read().renders, 0),
+            unaffectedRowFibers: rows.filter(([id]) => id !== 'workflow-editor-wait-diag185-0')
+                .reduce((sum, [, counter]) => sum + counter.read().renders, 0),
+            unrelatedGapFibers: [...editorCosts.views].filter(([id]) => /^workflow-editor-gap-diag185-\d+$/.test(id))
+                .reduce((sum, [, counter]) => sum + counter.read().renders, 0),
+            menuSerializations: stringifies.mock.calls.filter(([value]) => Array.isArray(value)
+                && value.some(item => item?.id === 'duplicate' && typeof item?.label === 'string')).length };
+        commits = 0;
+        for (const counter of editorCosts.views.values()) counter.reset();
+        stringifies.mockClear();
+        return result;
+    };
+    expect(measure('mount').rowFibers).toBeGreaterThanOrEqual(count);
+    const input = screen.findHostByTestId('workflow-editor-wait-diag185-0-prompt')!.findAll(node =>
+        node.props.testID === 'new-session-composer-input' && typeof node.props.onChange === 'function').at(-1)!;
+    await act(async () => input.props.onChange({ nativeEvent: {
+        text: 'Reviewx', selection: { start: 7, end: 7 }, eventCount: 1, references: [],
+    } }));
+    await flushHookEffects();
+    expect(current.blocks[0]?.kind === 'wait' && current.blocks[0].document.text).toBe('Reviewx');
+    const key = measure('keystroke');
+    await screen.pressByTestIdAsync('workflow-editor-wait-diag185-0-options');
+    await flushHookEffects();
+    measure('selection-and-inspector');
+    await act(async () => getStorage().setState(state => ({ machines: { ...state.machines,
+        [machines[99]!.id]: { ...machines[99]!, metadataVersion: 2 },
+    } })));
+    await flushHookEffects();
+    const publication = measure('unrelated-store-publication');
+    stringifies.mockRestore();
+    expect(key.unaffectedRowFibers).toBe(0);
+    expect(key.unrelatedGapFibers).toBe(0);
+    expect(key.menuSerializations).toBeLessThanOrEqual(1);
+    expect(publication.commits).toBe(0);
+    const sibling = screen.findHostByTestId('workflow-editor-wait-diag185-1-prompt')!.findAll(node =>
+        node.props.testID === 'new-session-composer-input' && typeof node.props.onChange === 'function').at(-1)!;
+    await act(async () => sibling.props.onChange({ nativeEvent: {
+        text: 'Reviewy', selection: { start: 7, end: 7 }, eventCount: 1, references: [],
+    } }));
+    await flushHookEffects();
+    expect(current.blocks[0]?.kind === 'wait' && current.blocks[0].document.text).toBe('Reviewx');
+    expect(current.blocks[1]?.kind === 'wait' && current.blocks[1].document.text).toBe('Reviewy');
+    await screen.unmount();
+});
 
 it.each(['chooser', 'drag'] as const)('acquires unopened Session options only on this editor\'s %s intent', async (intent) => {
     const harness = await loadHarness();

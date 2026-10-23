@@ -55,51 +55,7 @@ type WorkflowWaitBlockEditorProps = Readonly<{
     testIDPrefix: string;
 }>;
 
-export function WorkflowWaitBlockEditor(props: WorkflowWaitBlockEditorProps): React.ReactElement {
-    // The list publishes a new draft and callbacks on every keystroke. A Wait
-    // card renders only its own block; events must still consume the latest
-    // callbacks so an untouched sibling cannot write an older whole draft.
-    const latest = React.useRef(props);
-    latest.current = props;
-    const events = React.useMemo(() => ({
-        select: () => latest.current.onSelect(),
-        change: (block: WorkflowWaitLeafV1) => latest.current.onChangeBlock(block),
-        openOptions: (anchor: React.RefObject<View | null>) => latest.current.onOpenOptions?.(anchor),
-        registerFocus: (focus: (() => void) | null) => latest.current.focusRegistration?.(focus),
-        rename: (name: string) => latest.current.nameEditor?.onChangeText(name),
-        commitName: () => latest.current.nameEditor?.onCommit?.(),
-        focusName: () => latest.current.nameEditor?.onFocus?.(),
-    }), []);
-    const name = props.nameEditor;
-    const nameEditor = React.useMemo(() => name === undefined ? undefined : ({
-        value: name.value,
-        placeholder: name.placeholder,
-        accessibilityLabel: name.accessibilityLabel,
-        accessibilityHint: name.accessibilityHint,
-        editable: name.editable,
-        controlRef: name.controlRef,
-        testID: name.testID,
-        onChangeText: events.rename,
-        onCommit: name.onCommit === undefined ? undefined : events.commitName,
-        onFocus: name.onFocus === undefined ? undefined : events.focusName,
-    }), [name?.value, name?.placeholder, name?.accessibilityLabel, name?.accessibilityHint,
-        name?.editable, name?.controlRef, name?.testID, name !== undefined,
-        name?.onCommit !== undefined, name?.onFocus !== undefined, events]);
-    // Menu identity depends on its displayed choices, never on closures over
-    // the entire draft. Dispatch each choice through the current list owner.
-    const actionKey = JSON.stringify(props.actions.map(({ onSelect: _onSelect, ...action }) => action));
-    const actions = React.useMemo(() => props.actions.map(action => ({
-        ...action,
-        onSelect: () => latest.current.actions.find(current => current.id === action.id)?.onSelect(),
-    })), [actionKey]);
-    return <WorkflowWaitBlockEditorContent {...props}
-        nameEditor={nameEditor} actions={actions}
-        onSelect={events.select} onChangeBlock={events.change}
-        onOpenOptions={props.onOpenOptions === undefined ? undefined : events.openOptions}
-        focusRegistration={props.focusRegistration === undefined ? undefined : events.registerFocus} />;
-}
-
-const WorkflowWaitBlockEditorContent = React.memo(function WorkflowWaitBlockEditorContent(props: WorkflowWaitBlockEditorProps): React.ReactElement {
+export const WorkflowWaitBlockEditor = React.memo(function WorkflowWaitBlockEditor(props: WorkflowWaitBlockEditorProps): React.ReactElement {
     const { block, testIDPrefix } = props;
     const editable = props.editable !== false;
     const custody = props.composerCustody.entryFor(block.id);

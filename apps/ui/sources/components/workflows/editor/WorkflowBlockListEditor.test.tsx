@@ -1102,7 +1102,7 @@ describe('workflow block list editor', () => {
                 expect(screen.findByTestId(`workflow-editor-step-${block.id}`)).not.toBeNull();
             }
         }
-        expect(screen.findAllByTestId('workflow-editor-list-parallelBranch').length).toBe(parallel.branches.length);
+        expect(screen.findAllHostsByTestId('workflow-editor-list-parallelBranch').length).toBe(parallel.branches.length);
     });
 
     it('adds an Otherwise from the If\'s own menu and draws no empty Otherwise lane (lab E1; DESIGN-5 N12)', async () => {
