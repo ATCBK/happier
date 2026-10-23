@@ -1,6 +1,6 @@
 import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceAudienceGrantV1Schema, TeamCredentialResourceMemberGrantV1Schema, TeamCredentialResourceSummaryV1Schema, TeamCredentialSessionUsePolicyV1Schema, decodeTeamCredentialResourcesCursorV1, encodeTeamCredentialResourcesCursorV1, teamCredentialResourcesQueryKeyV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
+import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import { TeamCredentialSourceResourceAdministrationV1Schema, teamCredentialSourceLocatorKeyV1, teamCredentialSourceLocatorV1, type TeamCredentialSourceLocatorV1 } from '@happier-dev/protocol/teams';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
@@ -670,6 +670,7 @@ function projectCurrentDirectMaterialReferences(input: Readonly<{
 async function projectCatalogEntryInTx(
     tx: Tx,
     row: ResourceRow,
+    source: TeamCredentialSourceBindingV1 | null,
     audience: ResourceAudience,
     actorAccountId: string,
     prefetchedSourceResolution?: TeamCredentialResourceSourceResolution | null,
@@ -678,6 +679,7 @@ async function projectCatalogEntryInTx(
     captureProjectionFacts?: (facts: Readonly<{
         entitlement: Extract<Awaited<ReturnType<typeof resolveTeamCredentialEntitlementInTx>>, { ok: true }>;
         source: ReturnType<typeof TeamCredentialSourceBindingV1Schema.parse> | null;
+        sessionUsePolicyValid: boolean;
         directMaterialReferences: readonly Readonly<{ sourceMemberKey: string; sourceVersion: string }>[];
     }>) => void,
     prefetchedUsageEvaluation?: TeamCredentialUsageAdmissionLimitEvaluation | null,
@@ -713,13 +715,6 @@ async function projectCatalogEntryInTx(
         if ((entitlement.reason !== "resource_corrupt" && entitlement.reason !== "source_owner_required")
             || !(prefetchedAudienceMatch ?? await hasCurrentTeamCredentialAudienceMatchInTx(tx, { resourceId: row.id, accountId: actorAccountId }))) return null;
         const policy = TeamCredentialResourceCatalogEntryV1Schema.shape.sessionUsePolicy.safeParse(row.sessionUsePolicy);
-        let source: ReturnType<typeof TeamCredentialSourceBindingV1Schema.parse> | null = null;
-        try {
-            const parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-            source = parsed.success ? parsed.data : null;
-        } catch {
-            source = null;
-        }
         const projected = TeamCredentialResourceCatalogEntryV1Schema.safeParse({
             id: row.id,
             teamId: row.teamId,
@@ -756,13 +751,6 @@ async function projectCatalogEntryInTx(
             resetsAtUtc: usageEvaluation.denied.resetsAt.toISOString(),
         }
         : null;
-    let source: ReturnType<typeof TeamCredentialSourceBindingV1Schema.parse> | null = null;
-    try {
-        const parsed = TeamCredentialSourceBindingV1Schema.safeParse(JSON.parse(row.sourceBindingJson));
-        source = parsed.success ? parsed.data : null;
-    } catch {
-        source = null;
-    }
     const sourceResolution = source === null ? null : prefetchedSourceResolution ?? await resolveTeamCredentialResourceSourceInTx(tx, {
         custodianAccountId: row.custodianAccountId,
         source,
@@ -828,7 +816,7 @@ async function projectCatalogEntryInTx(
     }
     const placementRead = readTeamCredentialBrokerPlacement(row);
     const hasBrokerPlacement = placementRead.ok && placementRead.placement !== null;
-    captureProjectionFacts?.({ entitlement, source, directMaterialReferences: currentDirectReferences });
+    captureProjectionFacts?.({ entitlement, source, sessionUsePolicyValid: policy.success, directMaterialReferences: currentDirectReferences });
     const projected = TeamCredentialResourceCatalogEntryV1Schema.safeParse({
         id: row.id,
         teamId: row.teamId,
@@ -928,7 +916,7 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
     if (decoded?.status === 'invalid') return { ok: false as const, error: 'invalid_resource_input' as const };
     const after = decoded?.status === 'ok' ? decoded.cursor : null;
     const projected: Array<{ row: ResourceRow; resource: NonNullable<Awaited<ReturnType<typeof projectCatalogEntryInTx>>> }> = [];
-    const projectionFactsByResourceId = new Map<string, Parameters<NonNullable<Parameters<typeof projectCatalogEntryInTx>[7]>>[0]>();
+    const projectionFactsByResourceId = new Map<string, Parameters<NonNullable<Parameters<typeof projectCatalogEntryInTx>[8]>>[0]>();
     const candidateWindow = await tx.teamCredentialResource.findMany({
             where: { teamId: input.teamId, ...(after ? { OR: [
                 { displayName: { gt: after.displayName } },
@@ -1010,6 +998,7 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
             resource: await projectCatalogEntryInTx(
                 tx,
                 row,
+                candidateSources[index] ?? null,
                 audience,
                 input.actorAccountId,
                 sourceResolutions[index],
@@ -1043,17 +1032,15 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
             const entitlement = facts.entitlement;
             const placementRead = readTeamCredentialBrokerPlacement(row);
             const hasBrokerPlacement = placementRead.ok && placementRead.placement !== null;
-            let source: unknown;
+            const source = facts.source;
+            if (source === null) continue;
             let policy: unknown;
             try {
-                source = JSON.parse(row.sourceBindingJson);
                 policy = row.requestPolicyJson === null ? null : JSON.parse(row.requestPolicyJson);
             } catch {
                 continue;
             }
-            const parsedSource = TeamCredentialSourceBindingV1Schema.safeParse(source);
-            const parsedPolicy = TeamCredentialResourceCatalogEntryV1Schema.shape.sessionUsePolicy.safeParse(row.sessionUsePolicy);
-            if (!parsedSource.success || !parsedPolicy.success) continue;
+            if (!facts.sessionUsePolicyValid) continue;
             const requestPolicy = TeamCredentialResourceSummaryV1Schema.shape.requestPolicy.safeParse(policy);
             if (!requestPolicy.success) continue;
             const directMaterialReferences = entitlement.mayReceiveDirect ? facts.directMaterialReferences : [];
@@ -1064,7 +1051,7 @@ export async function readTeamCredentialCatalogInTx(tx: Tx, input: CredentialRea
                 custodianAccountId: row.custodianAccountId,
                 brokerMachineId: row.brokerMachineId,
                 brokerPoolId: row.brokerPoolId,
-                source: parsedSource.data,
+                source,
                 allowedModelIds: requestPolicy.data?.allowedModelIds ?? null,
             };
             if (entitlement.mayBroker && hasBrokerPlacement) {

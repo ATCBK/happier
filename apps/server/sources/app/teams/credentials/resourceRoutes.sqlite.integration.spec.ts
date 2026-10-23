@@ -20,10 +20,11 @@ import {
     type PeerTcpTunnelRelayEnvelope,
 } from "@happier-dev/protocol";
 import type { ProviderConnectionId } from "@happier-dev/protocol/providers/ids";
+import { TeamCredentialResourceCatalogEntryV1Schema } from "@happier-dev/protocol/teams/credentials/resourceV1";
 
 import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountIdentityDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
-import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
+import { getSocketRooms, getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
@@ -32,7 +33,7 @@ import { getMachineDaemonPresenceInventory } from "@/app/machines/machineDaemonP
 import { logger } from "@/utils/logging/log";
 
 import { registerTeamCredentialResourceRoutes } from "./registerTeamCredentialResourceRoutes";
-import { projectTeamCredentialResourceSummaryInTx } from "./resourceRead";
+import { projectTeamCredentialResourceSummaryInTx, readTeamCredentialCatalogInTx } from "./resourceRead";
 import { resolveTeamCredentialSourceMemberCurrentnessInTx } from "./resourceSourceResolver";
 import { inTx } from "@/storage/inTx";
 import { recordConnectedServiceAccountProfileChange } from "@/app/api/routes/connect/connectedServicesAccountProfileChange";
@@ -229,6 +230,9 @@ describe("Team credential resource routes (SQLite integration)", () => {
             connectionSecurityFingerprint: "connection-security:v1:catalog-row",
             credentialSlotId: "apiKey",
         } as const;
+        const broker = await db.machine.create({ data: {
+            id: `catalog-sibling-broker-${owner.id}`, accountId: owner.id, metadata: "{}", kind: "persistent",
+        } });
         const valid = await db.teamCredentialResource.create({ data: {
             id: "catalog-valid-sibling",
             teamId: team.id,
@@ -237,6 +241,21 @@ describe("Team credential resource routes (SQLite integration)", () => {
             disclosureCeiling: "brokered_only",
             sessionUsePolicy: "personal_allowed",
             sourceBindingJson: JSON.stringify(source),
+            brokerMachineId: broker.id,
+            memberGrants: { create: { teamMembershipId: membership.id, deliveryMode: "brokered" } },
+        } });
+        await db.teamCredentialResource.create({ data: {
+            id: "catalog-invalid-source-shape", teamId: team.id, custodianAccountId: owner.id,
+            displayName: "Invalid source shape sibling", disclosureCeiling: "brokered_only",
+            sessionUsePolicy: "personal_allowed", sourceBindingJson: JSON.stringify({ ...source, credentialSlotId: 1 }),
+            brokerMachineId: broker.id,
+            memberGrants: { create: { teamMembershipId: membership.id, deliveryMode: "brokered" } },
+        } });
+        await db.teamCredentialResource.create({ data: {
+            id: "catalog-invalid-session-policy", teamId: team.id, custodianAccountId: owner.id,
+            displayName: "Invalid session policy sibling", disclosureCeiling: "brokered_only",
+            sessionUsePolicy: "invalid-policy", sourceBindingJson: JSON.stringify({ ...source, connectionId: "catalog-policy-source" }),
+            brokerMachineId: broker.id,
             memberGrants: { create: { teamMembershipId: membership.id, deliveryMode: "brokered" } },
         } });
         await db.teamCredentialResource.create({ data: {
@@ -260,6 +279,49 @@ describe("Team credential resource routes (SQLite integration)", () => {
             readiness: { kind: "resource_corrupt" },
             recoveryAction: "source_owner_action",
         }));
+        expect(response.json().resources).toContainEqual(expect.objectContaining({
+            id: "catalog-invalid-source-shape", readiness: { kind: "resource_corrupt" },
+        }));
+        expect(response.json().resources).toContainEqual(expect.objectContaining({
+            id: "catalog-invalid-session-policy", readiness: { kind: "resource_corrupt" }, sessionUsePolicy: null,
+        }));
+
+        const input = { teamId: team.id, actorAccountId: recipient.id,
+            authentication: { authenticationAuthority: "present_user" } } as const;
+        const application = {
+            agentTargetKey: "agent:happier.agent.codex/codex",
+            implementationIdentity: { pluginId: "happier.provider.openai", localId: "openai" },
+            endpointTemplateId: "responses", protocol: "openai-responses",
+        } as const;
+        // Observe serialization work through the real catalog and database; JSON.parse keeps its implementation.
+        const parse = vi.spyOn(JSON, "parse");
+        const policyParse = vi.spyOn(TeamCredentialResourceCatalogEntryV1Schema.shape.sessionUsePolicy, "safeParse");
+        try {
+            const plain = await inTx(tx => readTeamCredentialCatalogInTx(tx, input));
+            expect(plain).toMatchObject({ ok: true, projectionRequests: [] });
+            const sourceParses = () => parse.mock.calls.filter(([value]) => value === valid.sourceBindingJson).length;
+            const baseline = sourceParses();
+            expect(baseline).toBe(1);
+            const baselinePolicyParses = policyParse.mock.calls.length;
+            expect(baselinePolicyParses).toBeGreaterThan(0);
+            parse.mockClear();
+            policyParse.mockClear();
+            const projected = await inTx(tx => readTeamCredentialCatalogInTx(tx, { ...input, application }));
+            expect(projected).toMatchObject({ ok: true });
+            if (!projected.ok) throw new Error("Catalog projection must be admitted");
+            expect(projected.page.resources).toEqual(plain.ok ? plain.page.resources : []);
+            expect(projected.projectionRequests).toEqual([{
+                resourceId: valid.id, teamId: team.id, resourceRevision: valid.revision,
+                custodianAccountId: owner.id, brokerMachineId: broker.id, brokerPoolId: null,
+                source, allowedModelIds: null, deliveryMode: "brokered", directMaterialReferences: [],
+            }]);
+            // Application projection must reuse the same transaction's admitted binding.
+            expect(sourceParses()).toBe(1);
+            expect(policyParse.mock.calls).toHaveLength(baselinePolicyParses);
+        } finally {
+            parse.mockRestore();
+            policyParse.mockRestore();
+        }
     });
 
     it("authorizes only the assigned external key through the authenticated route without accepting caller proof", async () => {
@@ -833,8 +895,9 @@ describe("Team credential resource routes (SQLite integration)", () => {
         });
         try {
             const joined = new Promise<void>(resolve => cluster.nodes[1].io.once("connection", socket => {
-                socket.data = { clientType: "machine-scoped", userId: owner.id, machineId: broker.id };
-                void socket.join(getUserMachinesSocketRoom(owner.id));
+                const identity = { clientType: "machine-scoped" as const, userId: owner.id, machineId: broker.id };
+                socket.data = identity;
+                void socket.join(getSocketRooms(identity));
                 resolve();
             }));
             client.connect();
