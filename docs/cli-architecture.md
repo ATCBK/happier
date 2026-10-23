@@ -5336,7 +5336,13 @@ the source build owner reuses workspace input capture before preparation, so
 the plugin compiler, QA export, web artifact and entry-size measurement consume
 one copied authored-input view. Later checkout edits affect the next build;
 interactive Expo retains live source and installed external tools retain their
-own lifecycle. Metro consumes that inventory for the ordinary Expo browser/asset export. The web
+own lifecycle. In 0.3 development, finite source exports reuse one captured
+project-root path per export context, preserving Metro's Router-bound transform
+cache keys. The existing owner-file lock protects capture replacement through
+Metro's final read. Each attempt recaptures authored inputs and removes that
+capture afterwards; the context retains the canonical compiler's inventory and
+validated plugin candidates for the next export. Exported serving products keep
+their separate output paths. Metro consumes that inventory for the ordinary Expo browser/asset export. The web
 artifact owner retains project-local export staging and atomic final publication,
 without workspace dist or declaration preparation. Ordinary Expo and public npm
 preparation retain their separate package-output inputs.
