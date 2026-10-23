@@ -10440,30 +10440,35 @@ function ConnectionPolicyEditor(props: Readonly<{
             />
           )}
         />
-      </ItemGroup>
-      <Form.Field
-        label={observationAgeLabel}
-        description={props.t(
-          'plugins.channels.surface.maximumObservationAgeDescription',
-          'Accept incoming observations no older than this limit.',
-        )}
-        disabled={formDisabled}
-        issue={validationIssue}
-      >
-        <Form.Select
-          testID="channels-connection-observation-age"
-          label={observationAgeLabel}
-          options={durationPresetOptions(OBSERVATION_AGE_PRESETS_MS, props.draft.maximumObservationAgeMs, props.t)}
-          value={props.draft.maximumObservationAgeMs}
-          onChange={(next) => {
-            const selected = readActionInputOptionValue(next);
-            if (typeof selected !== 'string') return;
-            props.onMaximumObservationAgeMsChange(selected);
-            if (validationIssue !== undefined) setValidationIssue(undefined);
-          }}
-          disabled={formDisabled}
+        <Item
+          title={observationAgeLabel}
+          subtitle={props.t(
+            'plugins.channels.surface.maximumObservationAgeDescription',
+            'Accept incoming observations no older than this limit.',
+          )}
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={(
+            <Form.Select
+              testID="channels-connection-observation-age"
+              presentation="field"
+              label={observationAgeLabel}
+              options={durationPresetOptions(OBSERVATION_AGE_PRESETS_MS, props.draft.maximumObservationAgeMs, props.t)}
+              value={props.draft.maximumObservationAgeMs}
+              onChange={(next) => {
+                const selected = readActionInputOptionValue(next);
+                if (typeof selected !== 'string') return;
+                props.onMaximumObservationAgeMsChange(selected);
+                if (validationIssue !== undefined) setValidationIssue(undefined);
+              }}
+              disabled={formDisabled}
+            />
+          )}
         />
-      </Form.Field>
+      </ItemGroup>
+      {validationIssue !== undefined ? (
+        <Status testID="channels-connection-observation-age-issue" tone="danger" label={validationIssue} />
+      ) : null}
 
       {props.execution.status === 'success' ? (
         <Status

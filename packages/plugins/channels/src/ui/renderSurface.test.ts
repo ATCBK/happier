@@ -7045,10 +7045,7 @@ describe('Channels connection policy editing across a source change', () => {
 
     try {
       await pressByTestId('channels-connection-connection-1');
-      await fixture.press(await fixture.getByRole('radio', {
-        name: editedObservationAge,
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Maximum observation age', editedObservationAge);
       expect(document.querySelector('[data-testid="channels-connection-source-changed"]')).toBeNull();
 
       // Another writer advances the connection while the edit is open.
@@ -7060,10 +7057,9 @@ describe('Channels connection policy editing across a source change', () => {
       });
       await pressByTestId('channels-detail-resource-refresh');
 
-      await expect(fixture.getByRole('radio', {
-        name: editedObservationAge,
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      await vi.waitFor(() => {
+        expectFieldValue('Maximum observation age', editedObservationAge);
+      });
       const notice = document.querySelector<HTMLElement>('[data-testid="channels-connection-source-changed"]');
       expect(notice).not.toBeNull();
       const save = document.querySelector<HTMLElement>('[data-testid="channels-connection-save"]');
@@ -7077,10 +7073,9 @@ describe('Channels connection policy editing across a source change', () => {
       await vi.waitFor(() => {
         expect(document.querySelector('[data-testid="channels-connection-source-changed"]')).toBeNull();
       });
-      await expect(fixture.getByRole('radio', {
-        name: '2 minutes',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      await vi.waitFor(() => {
+        expectFieldValue('Maximum observation age', '2 minutes');
+      });
       expect(document.querySelector('[data-testid="channels-connection-save"]')?.getAttribute('aria-disabled'))
         .not.toBe('true');
     } finally {
@@ -7127,10 +7122,7 @@ describe('Channels connection policy editing across a source change', () => {
 
     try {
       await pressByTestId('channels-connection-connection-1');
-      await fixture.press(await fixture.getByRole('radio', {
-        name: editedObservationAge,
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Maximum observation age', editedObservationAge);
       await pressByTestId('channels-connection-save');
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledTimes(1);
@@ -7187,10 +7179,9 @@ describe('Channels connection policy editing across a source change', () => {
       await pressByTestId('channels-detail-resource-refresh');
 
       expect(document.querySelector('[data-testid="channels-connection-source-changed"]')).toBeNull();
-      await expect(fixture.getByRole('radio', {
-        name: '2 minutes',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      await vi.waitFor(() => {
+        expectFieldValue('Maximum observation age', '2 minutes');
+      });
       expect(document.querySelector('[data-testid="channels-connection-save"]')?.getAttribute('aria-disabled'))
         .not.toBe('true');
     } finally {
