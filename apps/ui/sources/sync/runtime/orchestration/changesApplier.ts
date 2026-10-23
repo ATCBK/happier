@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { AutomationRefreshOptions } from '@/sync/engine/automations/syncAutomations';
 import {
     classifyChangeForCheckpoint,
     changeRequiresSavedSecretCatalogRefresh,
@@ -58,7 +59,7 @@ export async function applyPlannedChangeActions(params: {
         friends?: () => Promise<void>;
         friendRequests?: () => Promise<void>;
         feed?: () => Promise<void>;
-        automations?: () => Promise<void>;
+        automations?: (options?: AutomationRefreshOptions) => Promise<void>;
         sessions?: (context: SessionListInvalidationContext) => Promise<void>;
         /** Refresh exactly these listed rows by id; the list membership is not re-read. */
         sessionRows?: (sessionIds: readonly string[]) => Promise<void>;
@@ -209,7 +210,14 @@ export async function applyPlannedChangeActions(params: {
         tasks.push(() => params.invalidate.friendRequests?.() ?? Promise.resolve());
     }
     if (planned.invalidate.feed) tasks.push(() => params.invalidate.feed?.() ?? Promise.resolve());
-    if (planned.invalidate.automations) tasks.push(() => params.invalidate.automations?.() ?? Promise.resolve());
+    if (planned.invalidate.automations) {
+        const automationChanges = planned.changes.filter(change => change.kind === 'automation');
+        // The canonical status writer names this sentinel and never writes Runs.
+        // Unknown, mixed and ordinary Automation ids retain the full recovery read.
+        const summariesOnly = automationChanges.length > 0
+            && automationChanges.every(change => change.entityId === 'automation-source-status');
+        tasks.push(() => params.invalidate.automations?.(summariesOnly ? { summariesOnly: true } : undefined) ?? Promise.resolve());
+    }
     if (planned.invalidate.pets) {
         tasks.push(async () => {
             try {

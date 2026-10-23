@@ -1,3 +1,5 @@
+import type { AutomationRefreshOptions } from './syncAutomations';
+
 export function isAutomationSocketUpdateType(type: string): boolean {
     return (
         type === 'automation-upsert'
@@ -10,13 +12,15 @@ export function isAutomationSocketUpdateType(type: string): boolean {
 
 export function applyAutomationSocketUpdate(params: {
     updateType: string;
-    invalidateAutomations: () => void;
-    invalidateAutomationsCoalesced?: () => void;
+    invalidateAutomations: (options?: AutomationRefreshOptions) => void;
+    invalidateAutomationsCoalesced?: (options?: AutomationRefreshOptions) => void;
 }): boolean {
     if (!isAutomationSocketUpdateType(params.updateType)) {
         return false;
     }
     const invalidate = params.invalidateAutomationsCoalesced ?? params.invalidateAutomations;
-    invalidate();
+    // Source/catalog status and consumed no-Run budgets change summaries, not Runs.
+    if (params.updateType === 'automation-source-status-updated') invalidate({ summariesOnly: true });
+    else invalidate();
     return true;
 }

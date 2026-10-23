@@ -14,6 +14,9 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
 import { loadSyncTuning } from '@/sync/runtime/syncTuning';
 
+/** Only a proven source-status change can omit the retained Run-window refresh. */
+export type AutomationRefreshOptions = Readonly<{ summariesOnly: true }>;
+
 export async function fetchAndApplyAutomations(params: {
     credentials: AuthCredentials | null | undefined;
     applyAutomations: (automations: AutomationDefinition[], nextCursor: string | null) => number | null;
