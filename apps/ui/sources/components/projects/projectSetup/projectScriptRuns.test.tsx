@@ -28,7 +28,7 @@ import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExec
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 const inspectionTransport = vi.hoisted(() => ({ accounts: [] as string[], answer: null as unknown,
-    workerAnswer: null as unknown, hold: null as Promise<void> | null, failure: null as string | null }));
+    workerAnswer: null as unknown, hold: null as Promise<void> | null, failure: null as string | null, offline: false }));
 
 // Passive inspection uses the original Account's external Action ingress even on its own Machine.
 async function inspectActionResponse(path: string, init?: RequestInit): Promise<Response | null> {
@@ -39,6 +39,7 @@ async function inspectActionResponse(path: string, init?: RequestInit): Promise<
     const bearer = new Headers(init?.headers).get('Authorization')?.slice('Bearer '.length);
     if (!bearer) throw new Error('Inspection must carry its captured Account');
     inspectionTransport.accounts.push(parseToken(bearer));
+    if (inspectionTransport.offline) throw new TypeError('Network request failed');
     if (inspectionTransport.failure) return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
         requestId: envelope.requestId, execution: { ok: false, errorCode: inspectionTransport.failure, error: inspectionTransport.failure } }));
     const answer = ProjectDefinitionInspectOutputSchema.parse(inspectionTransport.answer);
@@ -75,7 +76,7 @@ const { useProjectScriptsController } = await import('./useProjectScriptsControl
 const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const NO_CHANGE = () => {};
 afterEach(() => { standardCleanup(); actionOperationStore.reset(); inspectionTransport.accounts = []; inspectionTransport.answer = null;
-    inspectionTransport.workerAnswer = null; inspectionTransport.hold = null; inspectionTransport.failure = null; });
+    inspectionTransport.workerAnswer = null; inspectionTransport.hold = null; inspectionTransport.failure = null; inspectionTransport.offline = false; });
 
 describe('Scripts canonical operation subscriptions', () => {
     it.each([false, true])('keeps hidden inspection idle and retains one shared checkout result through close, reopen and remount (initially presented: %s)', async initiallyPresented => {
@@ -99,8 +100,12 @@ describe('Scripts canonical operation subscriptions', () => {
         const wrapper = ({ children }: React.PropsWithChildren) => <PluginSurfaceFocusEligibilityProvider active={presented}>{children}</PluginSurfaceFocusEligibilityProvider>;
         try {
             const workspace: WorkspaceAddressV1 = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), machineId: 'source-machine', workspaceId: 'source', rootPath: '/source' };
-            inspectionTransport.answer = ProjectDefinitionInspectOutputSchema.parse({ definition: { basis: { kind: 'absent' }, document: null },
-                detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+            const native = { kind: 'native', tool: 'package_script', file: 'package.json', target: 'build' };
+            const manifest = { version: 1, scripts: { build: { source: native } },
+                services: { app: { source: { kind: 'command', command: 'serve' }, execution: 'portable' } } };
+            inspectionTransport.answer = ProjectDefinitionInspectOutputSchema.parse({ definition: { basis: { kind: 'present', hash: 'a'.repeat(64) },
+                document: { status: 'valid', bytes: JSON.stringify(manifest), original: manifest, manifest, diagnostics: [] } },
+                detection: { entries: [{ source: native, usage: 'script' }], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
                 setupReadiness: { kind: 'current', reviewedEffectDigest: 'inspected-effect', completedAtMs: 123 },
                 setupConsent: { kind: 'admitted' } });
             const homes = [workspace.serverId];
@@ -151,9 +156,27 @@ describe('Scripts canonical operation subscriptions', () => {
             await vi.waitFor(() => expect(remounted.getCurrent().read).toMatchObject({ refreshing: true, value: { definition: success.value.definition } }));
             await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account', 'account']));
             await act(async () => { nextRead.resolve(); });
-            inspectionTransport.failure = 'permission_denied';
+            await vi.waitFor(() => expect(remounted.getCurrent().read).toEqual(success));
+            const retainedBinding = remounted.getCurrent().binding;
+            inspectionTransport.offline = true;
             await act(async () => { remounted.getCurrent().retry(); });
-            await vi.waitFor(() => expect(remounted.getCurrent().read).toEqual({ key: projectDefinitionInspectionKey(workspace), error: 'permission_denied' }));
+            await vi.waitFor(() => expect(remounted.getCurrent().read).toMatchObject({ refreshing: false, error: expect.any(String) }));
+            const offline = remounted.getCurrent().read;
+            expect(offline).toMatchObject({ value: { definition: success.value.definition, detection: success.value.detection } });
+            expect.soft(offline && 'value' in offline ? offline.value : null).not.toHaveProperty('setupReadiness');
+            expect.soft(offline && 'value' in offline ? offline.value : null).not.toHaveProperty('setupConsent');
+            inspectionTransport.offline = false;
+            for (const code of ['access_denied', 'admission_unavailable', 'content_unavailable', 'permission_denied', 'not_authenticated']) {
+                inspectionTransport.failure = null;
+                await act(async () => { remounted.getCurrent().retry(); });
+                await vi.waitFor(() => expect(remounted.getCurrent().read).toEqual(success));
+                inspectionTransport.failure = code;
+                await act(async () => { remounted.getCurrent().retry(); });
+                await vi.waitFor(() => expect(remounted.getCurrent().read).toHaveProperty('error', code));
+                expect.soft(remounted.getCurrent().read).toEqual({ key: projectDefinitionInspectionKey(workspace), error: code });
+                expect(remounted.getCurrent().binding).toBe(retainedBinding);
+                expect(retainedBinding?.isCurrent()).toBe(true);
+            }
             await remounted.unmount();
         } finally { refreshing.resolve(); await connection.dispose(); disposeExecutor(); }
     });

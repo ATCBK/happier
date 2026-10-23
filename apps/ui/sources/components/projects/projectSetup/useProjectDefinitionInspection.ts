@@ -60,9 +60,14 @@ function createInspectionStore(currentBinding: () => ServerCredentialAccountScop
             if (!currentBinding()) return null;
             const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
                 ? error.code : 'project_definition_inspection_failed';
-            return state && 'value' in state && code !== 'permission_denied' && code !== 'not_authenticated'
-                ? { ...state, refreshing: false, error: code }
-                : { key: projectDefinitionInspectionKey(input), error: code };
+            // Machine/root/content refusals withdraw the inspection even while Account
+            // credentials remain current. Transport failures retain display facts only.
+            if (!state || !('value' in state) || ['permission_denied', 'not_authenticated',
+                'access_denied', 'admission_unavailable', 'content_unavailable'].includes(code)) {
+                return { key: projectDefinitionInspectionKey(input), error: code };
+            }
+            const { setupReadiness: _readiness, setupConsent: _consent, ...value } = state.value;
+            return { ...state, value, refreshing: false, error: code };
         },
         applySnapshot: (_state, snapshot) => snapshot,
         subscribeRecovery: (input, refresh) => {

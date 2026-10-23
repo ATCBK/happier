@@ -524,7 +524,7 @@ describe('ProjectScriptsBody runs', () => {
     await act(async () => actionOperationStore.setMachineObservation({ serverId: workspace.serverId, machineId: workspace.machineId }, 'unavailable'));
     await act(async () => fail({ code: 'project_definition_inspection_failed' }));
     expect(screen.findByTestId('scripts.script:test')).not.toBeNull();
-    expect(screen.getTextContent()).toContain('projects.scripts.setup.readySince');
+    expect(screen.getTextContent()).not.toContain('projects.scripts.setup.readySince');
     expect(screen.findByTestId('scripts.inspection-action')).not.toBeNull();
     shared.inspectionPending = null;
     await act(async () => screen.pressByTestIdAsync('scripts.inspection-action'));
