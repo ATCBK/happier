@@ -84,6 +84,40 @@ describe('useSearch (hook)', () => {
         expect(searchFn).toHaveBeenCalledTimes(3);
     });
 
+    it('isolates cached answers and in-flight requests by scope while retaining same-scope cache hits', async () => {
+        const pending: Array<(rows: string[]) => void> = [];
+        const search = (_query: string) => new Promise<string[]>((resolve) => pending.push(resolve));
+        const { useSearch } = await import('./useSearch');
+        const hook = await renderHook(({ scope, query }) => useSearch(query, search, scope), {
+            initialProps: { scope: 'home-a/account-a', query: 'Ada' },
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        await act(async () => { pending[0]!(['Home A Ada']); });
+
+        await hook.rerender({ scope: 'home-b/account-a', query: 'Ada' });
+        expect(hook.getCurrent().results).toEqual([]);
+        expect(hook.getCurrent().isSearching).toBe(true);
+        expect(pending).toHaveLength(1);
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        await hook.rerender({ scope: 'home-b/account-b', query: 'Ada' });
+        await act(async () => { pending[1]!(['superseded Account Ada']); });
+        expect(hook.getCurrent().results).toEqual([]);
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        await act(async () => { pending[2]!(['current Account Ada']); });
+        expect(hook.getCurrent().results).toEqual(['current Account Ada']);
+
+        await hook.rerender({ scope: 'home-a/account-a', query: 'Ada' });
+        expect(hook.getCurrent().results).toEqual(['Home A Ada']);
+        expect(hook.getCurrent().isSearching).toBe(false);
+        expect(pending).toHaveLength(3);
+        await act(async () => { hook.getCurrent().retry(); });
+        await act(async () => { pending[3]!(['refreshed Home A Ada']); });
+        expect(hook.getCurrent().results).toEqual(['refreshed Home A Ada']);
+        await hook.rerender({ scope: 'home-b/account-b', query: 'Ada' });
+        expect(hook.getCurrent().results).toEqual(['current Account Ada']);
+        expect(pending).toHaveLength(4);
+    });
+
     it('keeps the latest query and retry answer when superseded requests settle later', async () => {
         const pending: Array<(rows: string[]) => void> = [];
         const searchFn = vi.fn(() => new Promise<string[]>((resolve) => pending.push(resolve)));

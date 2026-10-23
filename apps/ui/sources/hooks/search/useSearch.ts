@@ -3,6 +3,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 export type UseSearchError = 'searchFailed';
 export type SearchRequestContext = Readonly<{ isCurrent: () => boolean }>;
 
+type SearchState<T> = {
+    scopeKey: string;
+    results: T[];
+    isSearching: boolean;
+    error: UseSearchError | null;
+};
+
 /**
  * Production-ready search hook with automatic debouncing, caching, and retry logic.
  * 
@@ -15,15 +22,15 @@ export type SearchRequestContext = Readonly<{ isCurrent: () => boolean }>;
  * 
  * @param query - The search query string
  * @param searchFn - The async function to perform the search
+ * @param scopeKey - The identity of the source whose query answers may be reused
  * @returns Object with results array, isSearching boolean, and a stable error code (if any)
  */
 export function useSearch<T>(
     query: string,
-    searchFn: (query: string, context: SearchRequestContext) => Promise<T[]>
+    searchFn: (query: string, context: SearchRequestContext) => Promise<T[]>,
+    scopeKey = '',
 ): { results: T[]; isSearching: boolean; error: UseSearchError | null; retry: () => void } {
-    const [results, setResults] = useState<T[]>([]);
-    const [isSearching, setIsSearching] = useState(false);
-    const [error, setError] = useState<UseSearchError | null>(null);
+    const [state, setState] = useState<SearchState<T>>({ scopeKey, results: [], isSearching: false, error: null });
     
     // Permanent cache for search results
     const cacheRef = useRef<Map<string, T[]>>(new Map());
@@ -35,17 +42,21 @@ export function useSearch<T>(
     // Perform the search with retry logic
     const performSearch = useCallback(async (searchQuery: string) => {
         // Check cache first
-        const cached = cacheRef.current.get(searchQuery);
+        const cacheKey = JSON.stringify([scopeKey, searchQuery]);
+        const cached = cacheRef.current.get(cacheKey);
         if (cached) {
-            setResults(cached);
-            setError(null);
+            setState({ scopeKey, results: cached, isSearching: false, error: null });
             return;
         }
         
         const requestId = ++requestIdRef.current;
         const isCurrent = () => requestIdRef.current === requestId;
-        setIsSearching(true);
-        setError(null);
+        setState(previous => ({
+            scopeKey,
+            results: previous.scopeKey === scopeKey ? previous.results : [],
+            isSearching: true,
+            error: null,
+        }));
         
         // IMPORTANT: do not retry forever. Persistent errors (bad auth/config) would otherwise
         // cause infinite background requests and a "stuck loading" UI.
@@ -64,18 +75,16 @@ export function useSearch<T>(
                 if (!isCurrent()) return;
                 
                 // Cache the results
-                cacheRef.current.set(searchQuery, searchResults);
+                cacheRef.current.set(cacheKey, searchResults);
                 
                 // Update state
-                setResults(searchResults);
-                setError(null);
+                setState({ scopeKey, results: searchResults, isSearching: true, error: null });
                 return; // Success
                 
             } catch (error) {
                 if (!isCurrent()) return;
                 if (attempt >= maxAttempts) {
-                    setResults([]);
-                    setError('searchFailed');
+                    setState({ scopeKey, results: [], isSearching: true, error: 'searchFailed' });
                     return;
                 }
                 // Wait before retrying (bounded)
@@ -85,10 +94,10 @@ export function useSearch<T>(
             }
         } finally {
             if (requestIdRef.current === requestId) {
-                setIsSearching(false);
+                setState(previous => ({ ...previous, isSearching: false }));
             }
         }
-    }, [searchFn]);
+    }, [searchFn, scopeKey]);
     
     // Effect to handle debounced search
     useEffect(() => {
@@ -102,24 +111,24 @@ export function useSearch<T>(
         
         // If query is empty, clear results immediately
         if (!query.trim()) {
-            setResults([]);
-            setIsSearching(false);
-            setError(null);
+            setState({ scopeKey, results: [], isSearching: false, error: null });
             return;
         }
         
         // Check cache immediately
-        const cached = cacheRef.current.get(query);
+        const cached = cacheRef.current.get(JSON.stringify([scopeKey, query]));
         if (cached) {
-            setResults(cached);
-            setIsSearching(false);
-            setError(null);
+            setState({ scopeKey, results: cached, isSearching: false, error: null });
             return;
         }
         
         // Set searching state immediately for better UX
-        setIsSearching(true);
-        setError(null);
+        setState(previous => ({
+            scopeKey,
+            results: previous.scopeKey === scopeKey ? previous.results : [],
+            isSearching: true,
+            error: null,
+        }));
         
         // Debounce the actual search
         timeoutRef.current = setTimeout(() => {
@@ -133,14 +142,21 @@ export function useSearch<T>(
                 clearTimeout(timeoutRef.current);
             }
         };
-    }, [query, performSearch]);
+    }, [query, performSearch, scopeKey]);
     
     const retry = useCallback(() => {
         if (!query.trim()) return;
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        cacheRef.current.delete(query);
+        cacheRef.current.delete(JSON.stringify([scopeKey, query]));
         void performSearch(query);
-    }, [performSearch, query]);
+    }, [performSearch, query, scopeKey]);
 
-    return { results, isSearching, error, retry };
+    // A changed source must never render the previous source's answer before the effect runs.
+    const currentScope = state.scopeKey === scopeKey;
+    return {
+        results: currentScope ? state.results : [],
+        isSearching: currentScope ? state.isSearching : query.trim().length > 0,
+        error: currentScope ? state.error : null,
+        retry,
+    };
 }
