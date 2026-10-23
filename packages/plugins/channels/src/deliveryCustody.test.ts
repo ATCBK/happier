@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
+import { MAX_CONVERSATION_RECEIVE_WAIT_MS, type ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
 
 import {
   claimStaleConversationDeliveryAttemptRecovery,
@@ -56,16 +56,16 @@ describe('Channels outward delivery custody', () => {
     const result = settleConversationDeliveryAttempt({
       custody: { state: 'attempting', attemptCount: 5, attemptId: 'attempt-5', startedAt: 100, providerMessageIds: [] },
       attemptId: 'attempt-5',
-      result: { kind: 'notDelivered', retry: 'after', retryAfterMs: 12_000 },
+      result: { kind: 'notDelivered', retry: 'after', retryAfterMs: 120_000 },
       now: 100,
     });
-    expect(result).toMatchObject({ kind: 'settled', custody: { state: 'retryDue', retryNotBefore: 12_100 } });
+    expect(result).toMatchObject({ kind: 'settled', custody: { state: 'retryDue', retryNotBefore: 120_100 } });
     if (result.kind !== 'settled') throw new Error('Expected settlement');
     expect(deriveConversationDeliveryProjection(result.custody)).toMatchObject({ terminal: false, attention: true });
-    expect(startConversationDeliveryAttempt({ custody: result.custody, attemptId: 'attempt-6', startedAt: 12_100 }))
+    expect(startConversationDeliveryAttempt({ custody: result.custody, attemptId: 'attempt-6', startedAt: 120_100 }))
       .toMatchObject({ kind: 'started', custody: { attemptCount: 6 } });
   });
-  it.each(['safe', 'zeroRetryAfter'] as const)('keeps growing %s no-effect backoff beyond five attempts and never starts before the due time', (retryPolicy) => {
+  it.each(['safe', 'zeroRetryAfter'] as const)('bounds %s no-effect backoff and never starts before the due time', (retryPolicy) => {
     let custody = createReadyConversationDeliveryCustody();
     let now = 0;
     for (let attempt = 1; attempt <= 8; attempt += 1) {
@@ -80,7 +80,7 @@ describe('Channels outward delivery custody', () => {
       });
       if (settled.kind !== 'settled') throw new Error('Expected retry settlement');
       custody = settled.custody;
-      const due = now + 1_000 * 2 ** (attempt - 1);
+      const due = now + Math.min(MAX_CONVERSATION_RECEIVE_WAIT_MS, 1_000 * 2 ** (attempt - 1));
       expect(custody).toMatchObject({ state: 'retryDue', retryNotBefore: due });
       expect(deriveConversationDeliveryProjection(custody)).toMatchObject({ terminal: false, attention: true });
       expect(startConversationDeliveryAttempt({ custody, attemptId: 'early', startedAt: due - 1 }))
