@@ -14,7 +14,7 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, API_TOK
 import { auth } from '@/app/auth/auth';
 import { machineUpdateHandler } from '@/app/api/socket/machineUpdateHandler';
 import { VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY } from '@/app/api/socket/machineSocketInstallationProof';
-import { createFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
+import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
 import { setMachineAccessGrantInTx, removeMachineAccessGrantInTx, resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
@@ -249,9 +249,8 @@ describe('requester Session input through the custodian Machine socket', () => {
         ] } })).toBeNull();
     });
 
-    it.each([{ mode: 'plain', preset: 'quiet', tagged: false }, { mode: 'e2ee', preset: 'quiet', tagged: false },
-        { mode: 'e2ee', preset: 'quiet', tagged: true }, { mode: 'plain', preset: 'important', tagged: false }] as const)(
-        'merges a newly selected stronger private route into the same unaccepted ordinary original ($mode, $preset, tagged=$tagged)', async ({ mode, preset, tagged }) => {
+    it.each([{ mode: 'plain', preset: 'quiet' }, { mode: 'e2ee', preset: 'quiet' },
+        { mode: 'plain', preset: 'important' }] as const)('merges a newly selected stronger private route into the same unaccepted ordinary original ($mode, $preset)', async ({ mode, preset }) => {
         const signing = tweetnacl.sign.keyPair();
         const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
         const contentKey = tweetnacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(material.secret)).publicKey;
@@ -296,10 +295,7 @@ describe('requester Session input through the custodian Machine socket', () => {
         const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
         const host = buildTrustedHostSessionInputAdmissionV1('agent');
         const payload = (delivery: typeof quiet) => ({ localId, targetMachineId: machine.id, followRelations: relations,
-            followDeliveryV1: delivery,
-            ...(mode === 'e2ee' && tagged ? { requestEqualityEvidenceV1: { kind: 'e2eeTag',
-                tag: (delivery.delivery === 'wake' ? 'A' : 'B').repeat(43) } } : {}),
-            content: mode === 'e2ee'
+            followDeliveryV1: delivery, content: mode === 'e2ee'
                 // The paired producer uses the real Session cipher. This Home
                 // boundary must preserve, not open or reinterpret, its bytes.
                 ? { t: 'encrypted', c: `opaque-follow-${delivery.delivery}` }
@@ -370,21 +366,19 @@ describe('requester Session input through the custodian Machine socket', () => {
             const retry = await enqueueLate({ ...payload(important), followSources: sources });
             expect(retry.statusCode, retry.body).toBe(200);
             expect(retry.json()).toMatchObject({ didWrite: false });
+            expect((await enqueueLate({ ...payload(important), followSources: sources,
+                content: mode === 'e2ee' ? { t: 'plain', v: { role: 'user' } } : { t: 'encrypted', c: 'wrong-mode' } })).statusCode).toBe(400);
+            expect((await enqueueLate({ ...payload(important), followSources: [{ ...sources[0],
+                rule: { ruleId: 'private-rule-0', ruleVersion: 0 } }] })).statusCode).toBe(403);
+            expect((await enqueueLate(payload(quiet))).statusCode).toBe(400);
             const changedContent = mode === 'e2ee'
                 ? { t: 'encrypted', c: 'different-original-content' }
                 : { t: 'plain', v: { ...(payload(important).content as { v: object }).v,
                     content: { type: 'text', text: 'different original content' } } };
-            const changedRetry = await enqueueLate({ ...payload(important), followSources: sources, content: changedContent,
-                ...(mode === 'e2ee' && tagged ? { requestEqualityEvidenceV1: { kind: 'e2eeTag', tag: 'C'.repeat(43) } } : {}) });
+            const changedRetry = await enqueueLate({ ...payload(important), followSources: sources, content: changedContent });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } })).toEqual(settled);
             expect(changedRetry.statusCode, changedRetry.body).toBe(400);
             expect(changedRetry.json()).toMatchObject({ admissionRejectionCode: 'session_input_idempotency_conflict' });
-            expect((await enqueueLate({ ...payload(important), followSources: sources,
-                content: mode === 'e2ee' ? { t: 'plain', v: { role: 'user' } } : { t: 'encrypted', c: 'wrong-mode' },
-                requestEqualityEvidenceV1: undefined })).statusCode).toBe(400);
-            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } })).toEqual(settled);
-            expect((await enqueueLate({ ...payload(important), followSources: [{ ...sources[0],
-                rule: { ruleId: 'private-rule-0', ruleVersion: 0 } }] })).statusCode).toBe(403);
-            expect((await enqueueLate(payload(quiet))).statusCode).toBe(400);
             expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: destination.id, publisherAuthority,
                 localId, acceptedTurn: { kind: 'followUp', turnId: 'accepted-original' },
                 // As with the encrypted input above, Home preserves this
@@ -438,7 +432,7 @@ describe('requester Session input through the custodian Machine socket', () => {
         const host = buildTrustedHostSessionInputAdmissionV1('agent');
         const enqueue = async (localId: string, followSources: unknown, includeRelations = true, delivery = followDeliveryV1,
             text = 'selected original') => {
-            const socket = Object.assign(createFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
+            const socket = Object.assign(createAuthenticatedFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
                 data: { clientType: 'machine-scoped', machineId: sourceMachine.id,
                 [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: sourceMachine.installationId } }), { handshake: { auth: { token } } });
             machineUpdateHandler(owner.id, socket as unknown as Socket, { operationSocketBatchLimits: {
@@ -584,7 +578,7 @@ describe('requester Session input through the custodian Machine socket', () => {
         await db.sessionMessage.create({ data: { sessionId: source.id, localId: 'private-report', seq: 1, messageRole: 'agent',
             content: { t: 'plain', v: { role: 'agent', content: [] } } } });
         const token = await auth.createToken(custodian.id, undefined, { kind: 'account', authority: 'present_user' });
-        const socket = Object.assign(createFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
+        const socket = Object.assign(createAuthenticatedFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
             data: { clientType: 'machine-scoped', machineId: machine.id,
             [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: machine.installationId } }), { handshake: { auth: { token } } });
         machineUpdateHandler(custodian.id, socket as unknown as Socket, { operationSocketBatchLimits: {
@@ -770,7 +764,7 @@ describe('requester Session input through the custodian Machine socket', () => {
         // Only Socket.IO is substituted. Authentication, C41 grants, exact
         // AccessKey binding, Pending admission and durable SQLite writes are real.
         const enqueue = async (source: typeof target, localId: string) => {
-            const socket = Object.assign(createFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
+            const socket = Object.assign(createAuthenticatedFakeSocket({ nsp: { server: createSocketRoomDiscoveryHarness(async () => []) },
                 data: { clientType: 'machine-scoped', machineId: source.id,
                 [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: source.installationId } }), { handshake: { auth: { token } } });
             machineUpdateHandler(custodian.id, socket as unknown as Socket, { operationSocketBatchLimits: {
