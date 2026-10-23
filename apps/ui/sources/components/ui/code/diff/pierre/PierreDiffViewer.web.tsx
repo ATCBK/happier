@@ -31,7 +31,7 @@ import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCode
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
-import { scrollCodeLineIntoView } from '@/components/ui/code/view/scrollCodeLineIntoView';
+import { retainCodeLineLanding, scrollCodeLineIntoView } from '@/components/ui/code/view/scrollCodeLineIntoView';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import type { CodeTokenPointer } from '@/components/ui/code/interactions/codeTokenPress';
 import { PIERRE_FIND_HIGHLIGHT_CSS, pierreCodeLineSelector, registerPierreFindHighlights } from './pierreFindHighlights.web';
@@ -1112,6 +1112,11 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
 
     const paintRef = React.useRef<PierrePaint | null>(null);
     const scrollTargetKey = codeLineScrollTargetKey(props.scrollToLineId, props.scrollToLineId ? props.findRangesByLineId?.get(props.scrollToLineId) : undefined);
+    const stopRetainedLanding = React.useRef<(() => void) | null>(null);
+    React.useEffect(() => () => {
+        stopRetainedLanding.current?.();
+        stopRetainedLanding.current = null;
+    }, [scrollTargetKey, props.filePath, props.findActive, useHappierRenderer, initialPresentationForceFallback]);
     const stopFindRef = React.useRef<() => void>(() => {});
     const stopIntelligenceRef = React.useRef<() => void>(() => {});
     const refreshFind = React.useCallback((paint: PierrePaint) => {
@@ -1127,6 +1132,13 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         if (side === 'additions' && paint.instance.revealLine(lineNumber)) return;
         const queryRoot = paint.node.shadowRoot ?? paint.node;
         const el = queryRoot.querySelector<HTMLElement>(pierreCodeLineSelector(target));
+        const completeLanding = () => {
+            lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+            if (props.findActive && el) {
+                stopRetainedLanding.current?.();
+                stopRetainedLanding.current = retainCodeLineLanding(el);
+            }
+        };
         // Header-start review units use their first code line as the portable reveal target.
         // Their action row is before that line: land on its existing annotation, not below it.
         const previous = codeLines?.[(codeLines?.indexOf(target) ?? 0) - 1];
@@ -1143,7 +1155,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             // of the sticky file header and the Find bar. Pierre's offset for rows it has not measured (wrapped
             // lines on a phone) can be far off, so the offset scroll below only brings an unmounted row into view.
             if (!annotation && scrollCodeLineIntoView(el)) {
-                lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+                completeLanding();
                 return;
             }
             const top = paint.virtualizer.getOffsetInScrollContainer(paint.node) + (
@@ -1162,7 +1174,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             const node = annotationNode ?? el;
             if (!scrollCodeLineIntoView(node, annotationNode ? 'start' : 'center')) return;
         }
-        lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+        completeLanding();
     };
 
     const revealScrollTarget = React.useCallback((paint: PierrePaint) => {

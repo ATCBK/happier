@@ -14,7 +14,7 @@ import {
 import { CodeLineRow, CODE_LINE_BASE_HEIGHT, type CodeLineDiagnosticRange, type CodeLinePressEvent } from './CodeLineRow';
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLinesReadingAnchor';
-import { scrollCodeLineIntoView } from './scrollCodeLineIntoView';
+import { retainCodeLineLanding, scrollCodeLineIntoView } from './scrollCodeLineIntoView';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
@@ -223,6 +223,7 @@ export function CodeLinesViewCore(
     }, [props.externalScrollView]);
     const lineNativeIdPrefix = React.useId();
     const completedScrollTarget = React.useRef<string | null>(null);
+    const stopRetainedLanding = React.useRef<(() => void) | null>(null);
     const pendingTargetLanding = React.useRef<(() => void) | null>(null);
     const contentRef = React.useRef<View | null>(null);
     const nativeReadingAnchor = React.useRef<NativeCodeReadingAnchor | null>(null);
@@ -555,6 +556,11 @@ export function CodeLinesViewCore(
         };
     }, [estimatedRowHeight, leadingOffset]);
 
+    React.useEffect(() => () => {
+        stopRetainedLanding.current?.();
+        stopRetainedLanding.current = null;
+    }, [scrollTargetKey, scrollIndex < 0]);
+
     React.useEffect(() => {
         const targetId = props.scrollToLineId;
         if (!targetId) {
@@ -573,7 +579,12 @@ export function CodeLinesViewCore(
             try {
                 // A sheet over the bottom of the page (`contentPaddingBottom`) is not a place to land: the
                 // covered strip counts as the row's margin, so the row centres in the part still visible.
-                return scrollCodeLineIntoView(el, props.scrollToLineAlignment === 'start' ? 'start' : 'center', props.contentPaddingBottom);
+                const landed = scrollCodeLineIntoView(el, props.scrollToLineAlignment === 'start' ? 'start' : 'center', props.contentPaddingBottom);
+                if (landed && el && props.findRangesByLineId?.get(targetId)?.some(range => range.current)) {
+                    stopRetainedLanding.current?.();
+                    stopRetainedLanding.current = retainCodeLineLanding(el);
+                }
+                return landed;
             } catch {
                 return false;
             }

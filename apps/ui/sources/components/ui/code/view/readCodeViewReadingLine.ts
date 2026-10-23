@@ -18,7 +18,8 @@ export function findVerticalScroller(element: HTMLElement): HTMLElement | null {
       scroller.scrollHeight > scroller.clientHeight
     )
       return scroller;
-    scroller = scroller.parentElement;
+    const root = scroller.getRootNode();
+    scroller = scroller.parentElement ?? (root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : null);
   }
   return null;
 }
