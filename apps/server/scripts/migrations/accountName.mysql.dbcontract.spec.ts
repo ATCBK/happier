@@ -40,9 +40,12 @@ describe("Account name MySQL upgrade", () => {
             await deploy();
             const firstName = "a".repeat(191);
             const lastName = "b".repeat(191);
+            const trimWhitespace = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+            const edgeFirst = `${trimWhitespace}Ada${trimWhitespace}`;
+            const edgeLast = "\u0085\u200bLovelace\u200b\u0085";
             await db.$executeRawUnsafe(
-                "INSERT INTO `Account` (`id`,`publicKey`,`firstName`,`lastName`,`updatedAt`) VALUES ('long','long',?,?,CURRENT_TIMESTAMP(3)),('trim','trim',?,?,CURRENT_TIMESTAMP(3)),('blank','blank',?,?,CURRENT_TIMESTAMP(3))",
-                firstName, lastName, "\tAda\n", "\u00a0Lovelace\u00a0", "\t \n", "\u00a0",
+                "INSERT INTO `Account` (`id`,`publicKey`,`firstName`,`lastName`,`updatedAt`) VALUES ('long','long',?,?,CURRENT_TIMESTAMP(3)),('trim','trim',?,?,CURRENT_TIMESTAMP(3)),('blank','blank',?,?,CURRENT_TIMESTAMP(3)),('edge','edge',?,?,CURRENT_TIMESTAMP(3))",
+                firstName, lastName, "\tAda\n", "\u00a0Lovelace\u00a0", "\t \n", "\u00a0", edgeFirst, edgeLast,
             );
             await stageMigration(migrationName);
             await deploy();
@@ -50,6 +53,7 @@ describe("Account name MySQL upgrade", () => {
             expect(await db.$queryRawUnsafe("SELECT `id`,`firstName`,`lastName`,`name` FROM `Account` ORDER BY `id`"))
                 .toEqual([
                     { id: "blank", firstName: "\t \n", lastName: "\u00a0", name: null },
+                    { id: "edge", firstName: edgeFirst, lastName: edgeLast, name: `${edgeFirst.trim()} ${edgeLast.trim()}` },
                     { id: "long", firstName, lastName, name: `${firstName} ${lastName}` },
                     { id: "trim", firstName: "\tAda\n", lastName: "\u00a0Lovelace\u00a0", name: "Ada Lovelace" },
                 ]);
