@@ -28,9 +28,11 @@ import {
   setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import {
   fetchTeamCredentialDirectMaterialPreparation,
 } from './teamCredentialDirectMaterialHttp';
+import { commitActiveConnectedAccountCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const ACCOUNT_ID = 'custodian';
 
@@ -155,6 +157,97 @@ function reconciler(homeDomainAction: NonNullable<ActionExecutorDeps['homeDomain
 
 describe('daemon Team credential direct-material reconciler', () => {
   beforeEach(() => { vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockReset(); });
+
+  it('does no resource or account reads for 25 unrelated and cleanup-only publications across 20 resources and 5 sources', async () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    const resources = Array.from({ length: 20 }, (_, index) => TeamCredentialResourceSummaryV1Schema.parse({
+      ...summary({ id: `resource-${index}` }),
+      source: {
+        v: 1, kind: 'connected_account', credentialIncarnation: 'incarnation',
+        target: { kind: 'account', account: {
+          service: { pluginId: 'service.test', localId: `source-${index % 5}` }, accountId: 'account',
+        } },
+      },
+    }));
+    const homeDomainAction = vi.fn<NonNullable<ActionExecutorDeps['homeDomainAction']>>(async request => {
+      if (request.actionId === 'teams.list') return teamsPage;
+      return TeamCredentialResourcePageV1Schema.parse({
+        resources, viewer: { manageCredentials: false, offerOwnCredential: true }, nextCursor: null,
+      });
+    });
+    const listAccounts = vi.fn(async () => ({ accounts: [] }));
+    const owner = createDaemonTeamCredentialDirectMaterialReconciler({
+      token: 'token', accountId: ACCOUNT_ID, homeDomainAction, listAccounts,
+      // Unavailable accounts must never reach material admission; the real
+      // reconciliation path below stops at the HTTP account-list boundary.
+      establishedRuntimeOwner: { readMaterialSnapshot: async () => { throw new Error('Unexpected material read'); } },
+      readGroup: async () => null,
+      resolveProviderSource: async () => null,
+    });
+    vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockImplementation(async request => {
+      const resource = resources.find(candidate => candidate.id === request.resourceId)!;
+      const source = resource.source;
+      if (source?.kind !== 'connected_account') throw new Error('Unexpected source');
+      return {
+        homeServerIdentityId: 'home', teamId: 'team', resourceId: resource.id, resourceRevision: 1,
+        source, sourceMember: { kind: 'connected_account', service: source.target.account.service, connectedAccountId: 'account' },
+        sourceCredentialIncarnation: 'incarnation', publishedSourceVersion: null, recipients: [], nextCursor: null,
+      };
+    });
+    const providerCatalog = { status: 'ready' as const, revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    const configurationCatalog = { status: 'ready' as const, revision: 1,
+      record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'configurations', value: { v: 1, entries: [] } }) };
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'source-account',
+      settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      providerConnectionsCatalog: providerCatalog, connectedConfigurationCatalog: configurationCatalog });
+    const incumbent = { scopeKey: 'source-account', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    const passes: Promise<unknown>[] = [];
+    const unsubscribe = subscribeTeamCredentialDirectMaterialSourceChanges(() => { passes.push(owner.reconcile()); });
+    try {
+      // Establish that the fixture actually reaches every owned source.
+      await owner.reconcile();
+      expect(homeDomainAction).toHaveBeenCalledTimes(2);
+      expect(listAccounts).toHaveBeenCalledTimes(5);
+      homeDomainAction.mockClear(); listAccounts.mockClear();
+      for (let index = 0; index < 25; index++) {
+        commitActiveNotificationChannelCatalog({ ...incumbent, catalog: { status: 'ready', revision: index, channels: [], diagnostics: [] } });
+        commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog,
+          cleanup: { status: 'cleanup-pending', reason: `maintenance-${index}` } } });
+        commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: { ...configurationCatalog,
+          cleanup: index % 2 ? { status: 'complete' } : { status: 'cleanup-pending', reason: 'history-incomplete' } } });
+      }
+      await Promise.all(passes);
+      expect(homeDomainAction).toHaveBeenCalledTimes(0);
+      expect(listAccounts).toHaveBeenCalledTimes(0);
+
+      commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { ...providerCatalog, revision: 2 } });
+      await Promise.all(passes);
+      expect(homeDomainAction).toHaveBeenCalledTimes(2);
+      expect(listAccounts).toHaveBeenCalledTimes(5);
+      commitActiveConnectedAccountCatalog({ ...incumbent, key: 'configurations', catalog: { ...configurationCatalog, revision: 2 } });
+      await Promise.all(passes);
+      expect(homeDomainAction).toHaveBeenCalledTimes(4);
+      expect(listAccounts).toHaveBeenCalledTimes(10);
+      commitActiveProviderConnectionsCatalog({ ...incumbent, catalog: { status: 'unavailable', reason: 'forbidden' } });
+      await Promise.all(passes);
+      expect(homeDomainAction).toHaveBeenCalledTimes(6);
+      expect(listAccounts).toHaveBeenCalledTimes(15);
+
+      // One refused service read must not be repeated for each resource in a
+      // pass, and must be attempted afresh by the next reconciliation.
+      listAccounts.mockRejectedValue(new Error('service unavailable'));
+      const refused = await owner.reconcile();
+      expect(refused.failures).toHaveLength(20);
+      expect(listAccounts).toHaveBeenCalledTimes(20);
+      listAccounts.mockResolvedValue({ accounts: [] });
+      await owner.reconcile();
+      expect(listAccounts).toHaveBeenCalledTimes(25);
+    } finally {
+      unsubscribe();
+      await Promise.all(passes);
+      resetActiveAccountSettingsSnapshotForTests();
+    }
+  });
 
   it('wakes for source authority and Account lifetime changes without reconciling unrelated catalog publications', () => {
     resetActiveAccountSettingsSnapshotForTests();

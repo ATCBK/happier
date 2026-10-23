@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import { computeTeamCredentialSourceMemberKeyV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialResourcePageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
@@ -18,6 +19,7 @@ import {
   type TeamCredentialSourceSnapshot,
 } from '@/providers/broker/teamCredentialSourceSnapshot';
 import type { QualifiedConnectedAccountEstablishedRuntimeOwner } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import {
   fetchTeamCredentialDirectMaterialCensus,
   fetchTeamCredentialDirectMaterialPreparation,
@@ -36,16 +38,25 @@ import {
 // publication cut but do not change credential material.
 const directMaterialSourceSnapshotFields = [
   'scopeKey', 'source',
-  'providerConnectionsCatalog', 'savedSecretResources', 'savedSecretCatalogState',
-  'connectedConfigurationCatalog',
+  'savedSecretResources', 'savedSecretCatalogState',
 ] as const satisfies readonly (keyof ActiveAccountSettingsSnapshot)[];
 
 export function subscribeTeamCredentialDirectMaterialSourceChanges(
   listener: ActiveAccountSettingsSnapshotListener,
 ): () => void {
   return subscribeActiveAccountSettingsSnapshotChanges((previous, next) => {
+    // Catalog producers also publish real source/history cleanup diagnostics.
+    // Direct delivery consumes the admitted row, not its maintenance outcome.
+    const previousConfiguration = previous?.connectedConfigurationCatalog;
+    const nextConfiguration = next?.connectedConfigurationCatalog;
+    const sameConfiguration = previousConfiguration === nextConfiguration
+      || previousConfiguration?.status === 'ready' && nextConfiguration?.status === 'ready'
+        && previousConfiguration.revision === nextConfiguration.revision
+        && isDeepStrictEqual(previousConfiguration.record, nextConfiguration.record);
     if (previous && next
       && directMaterialSourceSnapshotFields.every(field => previous[field] === next[field])
+      && sameProviderConnectionsCatalogAuthority(previous.providerConnectionsCatalog, next.providerConnectionsCatalog)
+      && sameConfiguration
       && isDeepStrictEqual(previous.settings.secrets, next.settings.secrets)
       && isDeepStrictEqual(previous.settingsSecretsReadKeys, next.settingsSecretsReadKeys)) return;
     listener(previous, next);
@@ -130,10 +141,10 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
   const resolveConnectedSnapshot = async (
     source: Extract<TeamCredentialSourceBindingV1, { kind: 'connected_account' }>,
     account: QualifiedConnectedAccountRef,
+    profiles: readonly QualifiedConnectedAccountProfileV4[],
     signal: AbortSignal,
   ): Promise<TeamCredentialSourceSnapshot | null> => {
-    const listed = await params.listAccounts(account.service, signal);
-    const profile = listed.accounts.find((candidate) => (
+    const profile = profiles.find((candidate) => (
       candidate.ref.accountId === account.accountId
       && candidate.ref.service.pluginId === account.service.pluginId
       && candidate.ref.service.localId === account.service.localId
@@ -174,6 +185,21 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
         : listed);
       let prepared = 0;
       const failures: TeamCredentialDirectMaterialReconcileOutputV1['failures'][number][] = [];
+      // The service inventory is one read for this pass, even when resources,
+      // pool members or preparation pages share it. Material and its currentness
+      // remain fresh per preparation; no inventory survives into the next pass.
+      const accountsByService = new Map<string, Promise<Readonly<{
+        accounts: readonly QualifiedConnectedAccountProfileV4[];
+      }>>>();
+      const listAccounts = (service: QualifiedConnectedAccountRef['service'], currentSignal: AbortSignal) => {
+        const key = buildQualifiedPluginContributionKey(service);
+        let listed = accountsByService.get(key);
+        if (!listed) {
+          listed = params.listAccounts(service, currentSignal);
+          accountsByService.set(key, listed);
+        }
+        return listed;
+      };
       for (const resource of resources) {
         signal?.throwIfAborted();
         const source = resource.source!;
@@ -213,7 +239,9 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
             }) => {
               const effectiveSignal = currentSignal ?? new AbortController().signal;
               if (currentSource.kind === 'connected_account' && sourceMember.kind === 'connected_account') {
-                return await resolveConnectedSnapshot(currentSource, currentSource.target.account, effectiveSignal);
+                const account = currentSource.target.account;
+                const listed = await listAccounts(account.service, effectiveSignal);
+                return await resolveConnectedSnapshot(currentSource, account, listed.accounts, effectiveSignal);
               }
               if (currentSource.kind === 'provider_connection' && sourceMember.kind === 'provider_credential_slot') {
                 return await params.resolveProviderSource(currentSource, effectiveSignal);
@@ -230,7 +258,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
                 || !sourceCredentialIncarnation
               ) return null;
               const account = { service: currentSource.target.service, accountId: sourceMember.connectedAccountId };
-              const listed = await params.listAccounts(account.service, effectiveSignal);
+              const listed = await listAccounts(account.service, effectiveSignal);
               const profile = listed.accounts.find((candidate) => candidate.ref.accountId === account.accountId);
               if (!profile || profile.status !== 'connected') return null;
               const material = await params.establishedRuntimeOwner.readMaterialSnapshot({ account, signal: effectiveSignal });
