@@ -230,7 +230,7 @@ async function callMachineScm<T extends { success: boolean; error?: string; erro
     const result: unknown = await invokeUiScmAction({ actionId, input: request, schema,
         ...(options?.onDispatched ? { onDispatched: options.onDispatched } : {}),
         context: { externalActionTarget: { kind: 'machine', machineId },
-            ...(options?.authorization ? { defaultSessionId: options.authorization.sessionId } : {}),
+            ...(options?.authorization?.kind === 'session.write' ? { defaultSessionId: options.authorization.sessionId } : {}),
             ...(options?.serverId ? { serverId: options.serverId } : {}),
             ...(options?.accountId ? { expectedAccountId: options.accountId } : {}),
             ...(options?.signal ? { signal: options.signal } : {}),

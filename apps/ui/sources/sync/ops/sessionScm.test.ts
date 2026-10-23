@@ -784,7 +784,7 @@ describe('sessionScm', () => {
                 head: 'feature/prs',
                 outcomeVersion: 1,
             }),
-            { serverId: 'server-owned', timeoutMs: expect.any(Number) },
+            { serverId: 'server-owned', timeoutMs: expect.any(Number), authorization: { kind: 'session.write', sessionId: 'session-1' } },
         );
         expect(machineRpcMock).toHaveBeenNthCalledWith(
             2,
@@ -795,7 +795,7 @@ describe('sessionScm', () => {
                 prReference: { number: 42 },
                 outcomeVersion: 1,
             }),
-            { serverId: 'server-owned', timeoutMs: expect.any(Number) },
+            { serverId: 'server-owned', timeoutMs: expect.any(Number), authorization: { kind: 'session.write', sessionId: 'session-1' } },
         );
         expect(machineRpcMock).toHaveBeenNthCalledWith(
             3,

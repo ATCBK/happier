@@ -69,7 +69,7 @@ import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
-import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_MESSAGES, RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
 
 import { runMachineScmRpcWithFallback } from './scm/machineScm';
 import type { ScmRpcTransportResult } from './scm/scmRpcAdmission';
@@ -126,7 +126,7 @@ async function callScmPreferMachineTransport<
         method,
         payload,
         { serverId: resolvedServerId, ...(signal ? { signal } : {}), ...(accountId ? { accountId } : {}),
-            ...(method.startsWith('scm.diffSummary.') || workEvidence !== undefined
+            ...(resolveSocketRpcSessionAuthorization(method)?.optionalSessionScope || workEvidence !== undefined
                 ? { authorization: { kind: 'session.write' as const, sessionId } } : {}) },
     );
 }
