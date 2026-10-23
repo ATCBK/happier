@@ -62,6 +62,7 @@ it('joins pending actual Run preparation before retiring its retained failed sou
     manager = new ExecutionRunHostBridge({ parentProvider: 'codex', cwd: fixture.fixture.happyHomeDir,
       happyHomeDir: fixture.fixture.happyHomeDir, machineId: fixture.fixture.machineId, sendAcp: async () => {},
       resolveProvidersFeatureEnabled: () => true, resolveAccountSettingsSnapshot: readSnapshot,
+      resolveRunReportPolicy: fixture.resolveRunReportPolicy,
       resolveExecutionRunProfileCatalog: async () => ({ profileCatalog, engineRegistry }),
       resolveManagedPurposeBindingIntent: purposeResolver,
       prepareManagedEndpoint: createExecutionRunManagedProviderEndpointPreparer({ machineId: fixture.fixture.machineId, accountId,

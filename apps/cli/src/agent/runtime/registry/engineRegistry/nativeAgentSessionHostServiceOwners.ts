@@ -16,6 +16,8 @@ import type { Metadata } from '@/api/types';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { ResolvedSessionMcpServer } from '@/mcp/runtimeTypes';
+import { readDaemonPluginCatalog } from '@/daemon/controlClient';
+import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import type {
     McpSessionResolutionInput,
@@ -76,6 +78,9 @@ type NativeAgentToolExecutionOwner = Readonly<{
 
 export type NativeAgentSessionHostServiceOwners = Readonly<{
     features: Readonly<{ isEnabled(featureId: string): boolean }>;
+    happierTools: Readonly<{
+        readPluginToolCatalog(signal?: AbortSignal): Promise<readonly ProjectedPluginToolCatalogEntry[]>;
+    }>;
     terminalHost?: AgentTerminalHostService;
     sessionHooks: HostSessionHooksOwner;
     transcripts: Pick<AgentSessionHostServices['transcripts'], 'fileFollow'>;
@@ -443,6 +448,17 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         fileFollowPathGrants,
     });
     const features = createNativeAgentFeatureService(params.runtimeRegistry);
+    const happierTools = Object.freeze({
+        async readPluginToolCatalog(signal?: AbortSignal): Promise<readonly ProjectedPluginToolCatalogEntry[]> {
+            signal?.throwIfAborted();
+            const catalog = await readDaemonPluginCatalog({
+                selection: 'tools',
+                ...(signal ? { signal } : {}),
+            }).catch(() => ({ kind: 'unavailable' as const }));
+            signal?.throwIfAborted();
+            return catalog.kind === 'available' ? catalog.tools : Object.freeze([]);
+        },
+    });
     const catalogEntry = params.runtimeRegistry?.contributes.catalogEntriesById[
         params.agent.id
     ];
@@ -516,6 +532,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
 
     return Object.freeze({
         features,
+        happierTools,
         ...(terminalHost ? { terminalHost } : {}),
         sessionHooks,
         transcripts: Object.freeze({ fileFollow }),

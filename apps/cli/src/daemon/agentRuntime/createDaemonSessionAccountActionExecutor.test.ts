@@ -658,8 +658,12 @@ describe('daemon Session Account authority', () => {
         details: { reason: 'external_authorization_binding_mismatch' } });
   });
 
-  it.each(['find', 'settings', 'link', 'client', 'visual', 'relation', 'relation-server-error', 'unsigned-visual', 'unsigned-server-error', 'unsigned-retired', 'unsigned-revoked', 'unsigned-foreign-home', 'unsigned-unavailable'] as const)(
-    'routes an installed Session %s Action through its canonical approval replay owner', async kind => {
+  it.each([
+    ...(['find', 'settings', 'link', 'client', 'visual', 'relation', 'relation-server-error', 'unsigned-visual', 'unsigned-server-error', 'unsigned-retired', 'unsigned-revoked', 'unsigned-foreign-home', 'unsigned-unavailable'] as const)
+      .map(kind => ({ kind, requester: 'owner' as const })),
+    ...(['find', 'settings'] as const).map(kind => ({ kind, requester: 'unknown' as const })),
+  ])(
+    'routes an installed Session $kind Action through its canonical approval replay owner ($requester requester)', async ({ kind, requester }) => {
     const unsigned = kind.startsWith('unsigned-');
     const relation = kind.startsWith('relation');
     const runnerCarrier = kind === 'find' || kind === 'settings' || kind === 'link';
@@ -679,6 +683,7 @@ describe('daemon Session Account authority', () => {
       privateKey: Buffer.from(keys.secretKey).toString('base64url'),
     });
     const settings = AccountSettingsSchema.parse({ actionsSettingsV1: { v: 1, actions: {
+      'ui.find': { approvalRequiredSurfaces: ['agent'] },
       'session.board.item.upsert': { approvalRequiredSurfaces: ['agent'] },
       'session.manager.set': { approvalRequiredSurfaces: ['agent'] },
     } } });
@@ -907,7 +912,11 @@ describe('daemon Session Account authority', () => {
       const witness = { ...operation.witness, callerPermissionMode: 'default' as const,
         actionRequestAttributionV1: deriveSessionInputActionRequestAttributionV1({
           requestRef: operation.witness.inputId, persona: { serverId: configuration.activeServerId, sessionId: 'bob-session' },
-          origin: null, messageRole: 'user', inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+          // Human ingress retains the authenticated Home receipt; machine input
+          // without an original cause remains unknown, even for this owned Session.
+          origin: null, messageRole: 'user', inputAdmissionReceipt: requester === 'owner'
+            ? { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'source-account', sessionRelationship: 'owner' }
+            : { v: 1, issuer: 'authenticatedMachine' },
         }),
       };
       runnerMcp = createHappierMcpServer({ sessionId: 'bob-session', updateMetadata() {},
@@ -977,6 +986,13 @@ describe('daemon Session Account authority', () => {
       expect(mutations).toEqual([]);
       return;
     }
+    if (requester === 'unknown') {
+      expect(await pending).toMatchObject({ ok: false, result: { errorCode: 'approval_requester_unavailable' } });
+      expect(rows.size).toBe(0);
+      expect(deliveries).toEqual([]);
+      expect(mutations).toEqual([]);
+      return;
+    }
     await vi.waitFor(async () => {
       if (settled && rows.size === 0) {
         const result = await pending;
@@ -997,7 +1013,9 @@ describe('daemon Session Account authority', () => {
       expect(mintedRequests).toEqual([]);
     } else {
       if (runnerCarrier) {
-        expect(open.executionOriginV1.actionRequestAttributionV1?.requester).toBeNull();
+        expect(open.executionOriginV1.actionRequestAttributionV1?.requester).toEqual({
+          serverId: configuration.activeServerId, accountId: 'source-account',
+        });
         expect(open).not.toHaveProperty('requesterConfirmation');
       } else expect(requiresExactDaemonApprovalReplay(open)).toBe(!(kind === 'client' || relation));
       if (!open.executionOriginV1.externalActionInputSignature) throw new Error('Missing signed client approval origin');

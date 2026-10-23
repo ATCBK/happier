@@ -9,6 +9,7 @@ import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { readSessionExplicitStopV1FromMetadata, writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { createNativeAgentSessionWorkStateService } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionWorkState';
 import { createPluginTranscriptFileFollowService } from '@/plugins/runtime/context/transcripts/fileFollow';
@@ -87,7 +88,15 @@ describe('native Goal canonical Session readback', () => {
       transport: { serverId: 'goal-home', serverUrl: 'https://goal-home.test',
         createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
     });
-    return { session: client, holdRead() {
+    return { session: client, commitExternalStop() {
+      const stop = { v: 1, cause: 'explicit_stop', requestId: 'external-stop', requestedAtMs: 1 } as const;
+      const stopped = writeSessionExplicitStopV1ToMetadata(metadata, stop);
+      const next = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain',
+        metadata: stopped, agentState: null, storedContentMode: 'plain' });
+      raw = { ...raw, metadata: next.sharedMetadata.ciphertext, ownerMetadata: next.ownerMetadata,
+        metadataVersion: raw.metadataVersion + 1 };
+      return stop;
+    }, holdRead() {
       readEntered = false;
       heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
       const refresh = client!.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
@@ -96,6 +105,18 @@ describe('native Goal canonical Session readback', () => {
       return { entered: async () => await vi.waitFor(() => expect(readEntered).toBe(true)), release };
     } };
   }
+
+  it('reads committed Stop intent after a snapshot request already in flight', async () => {
+    const { session, holdRead, commitExternalStop } = createHome();
+    const previous = holdRead();
+    await previous.entered();
+    const stop = commitExternalStop();
+    expect(readSessionExplicitStopV1FromMetadata(session.getMetadataSnapshot())).toBeNull();
+    const refreshed = session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain', afterCurrentRead: true });
+    await previous.release();
+    await refreshed;
+    expect(readSessionExplicitStopV1FromMetadata(session.getMetadataSnapshot())).toEqual(stop);
+  });
 
   it.each([0, 1] as const)('reads external native Goal receipts despite older layout-%s refreshes', async layoutVersion => {
     const { session, holdRead } = createHome(layoutVersion);

@@ -11,7 +11,12 @@ import {
   createApiSessionSocketStub,
   createSessionTurnMutationAppliedHttpResponse,
   createSessionTurnMutationAppliedSocketAck,
+  createSessionTranscriptHomeStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
+import { createKeyedStreamedTranscriptBridge } from './createKeyedStreamedTranscriptBridge';
+import { createRuntimeTranscriptProjector } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1, SessionTranscriptObservationAckV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { SessionTurnMutationV1 } from '@happier-dev/protocol';
 import type { createSessionSocketTransport } from './connection/createSessionSocketTransport';
 import type { RegisteredSessionStateFieldMutationV1 } from './client/transport/mutations/sessionClientDurableMutationTypes';
@@ -399,6 +404,75 @@ function createWorkStateMutation(): RegisteredSessionStateFieldMutationV1 {
 }
 
 describe('ApiSessionClient durable mutation outbox', () => {
+  it.each([false, true])('joins streamed final Home receipts before an immediately following turn completion (checkpoint=%s)', async (checkpoint) => {
+    const home = createSessionTranscriptHomeStub();
+    const firstWrite = createDeferred<void>();
+    const acknowledge = createDeferred<void>();
+    let first = true;
+    let finalAssistantSequence: number | undefined;
+    sessionSocketStub = createApiSessionSocketStub({ connected: false,
+      emitWithAck: async (event, payload) => {
+        const answer = home.answer(event, payload);
+        if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+          const receipt = SessionTranscriptObservationAckV1Schema.parse(answer);
+          if (receipt.ok && receipt.localId === 'native-final') finalAssistantSequence = receipt.seq;
+          if (first) {
+            first = false;
+            firstWrite.resolve();
+            await acknowledge.promise;
+          }
+        }
+        return answer ?? { ok: true };
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 'streamed-final-ack' }));
+    // Model an established Home connection without unrelated reconnect recovery.
+    sessionSocketStub.connected = true;
+    const contract = { ...serverContract('session_sync_v2_pending_input_v1'), socket: sessionSocketStub };
+    const internals = client as unknown as {
+      sessionSyncPendingInputServerContractResult: typeof contract;
+      durableMutationOutbox: { setSessionSyncPendingInputServerContract: (result: typeof contract) => Promise<void> };
+    };
+    internals.sessionSyncPendingInputServerContractResult = contract;
+    await internals.durableMutationOutbox.setSessionSyncPendingInputServerContract(contract);
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'opencode', createSessionForStream: () => client,
+      ...(checkpoint ? { initialCheckpointDelayMs: 0, checkpointMinChars: 1 } : {}),
+    });
+    const project = createRuntimeTranscriptProjector();
+    let serial = Promise.resolve();
+    let sequence = 0;
+    const emit = (event: Record<string, unknown>) => {
+      const result = project({ session: client, provider: 'opencode', runtimeMessageDeltaBridge: bridge,
+        priorProjection: serial, event: AgentSessionRuntimeEventSchema.parse({
+          sessionId: client.sessionId, emittedAtMs: Date.now(), sequence: ++sequence, ...event,
+        }) });
+      serial = result.then(() => undefined);
+      return result;
+    };
+    try {
+      emit({ kind: 'message-delta', turnId: 'turn-final', channel: 'reasoning', text: 'Working' });
+      emit({ kind: 'message-delta', turnId: 'turn-final', channel: 'assistant', messageId: 'native-final', text: 'Exact final answer' });
+      let completed = false;
+      const terminal = emit({ kind: 'turn-complete', turnId: 'turn-final' }).then(result => { completed = true; return result; });
+      await firstWrite.promise;
+      await drainAsyncWork();
+      expect(completed).toBe(false);
+      acknowledge.resolve();
+      await expect(terminal).resolves.toMatchObject({
+        projected: true, kind: 'turn-complete', finalAssistantMessageSeq: expect.any(Number),
+      });
+      expect((await terminal).projected && finalAssistantSequence).toBeTypeOf('number');
+      expect(await terminal).toMatchObject({ finalAssistantMessageSeq: finalAssistantSequence });
+    } finally {
+      acknowledge.resolve();
+      await serial.catch(() => undefined);
+      bridge.clear();
+      sessionSocketStub.connected = false;
+      await client.close();
+    }
+  });
+
   beforeAll(async () => {
     await useTempHappyHome();
   });

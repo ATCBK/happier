@@ -9,6 +9,28 @@ import { createExternalSessionTerminalFollowProjector } from '@/session/external
 import { projectRuntimeTranscriptEvent, type RuntimeTranscriptProjectionSession } from './projectRuntimeTranscriptEvent';
 
 describe('native transcript finalization and live source follow', () => {
+  it.each(['channel', 'sidechain'] as const)('refuses a cached native receipt for a conflicting %s identity', async (conflict) => {
+    const session: RuntimeTranscriptProjectionSession = {
+      sessionId: 'conflicting-native-identity',
+      async enqueueAgentMessageCommitted() {
+        return { persisted: true, delivered: true, committedSequence: 11 };
+      },
+    };
+    const event = AgentSessionRuntimeEventSchema.parse({ kind: 'transcript-message-committed',
+      sessionId: session.sessionId, sequence: 1, emittedAtMs: 1,
+      messageId: 'native-collision', role: 'assistant', text: 'Original output',
+    });
+    await projectRuntimeTranscriptEvent({ session, provider: 'agent', event });
+    const conflicting = AgentSessionRuntimeEventSchema.parse({ ...event, sequence: 2, emittedAtMs: 2,
+      turnId: 'foreground', ...(conflict === 'channel' ? { role: 'reasoning' } : { sidechainId: 'child' }),
+    });
+    await expect(projectRuntimeTranscriptEvent({ session, provider: 'agent', event: conflicting }))
+      .rejects.toMatchObject({ code: 'runtime_transcript_required_admission_failed', reason: 'durable_custody_rejected' });
+    // A refused collision must not retire the exact original receipt.
+    await expect(projectRuntimeTranscriptEvent({ session, provider: 'agent', event: { ...event, turnId: 'foreground' } }))
+      .resolves.toMatchObject({ projected: true, finalAssistantMessageSeq: 11 });
+  });
+
   it.each([true, false])('keeps one durable row while preserving source delivery admission (delivered=%s)', async (delivered) => {
     type Commit = NonNullable<RuntimeTranscriptProjectionSession['enqueueAgentMessageCommitted']>;
     const rows = new Map<string, Parameters<Commit>[1]>();

@@ -134,10 +134,44 @@ export type RuntimeTranscriptProjectionResult =
     reason: 'unsupported_event' | 'session_mismatch' | 'ephemeral_not_accepted';
   }>;
 
-// Foreground streaming and native file follow can offer the same fact while
-// its first durable finalization is still awaiting custody. Join that work;
-// only successful finalization enters the existing committed-ID baseline.
-const pendingTranscriptCommits = new WeakMap<RuntimeTranscriptProjectionSession, Map<string, Promise<TranscriptMessageCommitResult>>>();
+// Foreground streaming and native file follow share the Session's ordered
+// projection and its active stream writer. Retain exact live receipts beside
+// the committed-ID baseline so a joining delivery admission can recheck them.
+type RuntimeTranscriptProjectionParams = Parameters<typeof projectRuntimeTranscriptEvent>[0];
+type CommittedNativeTranscript = Readonly<{
+  role: 'assistant' | 'reasoning';
+  sidechainId: string | null;
+  hasText: boolean;
+  result: Promise<TranscriptMessageCommitResult>;
+}>;
+type SessionTranscriptProjection = {
+  commits: Map<string, CommittedNativeTranscript>;
+  tail: Promise<void>;
+  stream?: Readonly<{ provider: ACPProvider; bridge: RuntimeMessageDeltaBridge }>;
+};
+const transcriptProjections = new WeakMap<RuntimeTranscriptProjectionSession, SessionTranscriptProjection>();
+
+function bindSessionTranscriptProjection<T extends RuntimeTranscriptProjectionParams>(params: T) {
+  let state = transcriptProjections.get(params.session);
+  if (!state) {
+    state = { commits: new Map(), tail: Promise.resolve() };
+    transcriptProjections.set(params.session, state);
+  }
+  if (params.provider && params.runtimeMessageDeltaBridge) {
+    state.stream = { provider: params.provider, bridge: params.runtimeMessageDeltaBridge };
+  }
+  return { state, params: !params.runtimeMessageDeltaBridge && state.stream && state.stream.provider === params.provider
+    ? { ...params, runtimeMessageDeltaBridge: state.stream.bridge } : params };
+}
+
+function enqueueSessionTranscriptProjection(
+  state: SessionTranscriptProjection,
+  project: () => Promise<RuntimeTranscriptProjectionResult>,
+): Promise<RuntimeTranscriptProjectionResult> {
+  const result = state.tail.then(project);
+  state.tail = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -172,9 +206,13 @@ function buildRuntimeMessageStreamArgs(
 ): RuntimeMessageStreamArgs {
   const foreground = isForegroundTurnRuntimeTranscriptEvent(event);
   return {
-    streamKey: foreground
-      ? JSON.stringify([event.turnId, channel, messageId])
-      : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, messageId]),
+    // A native message has one transcript identity even when its authoritative
+    // source observation is Session scoped. Only unnamed output needs turn scope.
+    streamKey: messageId
+      ? JSON.stringify([event.sessionId, event.sidechainId ?? null, channel, messageId])
+      : foreground
+        ? JSON.stringify([event.turnId, channel, null])
+        : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, null]),
     sidechainId: event.sidechainId ?? null,
     ...(messageId ? { messageId } : {}),
     ...(foreground ? { foregroundTurnId: event.turnId } : {}),
@@ -182,10 +220,12 @@ function buildRuntimeMessageStreamArgs(
 }
 
 function projectCommittedAssistantReceipt(
-  event: Extract<AgentSessionRuntimeEvent, { kind: 'transcript-message-committed' }>,
+  event: Extract<AgentSessionRuntimeEvent, { kind: 'transcript-message-committed' | 'message-delta' }>,
   result: TranscriptMessageCommitResult,
+  hasText = event.text.trim().length > 0,
 ): Readonly<{ finalAssistantMessageSeq?: number }> {
-  return isForegroundTurnRuntimeTranscriptEvent(event) && event.role === 'assistant' && event.text.trim().length > 0
+  return isForegroundTurnRuntimeTranscriptEvent(event)
+    && (event.kind === 'message-delta' ? event.channel === 'assistant' : event.role === 'assistant') && hasText
     && result.delivered && typeof result.committedSequence === 'number'
     && Number.isSafeInteger(result.committedSequence) && result.committedSequence >= 0
     ? { finalAssistantMessageSeq: result.committedSequence } : {};
@@ -236,10 +276,11 @@ export function createRuntimeTranscriptProjector(): (
     toolCallId: string;
     missingResultCreatedAtMs?: number;
   }>();
-  return async (params) => {
+  return (input) => {
+    const { state, params } = bindSessionTranscriptProjection(input);
     const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
     if (!parsed.success || parsed.data.sessionId !== params.session.sessionId) {
-      return await projectRuntimeTranscriptEvent(params);
+      return projectRuntimeTranscriptEvent(params);
     }
     const event = parsed.data;
     // Native cancellation is already authoritative. Publish its marker before
@@ -247,41 +288,43 @@ export function createRuntimeTranscriptProjector(): (
     const cancellationMarker = event.kind === 'turn-cancelled'
       ? commitRuntimeTurnCancellation(params, event) : undefined;
     void cancellationMarker?.catch(() => undefined);
-    await params.priorProjection;
-    if (event.kind === 'turn-cancelled' || event.kind === 'turn-failed' || event.kind === 'turn-complete') {
-      for (const call of pendingCalls.values()) {
-        if (call.sessionId !== event.sessionId || call.turnId !== event.turnId || call.missingResultCreatedAtMs !== undefined) continue;
-        // A terminal turn settles the transcript wait, not the external effect.
-        // Later native results keep the same projection identity; the existing
-        // transcript transport owns revision arbitration.
-        const settlement = await projectRuntimeTranscriptEvent({ ...params, toolResultCreatedAtMs: event.emittedAtMs, event: {
-          kind: 'tool-result', sessionId: call.sessionId, turnId: call.turnId,
-          toolCallId: call.toolCallId, sequence: event.sequence, emittedAtMs: event.emittedAtMs,
-          isError: true,
-          output: {
-            status: event.kind === 'turn-cancelled' ? 'cancelled' : 'failed',
-            error: 'The turn ended before a tool result was received. The operation may have taken effect.',
-          },
-        } });
-        if (settlement.projected) call.missingResultCreatedAtMs = event.emittedAtMs;
+    return enqueueSessionTranscriptProjection(state, async () => {
+      await params.priorProjection;
+      if (event.kind === 'turn-cancelled' || event.kind === 'turn-failed' || event.kind === 'turn-complete') {
+        for (const call of pendingCalls.values()) {
+          if (call.sessionId !== event.sessionId || call.turnId !== event.turnId || call.missingResultCreatedAtMs !== undefined) continue;
+          // A terminal turn settles the transcript wait, not the external effect.
+          // Later native results keep the same projection identity; the existing
+          // transcript transport owns revision arbitration.
+          const settlement = await projectRuntimeTranscriptEventNow({ ...params, toolResultCreatedAtMs: event.emittedAtMs, event: {
+            kind: 'tool-result', sessionId: call.sessionId, turnId: call.turnId,
+            toolCallId: call.toolCallId, sequence: event.sequence, emittedAtMs: event.emittedAtMs,
+            isError: true,
+            output: {
+              status: event.kind === 'turn-cancelled' ? 'cancelled' : 'failed',
+              error: 'The turn ended before a tool result was received. The operation may have taken effect.',
+            },
+          } });
+          if (settlement.projected) call.missingResultCreatedAtMs = event.emittedAtMs;
+        }
       }
-    }
-    const pendingCall = event.kind === 'tool-result'
-      ? pendingCalls.get(buildRuntimeToolLocalId(event, 'tool-call'))
-      : undefined;
-    const result = await projectRuntimeTranscriptEvent({ ...params,
-      ...(pendingCall?.missingResultCreatedAtMs === undefined ? {} : {
-        toolResultCreatedAtMs: pendingCall.missingResultCreatedAtMs,
-      }),
-    }, cancellationMarker);
-    if (result.projected && event.kind === 'tool-call' && isForegroundTurnRuntimeTranscriptEvent(event)) {
-      pendingCalls.set(buildRuntimeToolLocalId(event, 'tool-call'), {
-        sessionId: event.sessionId, turnId: event.turnId, toolCallId: event.toolCallId,
-      });
-    } else if (result.projected && event.kind === 'tool-result' && isForegroundTurnRuntimeTranscriptEvent(event)) {
-      pendingCalls.delete(buildRuntimeToolLocalId(event, 'tool-call'));
-    }
-    return result;
+      const pendingCall = event.kind === 'tool-result'
+        ? pendingCalls.get(buildRuntimeToolLocalId(event, 'tool-call'))
+        : undefined;
+      const result = await projectRuntimeTranscriptEventNow({ ...params,
+        ...(pendingCall?.missingResultCreatedAtMs === undefined ? {} : {
+          toolResultCreatedAtMs: pendingCall.missingResultCreatedAtMs,
+        }),
+      }, cancellationMarker);
+      if (result.projected && event.kind === 'tool-call' && isForegroundTurnRuntimeTranscriptEvent(event)) {
+        pendingCalls.set(buildRuntimeToolLocalId(event, 'tool-call'), {
+          sessionId: event.sessionId, turnId: event.turnId, toolCallId: event.toolCallId,
+        });
+      } else if (result.projected && event.kind === 'tool-result' && isForegroundTurnRuntimeTranscriptEvent(event)) {
+        pendingCalls.delete(buildRuntimeToolLocalId(event, 'tool-call'));
+      }
+      return result;
+    });
   };
 }
 
@@ -579,7 +622,7 @@ async function flushRequiredRuntimeTranscriptSegments(params: Readonly<{
   return finalAssistantMessageSeq === undefined ? {} : { finalAssistantMessageSeq };
 }
 
-export async function projectRuntimeTranscriptEvent(params: Readonly<{
+export function projectRuntimeTranscriptEvent(params: Readonly<{
   session: RuntimeTranscriptProjectionSession;
   provider?: ACPProvider;
   runtimeMessageDeltaBridge?: RuntimeMessageDeltaBridge;
@@ -594,7 +637,21 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;
   skillDelivery?: AgentSessionSkillDelivery;
   usageAccount?: SkillUsageAccount;
-}>, cancellationMarker?: Promise<TranscriptMessageCommitResult>): Promise<RuntimeTranscriptProjectionResult> {
+}>): Promise<RuntimeTranscriptProjectionResult> {
+  const bound = bindSessionTranscriptProjection(params);
+  const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
+  const cancellationMarker = parsed.success && parsed.data.sessionId === params.session.sessionId
+    && parsed.data.kind === 'turn-cancelled'
+    ? commitRuntimeTurnCancellation(bound.params, parsed.data) : undefined;
+  void cancellationMarker?.catch(() => undefined);
+  return enqueueSessionTranscriptProjection(bound.state,
+    () => projectRuntimeTranscriptEventNow(bound.params, cancellationMarker));
+}
+
+async function projectRuntimeTranscriptEventNow(
+  params: RuntimeTranscriptProjectionParams,
+  cancellationMarker?: Promise<TranscriptMessageCommitResult>,
+): Promise<RuntimeTranscriptProjectionResult> {
   const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
   if (!parsed.success) {
     return { projected: false, reason: 'unsupported_event' };
@@ -644,6 +701,14 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     params.normalizedToolTurnChangeTracker?.observeAgentTurnId(event.agentTurnId);
   }
   if (event.kind === 'message-delta') {
+    const committed = event.messageId && transcriptProjections.get(params.session)?.commits.get(event.messageId);
+    if (committed && committed.sidechainId === (event.sidechainId ?? null)
+      && committed.role === (event.channel === 'assistant' ? 'assistant' : 'reasoning')) {
+      // File follow can observe the authoritative final before a delayed native
+      // delta. Reuse its exact receipt rather than resurrecting a partial writer.
+      return { projected: true, kind: event.kind,
+        ...projectCommittedAssistantReceipt(event, await committed.result, committed.hasText) };
+    }
     const deltaText = event.text;
     if (!params.runtimeMessageDeltaBridge) {
       return { projected: false, reason: 'unsupported_event' };
@@ -965,10 +1030,15 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   const observation = resolveCommittedTranscriptObservation(event);
   assertRequiredTranscriptAdmission(params.admission, event.kind);
   const committedLocalIds = getSessionCommittedTranscriptLocalIds(params.session);
-  let pending = pendingTranscriptCommits.get(params.session);
+  const pending = transcriptProjections.get(params.session)!.commits;
   const incumbent = pending?.get(event.messageId);
   if (incumbent) {
-    const result = await incumbent;
+    // A native ID collision is not delivery evidence for another channel or
+    // sidechain. Preserve the exact receipt rather than acknowledging that write.
+    if (incumbent.role !== event.role || incumbent.sidechainId !== (event.sidechainId ?? null)) {
+      throw new RuntimeTranscriptRequiredAdmissionError('durable_custody_rejected', event.kind);
+    }
+    const result = await incumbent.result;
     assertRequiredTranscriptAdmission(params.admission, event.kind);
     if (params.admission?.requireDelivery && !result.delivered) {
       throw new RuntimeTranscriptRequiredAdmissionError('delivery_not_confirmed', event.kind);
@@ -976,10 +1046,6 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     return { projected: true, kind: event.kind, ...projectCommittedAssistantReceipt(event, result) };
   }
   if (committedLocalIds.has(event.messageId)) return { projected: true, kind: event.kind };
-  if (!pending) {
-    pending = new Map();
-    pendingTranscriptCommits.set(params.session, pending);
-  }
   const provider = params.provider;
   const channel = event.role === 'reasoning' ? 'reasoning' : 'assistant';
   const commit = async (): Promise<TranscriptMessageCommitResult> => {
@@ -1024,12 +1090,13 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     return result;
   };
   const publication = commit();
-  pending.set(event.messageId, publication);
+  pending.set(event.messageId, { role: event.role, sidechainId: event.sidechainId ?? null,
+    hasText: event.text.trim().length > 0, result: publication });
   try {
     const result = await publication;
     return { projected: true, kind: event.kind, ...projectCommittedAssistantReceipt(event, result) };
-  } finally {
+  } catch (error) {
     pending.delete(event.messageId);
-    if (pending.size === 0) pendingTranscriptCommits.delete(params.session);
+    throw error;
   }
 }

@@ -509,6 +509,7 @@ export function createStreamedTranscriptWriter(params: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
     admission?: CommittedTranscriptAdmission;
+    retainForTurnEnd?: boolean;
   }): Promise<StreamedTranscriptFlushSummary> => {
     const drainPromises: Promise<void>[] = [];
 
@@ -535,7 +536,7 @@ export function createStreamedTranscriptWriter(params: {
           segments.has(segment)
           && didSegmentDurablyFlush(segment, state)
         ) {
-          segments.delete(segment);
+          if (!opts.retainForTurnEnd) segments.delete(segment);
         } else if (segments.has(segment)) {
           logger.infoFile('[StreamedTranscriptWriter] Terminal snapshot delivery unresolved; retained for retry', {
             localId: segment.segmentLocalId,
@@ -591,7 +592,8 @@ export function createStreamedTranscriptWriter(params: {
       if (!segment) return null;
       segment.sourceMessageId = opts.sourceMessageId;
       overrideSegmentText(opts.kind, opts.text, opts.sidechainId);
-      return await flushSegments([segment], { reason: 'turn-end', admission: opts.admission });
+      return await flushSegments([segment], { reason: 'turn-end', admission: opts.admission,
+        retainForTurnEnd: opts.retainForTurnEnd });
     },
     flushAll: (opts) => flushSegments(Array.from(segments), opts),
   };

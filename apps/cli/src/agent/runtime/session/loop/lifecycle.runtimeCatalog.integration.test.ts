@@ -48,6 +48,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { FeaturesResponseSchema, accountSettingsParse } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import * as persistence from '@/persistence';
 import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequestSchema } from '@/daemon/browser/actions/controlTransport';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
@@ -794,6 +795,107 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
 
     releasePromptLoop();
     await runPromise;
+  });
+
+  it.each(['host shutdown', 'foreground Stop', 'session Stop', 'daemon Stop', 'unavailable Stop intent'] as const)('retains questions only across %s while retiring native permissions', async retirement => {
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const session = base.session;
+    let localMetadata = createMetadata();
+    const refreshSnapshot = session.refreshSessionSnapshotFromServerRequired.bind(session);
+    let releaseSnapshot: () => void = () => undefined;
+    const snapshotReleased = new Promise<void>(resolve => { releaseSnapshot = resolve; });
+    Object.assign(session, {
+      getMetadataSnapshot: () => localMetadata,
+      // The mutable Session fixture is the persistence/transport boundary. Its
+      // local metadata intentionally lags the already committed Stop marker.
+      refreshSessionSnapshotFromServerRequired: async () => {
+        if (retirement === 'daemon Stop') {
+          await snapshotReleased;
+          localMetadata = writeSessionExplicitStopV1ToMetadata(localMetadata, {
+            v: 1, cause: 'explicit_stop', requestId: 'committed-stop', requestedAtMs: 1,
+          });
+        } else if (retirement === 'unavailable Stop intent') throw new Error('Home unavailable');
+        else await refreshSnapshot();
+      },
+    });
+    const rpc = new RpcHandlerManager({ scopePrefix: session.sessionId, encryptionMode: 'plain' });
+    Object.assign(session, { rpcHandlerManager: rpc });
+    const permission = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Question lifetime]' });
+    const question = permission.handleToolCall('retained-question', 'AskUserQuestion', {
+      questions: [{ question: 'Continue after the runner returns?', options: [{ label: 'Yes' }] }],
+    }, { lifetime: 'occurrence', origin: 'host_occurrence_question' });
+    void question.catch(() => undefined);
+    await vi.waitFor(() => expect(session.getAgentStateSnapshot()?.requests?.['retained-question']).toBeDefined());
+    // The persistence boundary also contains a native permission from this runner.
+    // It must be retired even when a durable question survives physical shutdown.
+    await session.updateAgentState(state => ({ ...state, requests: { ...state.requests,
+      'native-permission': { tool: 'Write', arguments: { path: '/workspace/native' }, createdAt: 1, kind: 'permission' },
+    } }));
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+    );
+    let termination: ReturnType<typeof registerRunnerTerminationHandlers> | undefined;
+    let stopSession: (() => Promise<void>) | undefined;
+    const running = runSessionLoopLifecycle({
+      ...base, session, permissionHandler: permission,
+      config: { ...base.config, onRuntimeStopReady: stop => { stopSession = stop; } },
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      deps: { ...base.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources,
+        registerRunnerTerminationHandlersFn: registration => {
+          termination = registerRunnerTerminationHandlers({ ...registration, processLifecycleOwnership: 'caller',
+            sessionExitReport: null, exit: () => undefined });
+          return termination;
+        } },
+    });
+    try {
+      await vi.waitFor(() => expect(termination).toBeDefined());
+      if (!termination) throw new Error('Runner termination unavailable');
+      if (retirement === 'session Stop') {
+        if (!stopSession) throw new Error('Session Stop unavailable');
+        await stopSession();
+      } else {
+        if (retirement === 'foreground Stop') await rpc.invokeLocal('abort', {});
+        termination.requestTermination({ kind: 'signal', signal: 'SIGTERM' });
+      }
+      if (retirement === 'daemon Stop') {
+        // The authoritative read must not delay native retirement, and close
+        // must wait for its permission decision instead of losing that read.
+        await vi.waitFor(() => expect(base.runtime.resetOrDisposeRuntime).toHaveBeenCalledWith('host_shutdown'));
+        expect(base.session.endSessionAndClose).not.toHaveBeenCalled();
+        releaseSnapshot();
+      }
+      await termination.whenTerminated;
+      await running;
+      const state = session.getAgentStateSnapshot();
+      expect(state?.requests?.['native-permission']).toBeUndefined();
+      expect(state?.completedRequests?.['native-permission']).toMatchObject({ status: 'canceled' });
+      if (retirement === 'host shutdown' || retirement === 'unavailable Stop intent') {
+        expect(state?.requests?.['retained-question']).toMatchObject({ tool: 'AskUserQuestion', lifetime: 'occurrence' });
+        expect(state?.completedRequests?.['retained-question']).toBeUndefined();
+        const resumedRpc = new RpcHandlerManager({ scopePrefix: session.sessionId, encryptionMode: 'plain' });
+        Object.assign(session, { rpcHandlerManager: resumedRpc });
+        const resumedPermission = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Question rejoin]' });
+        try {
+          await resumedRpc.invokeLocal('session.user_action.answer', {
+            id: 'retained-question', approved: true, answers: { 'Continue after the runner returns?': ['Yes'] },
+          });
+          expect(session.getAgentStateSnapshot()?.requests?.['retained-question']).toBeUndefined();
+          expect(session.getAgentStateSnapshot()?.completedRequests?.['retained-question']).toMatchObject({
+            status: 'approved', structuredAnswersV1: { 'Continue after the runner returns?': ['Yes'] },
+          });
+        } finally {
+          await resumedPermission.reset();
+        }
+      } else {
+        expect(state?.requests?.['retained-question']).toBeUndefined();
+        expect(state?.completedRequests?.['retained-question']).toMatchObject({ status: 'canceled', reason: 'Foreground turn stopped' });
+      }
+    } finally {
+      releaseSnapshot();
+      termination?.requestTermination({ kind: 'signal', signal: 'SIGTERM' });
+      await running;
+      await question.catch(() => undefined);
+    }
   });
 
   it('disposes native process custody as host_shutdown without waiting for native cancellation', async () => {
@@ -2295,6 +2397,112 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     info.mockRestore();
   });
 
+  it.each([
+    { stopPath: 'killSession', stopIntent: true, nativeCancelled: false },
+    { stopPath: 'signal', stopIntent: true, nativeCancelled: false },
+    { stopPath: 'signal', stopIntent: true, nativeCancelled: true },
+    { stopPath: 'signal', stopIntent: false, nativeCancelled: false },
+  ])('retains Discussion preface reply custody when person Stop disposes an in-flight tool ($stopPath, explicit=$stopIntent, native=$nativeCancelled)', async ({ stopPath, stopIntent, nativeCancelled }) => {
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const session = base.session;
+    const partial = 'I will write the answer directly in the Discussion reply.';
+    const turnId = 'discussion-stopped-during-tool';
+    const requestLocalId = 'discussion-follow-stopped-question';
+    Object.assign(session, {
+      getLastObservedMessageSeq: () => 43,
+      getCommittedUserMessageSeq: (localId: string) => localId === requestLocalId ? 40 : null,
+      enqueueAgentMessageCommitted: vi.fn<NonNullable<SessionLoopLifecycleParams['session']['enqueueAgentMessageCommitted']>>(async (_provider, body) => ({
+        persisted: true, delivered: true, committedSequence: body.type === 'message' ? 42 : 43,
+      })),
+    });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let acceptedTurnId = turnId;
+    const provider: AgentSessionRuntime = {
+      async send(request) {
+        acceptedTurnId = request.delivery.turnId;
+        for (const event of [
+          { kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery },
+          { kind: 'turn-start', turnId: acceptedTurnId, startedBy: 'host' },
+          { kind: 'message-delta', turnId: acceptedTurnId, channel: 'assistant', messageId: 'preface', text: partial },
+          { kind: 'tool-call', turnId: acceptedTurnId, toolCallId: 'reply-in-flight', toolName: 'discussion_reply', input: {} },
+        ]) listener?.(canonicalRuntimeEvent({ ...event, sessionId: session.sessionId, emittedAtMs: 1 }));
+        return { status: 'admitted' };
+      },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      async dispose() {
+        // Codex retires its native subscribers before disposing app-server.
+        // Its raw native interruption is not observable by the host afterward.
+        listener = undefined;
+      },
+    };
+    const declaration = readAgentCatalogSnapshot().agentDefinitionsById.get('codex');
+    if (!declaration?.richDefinition || !declaration.pluginId) throw new Error('Missing Codex Agent declaration');
+    const runtimeScope = new AbortController();
+    const services = createUnavailablePluginServices();
+    const contextFixture = createAcpSessionRuntimeContextFixture({
+      agent: declaration.richDefinition.definition, pluginId: declaration.pluginId, sessionId: session.sessionId,
+      directory: '/workspace', signal: runtimeScope.signal, session, services,
+      protocols: createPublicAcpRuntimeProtocols({ pluginId: declaration.pluginId, agentId: declaration.id,
+        signal: runtimeScope.signal, isCurrent: () => !runtimeScope.signal.aborted, services }),
+    });
+    onTestFinished(async () => { runtimeScope.abort(); await contextFixture.dispose(); });
+    const runtime = createNativeAgentSessionOperations(provider, session.sessionId, undefined, undefined, undefined, undefined, undefined, {
+      context: contextFixture.context, cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
+      cancellation: { declared: true, cancel: async ({ turnId }) => {
+        if (nativeCancelled) listener?.(canonicalRuntimeEvent({ kind: 'turn-cancelled', sessionId: session.sessionId,
+          turnId, emittedAtMs: 2, cause: 'user' }));
+        return { status: 'requested', turnId };
+      } },
+      configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    let stop: (() => Promise<void>) | undefined;
+    let termination: ReturnType<typeof registerRunnerTerminationHandlers> | undefined;
+    const running = runSessionLoopLifecycle({ ...base, runtime, hookRuntime: runtime,
+      config: { ...base.config, startRuntimeBeforeFirstPrompt: true, onRuntimeStopReady: value => { stop = value; } },
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      deps: { ...base.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources,
+        registerRunnerTerminationHandlersFn: options => {
+          termination = registerRunnerTerminationHandlers({ ...options, processLifecycleOwnership: 'caller', sessionExitReport: null, exit: () => undefined });
+          return termination;
+        } },
+    });
+    try {
+      await vi.waitFor(() => { expect(listener).toBeTypeOf('function'); expect(stop).toBeTypeOf('function'); });
+      // The native owner starts the already-admitted turn; protected Pending
+      // readmission is exercised by its separate HTTP composition.
+      await runtime.sendTurnPrompt('Answer this Discussion question', { localId: requestLocalId, turnId, userMessageSeq: 40,
+        discussionAddressing: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: session.sessionId },
+      });
+      await vi.waitFor(() => expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
+        'codex', expect.objectContaining({ type: 'tool-call', callId: 'reply-in-flight' }), expect.anything()));
+      if (!stop || !termination) throw new Error('Stop controls were not registered');
+      const stoppedMetadata = writeSessionExplicitStopV1ToMetadata(createMetadata(), {
+        v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: Date.now(),
+      });
+      if (stopIntent) Object.assign(session, { getMetadataSnapshot: () => stoppedMetadata });
+      if (stopPath === 'killSession') await stop();
+      else { termination.requestTermination({ kind: 'signal', signal: 'SIGTERM' }); await termination.whenTerminated; }
+      await running;
+      const commits = vi.mocked(session.enqueueAgentMessageCommitted!).mock.calls;
+      expect(commits.filter(([, body]) => body.type === 'turn_cancelled')).toHaveLength(stopIntent ? 1 : 0);
+      const rows = new Map(commits.map(([, body, options]) => [options.localId, body]));
+      expect([...rows.values()].filter(body => body.type === 'message' && body.message === partial)).toHaveLength(1);
+      const mutations = vi.mocked(session.enqueueSessionTurnMutation!).mock.calls.map(([mutation]) => mutation);
+      expect(mutations.filter(mutation => mutation.action === 'cancel')).toEqual(stopIntent ? [
+        expect.objectContaining({ turnId: acceptedTurnId }),
+      ] : []);
+      if (stopIntent) expect(mutations.some(mutation => mutation.action === 'append_transcript_anchors'
+        && mutation.turnId === acceptedTurnId && mutation.transcriptAnchors.finalAssistantMessageSeq === 42)).toBe(true);
+      expect(mutations.filter(mutation => mutation.action === 'complete' || mutation.action === 'fail')).toEqual([]);
+    } finally {
+      termination?.requestTermination({ kind: 'signal', signal: 'SIGTERM' });
+      await running.catch(() => undefined);
+    }
+  });
+
   it.each(['no-partial', 'committed-partial'] as const)('lets canonical runtime cancellation retain exact reply custody without an abort-side duplicate (%s)', async partial => {
     const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
     // The provider and acknowledged transcript transport are the boundaries;
@@ -3658,7 +3866,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     };
     session.enqueueAgentMessageCommitted = vi.fn(async () => {
       await commitReleased;
-      return { persisted: true as const, delivered: false as const };
+      return { persisted: true as const, delivered: true as const, committedSequence: 7 };
     });
     const runtime = baseParams.runtime as unknown as {
       subscribeRuntimeEvents: ReturnType<typeof vi.fn>;
@@ -3730,13 +3938,16 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     }));
   });
 
-  it('projects public runtime message deltas before publishing terminal turn mutations', async () => {
+  it.each([false, true, 'source-first'] as const)('projects public runtime message deltas before publishing terminal turn mutations (Session-scoped final=%s)', async (sourceFinal) => {
     const baseParams = createLifecycleParams({ policyAgentId: 'cursor' });
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
     const session = baseParams.session as unknown as {
       enqueueAgentMessageCommitted: ReturnType<typeof vi.fn>;
       enqueueSessionTurnMutation: ReturnType<typeof vi.fn>;
     };
+    session.enqueueAgentMessageCommitted = vi.fn(async () => ({
+      persisted: true as const, delivered: true as const, committedSequence: 7,
+    }));
     const runtime = baseParams.runtime as unknown as {
       subscribeRuntimeEvents: ReturnType<typeof vi.fn>;
     };
@@ -3761,6 +3972,10 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
             turnId: 'turn-1',
             startedBy: 'host',
           }));
+          if (sourceFinal === 'source-first') runtimeEventHandler?.(canonicalRuntimeEvent({
+            kind: 'transcript-message-committed', sessionId: 'session-1', emittedAtMs: 2,
+            messageId: 'native-cursor-final', role: 'assistant', text: 'Cursor answered.',
+          }));
           runtimeEventHandler?.(canonicalRuntimeEvent({
             kind: 'message-delta',
             sessionId: 'session-1',
@@ -3768,6 +3983,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
             turnId: 'turn-1',
             channel: 'assistant',
             text: 'Cursor ',
+            messageId: 'native-cursor-final',
           }));
           runtimeEventHandler?.(canonicalRuntimeEvent({
             kind: 'message-delta',
@@ -3776,6 +3992,11 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
             turnId: 'turn-1',
             channel: 'assistant',
             text: 'answered.',
+            messageId: 'native-cursor-final',
+          }));
+          if (sourceFinal === true) runtimeEventHandler?.(canonicalRuntimeEvent({
+            kind: 'transcript-message-committed', sessionId: 'session-1', emittedAtMs: 3,
+            messageId: 'native-cursor-final', role: 'assistant', text: 'Cursor answered.',
           }));
           runtimeEventHandler?.(canonicalRuntimeEvent({
             kind: 'turn-complete',
@@ -3792,7 +4013,10 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'cursor',
       { type: 'message', message: 'Cursor answered.' },
-      expect.objectContaining({
+      expect.objectContaining(sourceFinal === 'source-first' ? {
+        localId: 'native-cursor-final',
+        meta: expect.objectContaining({ source: 'runtime', runtimeEventKind: 'transcript-message-committed' }),
+      } : {
         meta: expect.objectContaining({
           happierStreamSegmentV1: expect.objectContaining({
             segmentKind: 'assistant',
@@ -3815,7 +4039,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       expect.objectContaining({
         action: 'complete',
         turnId: 'turn-1',
-        transcriptAnchors: { finalAssistantMessageSeq: null },
+        transcriptAnchors: { startSeqInclusive: 7, endSeqInclusive: 7, finalAssistantMessageSeq: 7 },
       }),
     );
   });

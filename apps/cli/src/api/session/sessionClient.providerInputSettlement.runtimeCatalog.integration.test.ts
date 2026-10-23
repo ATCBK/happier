@@ -15,6 +15,7 @@ import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
 import {
   type ApiSessionSocketStub,
   createApiSessionSocketStub,
+  resolveApiSessionSocketDefaultAck,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { SocketAckError } from '@/session/transport/shared/socketAck';
 import { createSessionProviderInputOutcomeBinding } from '@/agent/runtime/session/input/providerInputOutcome';
@@ -24,6 +25,19 @@ import {
   ApiSessionClient,
   type ApiSessionClientOptions,
 } from './sessionClient';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionPendingAdmissionSettlementRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
+import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
+import { createSessionFollowSourceMaterialResolver } from '@/agent/runtime/session/follow/sessionFollowSourceMaterialResolver';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
+import { runPermissionModePromptLoop, type PermissionModePromptLoopTurnOperations } from '@/agent/runtime/runPermissionModePromptLoop';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 let sessionSocketStub: ApiSessionSocketStub | null = null;
 let userSocketStub: ApiSessionSocketStub | null = null;
@@ -140,6 +154,141 @@ describe('ApiSessionClient provider-input settlement', () => {
     blockDeliveryMock.mockReset();
     listDeliveryStatusesMock.mockReset();
     sendSessionMessageMock.mockReset();
+  });
+
+  it.each(['withdrawn', 'unavailable', 'already-dispatched'] as const)('retires an obsolete input only after exact Home cancellation (%s)', async state => {
+    let remoteStatus = 'delivering';
+    let attempts = 0;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async () => {
+      remoteStatus = 'discarded';
+      attempts += 1;
+      return { v: 1, result: state === 'unavailable' && attempts === 1
+        ? { status: 'outcomeUnknown', localId: 'obsolete-follow-question', code: 'admission_unavailable' }
+        : { status: 'rejected', code: 'session_input_cancelled' } };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'obsolete-follow-question');
+    markMaterializedProviderInput(client, 'independent-human-input');
+    if (state === 'already-dispatched') client.markPendingProviderInputDispatched(['obsolete-follow-question']);
+    const withdrawn = await client.withdrawSessionInputBeforeProviderDispatch({ localId: 'obsolete-follow-question' });
+    expect(withdrawn).toBe(state === 'withdrawn');
+    expect(client.hasPendingProviderInput('obsolete-follow-question')).toBe(state !== 'withdrawn');
+    expect(client.hasPendingProviderInput('independent-human-input')).toBe(true);
+    expect(blockDeliveryMock).not.toHaveBeenCalled();
+    expect(resolveAcceptedMock).not.toHaveBeenCalled();
+    if (state === 'already-dispatched') expect(sessionSocketStub.emitWithAck).not.toHaveBeenCalled();
+    else expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith('session-pending-admission-settlement-v1', {
+      v: 1, sessionId: 's1', localId: 'obsolete-follow-question', decision: { kind: 'reject', code: 'session_input_cancelled' },
+    });
+    if (state === 'unavailable') {
+      // The Home retains its discarded Pending row. A lost reply is rejoined
+      // by the same idempotent cancellation; an unknown result retired nothing.
+      expect(remoteStatus).toBe('discarded');
+      await expect(client.withdrawSessionInputBeforeProviderDispatch({ localId: 'obsolete-follow-question' })).resolves.toBe(true);
+      expect(client.hasPendingProviderInput('obsolete-follow-question')).toBe(false);
+      expect(client.hasPendingProviderInput('independent-human-input')).toBe(true);
+    }
+  });
+
+  it.each(['before hydration', 'at final recheck', 'after manager detaches', 'after manager detaches (legacy)'] as const)('cancels a resolved Follow question %s before dispatching the next human input', async resolvedAt => {
+    const localId = 'resolved-question-input';
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
+      original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 1,
+        requests: [{ requestId: 'question', createdAt: 3, turnId: 'question-turn' }] } },
+      requestEvents: [{ requestId: 'question', event: { kind: 'needs_you', type: 'decision' } }] });
+    const observed = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 1, turn: null };
+    const detached = resolvedAt.startsWith('after manager detaches');
+    const legacy = resolvedAt.endsWith('(legacy)');
+    const admission = buildTrustedHostSessionInputAdmissionV1('agent');
+    const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedAccount', actorAccountId: 'account',
+      sessionRelationship: 'owner', admittedTarget: { homeId: 'home', accountId: 'account', sessionId: 's1',
+        machineId: 'machine', installationId: 'installation' }, followDeliveryV1: delivery });
+    vi.mocked(axios.get).mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === `/v2/sessions/s1/messages/by-local-id/${localId}`) return { status: 200, data: { message: {
+        id: 'retained-follow-message', seq: 11, localId, createdAt: 1, updatedAt: 1, messageRole: 'user',
+        inputAdmissionReceipt: receipt,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Followed source changed.' },
+          ...(legacy ? {} : { meta: { happierInputRequestV1: { ...admission.request, followDeliveryV1: delivery },
+            happierProvenanceV1: admission.provenance } }) } },
+      } } };
+      if (path === '/v2/sessions/s1/pending') return { data: { pending: [] } };
+      throw new Error(`Unexpected HTTP GET: ${path}`);
+    });
+    const pending = new Map<string, 'delivering' | 'discarded'>([[localId, 'delivering'], ['next-human-input', 'delivering']]);
+    const activePending = () => [...pending].filter(([, status]) => status !== 'discarded').map(([id]) => id);
+    const requests: Array<{ event: string; payload: unknown }> = [];
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      requests.push({ event, payload });
+      if (event === SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) return { ok: true, v: 1, sessionId: 's1',
+        publisherGeneration: '1', currentSourceSessionIds: detached ? [] : ['source'], observations: !detached && pending.get(localId) === 'delivering' ? [{
+          kind: 'admitted_input', localInputId: localId, delivery, sourceSessionId: 'source', destinationSessionId: 's1',
+          delivered: { ...observed, agentStateVersion: 0 }, observed,
+        }] : [] };
+      if (event === 'session-pending-admission-settlement-v1') {
+        const input = SessionPendingAdmissionSettlementRequestV1Schema.parse(payload);
+        expect(input.localId).toBe(localId);
+        if (input.decision.kind === 'admit' && !detached) return { v: 1, result: { status: 'alreadyAccepted', localId } };
+        if (!detached) expect(input.decision).toMatchObject({ kind: 'reject', code: 'session_input_cancelled' });
+        pending.set(input.localId, 'discarded');
+        return { v: 1, result: { status: 'rejected', code: 'session_input_cancelled' } };
+      }
+      return resolveApiSessionSocketDefaultAck(event, payload);
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: true });
+    const session = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1',
+      metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }) }));
+    for (const id of pending.keys()) markMaterializedProviderInput(session, id);
+    const material = createSessionFollowSourceMaterialResolver();
+    let sourceReads = 0;
+    const hydrateObservation = createSessionFollowSourceHydrator({ session, credentials: { token: 'tok', encryption: null },
+      sourceMaterialResolver: material, deps: { fetchRunnerSourceProjection: async () => {
+        sourceReads += 1;
+        const resolved = resolvedAt === 'before hydration' || sourceReads >= 3;
+        return SessionFollowSourceProjectionResponseV1Schema.parse({ v: 1, source: {
+          id: 'source', encryptionMode: 'plain', metadata: '{}', archivedAt: null,
+          createdAt: 1, updatedAt: 1, active: true, activeAt: 1, thinking: false, thinkingAt: null,
+          latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null,
+          latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: resolved ? 2 : 1,
+          agentState: JSON.stringify({ requests: resolved ? {} : { question: { tool: 'AskUserQuestion', arguments: {},
+            kind: 'user_action', createdAt: 3, turnId: 'question-turn' } } }),
+        }, messages: [], hasMore: false });
+      } } });
+    const reconcile = createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 });
+    const sendTurnPrompt = vi.fn(async () => { expect(activePending()).toEqual(['next-human-input']); });
+    const runtime: PermissionModePromptLoopTurnOperations = {
+      beginTurnLifecycle() {}, sendTurnPrompt, steerInFlightTurn: async () => {}, waitForTurnCompletion: async () => {},
+      subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => {}, cancelTurn: async () => {},
+      readSessionIdentity: () => ({ sessionId: 'native-session' }), updateSessionRuntimeConfig: async () => {},
+      resetOrDisposeRuntime: async () => {},
+      prepareHostContext: async input => await reconcile(input),
+    };
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(JSON.stringify,
+      { batcher: combinePermissionModeQueuedPrompts });
+    queue.pushIsolate({ text: 'Followed source changed.', localId,
+      followDeliveries: [{ delivery, localInputId: localId, userMessageSeq: null }] }, { permissionMode: 'default' });
+    queue.pushIsolate({ text: 'A new human request', localId: 'next-human-input' }, { permissionMode: 'default' });
+    let done = false;
+    const onPromptFailure = vi.fn();
+    try {
+      await runPermissionModePromptLoop({ providerName: 'Test', agentMessageType: 'codex', explicitPermissionMode: undefined,
+        session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
+        createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
+        messageBuffer: new MessageBuffer(), shouldExit: () => done, getAbortSignal: () => new AbortController().signal,
+        keepAlive() {}, setThinking() {}, sendReady() { done = true; }, currentPermissionModeUpdatedAt: 0,
+        setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {}, formatPromptErrorMessage: String,
+        registerProviderAcceptedEffect() {}, onPromptFailure,
+      });
+      expect(sendTurnPrompt).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('A new human request'),
+        expect.objectContaining({ localId: 'next-human-input' }));
+      expect(activePending()).toEqual(['next-human-input']);
+      expect(pending.get(localId)).toBe('discarded');
+      expect(session.hasPendingProviderInput(localId)).toBe(false);
+      expect(requests.some(request => request.event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1)).toBe(false);
+      expect(blockDeliveryMock).not.toHaveBeenCalled();
+      expect(onPromptFailure).not.toHaveBeenCalled();
+    } finally { material.dispose(); }
   });
 
   it('preserves a claimed initial prompt as pre-effect custody when the host closes before native dispatch', async () => {

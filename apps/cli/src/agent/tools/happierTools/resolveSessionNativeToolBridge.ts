@@ -11,6 +11,7 @@ import { projectSessionBoundActionToolInputSchema } from './actionToolContext';
 import { listBuiltInHappierTools } from './listBuiltInHappierTools';
 import { resolveActionsSettingsWithEnvironmentOverride } from '@/settings/actionsSettings';
 import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
+import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 
 function projectJsonSchema(schema: unknown) {
   const jsonSchema = schema instanceof z.core.$ZodType
@@ -69,6 +70,8 @@ export function resolveSessionNativeToolDescriptors(params: Readonly<{
   sessionMemoryEnabled?: boolean;
   /** Current decision for the Session runtime's exact Home. Missing is fail-closed. */
   isServerFeatureEnabled?: (featureId: FeatureId) => boolean;
+  /** Exact external Action tools admitted by the daemon catalog owner. */
+  pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
 }>): readonly AgentSessionNativeToolDescriptor[] {
   const actionsSettings = resolveActionsSettingsWithEnvironmentOverride(params.accountSettings);
   const isActionEnabled = (actionId: ActionId) => isActionEnabledByActionsSettings(
@@ -91,6 +94,7 @@ export function resolveSessionNativeToolDescriptors(params: Readonly<{
     requiredDirectActionIds: params.memoryRecallGuidanceEnabled
       ? MEMORY_RECALL_GUIDANCE_REQUIRED_ACTION_IDS
       : [],
+    pluginToolCatalog: params.pluginToolCatalog,
   });
 
   return Object.freeze(tools.flatMap((tool) => {

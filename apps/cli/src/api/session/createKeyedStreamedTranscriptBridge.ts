@@ -94,6 +94,9 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
         text: args.text,
         sourceMessageId: args.sourceMessageId,
         admission: args.admission,
+        // The final source fact can omit turn scope while naming an already
+        // foreground-owned message. Its exact receipt still belongs to that turn.
+        retainForTurnEnd: entry.args.foregroundTurnId !== undefined,
       });
       if (!entry.writer.hasPendingSegments()) writerByStreamKey.delete(streamKey);
       return summary;

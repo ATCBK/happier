@@ -1,10 +1,9 @@
 import { z } from 'zod/mini';
 
-import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
-
 import { claimDaemonForegroundAgentRuntime } from '@/daemon/controlClient';
 import {
   HAPPIER_FOREGROUND_AGENT_RUNTIME_ADMISSION_FILE_ENV_KEY,
+  ForegroundAgentRuntimeClaimResponseV1Schema,
 } from '@/daemon/agentRuntime/foregroundAdmissionContract';
 import { readPrivateBearerFile } from '@/daemon/privateBearerFile';
 import {
@@ -16,24 +15,6 @@ const ForegroundAdmissionHandoffSchema = z.strictObject({
   capability: z.string().check(z.minLength(1), z.maxLength(4_096)),
   descriptor: AgentRuntimeDaemonSessionDescriptorV1Schema,
 });
-
-const ForegroundEnvironmentClaimResultSchema = z.discriminatedUnion('ok', [
-  z.strictObject({
-    ok: z.literal(true),
-    environment: z.record(z.string(), z.string()),
-    unsetEnvironmentVariableNames: z.array(z.string()),
-    sensitiveEnvironmentVariableNames: z.array(
-      z.string().check(z.minLength(1), z.maxLength(256)),
-    ).check(z.maxLength(256)),
-  }),
-  z.strictObject({
-    ok: z.literal(false),
-    error: ProviderErrorV1Schema,
-    profileSecretRecovery: z.optional(z.strictObject({
-      requirementNames: z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(256)),
-    })),
-  }),
-]);
 
 export async function claimDaemonForegroundAgentRuntimeEnvironment(
   params: Readonly<{
@@ -57,7 +38,7 @@ export async function claimDaemonForegroundAgentRuntimeEnvironment(
   const handoff = ForegroundAdmissionHandoffSchema.parse(
     JSON.parse(await readPrivateBearerFile(admissionFilePath)),
   );
-  return ForegroundEnvironmentClaimResultSchema.parse(
+  return ForegroundAgentRuntimeClaimResponseV1Schema.parse(
     await claimDaemonForegroundAgentRuntime({
       v: 1,
       attemptId: params.attemptId,

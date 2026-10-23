@@ -159,6 +159,7 @@ export function createLease(agentId: string): AgentRuntimeRegistrationLease {
 export function createSessionHostServiceOwners(): NativeAgentSessionHostServiceOwners {
     return Object.freeze({
         features: Object.freeze({ isEnabled: () => false }),
+        happierTools: Object.freeze({ readPluginToolCatalog: async () => Object.freeze([]) }),
         sessionHooks: Object.freeze({
             startServer: async () => Object.freeze({ port: 4312, stop: () => undefined, dispose: async () => undefined }),
             resolveForwarderAssets: async () => Object.freeze({ nodeExecutable: '/runtime/node', sessionForwarderScript: '/runtime/session-forwarder.cjs', permissionForwarderScript: '/runtime/permission-forwarder.cjs' }),

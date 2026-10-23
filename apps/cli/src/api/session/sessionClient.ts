@@ -273,6 +273,7 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connected
 import { isActiveLatestTurnStatus, readLatestTurnStatusSnapshot } from './sessionTurnStatusSnapshot';
 import {
     blockPendingQueueV2Delivery,
+    settlePendingQueueV2Admission,
     blockPendingExecutionRunDelivery,
     isAcceptedPendingQueueV2DeliveryAckResponseLoss,
     listPendingQueueV2DeliveryStatusesFromServer,
@@ -2716,7 +2717,11 @@ export class ApiSessionClient extends EventEmitter {
      * Startup authority handoff uses this fail-closed surface after the publisher claim. Callers
      * must not substitute the cached `ensureMetadataSnapshot` or the best-effort refresh.
      */
-    async refreshSessionSnapshotFromServerRequired(opts?: { reason?: SessionSnapshotRefreshReason }): Promise<void> {
+    async refreshSessionSnapshotFromServerRequired(opts?: { reason?: SessionSnapshotRefreshReason; afterCurrentRead?: boolean }): Promise<void> {
+        // A caller acting on an already committed external intent cannot use
+        // a response captured by an earlier read. After this barrier, the next
+        // sync either starts a read or joins one started after this invocation.
+        if (opts?.afterCurrentRead && this.snapshotSyncInFlight) await this.snapshotSyncInFlight;
         await this.interactionApi.refreshSessionSnapshotFromServerRequired(opts);
     }
 
@@ -4992,6 +4997,22 @@ export class ApiSessionClient extends EventEmitter {
         this.materializationRuntime.deleteMaterializedLocalId(localId);
         this.dispatchedPendingProviderInputLocalIds.delete(localId);
         this.nonBlockingArchivedPendingDeliveryLocalIds.delete(localId);
+    }
+
+    /** Cancel an obsolete, claimed input through the Home before any native effect. */
+    async withdrawSessionInputBeforeProviderDispatch(input: Readonly<{ localId: string; signal?: AbortSignal }>): Promise<boolean> {
+        const localId = readPendingLocalId(input.localId);
+        if (!localId || this.closed || this.providerInputClosing || !this.hasPendingProviderInput(localId)
+            || this.dispatchedPendingProviderInputLocalIds.has(localId)
+            || this.terminalPendingSettlementLocalIds.has(localId)) return false;
+        const signal = input.signal
+            ? AbortSignal.any([input.signal, this.socketAckAbortController.signal]) : this.socketAckAbortController.signal;
+        const result = await settlePendingQueueV2Admission({ socket: this.socket, sessionId: this.sessionId, localId,
+            signal, decision: { kind: 'reject', code: 'session_input_cancelled' } });
+        if (result.status !== 'rejected' || result.code !== 'session_input_cancelled') return false;
+        this.deletePendingProviderInputLocalState(localId);
+        this.emit('pending-provider-input-retired', localId);
+        return true;
     }
 
     /**

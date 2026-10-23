@@ -18,6 +18,8 @@ export type StreamedTranscriptWriter = Readonly<{
     text: string;
     sourceMessageId: string;
     admission?: CommittedTranscriptAdmission;
+    /** Keep the acknowledged segment until its existing foreground boundary consumes it. */
+    retainForTurnEnd?: boolean;
   }) => Promise<StreamedTranscriptFlushSummary | null>;
   flushAll: (opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';

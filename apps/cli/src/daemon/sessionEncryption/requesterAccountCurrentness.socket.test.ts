@@ -21,7 +21,7 @@ import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/proto
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { logger } from '@/ui/logger';
 import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
-import type { ChangeEntry } from '@happier-dev/protocol/changes';
+import { buildProviderAccountUsageRefreshChangeV1, type ChangeEntry } from '@happier-dev/protocol/changes';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
 import { ReviewCommentPrepareMutationRequestV1Schema } from '@happier-dev/protocol/reviews/comments/mutation';
@@ -41,6 +41,89 @@ const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: '
 afterEach(() => vi.restoreAllMocks());
 
 describe('requester Account currentness over the installed socket wiring', () => {
+    it('shares an already-demanded changes feed across new subscribers and catches up after demand resumes', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const cursors: number[] = [];
+        let cursor = 0;
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
+            if (url.endsWith('/currentness')) return { status: 200, data: fact };
+            if (!url.endsWith('/v2/changes')) throw new Error(`Unexpected GET ${url}`);
+            const after = config?.params?.after ?? 0;
+            cursors.push(after);
+            const changes: ChangeEntry[] = cursor > after
+                ? [{ cursor, kind: 'session', entityId: 'follow-source', changedAt: 1 }] : [];
+            return { status: 200, data: { changes, nextCursor: cursor } };
+        });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token: 'bob-demand',
+            serverBaseUrl: 'https://demand-home.example' });
+        const releases: (() => void)[] = [];
+        try {
+            await observation.read();
+            releases.push(observation.subscribeSessionFollowRules(() => {}));
+            await vi.waitFor(() => expect(cursors).toEqual([0]));
+            releases.push(observation.subscribeConnectedAccounts(() => {}));
+            const sources: (string | null)[] = [];
+            releases.push(observation.subscribeSessionFollowSources(source => { sources.push(source); }));
+            // Drain the real channel: subscribing and unrelated profile updates are not feed events.
+            await channel.pushProfile('bob');
+            expect(cursors).toEqual([0]);
+            cursor = 1;
+            await channel.hintAccountChange();
+            await vi.waitFor(() => expect(sources).toEqual([null, 'follow-source']));
+            expect(cursors).toEqual([0, 0]);
+            releases.splice(0).forEach(release => release());
+            cursor = 2;
+            await channel.hintAccountChange();
+            expect(cursors).toEqual([0, 0]);
+            releases.push(observation.subscribeSessionFollowSources(source => { sources.push(source); }));
+            await vi.waitFor(() => expect(sources).toEqual([null, 'follow-source', null, 'follow-source']));
+            expect(cursors).toEqual([0, 0, 1]);
+        } finally { releases.forEach(release => release()); await observation.dispose(); await channel.close(); }
+    });
+
+    it('delivers exact quota Refresh through the existing Account feed beyond unrelated full pages and retires demand', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const recordId = buildProviderAccountUsageRecordId({ providerId: 'quota-provider', accountSubjectId: 'bob',
+            subjectKind: 'account', quotaScope: 'account' });
+        let pending = false;
+        const cursors: number[] = [];
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
+            if (url.endsWith('/currentness')) return { status: 200, data: fact };
+            if (!url.endsWith('/v2/changes')) throw new Error(`Unexpected GET ${url}`);
+            const after = config?.params?.after ?? 0;
+            cursors.push(after);
+            const changes: ChangeEntry[] = pending && after === 0
+                ? Array.from({ length: 200 }, (_, index) => ({ cursor: index + 1, kind: 'machine',
+                    entityId: `unrelated-${index}`, changedAt: 1 }))
+                : pending && after === 200 ? [{ cursor: 201, changedAt: 1,
+                    ...buildProviderAccountUsageRefreshChangeV1(recordId) }] : [];
+            return { status: 200, data: { changes, nextCursor: changes.at(-1)?.cursor ?? after } };
+        });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token: 'bob-quota',
+            serverBaseUrl: 'https://quota-home.example' });
+        const publications: unknown[] = [];
+        let release: (() => void) | undefined;
+        try {
+            await observation.read();
+            release = observation.subscribeConnectedAccounts(event => { publications.push(event); });
+            await vi.waitFor(() => expect(cursors).toEqual([0]));
+            pending = true;
+            await channel.hintAccountChange();
+            await vi.waitFor(() => expect(publications).toEqual([{ quotaRefreshRecordIds: [recordId] }]));
+            expect(cursors).toContain(200);
+            // A full page is progress, not a reset of every quota deadline.
+            release();
+            const reads = cursors.length;
+            await channel.hintAccountChange();
+            expect(cursors).toHaveLength(reads);
+            expect(publications).toHaveLength(1);
+        } finally { release?.(); await observation.dispose(); await channel.close(); }
+    });
+
     it.each([
         ['reviews.comments.claimPublicationDispatch', 'mode-change'],
         ['reviews.comments.create', 'mode-change'],

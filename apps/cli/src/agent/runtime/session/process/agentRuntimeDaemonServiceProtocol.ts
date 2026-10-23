@@ -1,4 +1,6 @@
 import { z } from 'zod/mini';
+import { SessionAgentSpawnPolicyV1StrictSchema } from '@happier-dev/protocol/account/settings/sessionAgentSpawnPolicyV1';
+import { SessionAgentStartAllowListsV1StrictSchema } from '@happier-dev/protocol/account/settings/sessionAgentStartAllowListsV1';
 import { RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS, RUNNER_EXECUTION_RUN_SNAPSHOT_RESULTS } from './executionRunSnapshotProtocol';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { ReviewCommentPrincipalHeaderV1Schema } from '@happier-dev/protocol/reviews/comments/actions';
@@ -73,6 +75,12 @@ export const AGENT_RUNTIME_DAEMON_SERVICES_PATH =
   '/agent-runtime/session/services/v1';
 
 const OpaqueIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
+// Host-private projection: never transport the requester's Account document.
+const AgentStartPolicyV1Schema = z.strictObject({
+  workDepthLimit: z.int().check(z.gte(0)),
+  sessionAgentStartAllowListsV1: asHostProtocolZod(SessionAgentStartAllowListsV1StrictSchema),
+  sessionAgentSpawnPolicyV1: asHostProtocolZod(SessionAgentSpawnPolicyV1StrictSchema),
+});
 const ActionExecuteSuccessSchema = z.strictObject({
   ok: z.literal(true),
   result: z.unknown(),
@@ -156,6 +164,7 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.strictObject({
     executionRunSnapshotId: z.optional(z.uuid()),
   }),
   operation: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('agent_start.policy.read') }),
     z.strictObject({ kind: z.literal('execution_run.review_plugin_authority.resolve_v1'),
       pluginId: asHostProtocolZod(PluginIdSchema) }),
     ...RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS,
@@ -324,6 +333,7 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
     z.strictObject({
       ok: z.literal(true),
       result: z.union([
+        z.strictObject({ kind: z.literal('agent_start.policy'), policy: AgentStartPolicyV1Schema }),
         z.strictObject({ kind: z.literal('execution_run.review_plugin_authority'),
           authority: z.nullable(z.strictObject({ sourceCustody: asHostProtocolZod(PluginSourceCustodyV1Schema),
             caller: z.nullable(asHostProtocolZod(PluginMachineMaterializationRefV1Schema)) })) }),

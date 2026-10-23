@@ -100,7 +100,6 @@ const preparationDiagnosticCodes = new Set([
   ...Object.keys(SESSION_PREPARATION_FAILURE_PREVIEWS),
   ...ProviderErrorCodeV1Schema.options,
   ...ProviderBrokerAdmissionFailureCodeV1Schema.options,
-  'team_credential_provider_selection_not_current',
   'account_role_overrides_unavailable',
   'context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete',
   'role_target_unavailable', 'role_policy_unenforceable', 'preparation_pending', 'attachment_unavailable',

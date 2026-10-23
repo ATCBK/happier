@@ -16,9 +16,15 @@ import { resolveStructuredInputProviderDispatchContext } from '@/agent/runtime/t
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
+import * as persistence from '@/persistence';
+import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
+import { isExecutionRunConnectedServiceGenerationCurrent } from '@/daemon/connectedServices/runs/executionRunGenerationAdmission';
+import { ConnectedServiceRunGenerationCurrentRequestSchema } from '@/daemon/connectedServices/runs/materializeContract';
+import { parseConnectedServiceProjectionSnapshot } from '@/daemon/connectedServices/accountGroups/generation/connectedServiceProjectionSnapshot';
+import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 type RunPorts = Pick<ConstructorParameters<typeof ExecutionRunHostBridge>[0],
-  'sessionInteractionHost' | 'prepareManagedEndpoint' | 'resolveManagedPurposeBindingIntent'>;
+  'sessionInteractionHost' | 'prepareManagedEndpoint' | 'resolveManagedPurposeBindingIntent' | 'resolveAccountSettingsSnapshot' | 'checkConnectedServicesGenerationCurrent'>;
 
 // Observe the existing production composition hook. Registration, publication,
 // Run preparation and structured-input resolution all remain real.
@@ -46,11 +52,13 @@ function createClient(directory: string, serverUrl: string) {
     sessionInteractionHost: Reflect.get(manager, 'sessionInteractionHost'),
     prepareManagedEndpoint: Reflect.get(manager, 'prepareManagedEndpoint'),
     resolveManagedPurposeBindingIntent: Reflect.get(manager, 'resolveManagedPurposeBindingIntent'),
+    resolveAccountSettingsSnapshot: Reflect.get(manager, 'resolveAccountSettingsSnapshot'),
+    checkConnectedServicesGenerationCurrent: Reflect.get(manager, 'checkConnectedServicesGenerationCurrent'),
   };
   return { client, ports };
 }
 
-afterEach(() => { vi.unstubAllEnvs(); resetInMemoryAccountSettingsContextForTests(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetInMemoryAccountSettingsContextForTests(); });
 
 it('resolves Run composer inputs after constructor registration, rejects stale completions and withdraws retired callbacks', async () => {
   await withTempDir('c111-composer-', async directory => {
@@ -115,7 +123,7 @@ it('resolves Run composer inputs after constructor registration, rejects stale c
   });
 });
 
-it('opens a managed Gateway Run through services installed after registration and fences replacement/retirement', async () => {
+it('opens a managed Gateway Run from its cold captured Account after registration and fences replacement/retirement', async () => {
   const fixture = await createManagedRunLaunchFixture({ physicalGateway: true });
   let resolveCount = 0;
   let opens = 0;
@@ -125,6 +133,9 @@ it('opens a managed Gateway Run through services installed after registration an
     if (request.url === '/v1/account/encryption/currentness') response.end(JSON.stringify({ mode: 'plain', version: 1,
       settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
     else if (request.url === '/v2/account/settings') response.end(JSON.stringify({ version: 1, content: { t: 'plain', v: { schemaVersion: 6 } } }));
+    else if (request.url === '/v1/account/entity-rows/provider-connections') response.end(JSON.stringify({ status: 'present', revision: 1,
+      content: { t: 'plain', v: fixture.snapshot.providerConnectionsCatalog?.status === 'ready' ? fixture.snapshot.providerConnectionsCatalog.catalog : null } }));
+    else if (request.url === '/v2/account/settings/history') response.end(JSON.stringify({ snapshots: [] }));
     else if (request.url === '/v1/responses') { request.resume(); request.on('end', () => response.end(JSON.stringify({ output_text: 'C111_GATEWAY_OK' }))); }
     else { response.statusCode = 404; response.end('{}'); }
   });
@@ -145,11 +156,19 @@ it('opens a managed Gateway Run through services installed after registration an
     readBinding: async input => ({ kind: 'provider_managed.binding', bindingId: input.bindingId, endpointUrl: `${serverUrl}/v1`, headers: {} }),
     closeBinding: async () => { closes++; },
   };
-  const prepare = () => prepareExecutionRunProviderLaunch({
+  // A different ambient Account must never supply this Session's catalog.
+  setActiveAccountSettingsSnapshot(fixture.snapshot);
+  const ambient = getActiveAccountSettingsSnapshot();
+  const prepare = async () => {
+    const snapshot = await ports.resolveAccountSettingsSnapshot!();
+    const operation = ports.resolveAccountSettingsSnapshot?.readOperationContext?.();
+    if (!operation) throw new Error('Expected the actual Session Account holder');
+    return prepareExecutionRunProviderLaunch({
     selection: { agentTargetKey: fixture.agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'example' },
     backendTarget: { kind: 'backend', backendId: fixture.agentId }, agentId: fixture.agentId,
     runId: 'attached-run', machineId: fixture.machineId, featureEnabled: true,
-    happyHomeDir: fixture.happyHomeDir, accountSettingsSnapshot: fixture.snapshot, runtimeRegistryLease: fixture.lease,
+    happyHomeDir: fixture.happyHomeDir, accountSettingsSnapshot: snapshot, runtimeRegistryLease: fixture.lease,
+    savedSecretOperationContext: operation,
     resolveManagedPurposeBindingIntent: ports.resolveManagedPurposeBindingIntent,
     prepareManagedEndpoint: ports.prepareManagedEndpoint ? async input => {
       const endpoint = await ports.prepareManagedEndpoint!({ ...input,
@@ -158,7 +177,8 @@ it('opens a managed Gateway Run through services installed after registration an
       cleanups.push(endpoint.cleanup);
       return endpoint;
     } : undefined,
-  });
+    });
+  };
   try {
     await expect(prepare()).rejects.toBeDefined();
     expect(opens).toBe(0);
@@ -167,6 +187,8 @@ it('opens a managed Gateway Run through services installed after registration an
     expect(ports.resolveManagedPurposeBindingIntent).toBeTypeOf('function');
     const first = await prepare();
     expect(first.providerBinding?.connectionId).toBe('run-gateway');
+    expect(ports.resolveAccountSettingsSnapshot?.readOperationContext?.()?.readSnapshot()?.providerConnectionsCatalog?.status).toBe('ready');
+    expect(getActiveAccountSettingsSnapshot()).toBe(ambient);
     expect(resolveCount).toBeGreaterThan(0);
     expect(opens).toBe(1);
     const request = () => fetch(`${endpointUrl}/responses`, { method: 'POST',
@@ -207,3 +229,49 @@ it('opens a managed Gateway Run through services installed after registration an
     await fixture.cleanup();
   }
 }, 30_000);
+
+it('admits a brokered Team Run through the registered generation port without inventing a local credential generation', async () => {
+  await withTempDir('c123-team-run-', async directory => {
+    const registry = new ConnectedServiceRuntimeRegistry();
+    const bindings = { v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+      source: 'team_resource', resourceId: 'team-resource', deliveryMode: 'brokered',
+    } } } as const;
+    const target = registry.registerRunTarget({ runKey: 'team-run', pid: process.pid, agentId: 'codex', sessionId: 'parent',
+      materializationKey: 'team-run', connectedServicesBindingsRaw: bindings, connectedServiceSelectionsEnv: {} });
+    expect(target.activeBindings).toEqual([]);
+    const projection = parseConnectedServiceProjectionSnapshot({ connectedServicesV2: [], connectedServiceCredentialRevisionsV1: [] });
+    const daemon = createServer((request, response) => {
+      let body = '';
+      request.on('data', data => { body += data; });
+      request.on('end', () => {
+        const input = ConnectedServiceRunGenerationCurrentRequestSchema.parse(JSON.parse(body));
+        const current = registry.getRunTargetByRunKey(input.runId);
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true, current: Boolean(current && current.pid === input.runnerPid
+          && isExecutionRunConnectedServiceGenerationCurrent({ runId: input.runId, target: current, projection })) }));
+      });
+    });
+    daemon.listen(0, '127.0.0.1');
+    await once(daemon, 'listening');
+    const address = daemon.address();
+    if (!address || typeof address === 'string') throw new Error('Missing daemon HTTP boundary');
+    // The daemon-state filesystem read is a genuine OS boundary; the client,
+    // registered Run port, HTTP contract, registry and generation policy stay real.
+    vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: process.pid, httpPort: address.port,
+      startedAt: 1, startedWithCliVersion: '0.3.0', controlToken: 'fixture-daemon-control' });
+    const { client, ports } = createClient(directory, 'http://127.0.0.1:1');
+    const registration = { v: 1, activationId: 'a1234567-1234-4234-8234-123456789abc', runKey: 'team-run', agentId: 'codex',
+      materializationKey: 'team-run', connectedServicesBindings: bindings, connectedServiceSelectionsEnv: {},
+      sessionDirectory: directory, materializedRoot: null } as const;
+    const check = () => ports.checkConnectedServicesGenerationCurrent!({ runId: 'team-run', registration });
+    try {
+      await expect(check()).resolves.toEqual({ current: true });
+      registry.unregisterRunKey('team-run');
+      await expect(check()).resolves.toEqual({ current: false });
+    } finally {
+      await client.close();
+      daemon.closeAllConnections();
+      await new Promise<void>((resolve, reject) => daemon.close(error => error ? reject(error) : resolve()));
+    }
+  });
+});

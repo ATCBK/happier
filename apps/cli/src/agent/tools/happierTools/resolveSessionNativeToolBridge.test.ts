@@ -7,6 +7,7 @@ import { z } from 'zod/mini';
 import { resolveSessionNativeToolDescriptors } from './resolveSessionNativeToolBridge';
 import { projectMcpToolInputJsonSchema } from '@/mcp/server/projectMcpToolInputJsonSchema';
 import { projectSessionBoundActionToolInputSchema } from './actionToolContext';
+import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 
 const originalActionsSettingsEnv = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
 
@@ -20,6 +21,32 @@ afterEach(() => {
 });
 
 describe('resolveSessionNativeToolDescriptors', () => {
+  it('projects an external daemon Action tool from the admitted catalog and fails closed when it is omitted', () => {
+    const pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[] = [{
+      toolId: 'dev.leads-fixture/record-analysis',
+      actionId: 'dev.leads-fixture/actions/record-analysis',
+      name: 'leads_record_analysis',
+      title: 'Record lead analysis',
+      description: 'Record a structured lead analysis.',
+      inputSchema: {
+        type: 'object',
+        properties: { leadId: { type: 'string' }, score: { type: 'number' } },
+        required: ['leadId', 'score'],
+        additionalProperties: false,
+      },
+      surfaces: ['agent'],
+    }];
+    const resolve = (catalog: readonly ProjectedPluginToolCatalogEntry[]) => resolveSessionNativeToolDescriptors({
+      accountSettings: {}, sessionId: 'embed-created-session', sessionMachineId: 'machine-1',
+      memoryRecallGuidanceEnabled: false, pluginToolCatalog: catalog,
+    });
+
+    expect(resolve(pluginToolCatalog)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'leads_record_analysis', title: 'Record lead analysis' }),
+    ]));
+    expect(resolve([]).map((tool) => tool.name)).not.toContain('leads_record_analysis');
+  });
+
   it('reuses repeated Board input definitions in the native Agent descriptor', () => {
     const spec = getActionSpec('session.board.item.upsert');
     const example = spec.examples?.mcp?.argsExample;

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { configuration } from '@/configuration';
+import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
 
 import {
   AGENT_RUNTIME_DAEMON_SERVICES_PATH,
@@ -16,6 +18,7 @@ import { createProviderErrorV1, ProviderErrorCodeV1Schema } from '@happier-dev/p
 import type { SessionInputEnqueueResultV1 } from '@happier-dev/protocol';
 import { TeamCredentialErrorCodeV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import {
+  HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY,
   readAgentRuntimeDaemonServiceAuthority,
   readCurrentRunnerAgentRuntimeDaemonServiceAuthority,
   type AgentRuntimeDaemonServiceAuthorityExpectedInput,
@@ -39,6 +42,27 @@ import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protoco
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
+
+/** The existing Session capability selects the policy's Account and source. */
+export async function readCurrentRunnerAgentStartPolicyV1(
+  sessionId: string, signal?: AbortSignal,
+): Promise<RequesterAgentStartPolicyV1 | null> {
+  const path = process.env[HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY];
+  if (!path) return null;
+  const current = await readCurrentRunnerAgentRuntimeDaemonServiceAuthority({
+    happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+    path, expectedSessionId: sessionId,
+  });
+  if (!current) return null;
+  const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
+    authority: { happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      path, sessionId, runner: current.runner, retainedAgent: current.retainedAgent },
+    signal,
+    timeoutMs: null,
+    createRequest: token => ({ v: 1, context: { token, sessionId }, operation: { kind: 'agent_start.policy.read' } }),
+  });
+  return response.ok && response.result.kind === 'agent_start.policy' ? response.result.policy : null;
+}
 
 function createRunnerAgentRuntimeDaemonServiceAuthorityTransitionError():
 Error & { code: typeof RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE } {

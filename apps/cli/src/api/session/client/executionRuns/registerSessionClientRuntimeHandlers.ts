@@ -712,6 +712,9 @@ export function registerSessionClientRuntimeHandlers(
         token: params.token,
         serverId: approvalServerId,
         serverHttpBaseUrl: approvalServerApiUrl,
+        ...(params.getServerFeaturesSnapshot
+            ? { resolveServerFeaturesSnapshot: params.getServerFeaturesSnapshot }
+            : {}),
         sessionId: params.sessionId,
         getCurrentSessionMetadata: params.getSessionMetadata,
         ...(parentSessionForTools ? {

@@ -6,7 +6,7 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 
 it.each(['plugin_mcp_preparation_unavailable', 'agent_runtime_daemon_service_generation_not_current',
   'native_agent_privileged_effect_authority_unavailable', 'native_agent_privileged_effect_outcome_unknown',
-  'skills_unavailable'])('retains only the closed startup refusal %s', code => {
+  'skills_unavailable', 'team_credential_provider_selection_not_current'])('retains only the closed startup refusal %s', code => {
   const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
   const fatal = vi.spyOn(logger, 'fatal').mockImplementation(() => {});
   try {

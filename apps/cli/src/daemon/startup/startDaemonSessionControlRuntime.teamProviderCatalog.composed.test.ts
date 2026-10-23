@@ -28,9 +28,14 @@ import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { logger } from '@/ui/logger';
-import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
+import { createDaemonMachineIrohRuntime, type DaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachineIrohRuntime';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
 import { startPeerMediationLoopbackServer } from '@/daemon/peer/mediation/loopback/server';
+import { openDaemonSessionTeamCredentialProviderBinding } from '@/daemon/providers/sessionTeamCredentialProviderBindingComposition';
+import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { PROVIDER_BROKER_OPEN_HTTP_PATH_V1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { ProviderBrokerOpenRequestV1Schema, type ProviderBrokerOpenRequestV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { TEAM_CREDENTIAL_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
 
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
@@ -57,7 +62,7 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
 
-it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
+it.each(['ready', 'requester Home', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
@@ -67,7 +72,26 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
   let nativeTunnelOpen: ReturnType<typeof createProviderBrokerMachineCarrierTunnelOpen> | undefined;
   let workerEndpoint: import('@happier-dev/protocol').IrohEndpointDescriptorV1 | undefined;
   let brokerEndpoint: import('@happier-dev/protocol').IrohEndpointDescriptorV1 | undefined;
+  let workerRuntime: DaemonMachineIrohRuntime | undefined;
+  let dropRequesterContext = false;
+  let daemonAccount: 'custodian' | 'requester' = 'custodian';
   const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(91));
+  const signedBrokerResponse = (request: ProviderBrokerOpenRequestV1) => {
+    if (!workerEndpoint || !brokerEndpoint) throw new Error('Missing native endpoints');
+    const issuedAt = Date.now();
+    const payload = { v: 1 as const, aud: 'happier-provider-broker-route-v1' as const,
+      grantId: 'grant', issuedAt, expiresAt: issuedAt + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
+      teamId: 'team', resourceId: request.resourceId, sourceRevision: request.sourceRevision,
+      brokerPlacementFingerprint: 'c'.repeat(64), initiatorTokenEpoch: 0,
+      initiator: { accountId: 'requester', machineId: 'machine', endpointId: workerEndpoint.endpointId },
+      target: { custodianAccountId: 'source-owner', machineId: 'broker', endpointId: brokerEndpoint.endpointId },
+      consumer: request.consumer, application: request.application };
+    return { ok: true as const, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker',
+      endpointId: brokerEndpoint.endpointId, endpointRevision: 1, endpoint: brokerEndpoint },
+      authority: { payload, signature: { alg: 'Ed25519' as const, keyId: 'home', valueBase64Url: Buffer.from(
+        tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV1(payload)), signingKey.secretKey),
+      ).toString('base64url') } } };
+  };
   const cleanup: Array<() => Promise<void>> = [];
   onTestFinished(async () => { for (const close of cleanup.reverse()) await close(); });
   const warnings = vi.spyOn(logger, 'warnLocalFile');
@@ -77,6 +101,16 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
   }));
   h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'codex', false, undefined, undefined, {
     openTeamCredentialProviderBinding: async input => {
+      if (metadata === 'requester Home') {
+        return await openDaemonSessionTeamCredentialProviderBinding({ ...input,
+          ...(dropRequesterContext ? { providerSettingsOperationContext: undefined } : {}),
+        }, { machineId: 'machine', accountId: daemonAccount, serverId: 'session-home', happyHomeDir: h.f.directory,
+          credentials: daemonAccount === 'requester' ? h.requester.bootstrap.credentials : { token: 'custodian-token', encryption: null },
+          serverHttpBaseUrl: h.requester.bootstrap.serverHttpBaseUrl,
+          controller: h.plugin.controller, runtime: workerRuntime, resolveTrustRoots: () => [
+            { keyId: 'home', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+          openTeamDirect: async () => { throw new Error('Unexpected direct material'); } });
+      }
       const opened = await openSessionTeamCredentialProviderBinding({ ...input, machineId: 'machine',
         binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: input.resourceId, expectedResourceRevision: input.expectedResourceRevision,
           deliveryMode: input.deliveryMode, teamId: input.teamId }, lease: h.plugin.lease,
@@ -96,19 +130,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
           }
           if (request.refreshAuthority && metadata === 'refresh refused') return { ok: false, reasonCode: 'broker_unavailable' };
           if (workerEndpoint && brokerEndpoint) {
-            const issuedAt = Date.now();
-            const payload = { v: 1 as const, aud: 'happier-provider-broker-route-v1' as const,
-              grantId: 'grant', issuedAt, expiresAt: issuedAt + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
-              teamId: 'team', resourceId: request.resourceId, sourceRevision: request.sourceRevision,
-              brokerPlacementFingerprint: 'c'.repeat(64), initiatorTokenEpoch: 0,
-              initiator: { accountId: 'requester', machineId: 'machine', endpointId: workerEndpoint.endpointId },
-              target: { custodianAccountId: 'source-owner', machineId: 'broker', endpointId: brokerEndpoint.endpointId },
-              consumer: request.consumer, application: request.application };
-            return { ok: true, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker',
-              endpointId: brokerEndpoint.endpointId, endpointRevision: 1, endpoint: brokerEndpoint },
-              authority: { payload, signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: Buffer.from(
-                tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV1(payload)), signingKey.secretKey),
-              ).toString('base64url') } } };
+            return signedBrokerResponse(request);
           }
           return { ok: true, target: { custodianAccountId: 'source-owner', brokerMachineId: 'broker', endpointId: 'b'.repeat(64),
             endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } }, authority: { payload: { v: 1,
@@ -174,7 +196,32 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     return get(url, options);
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
-  if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'refresh refused') {
+  if (metadata === 'requester Home') {
+    const post = vi.mocked(axios.post).getMockImplementation()!;
+    vi.mocked(axios.post).mockImplementation(async (url, data, options) => {
+      const path = new URL(String(url)).pathname;
+      if (path === TEAM_CREDENTIAL_ACTION_PATHS_V1['teams.credentials.entitled.list']) {
+        catalogReads++;
+        // This real Home HTTP boundary exposes the Team only to its recipient.
+        // The strict page/model readers beneath it stay real.
+        const recipient = options?.headers?.Authorization === `Bearer ${h.requester.bootstrap.credentials.token}`;
+        return { status: 200, data: { resources: recipient ? [TeamCredentialResourceCatalogEntryV1Schema.parse({
+          id: 'resource', teamId: 'team', displayName: 'Shared Pool', resourceRevision: 2,
+          readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
+          directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
+          sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
+          connectedServiceSelections: [], providerModels: [model],
+        })] : [], nextCursor: null } };
+      }
+      if (path === PROVIDER_BROKER_OPEN_HTTP_PATH_V1) {
+        expect(options?.headers?.Authorization).toBe(`Bearer ${h.requester.bootstrap.credentials.token}`);
+        brokerOpens++;
+        return { status: 200, data: signedBrokerResponse(ProviderBrokerOpenRequestV1Schema.parse(data)) };
+      }
+      return post(url, data, options);
+    });
+  }
+  if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'refresh refused' || metadata === 'requester Home') {
     // The target HTTP service is the external boundary. Keep real signed
     // cross-Account admission, native Iroh and capability gating in the path.
     const http = createServer((request, response) => {
@@ -195,6 +242,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
       relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
     cleanup.push(broker.shutdown);
     if (!worker.available || !broker.available) throw new Error('Expected native Team endpoints');
+    workerRuntime = worker;
     workerEndpoint = worker.endpoint;
     brokerEndpoint = broker.endpoint;
     const trustRoots = [{ keyId: 'home', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }];
@@ -216,7 +264,7 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     if (target.pathname === AGENT_RUNTIME_DAEMON_SERVICES_PATH && target.hostname === '127.0.0.1'
       && target.port === String(boundary.port)) return nativeFetch(url, options);
     if (target.pathname === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
-      if (metadata === 'slow catalog' || metadata === 'slow refresh') return nativeFetch(url, options);
+      if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'requester Home') return nativeFetch(url, options);
       // Native transport is the boundary: a failed fresh handshake closes its
       // local HTTP socket without returning an HTTP response to the real binder.
       if (metadata === 'refresh refused') await refreshStream?.();
@@ -244,6 +292,28 @@ it.each(['ready', 'binding not current', 'missing declaration', 'non-204', 'sock
     kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
     agentTargetKey, modelId: model.descriptor.id } });
   try {
+  if (metadata === 'requester Home') {
+    const opened = await openThroughRunner();
+    expect(opened.providerBinding).toMatchObject({ source: { kind: 'team_resource', resourceId: 'resource' },
+      upstream: { normalizedUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/u) } });
+    expect(parseCodexProviderBindingEngineConfigV1(opened.providerBinding)).not.toBeNull();
+    expect(catalogReads).toBeGreaterThan(0);
+    expect(brokerOpens).toBeGreaterThan(0);
+    const priorBrokerOpens = brokerOpens;
+    // Deliberately remove the requester binding once. This is the original
+    // mis-wiring: a valid Team selection disappears in the custodian catalog.
+    dropRequesterContext = true;
+    await expect(openThroughRunner()).rejects.toMatchObject({ code: 'team_credential_provider_selection_not_current' });
+    expect(brokerOpens).toBe(priorBrokerOpens);
+    // A daemon's own Account still uses the same composition without a
+    // separate requester context or an alternate catalog/broker path.
+    daemonAccount = 'requester';
+    const ownAccountSnapshot = h.requester.readAccountSettingsSnapshot();
+    if (!ownAccountSnapshot) throw new Error('Missing own Account confirmation');
+    setActiveAccountSettingsSnapshot(ownAccountSnapshot);
+    await expect(openThroughRunner()).resolves.toMatchObject({ kind: 'provider_broker.binding', status: 'opened' });
+    return;
+  }
   if (metadata === 'binding not current') {
     h.tracked.spawnOptions = { ...h.tracked.spawnOptions, teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' },
       resourceId: 'other-resource', expectedResourceRevision: 2, teamId: 'team', deliveryMode: 'brokered' }] };

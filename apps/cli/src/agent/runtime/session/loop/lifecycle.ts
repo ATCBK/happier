@@ -1,6 +1,7 @@
 import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { isForegroundTurnRuntimeTranscriptEvent, isSessionScopedRuntimeTranscriptEvent } from '../events/runtimeTranscriptScope';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import { readSessionExplicitStopV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import { resolveRuntimeCheckpointToolProtocol } from '@happier-dev/agents/session/controls/checkpoints';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
@@ -934,23 +935,39 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     await params.startupCoordinator.start();
   };
 
-  const handleAbort = async () => {
+  const cancelCurrentTurn = (permissionScope: 'foreground' | 'session') => {
     logger.debug(`${params.config.uiLogPrefix} Abort requested`);
     resetAssistantTextSnapshotTurnScope(params.session, 'abort');
     abortController.abort();
     abortController = new AbortController();
     // Permission withdrawal may await Home persistence. Native cancellation
     // must propagate while that independent write is still pending.
-    await Promise.all([
-      (async () => {
+    let explicitStop = permissionScope === 'foreground';
+    const permissions = (async () => {
+      if (!explicitStop) {
         try {
-          await params.permissionHandler.reset({ scope: 'foreground' });
+          // Daemon Stop commits its intent before signalling, but the local
+          // socket projection can lag. Read the canonical snapshot before
+          // deciding whether this physical retirement withdraws questions.
+          await params.session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain', afterCurrentRead: true });
+          const stop = readSessionExplicitStopV1FromMetadata(params.session.getMetadataSnapshot());
+          explicitStop = stop !== null && !('status' in stop);
         } catch {
-          logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
-            error: 'permission_reset_failed',
+          logger.infoFile(`${params.config.uiLogPrefix} Stop intent unavailable during runtime retirement; preserving questions`, {
+            error: 'retirement_stop_intent_unavailable',
           });
         }
-      })(),
+      }
+      try {
+        await params.permissionHandler.reset(explicitStop ? { scope: 'foreground' } : undefined);
+      } catch {
+        logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
+          error: 'permission_reset_failed',
+        });
+      }
+    })();
+    const completed = Promise.all([
+      permissions,
       (async () => {
         try {
           await runtimeForPromptLoop.cancelTurn();
@@ -960,7 +977,26 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           });
         }
       })(),
-    ]);
+    ]).then(() => undefined);
+    return { permissions, completed, isExplicitStop: () => explicitStop };
+  };
+  const handleAbort = () => cancelCurrentTurn('foreground').completed;
+  const settleExplicitlyStoppedTurn = async (): Promise<void> => {
+    if (!sessionTurnLifecycle.hasActiveTurn() || !activeRuntimeTranscriptTurnId) return;
+    // Successful disposal after an admitted person Stop establishes host
+    // cancellation even when native cleanup retires its event subscribers.
+    // Reuse terminal projection and reply custody; an abort request alone
+    // cannot establish this outcome, nor replace an observed native terminal.
+    observeRuntimeLifecycleMessage({
+      sequence: 0,
+      sessionId: params.session.sessionId,
+      emittedAtMs: Date.now(),
+      kind: 'turn-cancelled',
+      turnId: activeRuntimeTranscriptTurnId,
+      cause: 'user',
+    });
+    await drainRuntimeTranscriptProjections();
+    await sessionTurnLifecycle.drainAcceptedLifecycle();
   };
   params.setAbortRequestedCallback(handleAbort, () => abortController.signal);
   let inkInstance: ReturnType<typeof render> | null = null;
@@ -1136,12 +1172,25 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         runtimeDisposeReason = resolveRunnerRuntimeDisposalReason(event);
         shouldExit = true;
         try {
+          let permissionRetirement = Promise.resolve();
+          let isExplicitStop = () => false;
           await abortAndDisposeRunnerRuntime({
             retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
-            abortActiveTurn: handleAbort,
+            // Physical retirement keeps durable questions for the replacement
+            // runner. Only explicit Stop withdraws them at the foreground owner.
+            abortActiveTurn: () => {
+              const cancellation = cancelCurrentTurn(event.kind === 'killSession' ? 'foreground' : 'session');
+              permissionRetirement = cancellation.permissions;
+              isExplicitStop = cancellation.isExplicitStop;
+              return cancellation.completed;
+            },
             disposeRuntime: disposeRuntimeOnce,
             reason: runtimeDisposeReason,
           });
+          // Native disposal stays independent of provider cancellation. Keep
+          // the transport alive until request retirement has read Stop intent.
+          await permissionRetirement;
+          if (isExplicitStop()) await settleExplicitlyStoppedTurn();
           params.session.prepareForClose();
           unsubscribeRuntimeEventsOnce();
           await drainRuntimeTranscriptProjections();

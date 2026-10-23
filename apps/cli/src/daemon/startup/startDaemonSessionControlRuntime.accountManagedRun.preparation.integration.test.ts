@@ -74,6 +74,7 @@ it('retains prepublication managed source cleanup in the actual rejected Run con
     manager = new ExecutionRunHostBridge({ parentProvider: 'codex', cwd: fixture.fixture.happyHomeDir,
       happyHomeDir: fixture.fixture.happyHomeDir, machineId: fixture.fixture.machineId, sendAcp: async () => {},
       resolveProvidersFeatureEnabled: () => true, resolveAccountSettingsSnapshot: readSnapshot,
+      resolveRunReportPolicy: fixture.resolveRunReportPolicy,
       resolveExecutionRunProfileCatalog: async () => ({ profileCatalog, engineRegistry }),
       resolveManagedPurposeBindingIntent: purposeResolver,
       prepareManagedEndpoint: createExecutionRunManagedProviderEndpointPreparer({ machineId: fixture.fixture.machineId, accountId,

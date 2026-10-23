@@ -11,7 +11,7 @@ import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../conne
 import { createConnectedAccountDaemonConfigurationOwner } from '../connectedServices/ConnectedAccountDaemonRuntime';
 import { createDaemonConnectedAccountPurposeBindingRuntime } from '../connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 import { createActiveAccountSettingsConnectedAccountPurposeBindingStore } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
-import { refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { createHttpTeamCredentialDirectMaterialClient } from '../connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createDaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import { createProviderAccountUsageStore } from '../connectedServices/accountUsage/store';
@@ -53,7 +53,7 @@ export function resolveRequesterSessionRuntimeDirectories(input: Readonly<{
 export async function createRequesterSessionRuntimeContext(input: Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
   signal?: AbortSignal;
-  coordinatorInput: Omit<CoordinatorInput, 'api' | 'credentials' | 'accountSettingsSnapshot'
+  coordinatorInput: Omit<CoordinatorInput, 'api' | 'credentials' | 'accountSettingsSnapshot' | 'subscribeAccountSettingsSnapshot'
     | 'activeServerDir' | 'providerAccountUsageStore' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'qualifiedConnectedAccountEstablishedRuntimeOwner' | 'listScheduledQualifiedConnectedAccounts'
     | 'listQualifiedConnectedAccountGroupQuotaTargets' | 'onQualifiedConnectedAccountCredentialUpdated'
@@ -137,9 +137,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
       }
       const current = readSnapshot();
       await Promise.all([
-        ...(current.connectedPurposeCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
+        ...(current.connectedPurposeCatalog ? [readActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
           key: 'purposes', operationContext: savedSecrets })] : []),
-        ...(current.connectedConfigurationCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
+        ...(current.connectedConfigurationCatalog ? [readActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
           key: 'configurations', operationContext: savedSecrets })] : []),
       ]);
       return true;
@@ -256,10 +256,14 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     listScheduledQualifiedConnectedAccounts: service => purposes.listCoordinatorAccounts(undefined, service),
     subscribeConnectedAccountInvalidations: listener => {
       const releasePurpose = purposes.subscribeInvalidations(listener);
-      const settingsSubscription = store.subscribe(listener);
-      return () => { releasePurpose(); settingsSubscription.dispose(); };
+      const releaseObservation = bootstrap.subscribeConnectedAccounts(event => { purposes.invalidate(event); });
+      return () => { releaseObservation(); releasePurpose(); };
     },
-    listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: purposes.invalidate,
+    subscribeAccountSettingsSnapshot: listener => {
+      const subscription = store.subscribe(listener);
+      return () => subscription.dispose();
+    },
+    listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: () => purposes.invalidate(),
     }));
     if (!await isCurrent(input.signal)) {
       await dispose();

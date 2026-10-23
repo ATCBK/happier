@@ -239,6 +239,7 @@ export type AdmittedRequesterSessionBootstrap = Readonly<{
   refreshAccountSettings(minSettingsVersion?: number, signal?: AbortSignal): Promise<boolean>;
   subscribeAccountSettings(listener: () => void): () => void;
   subscribeSessionFollowRules(listener: () => void): () => void;
+  subscribeConnectedAccounts: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness>['subscribeConnectedAccounts'];
   subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
   /** One authority observation; accepted preparation owns any retry outside this reader. */
   isCurrent(signal?: AbortSignal): Promise<boolean>;
@@ -450,6 +451,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       savedSecretOperationContext, isCurrent, dispose, getBoundSessionId: () => bound?.sessionId ?? null, bindSession, bindExistingSession,
       ensureAccountSettingsCurrent: settingsPublication.ensureCurrent, subscribeAccountSettings: settingsPublication.subscribe,
       subscribeSessionFollowRules: accountObservation.subscribeSessionFollowRules,
+      subscribeConnectedAccounts: accountObservation.subscribeConnectedAccounts,
       subscribeSessionFollowSources: accountObservation.subscribeSessionFollowSources,
       refreshAccountSettings: settingsPublication.refresh,
       bindRuntimeMachineAdmissionCurrentness: (current: (signal?: AbortSignal) => Promise<boolean>) => {
