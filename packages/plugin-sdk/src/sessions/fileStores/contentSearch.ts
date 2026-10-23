@@ -101,12 +101,13 @@ type ContentPrefilterParams = Readonly<{
   /** Native layout selectors, supplied by the same owner that enumerates candidates. */
   glob?: string;
   maxDepth?: number;
+  logger?: AgentExternalSessionsInvocation['logger'];
 }>;
 
 /**
  * Source-scoped native prefilter, shared by decoders and page owners. Null
- * excludes nothing. The default returns paths; lineOffsets returns match byte
- * positions without source text. Paths may also be admitted native roots.
+ * excludes nothing. The default returns paths; lineOffsets returns matching
+ * JSONL row-start byte positions without source text. Paths may also be roots.
  */
 export function prefilterExternalSessionContentPaths(params: ContentPrefilterParams & Readonly<{
   lineOffsets: true;
@@ -119,7 +120,15 @@ export async function prefilterExternalSessionContentPaths(params: ContentPrefil
   additionalLinePatterns?: readonly string[];
 }>): Promise<ReadonlySet<string> | ReadonlyMap<string, readonly number[]> | null> {
   params.signal?.throwIfAborted();
-  if (!params.query || /[^\x01-\x7F]/.test(params.query.toLowerCase())) return null;
+  const startedAt = performance.now();
+  const report = (reason: string, fields: Readonly<Record<string, number | boolean>> = {}) => {
+    params.logger?.debug('external_sessions.content_prefilter', {
+      reason, files: params.paths.length, lineOffsets: params.lineOffsets === true,
+      elapsedMs: Math.round(performance.now() - startedAt), ...fields,
+    });
+  };
+  const unavailable = (reason: string) => { report(reason); return null; };
+  if (!params.query || /[^\x01-\x7F]/.test(params.query.toLowerCase())) return unavailable('query_not_process_safe');
   if (params.paths.length === 0) return params.lineOffsets ? new Map() : new Set();
   // A mixed JSON spelling either contains the literal/named-escaped query or
   // at least one Unicode escape for a character in it. Bound the alternatives
@@ -130,7 +139,7 @@ export async function prefilterExternalSessionContentPaths(params: ContentPrefil
   // The only non-ASCII code points whose JavaScript lowercase contains ASCII.
   if (folded.includes('i')) codes.add(0x0130);
   if (folded.includes('k')) codes.add(0x212a);
-  const patterns = [...new Set([escapePattern(params.query), escapePattern(JSON.stringify(params.query).slice(1, -1)),
+  const patterns = [...new Set([...(params.lineOffsets && params.query.includes('\n') ? [] : [escapePattern(params.query)]), escapePattern(JSON.stringify(params.query).slice(1, -1)),
     `\\\\u(?:${[...codes].map(code => code.toString(16).padStart(4, '0')).join('|')})`,
     ...(folded.includes('i') ? ['İ'] : []), ...(folded.includes('k') ? ['K'] : []),
     ...(params.query.includes('/') ? [escapePattern('\\/')] : []),
@@ -139,41 +148,57 @@ export async function prefilterExternalSessionContentPaths(params: ContentPrefil
     // A raw NUL in a damaged native record must not hide readable messages
     // elsewhere in the file. The decoder owns record validity and coverage.
     args: ['--no-config', ...(params.lineOffsets
-      ? ['--with-filename', '--only-matching', '--byte-offset', '--replace', '-', '--no-heading', '--color', 'never']
-      : ['--files-with-matches']), '--null', '--ignore-case', '--multiline', '--text',
+      ? ['--with-filename', '--only-matching', '--byte-offset', '--replace', '-', '--heading', '--color', 'never']
+      : ['--files-with-matches']), '--null', '--ignore-case', ...(!params.lineOffsets ? ['--multiline'] : []), '--text',
       '--hidden', '--no-ignore',
       ...(params.glob === undefined ? [] : ['--glob', params.glob]),
       ...(params.maxDepth === undefined ? [] : ['--max-depth', String(params.maxDepth)]),
-      ...patterns.flatMap(pattern => ['-e', pattern])],
+      // Anchor each admitted match at its JSONL row boundary. Consumers can
+      // seek that row through the canonical byte scanner instead of rereading
+      // gigabytes between sparse matches. JSONL spellings are line-local;
+      // multiline replacement in rg shifts later byte offsets by replaced text.
+      ...(params.lineOffsets ? [`(?m)^[^\\n]*(?:${patterns.join('|')})`] : patterns).flatMap(pattern => ['-e', pattern])],
     paths: params.paths,
     signal: params.signal,
   });
   params.signal?.throwIfAborted();
-  if (result.stdoutTruncated) return null;
+  if (result.stdoutTruncated) return unavailable('stdout_truncated');
   if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('Conversation content prefilter failed.');
   if (params.lineOffsets) {
     const offsets = new Map<string, number[]>();
-    // --null frames filenames independently of colons/newlines. A fixed replaced
-    // match reveals only byte offsets, never native transcript bodies. rg can
-    // suppress empty replacements with a multi-pattern regex search.
+    // Heading mode emits each NUL-framed path once, rather than once per
+    // match. Repeating native paths can exhaust the host output budget and
+    // discard admission for an entire page. Positions contain no source text.
+    // Blank lines separate groups; newlines within paths stay before the NUL.
     for (let start = 0; start < result.stdout.length;) {
       const separator = result.stdout.indexOf('\0', start);
-      if (separator < start) return null;
-      const end = result.stdout.indexOf('\n', separator + 1);
-      if (end < 0) return null;
-      const position = result.stdout.slice(separator + 1, end);
-      if (!/^\d+:-\r?$/.test(position)) return null;
-      const offset = Number(position.replace(/:-\r?$/, ''));
-      if (!Number.isSafeInteger(offset)) return null;
+      if (separator < start) return unavailable('invalid_offset_output');
       const path = result.stdout.slice(start, separator);
       const entries = offsets.get(path) ?? [];
-      if (entries.at(-1) !== offset) entries.push(offset);
+      start = separator + 1;
+      let matched = false;
+      while (start < result.stdout.length) {
+        const end = result.stdout.indexOf('\n', start);
+        if (end < 0) return unavailable('invalid_offset_output');
+        const position = result.stdout.slice(start, end);
+        start = end + 1;
+        if (/^\r?$/.test(position)) break;
+        if (!/^\d+:-\r?$/.test(position)) return unavailable('invalid_offset_output');
+        const offset = Number(position.replace(/:-\r?$/, ''));
+        if (!Number.isSafeInteger(offset)) return unavailable('invalid_offset_output');
+        if (entries.at(-1) !== offset) entries.push(offset);
+        matched = true;
+      }
+      if (!matched) return unavailable('invalid_offset_output');
       offsets.set(path, entries);
-      start = end + 1;
     }
-    return result.exitCode === 0 && offsets.size === 0 ? null : offsets;
+    if (result.exitCode === 0 && offsets.size === 0) return unavailable('empty_success_output');
+    report('line_offsets', { admittedFiles: offsets.size, stdoutBytes: Buffer.byteLength(result.stdout) });
+    return offsets;
   }
-  return new Set(result.stdout.split('\0').filter(Boolean));
+  const paths = new Set(result.stdout.split('\0').filter(Boolean));
+  report('file_paths', { admittedFiles: paths.size, stdoutBytes: Buffer.byteLength(result.stdout) });
+  return paths;
 }
 
 /** Native decoding/semantic selection stays with the plugin; bodies are not retained. */

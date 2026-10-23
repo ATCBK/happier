@@ -2,7 +2,7 @@ import { appendFile, mkdir, mkdtemp, open, rm, stat, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 type ByteCursor = Readonly<{ v: 1; kind: 'byteOffset'; offset: number }>;
@@ -105,6 +105,38 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it('assembles forward multi-chunk records with linear buffer copying and exact page continuation', async () => {
+    const scanner = await import('./boundedJsonlScanner.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-jsonl-allocation-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const text = 'café 😀 '.repeat(160_000);
+    const first = jsonlLine({ text });
+    const second = jsonlLine({ text: 'next record' });
+    await writeFile(filePath, first + second);
+    let copiedBytes = 0;
+    const concat = Buffer.concat;
+    // Observe the actual platform allocation; framing and parsing stay real.
+    const allocation = vi.spyOn(Buffer, 'concat').mockImplementation((buffers, length) => {
+      copiedBytes += length ?? buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+      return concat(buffers, length);
+    });
+    try {
+      const page = await scanner.readJsonlFileForwardLines({ filePath, offsetBytes: 0,
+        maxBytes: Buffer.byteLength(first + second), maxItems: 1, chunkBytes: 64 * 1024 });
+      expect(page.items.map(line => line.value)).toEqual([{ text }]);
+      expect(page.nextOffsetBytes).toBe(Buffer.byteLength(first));
+      expect(page.reachedEnd).toBe(false);
+      const next = await scanner.readJsonlFileForwardLines({ filePath, offsetBytes: page.nextOffsetBytes,
+        maxBytes: Buffer.byteLength(second), maxItems: 1 });
+      expect(next.items.map(line => line.value)).toEqual([{ text: 'next record' }]);
+      expect(next.reachedEnd).toBe(true);
+      // One assembly per completed record; permit one extra source-sized copy.
+      // Repeatedly copying the growing carry exceeds this by an order of magnitude.
+      expect(copiedBytes).toBeLessThanOrEqual(2 * Buffer.byteLength(first + second));
+    } finally { allocation.mockRestore(); }
+  });
+
   it.each(['forward', 'backward'] as const)(
     'keeps exact record offsets around leading and consecutive separators in the %s scanner',
     async (direction) => {

@@ -486,6 +486,10 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   /** Query-local byte admission; excluded rows consume boundaries without decoding or diagnostics. */
   shouldParseLine?: (startOffsetBytes: number, endOffsetBytes: number) => boolean;
   onSkippedLine?: (startOffsetBytes: number, endOffsetBytes: number, tailOffsetBytes: number | null) => void;
+  /** Proven candidate row starts from the shared prefilter, sorted oldest first. */
+  candidateByteOffsets?: readonly number[];
+  /** Sparse admission can exclude a whole byte range without counting its rows. */
+  onSkippedRange?: (startOffsetBytes: number, endOffsetBytes: number, tailOffsetBytes: number | null) => void;
   onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
 }>): Promise<Readonly<{
   items: readonly JsonlParsedLineV1[];
@@ -495,7 +499,92 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   /** Consumed end of this page; null until a terminal line boundary is established. */
   tailOffsetBytes: number | null;
 }>> {
-  return await withJsonlReadFile(params, (fileSystem) => scanJsonlBackwardPage({ ...params, fileSystem }));
+  return await withJsonlReadFile(params, async (fileSystem) => {
+    if (params.candidateByteOffsets) {
+      const size = (await fileSystem.stat(params.filePath)).size;
+      const end = Math.min(size, params.endOffsetBytes ?? size);
+      const maxBytes = normalizePositiveInteger(params.maxBytes, DEFAULT_TAIL_BYTES);
+      const chunkBytes = Math.max(1024, Math.trunc(params.chunkBytes ?? DEFAULT_CHUNK_BYTES));
+      // Seeking is an I/O optimization, not a new page bound. Dense admission
+      // and bounded transcript pages retain the sequential scanner.
+      if (maxBytes >= end && params.candidateByteOffsets.length * chunkBytes < maxBytes) {
+        return await scanSparseJsonlBackwardPage({ ...params, fileSystem }, end);
+      }
+    }
+    return await scanJsonlBackwardPage({ ...params, fileSystem });
+  });
+}
+
+async function scanSparseJsonlBackwardPage(
+  params: Parameters<typeof readJsonlFileBackwardPage>[0] & { fileSystem: JsonlScannerFileSystemV1 },
+  initialEnd: number,
+): ReturnType<typeof readJsonlFileBackwardPage> {
+  const offsets = [...new Set(params.candidateByteOffsets)].filter(offset => offset < initialEnd).sort((a, b) => b - a);
+  const maxBytes = normalizePositiveInteger(params.maxBytes, DEFAULT_TAIL_BYTES);
+  const maxItems = normalizePositiveInteger(params.maxItems, 100);
+  let bytesRead = 0;
+  const fileSystem: JsonlScannerFileSystemV1 = {
+    stat: async path => {
+      const metadata = await params.fileSystem.stat(path);
+      return { ...metadata, size: Math.min(metadata.size, initialEnd) };
+    },
+    read: async (path, position, length) => {
+      const bytes = await params.fileSystem.read(path, position, length);
+      if (length > 0 && bytes.length === 0) throw new Error('JSONL source became unreadable during sparse scanning');
+      bytesRead += bytes.length;
+      return bytes;
+    },
+  };
+  const items: JsonlParsedLineV1[] = [];
+  let itemCount = 0;
+  let nextEndOffsetBytes = initialEnd;
+  let tailOffsetBytes = initialEnd;
+  let malformedCount = 0;
+  const malformedPositions: number[] = [];
+  const damagedRow = new Error('Admitted row has invalid UTF-8');
+  let offsetIndex = 0;
+  for (; offsetIndex < offsets.length && itemCount < maxItems && bytesRead < maxBytes; offsetIndex++) {
+    const offset = offsets[offsetIndex]!;
+    let selected: JsonlForwardLineV1 | undefined;
+    try {
+      // Reuse the canonical forward framing, UTF-8 validation and JSON parser.
+      // The outer scan retains one descriptor across all selected rows.
+      await readJsonlFileForwardLines({ ...params, fileSystem, offsetBytes: offset,
+        maxBytes: maxBytes - bytesRead, maxItems: 1,
+        onLine: line => { selected = line; },
+        onDiagnostic: diagnostic => {
+          malformedCount += diagnostic.count;
+          malformedPositions.push(...diagnostic.positions.slice(0, MAX_SOURCE_DIAGNOSTIC_POSITIONS - malformedPositions.length));
+          params.onDiagnostic?.(diagnostic);
+          throw damagedRow;
+        },
+      });
+    } catch (error) { if (error !== damagedRow) throw error; }
+    const line: JsonlForwardLineV1 | undefined = selected;
+    if (line && line.startOffsetBytes !== offset) throw new Error('Candidate JSONL row boundary changed');
+    const incompleteTail = line?.endOffsetBytes === initialEnd && line.value === null && line.rawLine !== 'null';
+    if (incompleteTail) tailOffsetBytes = offset;
+    if (line && !incompleteTail) {
+      const afterLine = Math.min(initialEnd, line.endOffsetBytes + 1);
+      if (afterLine < nextEndOffsetBytes) params.onSkippedRange?.(afterLine, nextEndOffsetBytes, tailOffsetBytes);
+      if (line.value !== null || params.includeMalformedRecords) {
+        const parsedLine = { value: line.value, startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes };
+        itemCount++;
+        if (params.onLine) params.onLine(parsedLine, tailOffsetBytes);
+        else items.push(parsedLine);
+      }
+    }
+    nextEndOffsetBytes = offset;
+    // Also commits diagnosed/empty rows without inventing a decoded item.
+    params.onSkippedRange?.(offset, offset, tailOffsetBytes);
+  }
+  if (offsetIndex === offsets.length) {
+    if (nextEndOffsetBytes > 0) params.onSkippedRange?.(0, nextEndOffsetBytes, tailOffsetBytes);
+    nextEndOffsetBytes = 0;
+  }
+  const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
+  return { items: items.reverse(), ...(diagnostics ? { diagnostics } : {}), nextEndOffsetBytes,
+    reachedStart: nextEndOffsetBytes === 0, tailOffsetBytes };
 }
 
 async function scanJsonlBackwardPage(
@@ -719,7 +808,10 @@ async function scanJsonlForwardLines(
   const malformedPositions: number[] = [];
   let malformedCount = 0;
   let bytesReadTotal = 0;
-  let carry = Buffer.alloc(0);
+  // Keep unfinished record fragments without recopying the entire growing
+  // record on every chunk. Assemble only when its line boundary is known.
+  let carryChunks: Buffer[] = [];
+  let carryLength = 0;
   let carryStartOffset = offsetBytes;
   let nextReadOffset = offsetBytes;
 
@@ -728,34 +820,40 @@ async function scanJsonlForwardLines(
     const canContinueOversizeFirstLine =
       remainingBytes <= 0 &&
       itemCount === 0 &&
-      carry.length > 0 &&
-      carry.length < maxOversizeLineBytes;
+      carryLength > 0 &&
+      carryLength < maxOversizeLineBytes;
     if (remainingBytes <= 0 && !canContinueOversizeFirstLine) break;
 
-    const oversizeRemainingBytes = maxOversizeLineBytes - carry.length;
+    const oversizeRemainingBytes = maxOversizeLineBytes - carryLength;
     const readBudget = canContinueOversizeFirstLine ? oversizeRemainingBytes : remainingBytes;
     const readSize = Math.min(chunkBytes, fileSize - nextReadOffset, readBudget);
     if (readSize <= 0) break;
 
+    const chunkStartOffset = nextReadOffset;
     const chunk = await fileSystem.read(params.filePath, nextReadOffset, readSize);
     bytesReadTotal += chunk.length;
     nextReadOffset += chunk.length;
 
-    const combinedStartOffset = carryStartOffset;
-    const combined = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
     let lineStartIndex = 0;
-    for (let index = combined.indexOf(0x0a); index >= 0 && itemCount < maxItems;
-      index = combined.indexOf(0x0a, index + 1)) {
+    for (let index = chunk.indexOf(0x0a); index >= 0 && itemCount < maxItems;
+      index = chunk.indexOf(0x0a, index + 1)) {
 
-      const line = combined.slice(lineStartIndex, index);
+      const suffix = chunk.subarray(lineStartIndex, index);
+      const line = carryLength > 0
+        ? Buffer.concat([...carryChunks, suffix], carryLength + suffix.length)
+        : suffix;
+      const lineOffset = carryStartOffset;
+      carryChunks = [];
+      carryLength = 0;
+      carryStartOffset = chunkStartOffset + index + 1;
       const decoded = decodeSourceLine(line);
       if (!decoded.ok) {
         malformedCount += 1;
         if (malformedPositions.length < MAX_SOURCE_DIAGNOSTIC_POSITIONS) {
-          malformedPositions.push(combinedStartOffset + lineStartIndex + decoded.malformedOffsetBytes);
+          malformedPositions.push(lineOffset + decoded.malformedOffsetBytes);
         }
         params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1,
-          positions: [combinedStartOffset + lineStartIndex + decoded.malformedOffsetBytes] });
+          positions: [lineOffset + decoded.malformedOffsetBytes] });
         lineStartIndex = index + 1;
         continue;
       }
@@ -764,18 +862,22 @@ async function scanJsonlForwardLines(
         acceptLine({
           rawLine,
           value: parseJsonLine(rawLine),
-          startOffsetBytes: combinedStartOffset + lineStartIndex,
-          endOffsetBytes: combinedStartOffset + index,
+          startOffsetBytes: lineOffset,
+          endOffsetBytes: chunkStartOffset + index,
         });
       }
       lineStartIndex = index + 1;
     }
 
-    carry = combined.slice(lineStartIndex);
-    carryStartOffset = combinedStartOffset + lineStartIndex;
+    if (lineStartIndex < chunk.length) {
+      const remainder = chunk.subarray(lineStartIndex);
+      carryChunks.push(remainder);
+      carryLength += remainder.length;
+    }
   }
 
-  if (itemCount < maxItems && nextReadOffset >= fileSize && carry.length > 0) {
+  if (itemCount < maxItems && nextReadOffset >= fileSize && carryLength > 0) {
+    const carry = carryChunks.length === 1 ? carryChunks[0]! : Buffer.concat(carryChunks, carryLength);
     const decoded = decodeSourceLine(carry);
     if (!decoded.ok) {
       malformedCount += 1;
@@ -784,7 +886,8 @@ async function scanJsonlForwardLines(
       }
       params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1,
         positions: [carryStartOffset + decoded.malformedOffsetBytes] });
-      carry = Buffer.alloc(0);
+      carryChunks = [];
+      carryLength = 0;
       carryStartOffset = fileSize;
     } else {
       const rawLine = decoded.value.trim();
@@ -795,15 +898,16 @@ async function scanJsonlForwardLines(
           startOffsetBytes: carryStartOffset,
           endOffsetBytes: carryStartOffset + carry.length,
         });
-        carry = Buffer.alloc(0);
+        carryChunks = [];
+        carryLength = 0;
         carryStartOffset = fileSize;
       }
     }
   }
 
-  const reachedEnd = carry.length === 0 && nextReadOffset >= fileSize;
+  const reachedEnd = carryLength === 0 && nextReadOffset >= fileSize;
   assertJsonlReadProgress({ consumedBytes: carryStartOffset - offsetBytes, remainingSourceBytes: fileSize - nextReadOffset,
-    pendingLineBytes: carry.length, maxLineBytes: maxOversizeLineBytes, direction: 'forward', offsetBytes });
+    pendingLineBytes: carryLength, maxLineBytes: maxOversizeLineBytes, direction: 'forward', offsetBytes });
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
     items,

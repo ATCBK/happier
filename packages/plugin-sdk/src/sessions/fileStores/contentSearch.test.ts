@@ -12,6 +12,38 @@ import { readJsonlFileForwardLines } from './boundedJsonlScanner.js';
 afterEach(() => vi.restoreAllMocks());
 
 describe('decoded external conversation content search', () => {
+  it('retains exact per-file admission when a multi-file offset response exceeds the host output budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-prefilter-budget-'));
+    try {
+      const paths = ['first', process.platform === 'win32' ? 'second' : 'second:with\nseparator', 'third']
+        .map(name => join(root, `${name}.jsonl`));
+      const rows = ['unrelated', ...Array.from({ length: 8 }, () => 'needle'), 'ordinary'];
+      await Promise.all(paths.map(path => writeFile(path, rows.map(text => JSON.stringify({ text })).join('\n') + '\n')));
+      const launcher = fileURLToPath(new URL('../../../../../apps/cli/scripts/ripgrep_launcher.cjs', import.meta.url));
+      // The genuine process boundary reports its bounded output. Derive this
+      // fixture's ceiling from one file, so only aggregate output overflows.
+      let outputBudget: number | undefined;
+      const run = async ({ args, paths }: { args: readonly string[]; paths: readonly string[] }) => {
+        if (outputBudget === undefined) {
+          const single = await promisify(execFile)(process.execPath, [launcher, JSON.stringify([
+            ...args.map(arg => arg === '--heading' ? '--no-heading' : arg), '--', paths[0],
+          ])]);
+          outputBudget = Buffer.byteLength(single.stdout);
+        }
+        const result = await promisify(execFile)(process.execPath, [launcher, JSON.stringify([...args, '--', ...paths])]);
+        return { ...result, exitCode: 0, stdoutTruncated: Buffer.byteLength(result.stdout) > outputBudget };
+      };
+      const result = await prefilterExternalSessionContentPaths({ query: 'needle', paths, ripgrep: { run }, lineOffsets: true });
+      const expected = rows.flatMap((text, index) => text === 'needle'
+        ? [Buffer.byteLength(rows.slice(0, index).map(text => JSON.stringify({ text })).join('\n') + '\n')]
+        : []);
+      expect(result).toEqual(new Map(paths.map(path => [path, expected])));
+      // One indivisible file can still exhaust the real boundary. It must not
+      // turn into a proven miss merely because framing is more compact.
+      await expect(prefilterExternalSessionContentPaths({ query: 'needle', paths: [paths[0]!],
+        ripgrep: { run: async request => ({ ...await run(request), stdoutTruncated: true }) }, lineOffsets: true })).resolves.toBeNull();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it('keeps mixed JSON escapes and JavaScript ASCII folds without admitting unrelated Unicode escapes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-prefilter-spellings-'));
     try {

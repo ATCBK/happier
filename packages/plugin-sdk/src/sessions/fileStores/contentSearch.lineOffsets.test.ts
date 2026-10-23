@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ it('admits candidate byte positions without returning native text, including esc
   const root = await mkdtemp(join(tmpdir(), 'content-offsets-'));
   try {
     const path = join(root, process.platform === 'win32' ? 'native.jsonl' : 'native:with\nseparator.jsonl');
-    const lines = ['{"text":"unrelated"}', '{"text":"needle needle"}', '{"text":"n\\u0065edle"}', '{"text":"K sign"}', '{"text":"İ"}'];
+    const lines = ['{"text":"unrelated"}', '{"text":"needle needle"}', '{"text":"n\\u0065edle"}', '{"text":"K sign"}', '{"text":"İ"}', JSON.stringify({ text: 'line\nbreak' })];
     await writeFile(path, lines.join('\n') + '\n');
     const launcher = fileURLToPath(new URL('../../../../../apps/cli/scripts/ripgrep_launcher.cjs', import.meta.url));
     const ripgrep = { run: async ({ args, paths }: { args: readonly string[]; paths: readonly string[] }) => {
@@ -26,7 +26,7 @@ it('admits candidate byte positions without returning native text, including esc
         throw error;
       }
     } };
-    for (const [query, expected] of [['needle', [lines[1], lines[2]]], ['k sign', [lines[3]]], ['i', [lines[3], lines[4]]]] as const) {
+    for (const [query, expected] of [['needle', [lines[1], lines[2]]], ['k sign', [lines[3]]], ['i', [lines[3], lines[4]]], ['line\nbreak', [lines[5]]]] as const) {
       const offsets = await prefilterExternalSessionContentPaths({ query, paths: [path], ripgrep, lineOffsets: true,
         additionalLinePatterns: ['"other"\\s*:'] });
       const selected = await readJsonlFileBackwardPage({ filePath: path, endOffsetBytes: null, maxBytes: 4096, maxItems: 100,
@@ -63,6 +63,71 @@ it.each([false, true])('consumes skipped JSONL boundaries and diagnoses only adm
     expect(skipped).toContain(0);
     expect(skipped).not.toContain(prefix.length + bad.length + hit.length);
     expect(page.nextEndOffsetBytes).toBe(0);
+    expect(page.reachedStart).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('seeks sparse candidate rows through the same byte scanner without reading excluded gaps', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sparse-jsonl-'));
+  try {
+    const path = join(root, 'native.jsonl');
+    const excluded = JSON.stringify({ text: 'ordinary '.repeat(2000) }) + '\n';
+    const first = JSON.stringify({ text: 'first needle' }) + '\n';
+    // A candidate near the beginning of a large row must still read its end.
+    const last = JSON.stringify({ text: 'last needle ' + 'output '.repeat(20000) }) + '\n';
+    const body = excluded.repeat(100) + first + excluded.repeat(100) + last + excluded.repeat(100);
+    await writeFile(path, body);
+    const offsets = [body.indexOf(first), body.indexOf(last)];
+    let bytesRead = 0;
+    const skippedRanges: number[] = [];
+    const page = await readJsonlFileBackwardPage({ filePath: path, endOffsetBytes: null,
+      maxBytes: Buffer.byteLength(body), maxItems: 100,
+      candidateByteOffsets: offsets,
+      shouldParseLine: (start, end) => offsets.some(offset => offset >= start && offset < end),
+      onSkippedRange: (start, end) => { skippedRanges.push(end - start); },
+      fileSystem: { stat, read: async (path, position, length) => {
+        const file = await open(path, 'r');
+        try {
+          const buffer = Buffer.alloc(length);
+          const result = await file.read(buffer, 0, length, position);
+          bytesRead += result.bytesRead;
+          return buffer.subarray(0, result.bytesRead);
+        } finally { await file.close(); }
+      } },
+    });
+    expect(page.items.map(line => line.value)).toEqual([JSON.parse(first), JSON.parse(last)]);
+    expect(page.reachedStart).toBe(true);
+    expect(bytesRead).toBeLessThan(Buffer.byteLength(body) / 2);
+    expect(skippedRanges.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(Buffer.byteLength(body) / 2);
+    const recent = await readJsonlFileBackwardPage({ filePath: path, endOffsetBytes: null,
+      maxBytes: Buffer.byteLength(body), maxItems: 1, candidateByteOffsets: offsets });
+    expect(recent.items.map(line => line.value)).toEqual([JSON.parse(last)]);
+    expect(recent.reachedStart).toBe(false);
+    const older = await readJsonlFileBackwardPage({ filePath: path, endOffsetBytes: recent.nextEndOffsetBytes,
+      maxBytes: Buffer.byteLength(body), maxItems: 1, candidateByteOffsets: offsets });
+    expect(older.items.map(line => line.value)).toEqual([JSON.parse(first)]);
+    expect(older.reachedStart).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('preserves admitted sparse damage and an unfinished tail without diagnosing excluded bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sparse-damage-'));
+  try {
+    const path = join(root, 'native.jsonl');
+    const gap = Buffer.from((JSON.stringify({ text: 'ordinary '.repeat(2000) }) + '\n').repeat(100));
+    const damaged = Buffer.concat([Buffer.from('needle'), Buffer.from([0xff, 0x0a])]);
+    const malformed = Buffer.from('{"text":needle}\n');
+    const good = Buffer.from('{"text":"needle"}\n');
+    const tail = Buffer.from('{"text":"needle');
+    const body = Buffer.concat([gap, damaged, malformed, good, gap, Buffer.from([0xff, 0x0a]), tail]);
+    await writeFile(path, body);
+    const start = gap.length;
+    const offsets = [start, start + damaged.length, start + damaged.length + malformed.length, body.length - tail.length];
+    const page = await readJsonlFileBackwardPage({ filePath: path, endOffsetBytes: null,
+      maxBytes: body.length, maxItems: 100, candidateByteOffsets: offsets, includeMalformedRecords: true });
+    expect(page.items.map(line => line.value)).toEqual([null, { text: 'needle' }]);
+    expect(page.diagnostics).toEqual([{ code: 'malformed_source_utf8', count: 1, positions: [start + 6] }]);
+    expect(page.tailOffsetBytes).toBe(body.length - tail.length);
     expect(page.reachedStart).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
