@@ -339,13 +339,17 @@ annotations needed to expose its read tools after restart with resume.
 
 Artifact kind filtering is an additive HTTP and persistence extension.
 Current readers send the optional coarse `kind` query or exact `kinds` set.
-Writers derive metadata without a feature gate. This is a coordinated development
-contract, not a released or mixed-component availability claim.
+The daemon negotiates new exact-hint writes through the canonical
+`artifacts.queryHints` server feature. Missing or malformed support resolves to
+typed `unsupported`; ordinary content writes omit the optional new hint rather
+than sending a tagged value to a retained coarse-only schema. This operation
+negotiation does not establish general mixed-component compatibility.
 
 The one-way 0.3 upgrade does not support a 0.3 client against a 0.2 Home.
-No legacy-server adapter is required or provided. Current readers still require
-authenticated owner, access and Account-mode projections. The compatibility
-obligation is retained 0.2-created data opened through the current Home.
+The query-hint operation degrades safely as described above; it is not a general
+legacy-server adapter. Current readers still require authenticated owner, access
+and Account-mode projections. The data compatibility obligation includes retained
+0.2-created data opened through the current Home.
 
 Writes without kind remain accepted. Predecessor rows have null kind; earlier
 development rows can have only a coarse kind. An opaque header edit without a
