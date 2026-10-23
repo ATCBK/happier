@@ -12,13 +12,23 @@ import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCo
 import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import type { DiscussionRepositoryMutationOutcome } from '@/sync/ops/discussions/discussionRepository';
-import type { DiscussionAnchorV1, DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
+import type {
+  DiscussionAnchorV1,
+  DiscussionReplyTargetV1,
+} from '@happier-dev/protocol/discussions/replyTargets';
 import type { DiscussionMessageContentV1 } from '@happier-dev/protocol/discussions/content';
-import { prepareDiscussionContentForPassage, prepareDiscussionContentForRecipients } from './discussionComposerDocument';
+import {
+  prepareDiscussionContentForPassage,
+  prepareDiscussionContentForRecipients,
+} from './discussionComposerDocument';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import type { SessionDiscussionDraftMutationAttempt } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
-import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+  createSessionFixture,
+  renderScreen,
+  standardCleanup,
+} from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
@@ -27,7 +37,10 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationAdapter } from '@/components/appShell/workspace/workspaceNavigationAdapter';
-import { createWorkspaceState, reduceWorkspaceState } from '@/components/appShell/workspace/workspaceState';
+import {
+  createWorkspaceState,
+  reduceWorkspaceState,
+} from '@/components/appShell/workspace/workspaceState';
 
 const pane = vi.hoisted(() => ({
   openDetailsTab: vi.fn(),
@@ -118,9 +131,21 @@ const draftState = vi.hoisted(() => ({
   participants: [] as readonly never[],
   setParticipants: vi.fn(),
   // Keep the existing screen fixture on the real draft content binding, including inherited passage context.
-  prepareContent: (content: DiscussionMessageContentV1, options?: Readonly<{ replyTarget?: DiscussionReplyTargetV1; passage?: DocPassageRefV1 | null }>): DiscussionMessageContentV1 =>
-    prepareDiscussionContentForPassage({ content: prepareDiscussionContentForRecipients({ content, recipients: [], replyTarget: options?.replyTarget }),
-      passage: draftState.passage ?? options?.passage }),
+  prepareContent: (
+    content: DiscussionMessageContentV1,
+    options?: Readonly<{
+      replyTarget?: DiscussionReplyTargetV1;
+      passage?: DocPassageRefV1 | null;
+    }>,
+  ): DiscussionMessageContentV1 =>
+    prepareDiscussionContentForPassage({
+      content: prepareDiscussionContentForRecipients({
+        content,
+        recipients: [],
+        replyTarget: options?.replyTarget,
+      }),
+      passage: draftState.passage ?? options?.passage,
+    }),
   captureSubmittedCurrentness: vi.fn(() => ({
     scope: { serverId: 'server-a', accountId: 'viewer' },
     address: { kind: 'newDiscussion' },
@@ -181,7 +206,10 @@ const snapshot = {
         id: 'discussion-a',
         ownerAccountId: 'viewer',
         encryptionMode: 'plain',
-        anchor: { kind: 'session', sessionId: 'session-a' } as DiscussionAnchorV1 | null,
+        anchor: {
+          kind: 'session',
+          sessionId: 'session-a',
+        } as DiscussionAnchorV1 | null,
         access: 'owner',
         keyReadiness: true,
         dataEncryptionKey: null,
@@ -288,7 +316,9 @@ const snapshot = {
 
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-  return createExpoRouterMock({ router: { push: routerPush, replace: routerReplace } }).module;
+  return createExpoRouterMock({
+    router: { push: routerPush, replace: routerReplace },
+  }).module;
 });
 vi.mock('@/sync/api/discussions/discussionActions', () => ({
   createDiscussionClient: () => ({ participants: readParticipants }),
@@ -320,8 +350,14 @@ vi.mock('@/sync/ops/discussions/discussionRepositoryRegistry', () => ({
       subscribe: () => () => undefined,
       getSnapshot: () => snapshot,
       // The Discussion menu's pause setting reads through the repository; this screen does not exercise it.
-      getSettings: vi.fn(async () => ({ kind: 'failed', errorCode: 'unavailable' })),
-      setSettings: vi.fn(async () => ({ kind: 'failed', errorCode: 'unavailable' })),
+      getSettings: vi.fn(async () => ({
+        kind: 'failed',
+        errorCode: 'unavailable',
+      })),
+      setSettings: vi.fn(async () => ({
+        kind: 'failed',
+        errorCode: 'unavailable',
+      })),
       refreshDiscussion: repositoryRefreshDiscussion,
       participants: readParticipants,
       setReadState: vi.fn(async () => ({
@@ -364,16 +400,27 @@ vi.mock(
   '@/components/sessions/presentation/sessionComposerPresentationTargets',
   () => ({ requestRegisteredSessionComposerFocus: focusComposer }),
 );
-vi.mock('@/sync/sync', async importOriginal => {
+vi.mock('@/sync/sync', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/sync/sync')>();
-  return { ...actual, sync: new Proxy({}, {
-    // Retain this suite's existing metadata-write double; cold acquisition uses the real owner.
-    get: (_target, key) => key === 'patchSessionMetadataWithRetry' ? metadataWrites : Reflect.get(actual.sync, key),
-  }) };
+  return {
+    ...actual,
+    sync: new Proxy(
+      {},
+      {
+        // Retain this suite's existing metadata-write double; cold acquisition uses the real owner.
+        get: (_target, key) =>
+          key === 'patchSessionMetadataWithRetry'
+            ? metadataWrites
+            : Reflect.get(actual.sync, key),
+      },
+    ),
+  };
 });
 // The real provider module (the Run… start modal reads its context snapshot); only handler registration is stubbed.
 vi.mock('@/keyboard/KeyboardShortcutProvider', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/keyboard/KeyboardShortcutProvider')>()),
+  ...(await importOriginal<
+    typeof import('@/keyboard/KeyboardShortcutProvider')
+  >()),
   useKeyboardShortcutHandlers: () => true,
 }));
 vi.mock(
@@ -418,7 +465,10 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
 }));
 // The popover's portal and window measurement are the platform boundary; the sheet inside stays real.
 vi.mock('@/components/ui/popover', async (importOriginal) =>
-  (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
+  (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(
+    importOriginal,
+  ),
+);
 vi.mock('@/components/discussions/DiscussionComposer', () => ({
   DiscussionComposer: (props: Record<string, unknown>) => {
     composerProps.current = props;
@@ -443,8 +493,14 @@ vi.mock('@/hooks/session/useSessionExecutionRunLaunchability', () => ({
 
 import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
 await loadSyncSingletonForTests();
-let activeScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
-afterEach(async () => { await standardCleanup(); activeScope?.dispose(); activeScope = null; });
+let activeScope: Awaited<
+  ReturnType<typeof activateStorageAccountScope>
+> | null = null;
+afterEach(async () => {
+  await standardCleanup();
+  activeScope?.dispose();
+  activeScope = null;
+});
 
 import {
   consumeInteractiveExecutionRunDraftNavigationIntent,
@@ -466,7 +522,10 @@ async function press(
 
 describe('DiscussionDetailsView selection', () => {
   beforeEach(async () => {
-    activeScope = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'viewer' }, getStorage());
+    activeScope = await activateStorageAccountScope(
+      { serverId: 'server-a', accountId: 'viewer' },
+      getStorage(),
+    );
     const state = getStorage().getState();
     getStorage().setState({
       sessions: {},
@@ -511,7 +570,10 @@ describe('DiscussionDetailsView selection', () => {
     repositoryPost.mockClear();
     repositoryDismiss.mockClear();
     launchability.current = true;
-    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a' });
+    shellSession.current = createSessionFixture({
+      id: 'session-a',
+      serverId: 'server-a',
+    });
     repositoryRename.mockClear();
     repositoryArchive.mockClear();
     repositoryRestore.mockClear();
@@ -571,87 +633,253 @@ describe('DiscussionDetailsView selection', () => {
     };
   });
 
-  it.each(['tablet', 'phone'] as const)('keeps a retained Session source unavailable, then opens its exact Home-qualified answer on %s', async (device) => {
-    deviceType.current = device;
-    const messages = snapshot.threads['discussion-a'].messages;
-    snapshot.threads['discussion-a'].messages = [];
-    try {
-    snapshot.threads['discussion-a'].summary.anchor = { kind: 'session', sessionId: 'session-a', messageId: 'committed/answer' };
-    const target = { kind: 'discussion' as const, address: { serverId: 'server-a' }, discussionId: 'discussion-a' };
-    let workspace = createWorkspaceState({ id: 'discussion-tab', target: { kind: 'discussions', params: { discussionId: 'discussion-a', serverId: 'server-a' } }, pinned: false, preview: false });
-    const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
-    const committedHrefs: string[] = [];
-    const navigation = createWorkspaceNavigationAdapter({
-      getState: () => workspace, getCatalog: () => catalog,
-      getScope: () => ({ serverId: 'server-a', accountId: 'viewer' }),
-      dispatch: (action) => { workspace = reduceWorkspaceState(workspace, action); },
-      transport: { commit: (href) => { committedHrefs.push(href); } },
-      createId: () => 'source-tab', onChange: () => undefined,
-    });
-    const screen = await renderScreen(<SurfaceStateSizeProvider size={device === 'phone' ? 'phone' : 'pane'}>
-      <DestinationInstanceHost tabId="discussion-tab" ref={workspace.tabs['discussion-tab'].target}
-        pathname="/discussions/discussion-a" focused visible navigation={{
-          push: (href) => { expect(typeof href).toBe('string'); expect(navigation.openHref(String(href), { tabId: 'discussion-tab' })).toBe(true); },
-          replace: () => undefined, back: () => undefined,
-        }}>
-      <DiscussionDetailsView target={target} active standaloneSurface={device === 'phone'} />
-      </DestinationInstanceHost>
-    </SurfaceStateSizeProvider>);
-    const readOpen = (): (() => void) | undefined => device === 'phone'
-      ? screen.findAll(node => node.props.triggerTestID === 'session-discussion-actions-menu' && Array.isArray(node.props.actions))[0]?.props.actions
-        .find((action: { id: string }) => action.id === 'open-anchor')?.onSelect
-      : screen.findAll(node => node.props.testID === 'session-discussion-anchor' && typeof node.props.onPress === 'function')[0]?.props.onPress;
-    expect(screen.getTextContent()).toContain('Source unavailable');
-    expect(readOpen()).toBeUndefined();
-    const source = createSessionFixture({ id: 'session-a', serverId: 'server-a',
-      metadata: { name: 'Release review', path: '/project', host: 'host' } });
-    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession(source) } } }); });
-    expect(getStorage().getState().sessions['session-a']).toBeUndefined();
-    if (device === 'phone') await act(async () => { readOpen()!(); });
-    else await screen.pressByTestIdAsync('session-discussion-anchor');
-    expect(committedHrefs).toHaveLength(1);
-    const opened = new URL(committedHrefs[0]!, 'https://happier.invalid');
-    expect(opened.pathname).toBe('/session/session-a/message/server%3Acommitted%2Fanswer');
-    expect(opened.searchParams.get('serverId')).toBe('server-a');
-    const activeTab = workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId];
-    expect(activeTab.target.params).toMatchObject({ id: 'session-a', serverId: 'server-a', messageId: 'server:committed/answer' });
-    const retainedOpen = readOpen()!;
-    committedHrefs.length = 0;
-    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession({
-      ...source, metadata: null, ownerMetadataView: null, encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable',
-    }) } } }); });
-    expect(screen.getTextContent()).toContain('Source unavailable');
-    await act(async () => { retainedOpen(); });
-    expect(committedHrefs).toEqual([]);
-    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-b': { 'session-a': buildSessionListRenderableFromSession(createSessionFixture({ id: 'session-a', serverId: 'server-b',
-      metadata: { name: 'Other Home secret', path: '/other', host: 'host' } })) } } }); });
-    expect(screen.getTextContent()).toContain('Source unavailable');
-    expect(screen.getTextContent()).not.toContain('Other Home secret');
-    committedHrefs.length = 0;
-    await act(async () => { retainedOpen(); });
-    expect(committedHrefs).toEqual([]);
-    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession(source) } } }); });
-    // Retiring the captured Account cannot turn a retained header callback into a new Account's navigation.
-    exactHomeBinding.current.isCurrent = () => false;
-    await act(async () => { readOpen()!(); });
-    expect(committedHrefs).toEqual([]);
-    } finally { snapshot.threads['discussion-a'].messages = messages; }
-  });
+  it.each(['tablet', 'phone'] as const)(
+    'keeps a retained Session source unavailable, then opens its exact Home-qualified answer on %s',
+    async (device) => {
+      deviceType.current = device;
+      const messages = snapshot.threads['discussion-a'].messages;
+      snapshot.threads['discussion-a'].messages = [];
+      try {
+        snapshot.threads['discussion-a'].summary.anchor = {
+          kind: 'session',
+          sessionId: 'session-a',
+          messageId: 'committed/answer',
+        };
+        const target = {
+          kind: 'discussion' as const,
+          address: { serverId: 'server-a' },
+          discussionId: 'discussion-a',
+        };
+        let workspace = createWorkspaceState({
+          id: 'discussion-tab',
+          target: {
+            kind: 'discussions',
+            params: { discussionId: 'discussion-a', serverId: 'server-a' },
+          },
+          pinned: false,
+          preview: false,
+        });
+        const catalog = resolveCompactAppDestinations({
+          pages: [],
+          builtins: {
+            externalSessions: false,
+            inbox: false,
+            workflows: true,
+            friends: false,
+          },
+        });
+        const committedHrefs: string[] = [];
+        const navigation = createWorkspaceNavigationAdapter({
+          getState: () => workspace,
+          getCatalog: () => catalog,
+          getScope: () => ({ serverId: 'server-a', accountId: 'viewer' }),
+          dispatch: (action) => {
+            workspace = reduceWorkspaceState(workspace, action);
+          },
+          transport: {
+            commit: (href) => {
+              committedHrefs.push(href);
+            },
+          },
+          createId: () => 'source-tab',
+          onChange: () => undefined,
+        });
+        const screen = await renderScreen(
+          <SurfaceStateSizeProvider
+            size={device === 'phone' ? 'phone' : 'pane'}
+          >
+            <DestinationInstanceHost
+              tabId="discussion-tab"
+              ref={workspace.tabs['discussion-tab'].target}
+              pathname="/discussions/discussion-a"
+              focused
+              visible
+              navigation={{
+                push: (href) => {
+                  expect(typeof href).toBe('string');
+                  expect(
+                    navigation.openHref(String(href), {
+                      tabId: 'discussion-tab',
+                    }),
+                  ).toBe(true);
+                },
+                replace: () => undefined,
+                back: () => undefined,
+              }}
+            >
+              <DiscussionDetailsView
+                target={target}
+                active
+                standaloneSurface={device === 'phone'}
+              />
+            </DestinationInstanceHost>
+          </SurfaceStateSizeProvider>,
+        );
+        const readOpen = (): (() => void) | undefined =>
+          device === 'phone'
+            ? screen
+                .findAll(
+                  (node) =>
+                    node.props.triggerTestID ===
+                      'session-discussion-actions-menu' &&
+                    Array.isArray(node.props.actions),
+                )[0]
+                ?.props.actions.find(
+                  (action: { id: string }) => action.id === 'open-anchor',
+                )?.onSelect
+            : screen.findAll(
+                (node) =>
+                  node.props.testID === 'session-discussion-anchor' &&
+                  typeof node.props.onPress === 'function',
+              )[0]?.props.onPress;
+        expect(screen.getTextContent()).toContain('Source unavailable');
+        expect(readOpen()).toBeUndefined();
+        const source = createSessionFixture({
+          id: 'session-a',
+          serverId: 'server-a',
+          metadata: { name: 'Release review', path: '/project', host: 'host' },
+        });
+        await act(async () => {
+          getStorage().setState({
+            sessionListRowsByServerId: {
+              'server-a': {
+                'session-a': buildSessionListRenderableFromSession(source),
+              },
+            },
+          });
+        });
+        expect(getStorage().getState().sessions['session-a']).toBeUndefined();
+        if (device === 'phone')
+          await act(async () => {
+            readOpen()!();
+          });
+        else await screen.pressByTestIdAsync('session-discussion-anchor');
+        expect(committedHrefs).toHaveLength(1);
+        const opened = new URL(committedHrefs[0]!, 'https://happier.invalid');
+        expect(opened.pathname).toBe(
+          '/session/session-a/message/server%3Acommitted%2Fanswer',
+        );
+        expect(opened.searchParams.get('serverId')).toBe('server-a');
+        const activeTab =
+          workspace.tabs[
+            workspace.groups[workspace.focusedGroupId].activeTabId
+          ];
+        expect(activeTab.target.params).toMatchObject({
+          id: 'session-a',
+          serverId: 'server-a',
+          messageId: 'server:committed/answer',
+        });
+        const retainedOpen = readOpen()!;
+        committedHrefs.length = 0;
+        await act(async () => {
+          getStorage().setState({
+            sessionListRowsByServerId: {
+              'server-a': {
+                'session-a': buildSessionListRenderableFromSession({
+                  ...source,
+                  metadata: null,
+                  ownerMetadataView: null,
+                  encryptionMode: 'e2ee',
+                  encryptedContentAvailability: 'encrypted_content_unavailable',
+                }),
+              },
+            },
+          });
+        });
+        expect(screen.getTextContent()).toContain('Source unavailable');
+        await act(async () => {
+          retainedOpen();
+        });
+        expect(committedHrefs).toEqual([]);
+        await act(async () => {
+          getStorage().setState({
+            sessionListRowsByServerId: {
+              'server-b': {
+                'session-a': buildSessionListRenderableFromSession(
+                  createSessionFixture({
+                    id: 'session-a',
+                    serverId: 'server-b',
+                    metadata: {
+                      name: 'Other Home secret',
+                      path: '/other',
+                      host: 'host',
+                    },
+                  }),
+                ),
+              },
+            },
+          });
+        });
+        expect(screen.getTextContent()).toContain('Source unavailable');
+        expect(screen.getTextContent()).not.toContain('Other Home secret');
+        committedHrefs.length = 0;
+        await act(async () => {
+          retainedOpen();
+        });
+        expect(committedHrefs).toEqual([]);
+        await act(async () => {
+          getStorage().setState({
+            sessionListRowsByServerId: {
+              'server-a': {
+                'session-a': buildSessionListRenderableFromSession(source),
+              },
+            },
+          });
+        });
+        // Retiring the captured Account cannot turn a retained header callback into a new Account's navigation.
+        exactHomeBinding.current.isCurrent = () => false;
+        await act(async () => {
+          readOpen()!();
+        });
+        expect(committedHrefs).toEqual([]);
+      } finally {
+        snapshot.threads['discussion-a'].messages = messages;
+      }
+    },
+  );
 
   it('shows a private Task source and reply as unavailable without guessing a configured connection or exposing raw ids', async () => {
-    const task = { kind: 'task' as const, entry: { source: { pluginId: 'tasks-source', localId: 'issues' },
-      kindId: 'issue', collisionScope: 'private-scope', entryId: 'private-entry-id' } };
+    const task = {
+      kind: 'task' as const,
+      entry: {
+        source: { pluginId: 'tasks-source', localId: 'issues' },
+        kindId: 'issue',
+        collisionScope: 'private-scope',
+        entryId: 'private-entry-id',
+      },
+    };
     snapshot.threads['discussion-a'].summary.anchor = task;
     const messages = snapshot.threads['discussion-a'].messages;
     const reply = messages[1]!;
-    snapshot.threads['discussion-a'].messages = [{ ...reply, replyTarget: task }];
+    snapshot.threads['discussion-a'].messages = [
+      { ...reply, replyTarget: task },
+    ];
     try {
-      const screen = await renderScreen(<DiscussionDetailsView target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }} active />);
-      expect(screen.findByTestId(`discussion-reply-quote-${reply.id}.unavailable`)).not.toBeNull();
+      const screen = await renderScreen(
+        <DiscussionDetailsView
+          target={{
+            kind: 'discussion',
+            address: { serverId: 'server-a' },
+            discussionId: 'discussion-a',
+          }}
+          active
+        />,
+      );
+      expect(
+        screen.findByTestId(`discussion-reply-quote-${reply.id}.unavailable`),
+      ).not.toBeNull();
       expect(screen.getTextContent()).toContain('Source unavailable');
       expect(screen.getTextContent()).not.toContain('private-entry-id');
-      expect(screen.findAll(node => node.props.testID === 'session-discussion-anchor' && typeof node.props.onPress === 'function')).toHaveLength(0);
-    } finally { snapshot.threads['discussion-a'].messages = messages; }
+      expect(
+        screen.findAll(
+          (node) =>
+            node.props.testID === 'session-discussion-anchor' &&
+            typeof node.props.onPress === 'function',
+        ),
+      ).toHaveLength(0);
+    } finally {
+      snapshot.threads['discussion-a'].messages = messages;
+    }
   });
 
   it.each([
@@ -686,7 +914,11 @@ describe('DiscussionDetailsView selection', () => {
     expect(composerProps.current?.disabled).toBe(false);
 
     // Known refusal from the exact Session's own access projection.
-    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a', accessLevel: 'view' });
+    shellSession.current = createSessionFixture({
+      id: 'session-a',
+      serverId: 'server-a',
+      accessLevel: 'view',
+    });
     await screen.update(<DiscussionDetailsView target={target} active />);
 
     expect(composerProps.current?.disabled).toBe(false);
@@ -699,7 +931,11 @@ describe('DiscussionDetailsView selection', () => {
       'Private draft I am still writing',
     );
 
-    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a', accessLevel: 'edit' });
+    shellSession.current = createSessionFixture({
+      id: 'session-a',
+      serverId: 'server-a',
+      accessLevel: 'edit',
+    });
     await screen.update(<DiscussionDetailsView target={target} active />);
     expect(composerProps.current?.disabled).toBe(false);
     expect((composerProps.current?.value as { text: string }).text).toBe(
@@ -792,12 +1028,17 @@ describe('DiscussionDetailsView selection', () => {
     draftState.setPassage.mockClear();
     const screen = await renderScreen(
       <DiscussionDetailsView
-        target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }}
+        target={{
+          kind: 'discussion',
+          address: { serverId: 'server-a' },
+          discussionId: 'discussion-a',
+        }}
         active
       />,
     );
     expect(
-      screen.findByTestId('discussion-draft-passage-quote.text')?.props.children,
+      screen.findByTestId('discussion-draft-passage-quote.text')?.props
+        .children,
     ).toBe(draftState.passage.quote);
     await press(screen, 'discussion-draft-passage-remove');
     expect(draftState.setPassage).toHaveBeenCalledWith(null);
@@ -1428,8 +1669,9 @@ describe('DiscussionDetailsView selection', () => {
       />,
     );
 
-    expect(screen.findAllByType('EnrichedMarkdownText')[0]?.props.markdown)
-      .toBe('Check this[Bob](happier-ref:account:mention-private-456)');
+    expect(
+      screen.findAllByType('EnrichedMarkdownText')[0]?.props.markdown,
+    ).toBe('Check this[Bob](happier-ref:account:mention-private-456)');
     expect(
       screen.findByTestId('session-discussion-message-actor-message-a')?.props
         .children,
@@ -1467,6 +1709,90 @@ describe('DiscussionDetailsView selection', () => {
       }),
       { intent: 'preview' },
     );
+  });
+
+  it('signs every Agent answer as its own Session: the title when it has one, otherwise its Agent', async () => {
+    // A Workflow-spawned reviewer answers with no person's request stamped on it; it is still not the
+    // Account owner speaking.
+    const titled = createSessionFixture({
+      id: 'session-a',
+      serverId: 'server-a',
+    });
+    getStorage().setState({
+      sessions: {
+        [titled.id]: {
+          ...titled,
+          metadata: { ...titled.metadata!, name: 'Fresh reviewer 1' },
+        },
+      },
+    });
+    const screen = await renderScreen(
+      <DiscussionDetailsView
+        target={{
+          kind: 'discussion',
+          address: { serverId: 'server-a' },
+          discussionId: 'discussion-a',
+        }}
+        active
+      />,
+    );
+    expect(
+      screen.findByTestId('session-discussion-message-actor-message-agent')
+        ?.props.children,
+    ).toBe('Fresh reviewer 1');
+    expect(
+      screen.findByTestId('session-discussion-message-producer-message-agent')
+        ?.props.children,
+    ).toBe('Via Agent');
+
+    // Untitled no-folder Session: its Agent names it, never the generic "New chat".
+    await act(async () => {
+      getStorage().setState({
+        sessions: {
+          [titled.id]: {
+            ...titled,
+            metadata: {
+              ...titled.metadata!,
+              flavor: 'codex',
+              sessionDirectoryV1: { v: 1, kind: 'managed' },
+            },
+          },
+        },
+      });
+    });
+    expect(
+      screen.findByTestId('session-discussion-message-actor-message-agent')
+        ?.props.children,
+    ).toBe('Codex');
+  });
+
+  it('leaves Open run to the Run itself: a Session answer in a Workflow round does not repeat it', async () => {
+    const messages = snapshot.threads['discussion-a'].messages as unknown as Array<
+      (typeof snapshot.threads)['discussion-a']['messages'][number]
+    >;
+    const agent = messages[1]!;
+    const { messageRef: _agentRef, ...base } = agent;
+    const round = { runId: 'run-w', invocationRecordId: 'invocation-w', invocationAttempt: '0' };
+    messages[1] = openedMessage({ ...base, producerV1: { v: 1, kind: 'agent', sessionId: 'session-a', runId: 'run-w',
+      replyReturn: { serverId: 'server-a', requestLocalId: 'request-w', outcome: 'answer', workflow: round } } });
+    messages.push(openedMessage({ ...base, id: 'message-workflow', seq: 3, createdAt: 3,
+      producerV1: { v: 1, kind: 'workflow', ...round, execution: { kind: 'action', actionId: 'workflow.discussion.round.project' }, outcome: 'answer' },
+      content: { v: 1, parts: [{ t: 'text', text: 'Workflow result' }] } }));
+    try {
+      const screen = await renderScreen(
+        <DiscussionDetailsView
+          target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }}
+          active
+        />,
+      );
+      expect(screen.findByTestId('session-discussion-workflow-open-message-workflow')).not.toBeNull();
+      expect(screen.findByTestId('session-discussion-workflow-open-message-agent')).toBeNull();
+      // The answer still says what it read.
+      expect(screen.findByTestId('session-discussion-message-cutoff-message-agent')).not.toBeNull();
+    } finally {
+      messages.pop();
+      messages[1] = agent;
+    }
   });
 
   it('names a typed Session mention only through its accessible exact-Home title and refuses unknown selection text', async () => {
@@ -1518,14 +1844,25 @@ describe('DiscussionDetailsView selection', () => {
         />,
       );
       expect(screen.getTextContent()).not.toContain('Review agent');
-      const reference = screen.findAllByType(MarkdownView).find((node) =>
-        node.props.testID === 'session-discussion-message-content-message-session-mention')!;
-      expect(reference.props.inlineReferences.resolve('session:private-participant-session'))
-        .toMatchObject({ label: 'Session participant' });
-      const run = screen.findAllByType('EnrichedMarkdownText').find((node) =>
-        node.props.markdown.startsWith('Ask '))!;
+      const reference = screen
+        .findAllByType(MarkdownView)
+        .find(
+          (node) =>
+            node.props.testID ===
+            'session-discussion-message-content-message-session-mention',
+        )!;
+      expect(
+        reference.props.inlineReferences.resolve(
+          'session:private-participant-session',
+        ),
+      ).toMatchObject({ label: 'Session participant' });
+      const run = screen
+        .findAllByType('EnrichedMarkdownText')
+        .find((node) => node.props.markdown.startsWith('Ask '))!;
       await act(async () => {
-        run.props.onLinkPress({ url: 'happier-ref:session:private-participant-session' });
+        run.props.onLinkPress({
+          url: 'happier-ref:session:private-participant-session',
+        });
       });
       expect(routerPush).not.toHaveBeenCalled();
       await press(screen, 'session-discussion-select-message-session-mention');
@@ -1539,9 +1876,15 @@ describe('DiscussionDetailsView selection', () => {
           },
         });
       });
-      expect(screen.findAllByType('EnrichedMarkdownText').some((node) =>
-        node.props.markdown === 'Ask [Review agent](happier-ref:session:private-participant-session)'))
-        .toBe(true);
+      expect(
+        screen
+          .findAllByType('EnrichedMarkdownText')
+          .some(
+            (node) =>
+              node.props.markdown ===
+              'Ask [Review agent](happier-ref:session:private-participant-session)',
+          ),
+      ).toBe(true);
       await press(screen, 'transcript-selection-copy');
       expect(clipboard).toHaveBeenCalledWith('**Alice:**\n\nAsk @Review agent');
     } finally {
@@ -1795,8 +2138,14 @@ describe('DiscussionDetailsView selection', () => {
     ]);
     const originalMessages = snapshot.threads['discussion-a'].messages;
     activeScope?.dispose();
-    activeScope = await activateStorageAccountScope(exactHomeBinding.current.scope, getStorage());
-    shellSession.current = createSessionFixture({ id: 'session/a', serverId: exactHomeBinding.current.serverId });
+    activeScope = await activateStorageAccountScope(
+      exactHomeBinding.current.scope,
+      getStorage(),
+    );
+    shellSession.current = createSessionFixture({
+      id: 'session/a',
+      serverId: exactHomeBinding.current.serverId,
+    });
     snapshot.threads['discussion-a'].messages = originalMessages.map(
       ({ messageRef: _messageRef, ...message }) =>
         openedMessage(message, exactHomeBinding.current.serverId),
@@ -1908,8 +2257,13 @@ describe('DiscussionDetailsView selection', () => {
       )?.props.accessibilityLiveRegion,
     ).toBe('polite');
     expect(
-      screen.findAllByType(MarkdownView).find((node) =>
-        node.props.testID === 'session-discussion-message-content-post-local-unknown')?.props.markdown,
+      screen
+        .findAllByType(MarkdownView)
+        .find(
+          (node) =>
+            node.props.testID ===
+            'session-discussion-message-content-post-local-unknown',
+        )?.props.markdown,
     ).toBe('Uncertain message');
     expect(
       screen.findByTestId('session-discussion-mutation-retry')?.props,
@@ -1960,17 +2314,34 @@ describe('DiscussionDetailsView selection', () => {
     const { messageRef: _messageRef, ...message } = original;
     messages[0] = openedMessage({
       ...message,
-      content: DiscussionMessageContentV1Schema.parse({ v: 1, parts: [
-        { t: 'text', text: 'Ask ' },
-        { t: 'mention', participant: { kind: 'account', accountId: 'mention-private-456' } },
-        { t: 'text', text: ' about ' },
-        { t: 'mention', participant: { kind: 'session', sessionId: 'review-session' } },
-      ] }),
+      content: DiscussionMessageContentV1Schema.parse({
+        v: 1,
+        parts: [
+          { t: 'text', text: 'Ask ' },
+          {
+            t: 'mention',
+            participant: { kind: 'account', accountId: 'mention-private-456' },
+          },
+          { t: 'text', text: ' about ' },
+          {
+            t: 'mention',
+            participant: { kind: 'session', sessionId: 'review-session' },
+          },
+        ],
+      }),
     });
-    const session = createSessionFixture({ id: 'review-session', serverId: 'server-a' });
-    getStorage().setState({ sessions: {
-      [session.id]: { ...session, metadata: { ...session.metadata!, name: 'Auth fix' } },
-    } });
+    const session = createSessionFixture({
+      id: 'review-session',
+      serverId: 'server-a',
+    });
+    getStorage().setState({
+      sessions: {
+        [session.id]: {
+          ...session,
+          metadata: { ...session.metadata!, name: 'Auth fix' },
+        },
+      },
+    });
     try {
       const screen = await renderScreen(
         <DiscussionDetailsView
@@ -1983,23 +2354,37 @@ describe('DiscussionDetailsView selection', () => {
         />,
       );
 
-      const run = screen.findAllByType('EnrichedMarkdownText').find((node) =>
-        node.props.markdown.includes('Ask [Bob]'));
+      const run = screen
+        .findAllByType('EnrichedMarkdownText')
+        .find((node) => node.props.markdown.includes('Ask [Bob]'));
       expect(run).toBeDefined();
-      expect(run!.props.markdown).toBe('Ask [Bob](happier-ref:account:mention-private-456) about [Auth fix](happier-ref:session:review-session)');
-      const markdown = screen.findAllByType(MarkdownView).find((node) =>
-        node.props.testID === 'session-discussion-message-content-message-a')!;
-      expect(markdown.props.inlineReferences.resolve('account:mention-private-456'))
-        .toMatchObject({ label: 'Bob', glyph: 'assigned' });
-      expect(markdown.props.inlineReferences.resolve('session:review-session'))
-        .toMatchObject({ label: 'Auth fix', glyph: 'conversations' });
+      expect(run!.props.markdown).toBe(
+        'Ask [Bob](happier-ref:account:mention-private-456) about [Auth fix](happier-ref:session:review-session)',
+      );
+      const markdown = screen
+        .findAllByType(MarkdownView)
+        .find(
+          (node) =>
+            node.props.testID ===
+            'session-discussion-message-content-message-a',
+        )!;
+      expect(
+        markdown.props.inlineReferences.resolve('account:mention-private-456'),
+      ).toMatchObject({ label: 'Bob', glyph: 'assigned' });
+      expect(
+        markdown.props.inlineReferences.resolve('session:review-session'),
+      ).toMatchObject({ label: 'Auth fix', glyph: 'conversations' });
       await act(async () => {
         run!.props.onLinkPress({ url: 'happier-ref:session:review-session' });
       });
-      expect(routerPush).toHaveBeenCalledWith('/session/review-session?serverId=server-a');
+      expect(routerPush).toHaveBeenCalledWith(
+        '/session/review-session?serverId=server-a',
+      );
       await press(screen, 'session-discussion-select-message-a');
       await press(screen, 'transcript-selection-copy');
-      expect(clipboard).toHaveBeenCalledWith('**Alice:**\n\nAsk @Bob about @Auth fix');
+      expect(clipboard).toHaveBeenCalledWith(
+        '**Alice:**\n\nAsk @Bob about @Auth fix',
+      );
     } finally {
       messages[0] = original;
     }
@@ -2124,7 +2509,10 @@ describe('DiscussionDetailsView selection', () => {
     ).not.toBeNull();
     expect(screen.getTextContent()).toContain('This conversation is archived.');
     expect(dropdownProps.current?.items).toEqual([
-      expect.objectContaining({ id: 'save-as-pattern', testID: 'discussion-save-as-pattern' }),
+      expect.objectContaining({
+        id: 'save-as-pattern',
+        testID: 'discussion-save-as-pattern',
+      }),
       expect.objectContaining({ id: 'restore', title: 'Restore conversation' }),
     ]);
     expect(composerProps.current).toBeNull();
@@ -2450,10 +2838,16 @@ describe('DiscussionDetailsView selection', () => {
       status: 'failed',
       errorCode: 'discussion_post_denied',
       recovery: 'dismiss',
-      content: { v: 1, parts: [
-        { t: 'text', text: 'Refused opener ' },
-        { t: 'mention', participant: { kind: 'account', accountId: 'mention-private-456' } },
-      ] },
+      content: {
+        v: 1,
+        parts: [
+          { t: 'text', text: 'Refused opener ' },
+          {
+            t: 'mention',
+            participant: { kind: 'account', accountId: 'mention-private-456' },
+          },
+        ],
+      },
       mentionedAccountIds: [],
       draftSubmission: {
         scope: { serverId: 'server-a', accountId: 'viewer' },
@@ -2470,9 +2864,15 @@ describe('DiscussionDetailsView selection', () => {
     );
 
     expect(composerProps.current?.disabled).toBe(false);
-    expect(screen.findAllByType('EnrichedMarkdownText').some((node) =>
-      node.props.markdown === 'Refused opener [Collaborator](happier-ref:account:mention-private-456)'))
-      .toBe(true);
+    expect(
+      screen
+        .findAllByType('EnrichedMarkdownText')
+        .some(
+          (node) =>
+            node.props.markdown ===
+            'Refused opener [Collaborator](happier-ref:account:mention-private-456)',
+        ),
+    ).toBe(true);
     expect(
       screen.findByTestId(
         'session-discussion-message-status-create-message-failed',

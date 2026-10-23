@@ -398,9 +398,10 @@ export function placeDiscussionRequesterApprovals<
 >(
   messages: ReadonlyArray<Pick<DiscussionOpenedMessageV1, 'id' | 'producerV1'>>,
   approvals: ReadonlyArray<T>,
+  previous: ReadonlyMap<string, ReadonlyArray<T>> = new Map<string, ReadonlyArray<T>>(),
 ): ReadonlyMap<string, ReadonlyArray<T>> {
-  const placed = new Map<string, T[]>();
-  if (approvals.length === 0) return placed;
+  const placed = new Map<string, ReadonlyArray<T>>();
+  if (approvals.length === 0) return previous.size === 0 ? previous : placed;
   const messageIds = new Set(messages.map((message) => message.id));
   const replyByRequestRef = new Map<string, string>();
   for (const message of messages) {
@@ -421,7 +422,11 @@ export function placeDiscussionRequesterApprovals<
     if (!anchor) continue;
     placed.set(anchor, [...(placed.get(anchor) ?? []), approval]);
   }
-  return placed;
+  for (const [id, group] of placed) {
+    const known = previous.get(id);
+    if (known?.length === group.length && group.every((approval, index) => approval === known[index])) placed.set(id, known);
+  }
+  return placed.size === previous.size && [...placed].every(([id, group]) => previous.get(id) === group) ? previous : placed;
 }
 
 export type DiscussionTimelineMessage = Pick<

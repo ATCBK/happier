@@ -106,9 +106,13 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { Typography } from '@/constants/Typography';
 import type { SessionHumanPresenceViewer } from '@/sync/domains/session/humanPresence/sessionHumanPresenceStore';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { readableSessionDisplayTitle, useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
+import { readableSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { isUntitledSessionName } from '@/utils/sessions/sessionUtils';
+import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
-import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTimeAt, readShortRelativeTimeRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
+import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
 import { DiscussionAgentActivityReference } from '@/components/discussions/DiscussionAgentActivityReference';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { useOpenSessionAgentConversation } from '@/components/sessions/conversations/useOpenSessionAgentConversation';
@@ -429,7 +433,7 @@ function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget
     }), [invited, props.scope.accountId]);
     const invitedSessionAddresses = React.useMemo(() => invited.flatMap((participant) => participant.kind === 'session'
         ? [{ serverId: props.scope.serverId, sessionId: participant.sessionId }] : []), [invited, props.scope.serverId]);
-    const invitedSessionTitles = useSessionDisplayTitles(invitedSessionAddresses);
+    const invitedSessionTitles = useSessionDisplayNameProjections(invitedSessionAddresses, discussionSessionLabel);
     const invitedProfiles = useDiscussionParticipantProfiles({ scope: props.scope, accountLifetime: props.accountLifetime,
         roster: null, accountIds: invitedFaces.accountIds, enabled: invited.length > 0 });
     // Names, not counts, say who the empty page is waiting for (lab T2-ST "Ana and Checkout UI retry states are invited").
@@ -499,6 +503,16 @@ type DiscussionSource = Readonly<{
 /** Source navigation has archive eligibility in addition to ordinary title readability. */
 function readableDiscussionAnchorTitle(source: SessionDisplayNameSource | null): string | null {
     return source?.archivedAt == null ? readableSessionDisplayTitle(source) : null;
+}
+/**
+ * A Session as this thread names it (an answer's byline, a mention, a hold): its title, or for an untitled
+ * one its Agent, never the generic untitled word that every untitled answer would share.
+ */
+function discussionSessionLabel(source: SessionDisplayNameSource | null): string | null {
+    const title = sessionDisplayTitle(source);
+    if (!source || title === null || !(isUntitledSessionName(title) || title === t('session.folderless.untitledChat'))) return title;
+    const agentId = readSessionPresentationAgentId(source);
+    return agentId ? resolveAgentCatalogTitle(agentId) : title;
 }
 const NO_SOURCE_SUBAGENTS: ReturnType<typeof useSessionAgentActivityRoster>['subagents'] = Object.freeze([]);
 const readNoSourceExecutionRunEntry: ReturnType<typeof useSessionAgentActivityRoster>['readExecutionRunEntry'] = () => null;
@@ -672,13 +686,12 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const mentionedSessionAddresses = React.useMemo(() => [...new Set(messages.flatMap((message) => [
         ...(message.content ? readDiscussionMentionedParticipantIdsV1(message.content).mentionedSessionIds : []),
         ...(message.participantDeliveryV1?.map((delivery) => delivery.participantSessionId) ?? []),
-        // A Bot reply's byline names the Session that answered, through the same title projection.
-        // A suggested edit's author is named too: its Ask to redo addresses that Session.
-        ...(message.producerV1?.kind === 'agent' && (message.producerV1.actionRequestAttributionV1?.requester
-            || (message.content && isDiscussionDocEditProposalContentV1(message.content))) ? [message.producerV1.sessionId] : []),
+        // Every Agent answer's byline names the Session that answered (a Bot asked by a person, a reviewer
+        // a Workflow started, a suggested edit's author), through the same title projection.
+        ...(message.producerV1?.kind === 'agent' ? [message.producerV1.sessionId] : []),
     ]))]
         .map((sessionId) => ({ serverId: props.scope.serverId, sessionId })), [messages, props.scope.serverId]);
-    const mentionedSessionTitles = useSessionDisplayTitles(mentionedSessionAddresses);
+    const mentionedSessionTitles = useSessionDisplayNameProjections(mentionedSessionAddresses, discussionSessionLabel);
     // The Session this Discussion hangs off, named in the header (lab T2-A anchor); only this Home's
     // accessible title projection names it, as for mentions.
     const anchorSessionId = discussion?.anchor?.kind === 'session' ? discussion.anchor.sessionId : null;
@@ -791,7 +804,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         const sessionId = row.participant.kind === 'session' ? row.participant.sessionId : 'sessionId' in row ? row.sessionId : null;
         return sessionId ? [{ serverId: props.scope.serverId, sessionId }] : [];
     }), [props.scope.serverId, roster?.participants]);
-    const rosterSessionTitles = useSessionDisplayTitles(rosterSessionAddresses);
+    const rosterSessionTitles = useSessionDisplayNameProjections(rosterSessionAddresses, discussionSessionLabel);
     const recipientLabel = React.useCallback((participant: DiscussionParticipantRefV1): string => {
         if (participant.kind === 'session') {
             const index = rosterSessionAddresses.findIndex((address) => address.sessionId === participant.sessionId);
@@ -943,7 +956,12 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     // C7: a shared Bot's outward request waits in the thread that asked, under the Bot's reply to that
     // ask (or the ask itself while the Bot is blocked on it), joined by the request's admitted cause.
     const requesterApprovals = useDiscussionRequesterApprovals(discussionAddress, mentionedSessionAddresses);
-    const requesterApprovalsByMessage = React.useMemo(() => placeDiscussionRequesterApprovals(displayMessages, requesterApprovals), [displayMessages, requesterApprovals]);
+    const previousApprovalPlacement = React.useRef<ReadonlyMap<string, ReadonlyArray<ReturnType<typeof useDiscussionRequesterApprovals>[number]>>>(new Map());
+    const requesterApprovalsByMessage = React.useMemo(() => {
+        const next = placeDiscussionRequesterApprovals(displayMessages, requesterApprovals, previousApprovalPlacement.current);
+        previousApprovalPlacement.current = next;
+        return next;
+    }, [displayMessages, requesterApprovals]);
     const discussionReturnHref = React.useMemo(() => buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: props.target.address.serverId }, discussionId: props.target.discussionId } }), [props.target.address.serverId, props.target.discussionId]);
     const messageGroupStarts = React.useMemo(() => new Set(items.flatMap((item, index) => {
         if (item.kind !== 'human_message') return [];
@@ -1107,12 +1125,18 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         supportsAnotherRound: managedRuns.supportsAnotherRoundByRunId,
         retryRun: managedRuns.retry,
         canReply: discussion?.archivedAt === null && discussion.capabilities.postMessages,
-        viewer, mutation, source: props.source, mentionedSessionTitles,
+        viewer, mutation, source: props.source, mentionedSessionTitles, clockEnabled: presenceEligible,
         openQuotedMessage, replyToMessage, dismissRefusal,
     }), [items, requesterApprovalsByMessage, proposalDocReads, proposalClient, shownProposalDocs,
         managedRuns.metadataByRunId, managedRuns.callerAccessByRunId, managedRuns.supportsAnotherRoundByRunId, managedRuns.retry,
-        discussion?.archivedAt, discussion?.capabilities.postMessages, viewer, mutation, props.source, mentionedSessionTitles,
+        discussion?.archivedAt, discussion?.capabilities.postMessages, viewer, mutation, props.source, mentionedSessionTitles, presenceEligible,
         openQuotedMessage, replyToMessage, dismissRefusal]);
+    // The canonical Legend adapter admits only a primitive dataVersion. Adapt
+    // actual context changes to that key; do not serialize the entire history.
+    const rowContextVersion = React.useRef({ context: rowContext, revision: 0 });
+    if (rowContextVersion.current.context !== rowContext) {
+        rowContextVersion.current = { context: rowContext, revision: rowContextVersion.current.revision + 1 };
+    }
     const readableVisibleSeqs = React.useMemo(
         () => resolveReadableVisibleDiscussionSeqs({ messages, visibleMessageIds, lastReadSeq: discussion?.lastReadSeq ?? null }),
         [discussion?.lastReadSeq, messages, visibleMessageIds],
@@ -1296,7 +1320,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     dataKey={dataKey}
                     viewportRetention={repository}
                     data={items}
-                    extraData={rowContext}
+                    extraData={rowContextVersion.current.revision}
                     frame={frame}
                     webDomObservation={observation}
                     keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : item.kind === 'workflow_run' ? `workflow:${item.run.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
@@ -1347,12 +1371,12 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                                 ? readProposalDoc(item.message.content.proposal.target.ref.artifactId) : LOADING_PROPOSAL_DOC}
                             viewerAccountId={props.scope.accountId}
                             attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope)}
-                            footer={requesterApprovalsByMessage.has(item.message.id) || pendingMutation ? <>
-                                {requesterApprovalsByMessage.get(item.message.id)?.map((approval) => <ApprovalRequesterThreadCard
-                                    key={approval.artifact.id} approval={approval} serverId={props.scope.serverId} returnHref={discussionReturnHref} />)}
-                                {pendingMutation && mutationStatusLabel(pendingMutation) ? <Text testID={`session-discussion-message-status-${item.message.localId}`} accessibilityLiveRegion="polite" style={pendingMutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(pendingMutation)}</Text> : null}
-                                {pendingMutation ? <MutationRecovery mutation={pendingMutation} onRetry={() => void repository.retry(pendingMutation.localId)} onDismiss={dismissRefusal} /> : null}
-                            </> : null}
+                            requesterApprovals={requesterApprovalsByMessage.get(item.message.id)}
+                            returnHref={discussionReturnHref}
+                            pendingMutation={pendingMutation}
+                            onRetryMutation={repository.retry}
+                            onDismissMutation={dismissRefusal}
+                            clockEnabled={presenceEligible}
                         />;
                     }}
                 />
@@ -1511,9 +1535,14 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     viewerAccountId: string;
     /** "Asked by … · answered by …" from the reply's stamped cause; null when no person asked. */
     attributionLine: string | null;
-    footer: React.ReactNode;
+    requesterApprovals: ReadonlyArray<ReturnType<typeof useDiscussionRequesterApprovals>[number]> | undefined;
+    returnHref: string;
+    pendingMutation: DiscussionRepositoryMutation | null;
+    onRetryMutation: (localId: string) => void;
+    onDismissMutation: () => void;
+    clockEnabled: boolean;
 }>) => {
-    const { message } = props;
+    const { message, pendingMutation } = props;
     const { theme } = useUnistyles();
     const selection = useOptionalTranscriptSelectionRow(message.id);
     // The transcript's one row-action policy: on a fine pointer the select mark waits for hover, focus
@@ -1562,7 +1591,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                 {/* An unnamed Run already reads "Workflow run"; the tag would only repeat it. */}
                 {message.producerV1 && (message.producerV1.kind === 'agent' || props.workflowRunLabel) ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>
                     {message.producerV1.kind === 'agent' ? t('session.collaboration.discussion.viaAgent') : t('workflows.start.workflow')}</Text> : null}
-                {message.createdAt > 0 ? <Text testID={`session-discussion-message-timestamp-${message.id}`} accessibilityRole="text" accessibilityLabel={new Date(message.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTime(message.createdAt)}</Text> : null}
+                {message.createdAt > 0 ? <DiscussionMessageTimestamp messageId={message.id} createdAt={message.createdAt} enabled={props.clockEnabled} /> : null}
         </> : null}
         trailing={actions ? <RowActionRevealSlot revealed={selectRevealed || decisionOpen} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
             <View style={styles.rowActions}>
@@ -1642,7 +1671,10 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                 participant: props.resolveSessionLabel(delivery.participantSessionId) ?? t('session.collaboration.discussion.heldParticipant'),
             })}</Text>)}
             </>}
-            {props.footer}
+            {props.requesterApprovals?.map((approval) => <ApprovalRequesterThreadCard
+                key={approval.artifact.id} approval={approval} serverId={props.serverId} returnHref={props.returnHref} />)}
+            {pendingMutation && mutationStatusLabel(pendingMutation) ? <Text testID={`session-discussion-message-status-${message.localId}`} accessibilityLiveRegion="polite" style={pendingMutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(pendingMutation)}</Text> : null}
+            {pendingMutation ? <MutationRecovery mutation={pendingMutation} onRetry={() => void props.onRetryMutation(pendingMutation.localId)} onDismiss={props.onDismissMutation} /> : null}
             {decisionOpen && decisionSource ? <SaveMemoryDecisionSheet
                 seed={seedMemoryDecisionFromMessage(decisionSource, textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel))}
                 anchorRef={decisionAnchorRef} onClose={() => setDecisionOpen(false)}
@@ -1672,6 +1704,12 @@ function observeCommittedPost(repository: DiscussionRepository, discussionId: st
         if (check()) return;
         const unsubscribe = repository.subscribe(() => { if (check()) unsubscribe(); });
     });
+}
+
+function DiscussionMessageTimestamp(props: Readonly<{ messageId: string; createdAt: number; enabled: boolean }>) {
+    const readNextRefresh = React.useCallback((nowMs: number) => readShortRelativeTimeRefreshAtMs(props.createdAt, nowMs), [props.createdAt]);
+    const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, props.enabled);
+    return <Text testID={`session-discussion-message-timestamp-${props.messageId}`} accessibilityRole="text" accessibilityLabel={new Date(props.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTimeAt(props.createdAt, nowMs)}</Text>;
 }
 
 function MutationRecovery(props: Readonly<{ mutation: DiscussionRepositoryMutation; onRetry: () => void; onDismiss: () => void }>) {

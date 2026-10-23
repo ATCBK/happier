@@ -102,7 +102,7 @@ export const DiscussionWorkflowRunRow = React.memo(
             presentation={presentation}
             onOpen={open}
             actions={
-              <>
+              canSavePattern || anotherRound ? <>
                 {canSavePattern ? (
                   <ToolbarButton
                     testID={`discussion-workflow-run-save-pattern:${runId}`}
@@ -133,7 +133,7 @@ export const DiscussionWorkflowRunRow = React.memo(
                   onPress={() => void anotherRound()}
                 />
                 ) : null}
-              </>
+              </> : null
             }
           />
           {controls.start.refusal ? (

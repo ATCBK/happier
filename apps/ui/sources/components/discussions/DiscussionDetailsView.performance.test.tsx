@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createRenderCommitCounter } from '@/dev/testkit/performance/counts';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { answerDiscussionThreadForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -61,6 +62,7 @@ const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains
 const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+const { sessionListRuntimeClock } = await import('@/hooks/session/sessionListRuntimeClock');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 afterEach(async () => {
     await standardCleanup();
@@ -79,6 +81,13 @@ async function prepareLongDiscussion() {
     const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, conversations: { enabled: true } } } });
     homes.answer(serverId, '/v1/features', { body: features });
     homes.answer(serverId, '/v1/features/authenticated', { body: features });
+    // A settled empty Account, not a missing materialization endpoint whose
+    // canonical retry lifecycle would contaminate an idle-read measurement.
+    for (const path of ['/v1/plugins/availability/materializations/read', '/v1/plugins/availability/intents/list']) {
+        const response = createEmptyAccountBootstrapHttpResponse(path, { method: 'POST' });
+        if (!response) throw new Error(`Missing canonical Account bootstrap fixture: ${path}`);
+        homes.answer(serverId, `POST ${path}`, { body: await response.json() });
+    }
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
     homes.answer(serverId, '/v2/cursor', { body: { cursor: 0, changesFloor: 0 } });
     homes.answer(serverId, '/v2/sessions', { body: { sessions: [], nextCursor: null, hasNext: false } });
@@ -196,4 +205,33 @@ it('keeps unaffected mounted message rows quiet when one message arrives in a 30
     await renderScreen(frame);
     await flushHookEffects();
     expect(counts).toEqual({ renders: 0, commits: 0 });
+});
+
+it('advances a visible message age without rerendering its message body', async () => {
+    const { serverId, fixture } = await prepareLongDiscussion();
+    const now = Date.now();
+    fixture.messages[0] = { ...fixture.messages[0]!, createdAt: now - 61_000 };
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const screen = await renderScreen(<AppPaneProvider><SurfaceStateSizeProvider size="pane">
+        <DiscussionDetailsView target={{ kind: 'discussion', address: { serverId }, discussionId: 'committed-thread' }} active />
+    </SurfaceStateSizeProvider></AppPaneProvider>);
+    await vi.waitFor(() => expect(screen.findHostByTestId('session-discussion-message-timestamp-committed-root')?.props.children).toBe('1m'));
+    await flushHookEffects();
+    const body = counters.get('session-discussion-message-group-start-committed-root');
+    expect(body).toBeDefined();
+    body?.reset();
+    const clockFires = vi.fn();
+    const unsubscribe = sessionListRuntimeClock.subscribe(clockFires);
+    const idleStart = homes.requests.length;
+    try {
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        const idleRequests = homes.requests.slice(idleStart).map(request => request.path);
+        expect(screen.findHostByTestId('session-discussion-message-timestamp-committed-root')?.props.children).toBe('2m');
+        expect(body?.read()).toEqual({ renders: 0, commits: 0 });
+        expect(clockFires).toHaveBeenCalledTimes(1);
+        expect(idleRequests.filter(path => path.startsWith('/v1/discussions'))).toHaveLength(0);
+        await screen.unmount();
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        expect(clockFires).toHaveBeenCalledTimes(1);
+    } finally { unsubscribe(); }
 });
