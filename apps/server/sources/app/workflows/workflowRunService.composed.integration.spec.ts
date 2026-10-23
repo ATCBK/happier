@@ -455,6 +455,7 @@ describe("workflowRunService (integration)", () => {
             } }, onError: (error: unknown) => { throw error; },
         };
         type PreparedUpdate = Readonly<{
+            localId: string;
             update: WorkerUpdateV1;
             recheckAdmission: (signal: AbortSignal) => Promise<boolean>;
             acknowledgeAccepted: () => void;
@@ -482,7 +483,10 @@ describe("workflowRunService (integration)", () => {
             const first = await origin.prepareWorkerUpdates!({ signal, maxUtf8Bytes: 65536 });
             expect(first).toHaveLength(1);
             expect(first[0]!.update).toMatchObject({ transcriptPointer: { kind: "workflow_run", runId: seeded.runId }, wake: "needs_you" });
-            expect(await origin.take(signal)).toBeNull();
+            // Follow's default Important policy wakes for a pending decision;
+            // preparing it does not acknowledge provider acceptance.
+            expect(await origin.take(signal)).toMatchObject({ kind: "worker_update", localId: first[0]!.localId,
+                update: first[0]!.update });
             expect(await first[0]!.recheckAdmission(signal)).toBe(true);
             expect((await getWorkflowRun(seeded)).run.originDeliveryAckRevision).toBe(0);
             first[0]!.acknowledgeAccepted();
@@ -521,9 +525,13 @@ describe("workflowRunService (integration)", () => {
                 checkpointEnvelope: checkpointEnvelope(seeded.accountId, seeded.runId, seeded.rootId, 2n), resultEnvelope: terminalResult,
                 invocationTransitions: [{ id: seeded.rootId, expectedLifecycle: "pending", lifecycle: "completed" }] });
             if (offline) origin = connectOrigin();
-            const terminal = await origin.take(signal);
-            expect(terminal).toMatchObject({ kind: "worker_update", update: { wake: "finished", result: "done" } });
-            if (terminal?.kind !== "worker_update") throw new Error("expected terminal wake");
+            // Finished is quiet under Important: retain its result for context
+            // without starting another origin turn.
+            expect(await origin.take(signal)).toBeNull();
+            const terminalUpdates = await origin.prepareWorkerUpdates({ signal, maxUtf8Bytes: 65536 });
+            expect(terminalUpdates).toHaveLength(1);
+            const terminal = terminalUpdates[0]!;
+            expect(terminal.update).toMatchObject({ wake: "finished", result: "done" });
             expect(await terminal.recheckAdmission(signal)).toBe(true);
             terminal.acknowledgeAccepted();
             expect(await origin.take(signal)).toBeNull();
@@ -622,16 +630,21 @@ describe("workflowRunService (integration)", () => {
 
     it.each([true, false])("freezes the scoped Automation origin and explicit delivery request at accepted-snapshot resolution (delivery: %s)", async (deliver) => {
         const seeded = await seed();
-        const automation = await db.automation.create({ data: { accountId: seeded.accountId, name: "Scoped workflow",
-            scopeSessionId: seeded.sessionId, templateCiphertext: JSON.stringify({ t: "plain", v: {} }) } });
-        const runId = randomUUID();
-        await admitWorkflowRun({ ...seeded, runId, origin: { kind: "direct" }, acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId }) });
-        const definitionEnvelope = workflowDefinitionEnvelope();
-        await db.automationRun.update({ where: { id: runId }, data: { originKind: "automation", automationId: automation.id,
-            causeKind: "manual", causeOccurredAt: new Date(), claimedByMachineId: seeded.machineId, attempt: 1,
-            workflowAcceptedSnapshotEnvelope: null, executionInputEnvelope: definitionEnvelope } });
+        const automation = await createAutomation({ accountId: seeded.accountId, input: { name: "Scoped workflow", enabled: true,
+            scopeSessionId: seeded.sessionId,
+            executionRecipe: createAutomationWorkflowRecipeFixture({ templateVersion: 1, directory: "/repo", prompt: "Work" }),
+            assignments: [{ machineId: seeded.machineId, enabled: true, priority: 0 }], triggers: [] } });
+        const admitted = await inTx(tx => admitAutomationRunTx({ tx, accountId: seeded.accountId,
+            automationId: automation.id, now: new Date(), cause: { kind: "manual", invokedAt: Date.now() },
+            recipeFeaturePolicy: { workflowsEnabled: true } }));
+        if (admitted.kind !== "admitted") throw new Error("Expected real Automation admission");
+        const runId = admitted.run.id;
+        const claimed = await claimAutomationRun({ accountId: seeded.accountId, machineId: seeded.machineId,
+            leaseDurationMs: 30_000, recipeFeaturePolicy: { workflowsEnabled: true } });
+        if (!claimed.run || claimed.run.id !== runId) throw new Error("Expected the admitted Automation claim");
+        const definitionEnvelope = claimed.run.executionInputEnvelope;
         const request = { accountId: seeded.accountId, runId, automationId: automation.id, machineId: seeded.machineId,
-            expectedAttempt: 1, expectedRevision: 0, accountCurrentness: await accountCurrentness(seeded.accountId),
+            expectedAttempt: claimed.run.attempt, expectedRevision: claimed.run.revision, accountCurrentness: await accountCurrentness(seeded.accountId),
             definitionEnvelope, acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId, automationId: automation.id,
                 originSessionId: seeded.sessionId, deliver }),
             originSessionId: seeded.sessionId, ...(deliver ? { resultDelivery: { kind: "originating_session" as const } } : {}) };
