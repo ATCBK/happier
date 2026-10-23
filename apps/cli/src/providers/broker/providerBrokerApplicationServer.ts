@@ -1,4 +1,4 @@
-import fastify, { errorCodes, type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
+import fastify, { errorCodes, type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { Readable } from 'node:stream';
 import { constants } from 'node:os';
 import { AxiosError } from 'axios';
@@ -155,6 +155,27 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
     const proxies = new Set<FirstBytesLocalCapabilityProxy>();
     const streamLifetimes = new Set<Pick<ProviderBrokerApplicationStreamLifetime, 'close' | 'retire'>>();
     const app = fastify({ logger: false });
+    const requestDiagnostic = (request: FastifyRequest) => {
+        const remotePort = request.raw.socket.remotePort;
+        const context = remotePort === undefined ? undefined : contextsByRemotePort.get(remotePort);
+        if (!context || context.kind === 'external') return { applicationRequestId: request.id };
+        const consumer = context.authority.payload.consumer;
+        const grantId = closeRequestIdSchema.safeParse(context.authority.payload.grantId);
+        return { applicationRequestId: request.id,
+            consumerId: consumer.kind === 'session' ? consumer.sessionId : consumer.executionRunId,
+            ...(grantId.success ? { grantId: grantId.data } : {}) };
+    };
+    app.addHook('onRequest', async request => {
+        try {
+            logger.infoFile('[provider-broker-application]', { stage: 'received', ...requestDiagnostic(request) });
+        } catch { /* File diagnostics cannot affect admission. */ }
+    });
+    app.addHook('onResponse', async (request, reply) => {
+        try {
+            logger.infoFile('[provider-broker-application]', { stage: 'response_completed',
+                ...requestDiagnostic(request), httpStatus: reply.statusCode });
+        } catch { /* File diagnostics cannot affect response settlement. */ }
+    });
     app.addHook('onError', async (request, _reply, error) => {
         const failure = error instanceof ProviderBrokerApplicationPhaseError ? error : null;
         const original = failure?.cause instanceof Error ? failure.cause : error;
@@ -167,7 +188,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         logger.warnLocalFile('[provider-broker-application]', {
             stage: 'handler', code: 'exception',
             phase: failure?.phase ?? 'handler',
-            applicationRequestId: request.id,
+            ...requestDiagnostic(request),
             ...(failure ? { brokerRequestId: failure.brokerRequestId } : {}),
             errorName: APPLICATION_ERROR_NAMES.has(original.name) ? original.name : 'UnknownError',
             ...(errorCode ? { errorCode } : {}),
@@ -185,10 +206,11 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         reply: FastifyReply,
         response: Awaited<ReturnType<ProviderBrokerRequestHandler>>,
         requestSignal: AbortSignal,
+        applicationRequestId: string,
         context?: ProviderBrokerAuthenticatedStreamContext,
     ) => {
         if (!response.ok) {
-            logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', code: response.reasonCode });
+            logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', applicationRequestId, code: response.reasonCode });
             return writeProviderBrokerApplicationFailure(
                 reply,
                 response,
@@ -197,6 +219,10 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                 context && context.kind !== 'external' && context.kind !== 'account_connection' ? context.expected.resourceId : undefined,
             );
         }
+        try {
+            logger.infoFile('[provider-broker-application]', { stage: 'upstream_response',
+                applicationRequestId, httpStatus: response.response.status });
+        } catch { /* File diagnostics cannot affect forwarding. */ }
         for (const [name, value] of Object.entries(response.response.headers)) {
             if (!RESPONSE_HOP_BY_HOP_HEADERS.has(name.toLowerCase())) reply.header(name, value);
         }
@@ -244,6 +270,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         request.raw.once('aborted', () => controller.abort());
         reply.raw.once('close', () => controller.abort());
         const result = await input.handler({
+            applicationRequestId: request.id,
             context,
             carrierRequest: parsed.data,
             request: {
@@ -254,7 +281,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                 signal: controller.signal,
             },
         });
-        return await sendResponse(reply, result, controller.signal);
+        return await sendResponse(reply, result, controller.signal, request.id);
     });
 
     app.register(async (inference) => {
@@ -330,10 +357,10 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                 recordClose('received');
                 const result = localConsumer
                     ? await localConsumer.request(forwardedRequest)
-                    : await input.handler({ context, request: forwardedRequest });
+                    : await input.handler({ context, request: forwardedRequest, applicationRequestId: request.id });
                 // The canonical handler returns 204 only after retirement.
                 if (result.ok && result.response.status === 204) recordClose('retirement_completed');
-                return await sendResponse(reply, result, controller.signal, context);
+                return await sendResponse(reply, result, controller.signal, request.id, context);
             },
         });
     });

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/mini';
 
-import { encodeProviderBrokerAuthorityV1, encodeProviderBrokerAuthorityV2, IrohProviderBrokerHandshakeSchema, ProviderBrokerOpenResponseV1Schema, ProviderBrokerAccountOpenResponseV2Schema, SignedProviderBrokerRouteGrantV1Schema, SignedProviderBrokerRouteGrantV2Schema, type SignedProviderBrokerRouteGrantV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { encodeProviderBrokerAuthorityV1, encodeProviderBrokerAuthorityV2, IrohProviderBrokerHandshakeSchema, ProviderBrokerAdmissionFailureCodeV1Schema, ProviderBrokerOpenResponseV1Schema, ProviderBrokerAccountOpenResponseV2Schema, SignedProviderBrokerRouteGrantV1Schema, SignedProviderBrokerRouteGrantV2Schema, type SignedProviderBrokerRouteGrantV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import type { ProviderBrokerOpenResponseV1 } from '@happier-dev/protocol';
 
@@ -28,6 +28,11 @@ import { logger } from '@/ui/logger';
 
 type BrokerReleasePhase = 'public_listener_withdrawal' | 'private_control_dial'
   | 'delete_dispatched' | 'response_received' | 'private_control_close';
+const diagnosticIdSchema = z.uuid();
+const carrierAdmissionDiagnosticCodeSchema = z.union([
+  ProviderBrokerAdmissionFailureCodeV1Schema,
+  z.enum(['broker_consumer_closed', 'broker_fresh_handshake_unavailable', 'broker_binding_changed']),
+]);
 
 /** Diagnostic context stays in `cause`, which the existing cleanup logger
  * serializes. The original boundary exception (including its cause) survives. */
@@ -130,7 +135,7 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
     let releasing = false;
 
     const handshake = IrohProviderBrokerHandshakeSchema.parse({ v: payload.v, kind: 'provider_broker', authority });
-    const refreshHandshake = async () => {
+    const readFreshHandshake = async () => {
         if (releasing) {
           throw new MachineCarrierError('broker_consumer_closed', 'Provider broker consumer has been withdrawn.');
         }
@@ -161,6 +166,32 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
           kind: 'provider_broker',
           authority: freshAuthority,
         });
+    };
+    const refreshHandshake = async () => {
+      const requestId = randomUUID();
+      const consumerId = payload.consumer.kind === 'session' ? payload.consumer.sessionId : payload.consumer.executionRunId;
+      const record = (details: Readonly<{
+        outcome: 'started' | 'accepted' | 'refused' | 'failed';
+        grantId?: string;
+        code?: z.infer<typeof carrierAdmissionDiagnosticCodeSchema> | 'transport_error';
+      }>): void => {
+        try {
+          logger.infoFile('[provider-broker-application]', { stage: 'carrier_admission', requestId, consumerId, ...details });
+        } catch { /* Diagnostics cannot change fresh authority or stream custody. */ }
+      };
+      record({ outcome: 'started' });
+      try {
+        const fresh = await readFreshHandshake();
+        // Home-generated UUID links this stream to the target HTTP receipt.
+        // Legacy/non-UUID identifiers are omitted rather than logging free text.
+        const grantId = diagnosticIdSchema.safeParse(fresh.authority.payload.grantId);
+        record({ outcome: 'accepted', ...(grantId.success ? { grantId: grantId.data } : {}) });
+        return fresh;
+      } catch (error) {
+        const closedCode = carrierAdmissionDiagnosticCodeSchema.safeParse(error instanceof MachineCarrierError ? error.code : undefined);
+        record({ outcome: closedCode.success ? 'refused' : 'failed', code: closedCode.success ? closedCode.data : 'transport_error' });
+        throw error;
+      }
     };
     // Home work can outlive native's first-stream custody window. Complete
     // the first refresh before dial, then consume that exact witness once.

@@ -72,14 +72,15 @@ const expectedBinding = {
   application: payload.application,
 } as const;
 
-function signedAuthority(): SignedProviderBrokerRouteGrantV1 {
+function signedAuthority(grantId = payload.grantId): SignedProviderBrokerRouteGrantV1 {
+  const signedPayload = { ...payload, grantId };
   return {
-    payload,
+    payload: signedPayload,
     signature: {
       alg: 'Ed25519',
       keyId: 'home-1',
       valueBase64Url: Buffer.from(tweetnacl.sign.detached(
-        Buffer.from(createProviderBrokerRouteGrantSigningInputV1(payload)),
+        Buffer.from(createProviderBrokerRouteGrantSigningInputV1(signedPayload)),
         signingKey.secretKey,
       )).toString('base64url'),
     },
@@ -151,6 +152,63 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it('correlates consecutive Team requests through policy, admission and upstream status without payloads', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    let effects = 0;
+    let requestIdsCreated = 0;
+    const admissionIds: string[] = [];
+    const grantId = '09df506c-86a6-4569-a4dd-5c3256e0d152';
+    const source = TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection',
+      connectionId: 'pc_source', connectionSecurityFingerprint: 'connection-security:v1:source', credentialSlotId: 'apiKey' });
+    // The Home policy/admission and Provider HTTP boundary are external systems;
+    // keep the broker's real policy, signature verification and HTTP wiring.
+    const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [{ keyId: 'home-1', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+      nowMs: () => 200,
+      resolveRequestPolicy: async () => ({ resourceRevision: 7, sourceRevision: payload.sourceRevision,
+        application: payload.application, source, policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
+      createRequestId: () => `broker-request-${++requestIdsCreated}`,
+      admit: async input => {
+        admissionIds.push(input.requestId);
+        return { ok: true, access: { endpointUrl: () => 'http://127.0.0.1:43120/v1',
+        request: async () => ({ ok: ++effects === 1, status: effects === 1 ? 200 : 429,
+          statusText: '', headers: {}, body: null }) } };
+      },
+    }) });
+    try {
+      for (let turn = 0; turn < 2; turn++) {
+        const target = await server.createStreamTarget({ authenticatedRemoteEndpointId: payload.initiator.endpointId,
+          authority: signedAuthority(grantId), expected: expectedBinding });
+        const response = await requestThroughApplicationTarget({ ...target,
+          body: JSON.stringify({ model: 'gpt-5', messages: [{ role: 'user', content: 'private prompt sentinel' }] }) });
+        expect(response).toContain(turn === 0 ? 'HTTP/1.1 200' : 'HTTP/1.1 429');
+      }
+      const records = diagnostics.mock.calls.filter(([marker]) => marker === '[provider-broker-application]').map(([, data]) => data);
+      const received = records.filter(record => record && typeof record === 'object' && 'stage' in record && record.stage === 'received');
+      expect(received).toHaveLength(2);
+      const requestIds = received.map(record => {
+        expect(record).toMatchObject({ applicationRequestId: expect.any(String), consumerId: 'session-1', grantId });
+        if (!record || typeof record !== 'object' || !('applicationRequestId' in record)) throw new Error('Missing request diagnostic');
+        return record.applicationRequestId;
+      });
+      expect(new Set(requestIds).size).toBe(2);
+      for (const [index, requestId] of requestIds.entries()) {
+        expect(records).toContainEqual(expect.objectContaining({ stage: 'upstream_response', applicationRequestId: requestId,
+          httpStatus: index === 0 ? 200 : 429 }));
+        const brokerRequestId = `broker-request-${index + 1}`;
+        expect(records).toContainEqual({ stage: 'request_context', applicationRequestId: requestId, brokerRequestId });
+        expect(records).toContainEqual({ stage: 'phase', phase: 'upstream_forward', brokerRequestId, outcome: 'completed' });
+      }
+      expect(effects).toBe(2); // Diagnostics perform no extra Provider requests.
+      expect(admissionIds).toEqual(['broker-request-1', 'broker-request-2']);
+      expect(JSON.stringify(records)).not.toMatch(/private prompt sentinel|connection-security|Bearer|valueBase64Url/u);
+    } finally {
+      await server.close();
+      diagnostics.mockRestore();
+    }
+  });
+
   it('correlates private close receipt and completed real retirement without logging untrusted header values', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const controller = createPluginReloadController();

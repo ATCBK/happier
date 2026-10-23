@@ -13,6 +13,7 @@ import { createProviderBrokerMachineCarrierTunnelOpen } from './providerBrokerMa
 import type { DaemonMachineIrohRuntime } from './daemonMachineIrohRuntime';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
 import { registerPidSpawnResourceCleanup } from '@/daemon/sessions/cleanupPidSessionResources';
+import { logger } from '@/ui/logger';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
 const root = { keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') };
@@ -78,6 +79,49 @@ function brokerOpen(
 }
 
 describe('createProviderBrokerMachineCarrierTunnelOpen', () => {
+  it('records fresh-stream admission and a later closed refusal without disclosing authority or errors', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    let transport: Parameters<DaemonMachineIrohRuntime['openHttpTunnel']>[0] | undefined;
+    let refused = false;
+    let refreshFailure: Error | undefined;
+    let refreshes = 0;
+    const open = createProviderBrokerMachineCarrierTunnelOpen({
+      accountId: 'account-worker', localMachineId: 'machine-worker', resolveTrustRoots: () => [root], nowMs: () => 200,
+      runtime: { endpoint: { endpointId: initiatorEndpoint }, openHttpTunnel: async input => {
+        transport = input;
+        return { localPort: 41001, localCapability: 'private-capability', remoteEndpointId: targetEndpoint,
+          observedPath: 'direct', close: async () => {} };
+      } },
+    });
+    try {
+      await open({ brokerOpen: brokerOpen(), refreshBrokerOpen: async () => {
+        refreshes++;
+        if (refreshFailure) throw refreshFailure;
+        return refused ? { ok: false, reasonCode: 'session_not_active' }
+          : brokerOpen(authority({ grantId: '09df506c-86a6-4569-a4dd-5c3256e0d152' }));
+      } });
+      await transport?.handshakeProvider?.();
+      refused = true;
+      await expect(transport?.handshakeProvider?.()).rejects.toMatchObject({ code: 'session_not_active' });
+      expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
+        stage: 'carrier_admission', outcome: 'accepted', consumerId: 'session-1',
+        grantId: '09df506c-86a6-4569-a4dd-5c3256e0d152',
+      })]);
+      expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
+        stage: 'carrier_admission', outcome: 'refused', code: 'session_not_active', consumerId: 'session-1',
+      })]);
+      refreshFailure = Object.assign(new Error('private error sentinel'), { code: 'private code sentinel' });
+      await expect(transport?.handshakeProvider?.()).rejects.toBe(refreshFailure);
+      expect(diagnostics.mock.calls).toContainEqual(['[provider-broker-application]', expect.objectContaining({
+        stage: 'carrier_admission', outcome: 'failed', code: 'transport_error',
+      })]);
+      expect(refreshes).toBe(3); // One fresh Home check per demand, with no diagnostic probes/retries.
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toMatch(/private-capability|valueBase64Url|source-revision|private error sentinel|private code sentinel/u);
+    } finally {
+      diagnostics.mockRestore();
+    }
+  });
+
   it.each(['public_listener_withdrawal', 'private_control_dial', 'delete_dispatched', 'response_received'] as const)(
     'retains %s attribution and the original failure through registered Session cleanup', async phase => {
       const original = new Error('native or HTTP boundary failure');
