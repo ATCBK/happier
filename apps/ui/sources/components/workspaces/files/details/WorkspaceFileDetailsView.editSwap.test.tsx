@@ -90,6 +90,42 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); portalBoundary?.restore(); vi.unstubAllGlobals(); });
 
 describe('File page View → Edit swap', () => {
+    it('restores a clean retained Edit selection after the File scene remounts', async () => {
+        const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+        const { FilePageHeader } = await import('../file/FilePageHeader');
+        const { FileEditorPanel } = await import('../file/editor/FileEditorPanel');
+        const { readWorkspaceFileView } = await import('./workspaceFileDetails/workspaceFileView');
+        let pane!: ReturnType<typeof useAppPaneScope>;
+        let show!: React.Dispatch<React.SetStateAction<boolean>>;
+        function Scene() {
+            pane = useAppPaneScope('session:clean-edit-return');
+            const [visible, setVisible] = React.useState(true);
+            show = setVisible;
+            return visible ? <WorkspaceFileDetailsView scopeId={pane.scopeId} scope={fixture.scope} filePath={filePath}
+                sessionIdForAugmentation={fixture.session.id} /> : null;
+        }
+        const screen = await fixture.render(<ModalProvider><Scene /></ModalProvider>);
+        try {
+            await act(async () => { pane.openDetailsTab(createWorkspaceFileDetailsTab(filePath), { intent: 'pinned' }); });
+            await vi.waitFor(() => expect(screen.findByType(FilePageHeader).props.edit?.kind).toBe('edit'));
+            await act(async () => { screen.findByType(FilePageHeader).props.edit.onPress(); });
+            await vi.waitFor(() => expect(screen.findAllByType(FileEditorPanel)).toHaveLength(1));
+            expect(readWorkspaceFileView(pane.scopeState?.details.tabState[`file:${filePath}`]).mode).toBe('edit');
+            await act(async () => { show(false); });
+            await act(async () => { show(true); });
+            await vi.waitFor(() => expect(screen.findAllByType(FileEditorPanel)).toHaveLength(1));
+            expect(screen.findByType(FileEditorPanel).props.value).toBe(svg);
+            // Explicit Done chooses View; returning must not reopen an editor the person closed.
+            await act(async () => { await screen.findByType(FilePageHeader).props.editor.onDone(); });
+            expect(screen.findAllByType(FileEditorPanel)).toHaveLength(0);
+            await act(async () => { show(false); });
+            await act(async () => { show(true); });
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            expect(screen.findAllByType(FileEditorPanel)).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
     it('replaces settled attribution with the live writing note even with Track off, then restores it on settlement', async () => {
         const { createReducer } = await import('@happier-dev/session-core/reducer');
         const message = createToolCallMessageFixture({ id: 'writing-header', tool: { id: 'writing-header', name: 'Patch',

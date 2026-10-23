@@ -950,6 +950,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         scopeKey: JSON.stringify([scope?.serverId, editorAccountScope?.accountId, props.scopeId, filePath]),
         serverId: scope?.serverId ?? '', onExecuted: refreshAll,
     });
+    const stopEditing = React.useCallback(() => {
+        if (fileView.mode === 'edit') patchFileView({ mode: 'file' });
+    }, [fileView.mode, patchFileView]);
     const editorState = useWorkspaceFileEditorState({
         scope: scope ?? { serverId: 'unknown', machineId: 'unknown', rootPath: '/' },
         accountId: editorAccountScope?.accountId ?? null, filePath, displayMode,
@@ -963,6 +966,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         filesEditorAutoSave: filesEditorAutoSave === true,
         filesEditorChangeDebounceMs: typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : 0,
         mountedRef, refreshAll, readFileForSave, publishSavedFile, persistedDraft: persistedDraft ?? null, persistDraft,
+        initialEditing: fileView.mode === 'edit', onStopEditing: stopEditing,
         panePersistenceFailed: pane.persistenceFailed, agentName: editorAttribution.agentName,
         requestApproval: approval.requestApproval,
     });

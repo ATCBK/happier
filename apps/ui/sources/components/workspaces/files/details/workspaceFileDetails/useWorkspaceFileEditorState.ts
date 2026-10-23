@@ -36,6 +36,9 @@ type Input = Readonly<{
     refreshAll(): Promise<void>; readFileForSave?(): Promise<WorkspaceFileDetailsFileContent | null>;
     publishSavedFile?(value: { text: string; hash: string }): void;
     persistedDraft?: WorkspaceFileEditorDraft | null; persistDraft?(draft: WorkspaceFileEditorDraft | null): void;
+    /** Restore the selected mode without persisting a clean buffer as a dirty draft. */
+    initialEditing?: boolean;
+    onStopEditing?(): void;
     panePersistenceFailed?: boolean;
     /** The writing agent's display name, for the Undo notice's words only. */
     agentName?: string | null;
@@ -84,7 +87,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const [initialLine, setInitialLine] = React.useState<number>();
     // The reader's top row when Edit started from View, so the editor opens on the same view (P4-R10).
     const initialTop = React.useRef<WorkspaceFileEditStart['top']>(undefined);
-    const [pendingStart, setPendingStart] = React.useState(false);
+    const [pendingStart, setPendingStart] = React.useState(input.initialEditing === true && draft?.isEditingFile !== true);
     const editorHandleRef = React.useRef<TextEditorHandle | null>(null);
     const saving = React.useRef<AbortController | null>(null);
     const rereadAfterSave = React.useRef<Promise<void> | null>(null);
@@ -141,7 +144,8 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         editorHandleRef.current = null; supersededDisk.current = null; setAside.current = null;
         refusalRef.current = draft && input.unreachable ? { kind: 'unreachable' } : null; setRefusal(refusalRef.current);
         setIsSavingEdits(false); setSavedAtMs(null); setDraftPersistenceFailed(false);
-        setPendingStart(false); setInitialLine(undefined); initialTop.current = undefined; setEditorResetKey(key => key + 1);
+        setPendingStart(input.initialEditing === true && draft?.isEditingFile !== true);
+        setInitialLine(undefined); initialTop.current = undefined; setEditorResetKey(key => key + 1);
     }
     React.useEffect(() => { liveValue.publish(text.current); }, [liveValue, ownerKey]);
     React.useEffect(() => () => {
@@ -405,6 +409,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         if (!isCurrentOwner()) return; retireUndo(); autoSave.cancel(); publishDebounce.cancel();
         editing.current = false; setIsEditingFile(false); setPendingStart(false); backToEditing();
         reseed(latest.current.fileText ?? baseRef.current.text ?? ''); setEditorDirty(false); updateRefusal(null); persist();
+        latest.current.onStopEditing?.();
     }, [autoSave, backToEditing, isCurrentOwner, persist, publishDebounce, reseed, retireUndo, updateRefusal]);
     const doneEditingFile = React.useCallback(async () => {
         if (!isCurrentOwner() || !editing.current || saving.current) return;
@@ -413,6 +418,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         onEditorChange(editorHandleRef.current?.getValue() ?? text.current);
         if (text.current !== baseRef.current.text) return;
         retireUndo(); editing.current = false; setIsEditingFile(false); persist();
+        latest.current.onStopEditing?.();
     }, [isCurrentOwner, onEditorChange, persist, retireUndo]);
     const startComparison = React.useCallback(() => {
         void (async () => {
