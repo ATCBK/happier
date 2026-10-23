@@ -138,6 +138,9 @@ export type RuntimeTranscriptProjectionResult =
 // projection and its active stream writer. Retain exact live receipts beside
 // the committed-ID baseline so a joining delivery admission can recheck them.
 type RuntimeTranscriptProjectionParams = Parameters<typeof projectRuntimeTranscriptEvent>[0];
+type AdmittedRuntimeTranscriptProjectionParams = Omit<RuntimeTranscriptProjectionParams, 'event'> & Readonly<{
+  event: AgentSessionRuntimeEvent;
+}>;
 type CommittedNativeTranscript = Readonly<{
   role: 'assistant' | 'reasoning';
   sidechainId: string | null;
@@ -277,12 +280,17 @@ export function createRuntimeTranscriptProjector(): (
     missingResultCreatedAtMs?: number;
   }>();
   return (input) => {
-    const { state, params } = bindSessionTranscriptProjection(input);
-    const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
-    if (!parsed.success || parsed.data.sessionId !== params.session.sessionId) {
-      return projectRuntimeTranscriptEvent(params);
+    const bound = bindSessionTranscriptProjection(input);
+    const { state } = bound;
+    const parsed = AgentSessionRuntimeEventSchema.safeParse(bound.params.event);
+    if (!parsed.success) {
+      return enqueueSessionTranscriptProjection(state, async () => ({ projected: false, reason: 'unsupported_event' }));
     }
     const event = parsed.data;
+    const params = { ...bound.params, event };
+    if (event.sessionId !== params.session.sessionId) {
+      return enqueueSessionTranscriptProjection(state, () => projectRuntimeTranscriptEventNow(params));
+    }
     // Native cancellation is already authoritative. Publish its marker before
     // joining earlier transcript writes, while retaining their ordered drain.
     const cancellationMarker = event.kind === 'turn-cancelled'
@@ -640,23 +648,23 @@ export function projectRuntimeTranscriptEvent(params: Readonly<{
 }>): Promise<RuntimeTranscriptProjectionResult> {
   const bound = bindSessionTranscriptProjection(params);
   const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
-  const cancellationMarker = parsed.success && parsed.data.sessionId === params.session.sessionId
+  if (!parsed.success) {
+    return enqueueSessionTranscriptProjection(bound.state, async () => ({ projected: false, reason: 'unsupported_event' }));
+  }
+  const admitted = { ...bound.params, event: parsed.data };
+  const cancellationMarker = parsed.data.sessionId === params.session.sessionId
     && parsed.data.kind === 'turn-cancelled'
     ? commitRuntimeTurnCancellation(bound.params, parsed.data) : undefined;
   void cancellationMarker?.catch(() => undefined);
   return enqueueSessionTranscriptProjection(bound.state,
-    () => projectRuntimeTranscriptEventNow(bound.params, cancellationMarker));
+    () => projectRuntimeTranscriptEventNow(admitted, cancellationMarker));
 }
 
 async function projectRuntimeTranscriptEventNow(
-  params: RuntimeTranscriptProjectionParams,
+  params: AdmittedRuntimeTranscriptProjectionParams,
   cancellationMarker?: Promise<TranscriptMessageCommitResult>,
 ): Promise<RuntimeTranscriptProjectionResult> {
-  const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
-  if (!parsed.success) {
-    return { projected: false, reason: 'unsupported_event' };
-  }
-  const event = parsed.data;
+  const event = params.event;
   if (event.sessionId !== params.session.sessionId) {
     return { projected: false, reason: 'session_mismatch' };
   }
