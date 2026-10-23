@@ -13,7 +13,7 @@ import { expandHome } from '../paths/canonical_home.mjs';
 import { applyStackInfraProcessKind } from './stack_process_kind.mjs';
 export { applyStackInfraProcessKind };
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { inspectDependencyRefresh, resolveDependencyInstallRoot, resolveLockedInstallEnv, withDependencyRefresh } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, resolveDependencyInstallRoot, resolveLockedInstallEnv, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -446,7 +446,7 @@ async function readPackageJsonIfExists(pkgJsonPath) {
   return await readJson(pkgJsonPath);
 }
 
-export async function ensureServerGeneratedProviderOutputs(componentDir, installDir, { quiet = false, env: envIn, pm: pmIn } = {}) {
+export async function ensureServerGeneratedProviderOutputs(componentDir, installDir, { quiet = false, env: envIn, pm: pmIn, checkOnly = false, signal } = {}) {
   const componentPkgJsonPath = join(componentDir, 'package.json');
   const componentPkg = await readPackageJsonIfExists(componentPkgJsonPath);
   if (componentPkg?.name !== '@happier-dev/server') {
@@ -456,30 +456,38 @@ export async function ensureServerGeneratedProviderOutputs(componentDir, install
     return;
   }
 
-  const env = pmIn
+  const preparedEnv = pmIn
     ? (envIn ?? process.env)
     : await preparePmEnv(installDir, envIn ?? process.env);
+  // A worker's installed tree serves every server provider, even when this
+  // particular caller is preparing a single-provider runtime.
+  const env = { ...preparedEnv, HAPPIER_BUILD_DB_PROVIDERS: 'all' };
   const pm = pmIn ?? await getComponentPm(installDir, env);
-  const stdio = quiet ? 'ignore' : 'inherit';
-  if (!quiet) {
-    // eslint-disable-next-line no-console
-    console.log('[local] checking happier-server Prisma provider outputs...');
-  }
-
-  if (pm.name === 'pnpm') {
-    await ensurePnpmReady({ dir: installDir, env, quiet, pm });
-    await runPm(pm, ['--filter', '@happier-dev/server', 'run', '--silent', 'generate:providers'], {
-      cwd: installDir,
-      stdio,
-      env,
+  const invoke = async (check, childEnv) => {
+    const args = pm.name === 'pnpm'
+      ? ['--filter', '@happier-dev/server', 'run', '--silent', 'generate:providers']
+      : ['run', '-s', 'generate:providers'];
+    await runPm(pm, [...args, ...(check ? ['--check'] : [])], {
+      cwd: pm.name === 'pnpm' ? installDir : componentDir,
+      stdio: check || quiet ? 'ignore' : 'inherit', env: childEnv, signal,
     });
+  };
+  // The server generator owns every freshness decision, including its source
+  // stamps and patched private runtime copies. Healthy checks remain readers.
+  try {
+    await withDependencyConsumption({ installDir, env, signal }, readEnv => invoke(true, readEnv));
     return;
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (checkOnly) throw error;
   }
-
-  await runPm(pm, ['run', '-s', 'generate:providers'], {
-    cwd: componentDir,
-    stdio,
-    env,
+  await withDependencyRefreshLock({ installDir, env, signal }, async ({ lockPath, owner }) => {
+    const writerEnv = resolveLockedInstallEnv(env, { lockPath, owner });
+    try { await invoke(true, writerEnv); return; } catch { signal?.throwIfAborted(); }
+    if (!quiet) console.log('[local] regenerating stale happier-server Prisma provider outputs...');
+    // Generation replaces client files, not dependency packages. Loaded servers
+    // keep their client; no long-lived Stack retirement is needed for this write.
+    await invoke(false, writerEnv);
   });
 }
 
@@ -691,14 +699,14 @@ async function ensureComponentDependenciesInstalled(
     || (await inspectUiPostinstallOutputs(sharedUiDir, installDir, { env })).length > 0
   );
   const guardedDependencyReadyAction = onDependenciesReady || prepareComponentOutputs || needsSharedUiRepair
-    ? async () => {
+    ? async ({ env: readyEnv = env } = {}) => {
         await ensureCanonicalPnpmReady();
         // CLI, server and Stack callers share UI's installed dependencies too.
         // Inspection is read-only when healthy; repairs remain under admission.
         if (sharedUiDir) await ensureUiPostinstallOutputs(sharedUiDir, installDir, { quiet, env, pm });
-        if (onDependenciesReady) await onDependenciesReady();
+        if (onDependenciesReady) await onDependenciesReady({ env: readyEnv });
         if (prepareComponentOutputs) {
-          await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
+          await ensureComponentPrerequisites(componentDir, label, { quiet, env: readyEnv, pm });
         }
       }
     : null;

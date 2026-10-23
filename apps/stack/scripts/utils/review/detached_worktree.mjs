@@ -15,14 +15,14 @@ function defaultNonce() {
   return `${process.pid}-${Date.now()}-${rand}`;
 }
 
-export function computeDetachedWorktreeDir({ repoRootDir, label, headCommit, nonce } = {}) {
+export function computeDetachedWorktreeDir({ repoRootDir, worktreesRoot, label, headCommit, nonce } = {}) {
   const root = String(repoRootDir ?? '').trim();
   if (!root) throw new Error('[review] computeDetachedWorktreeDir: missing repoRootDir');
 
   const safeLabel = sanitizeLabel(label);
   const short = String(headCommit ?? '').slice(0, 12);
   const n = String(nonce ?? defaultNonce()).trim();
-  return join(root, '.project', 'review-worktrees', `${safeLabel}-${short}-${n}`);
+  return join(worktreesRoot ?? join(root, '.project', 'review-worktrees'), `${safeLabel}-${short}-${n}`);
 }
 
 /**
@@ -33,13 +33,13 @@ export function computeDetachedWorktreeDir({ repoRootDir, label, headCommit, non
  *   and left behind a directory, or when multiple review runs happen in parallel.
  * - We do best-effort cleanup even if `fn` throws.
  */
-export async function withDetachedWorktree({ repoDir, headCommit, label, env, nonce }, fn) {
+export async function withDetachedWorktree({ repoDir, headCommit, label, env, nonce, worktreesRoot: parentDir }, fn) {
   const root = (await runCapture('git', ['rev-parse', '--show-toplevel'], { cwd: repoDir, env })).toString().trim();
   if (!root) throw new Error('[review] failed to resolve git toplevel');
 
-  const worktreesRoot = join(root, '.project', 'review-worktrees');
+  const worktreesRoot = parentDir ?? join(root, '.project', 'review-worktrees');
   await ensureDir(worktreesRoot);
-  const dir = computeDetachedWorktreeDir({ repoRootDir: root, label, headCommit, nonce });
+  const dir = computeDetachedWorktreeDir({ repoRootDir: root, worktreesRoot, label, headCommit, nonce });
 
   // Extremely defensive: should not happen with nonced dirs, but avoid surprising errors.
   if (existsSync(dir)) {

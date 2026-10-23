@@ -49,6 +49,14 @@ import {
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
 
+test('declaration emission uses its measured worker envelope instead of a package-dist reservation', { skip: process.platform === 'win32' }, () => {
+  const expected = 4_022_016 + 1_608_848;
+  assert.equal(commandPolicy.resolveHeavyweightMemoryFloorKiB('declaration-emit'), expected);
+  const result = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nheavyweight_memory_floor_kib declaration-emit worker`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(Number(result.stdout), expected);
+});
+
 test('managed pnpm remains visible to remote commands without dependency bootstrap', {
   skip: process.platform === 'win32' ? 'Exercises the POSIX worker executable boundary' : false,
 }, async t => {
@@ -78,6 +86,47 @@ test('plugin source-resolving Vitest uses source preparation in both dispatchers
       'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
     assert.equal(native.status, 0, native.stderr);
     assert.equal(native.stdout, 'source-test');
+  }
+});
+
+test('server Vitest configs use source preparation without CLI publication custody in both dispatchers', async t => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const cwd = join(root, 'apps/server');
+  const configs = readdirSync(cwd).filter(name => /^vitest(?:\.[^.]+)*\.config\.ts$/u.test(name));
+  assert.ok(configs.includes('vitest.dbcontract.config.ts'));
+  const fixture = await createTempFixture(t, { prefix: 'server-source-config-policy-' });
+  const artifact = fixture.path('policy.sh');
+  await writeFile(artifact, renderNativeCommandPolicy());
+  const { prepareRemoteValidationWorkspace } = await import('./remote_validation_preparation.mjs');
+  const lockPath = fixture.path('.project/tmp/cli-dist-build.lock');
+  await withWorkspaceBundleLock(async () => {
+    for (const config of configs) {
+      for (const configArgs of [['--config', config], [`--config=./${config}`]]) {
+        const args = ['vitest', 'run', ...configArgs];
+        const policy = resolveRemoteCommandPolicy(args, { cwd });
+        assert.equal(policy.kind, 'source-test', config);
+        assert.equal(policy.workspaceLock, '', config);
+        const preparation = await prepareRemoteValidationWorkspace({
+          repoDir: fixture.root, componentRelativeDir: policy.component, validationKind: policy.kind,
+          requiredTools: policy.requiredTools,
+        });
+        assert.deepEqual(preparation.skipped, ['workspace-source-test']);
+        if (process.platform === 'win32') continue;
+        const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/apps/server; shift 2; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_kind" "$policy_workspaceLock"',
+          'policy', artifact, root, ...args], { encoding: 'utf8' });
+        assert.equal(native.status, 0, native.stderr);
+        assert.equal(native.stdout, 'source-test,', config);
+      }
+    }
+  }, { lockPath });
+  for (const override of ['--config=unknown.config.ts', '--config=../cli/vitest.config.ts', '--config=vitest.dbcontract.config.ts --root=../cli']) {
+    const args = ['vitest', 'run', ...override.split(' ')];
+    assert.equal(resolveRemoteCommandPolicy(args, { cwd }).kind, 'runtime', override);
+    if (process.platform === 'win32') continue;
+    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/apps/server; shift 2; resolve_native_command_policy "$@"; printf "%s" "$policy_kind"',
+      'policy', artifact, root, ...args], { encoding: 'utf8' });
+    assert.equal(native.status, 0, native.stderr);
+    assert.equal(native.stdout, 'runtime', override);
   }
 });
 

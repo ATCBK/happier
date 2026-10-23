@@ -39,7 +39,8 @@ test('wait diagnostics report live lock holders from the acquisition snapshot', 
     await writeFile(lockPath, JSON.stringify(kind === 'reader'
       ? { ...deadOwner, priority: 'reader', readers: [deadOwner, ...liveReaders] }
       : { ...liveOwner, priority: 'writer' }));
-    t.mock.method(Date, 'now', () => nowMs);
+    let clockNowMs = nowMs;
+    t.mock.method(Date, 'now', () => clockNowMs);
     const read = fs.readFileSync;
     let reads = 0;
     t.mock.method(fs, 'readFileSync', (path, ...args) => {
@@ -61,7 +62,7 @@ test('wait diagnostics report live lock holders from the acquisition snapshot', 
       onWait(event) {
         observed = event;
         unlinkSync(lockPath);
-        t.mock.method(Date, 'now', () => nowMs + 60000);
+        clockNowMs = nowMs + 60000;
         const readsBeforeNotice = reads;
         notice(event);
         notifierReread = reads !== readsBeforeNotice;

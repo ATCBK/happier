@@ -17,7 +17,7 @@ import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
 import { killProcessTree, run } from '../proc/proc.mjs';
 import { getExpoStatePaths, writePidState } from './expo.mjs';
 import { expoExec, expoSpawn } from './command.mjs';
-import { EXPO_DEPENDENCY_BARRIER_VERSION } from './dependency_barrier.mjs';
+import { EXPO_DEPENDENCY_BARRIER_VERSION } from '../proc/dependency_consumers.mjs';
 
 for (const invocation of ['spawn', 'exec']) test(`development Metro automatically refreshes stale installed dependencies (${invocation})`, async t => {
   const fixture = await fixtureFor(t);
@@ -29,7 +29,7 @@ for (const invocation of ['spawn', 'exec']) test(`development Metro automaticall
     `else fs.appendFileSync(${JSON.stringify(callsPath)}, process.argv.slice(2).join(' ') + '\\n');`,
   ].join('\n'));
   await writeFile(fixture.path('pnpm-lock.yaml'), '# new dependencies\n');
-  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   const expoPath = fixture.path('node_modules', '.bin', 'expo');
   await writeFile(expoPath, `#!${process.execPath}\nconsole.log('served');\n`);
   await chmod(expoPath, 0o755);
@@ -62,7 +62,7 @@ async function fixtureFor(t, { baseEnv = process.env } = {}) {
   }));
   await writeFile(fixture.path('package.json'), '{"private":true,"workspaces":["apps/*"]}\n');
   await writeFile(fixture.path('pnpm-lock.yaml'), '# fixture\n');
-  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await mkdir(fixture.path('node_modules', '.bin'), { recursive: true });
   const patchOutput = fixture.path('node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js');
   await mkdir(join(patchOutput, '..'), { recursive: true });
@@ -129,9 +129,10 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
   for (const source of [
     'proc/dependency_refresh.mjs', 'proc/jsonOwnerFileLock.mjs', 'proc/pids.mjs',
     'proc/workspace_package_manifests.mjs', 'proc/ui_postinstall.mjs', 'proc/workspaceBuildWaitNotifier.mjs',
-    'expo/dependency_barrier.mjs', 'fs/fs.mjs', 'fs/json.mjs',
+    'proc/dependency_consumers.mjs', 'fs/fs.mjs', 'fs/json.mjs', 'env/read.mjs', 'env/dotenv.mjs',
     'paths/paths.mjs', 'paths/canonical_home.mjs',
-    'dev_targets/stack_paths.mjs',
+    'dev_targets/stack_paths.mjs', 'stack/runtime_processes.mjs',
+    '../runtime/shared/pending_source_start.mjs',
     '../../../../packages/cli-common/fileChangeObserver.mjs',
     '../../../../packages/cli-common/processInstance.mjs',
   ]) {
@@ -142,6 +143,10 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
   const installDir = fixture.path('install');
   await mkdir(join(installDir, 'node_modules'), { recursive: true });
   await writeFile(join(installDir, 'package.json'), '{"private":true}\n');
+  const stoppedStack = fixture.path('stacks', 'stopped');
+  await mkdir(stoppedStack, { recursive: true });
+  await writeFile(join(stoppedStack, 'env'), `HAPPIER_STACK_REPO_DIR=${installDir}\n`);
+  await writeFile(join(stoppedStack, 'stack.runtime.json'), JSON.stringify({ ownerPid: null, processes: { daemonPid: null } }));
   const { withDependencyRefresh: coldRefresh } = await import(pathToFileURL(join(sourceDir, 'proc', 'dependency_refresh.mjs')).href);
   const result = await coldRefresh({ installDir, env: {
     ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }), HAPPIER_STACK_ENV_FILE: '',
@@ -248,7 +253,7 @@ test('bootstrap cache context discovers target-owned legacy Metro before changin
   }, async () => assert.fail('warm readiness must not install'));
   assert.equal(child.exitCode, null, 'read-only warm admission must preserve even a legacy serving consumer');
   await writeFile(fixture.path('pnpm-lock.yaml'), '# changed\n');
-  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await withDependencyRefresh({
     installDir: fixture.root, env: bootstrapEnv, refreshExisting: false,
     onDependenciesReady: async () => {},
@@ -290,7 +295,7 @@ test(`dependency mutation cannot borrow another stack identity to stop its servi
   const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
   const priorMarker = await readFile(markerPath, 'utf8');
   await writeFile(fixture.path('pnpm-lock.yaml'), '# changed\n');
-  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   let mutated = false;
   await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env: fixture.env }, async () => {
     mutated = true;
@@ -385,7 +390,7 @@ for (const gracefulExit of [false, true]) test(`managed Metro stops during depen
   await writeFile(fixture.env.npm_execpath,
     "if (process.argv[2] === '--version') console.log('1.22.22');\n");
   await writeFile(fixture.path('pnpm-lock.yaml'), '# automatic owning refresh\n');
-  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await ensureDepsInstalled(fixture.uiDir, 'development stack', { quiet: true,
     env: { ...fixture.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '0', HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1' } });
   assert.notEqual(second.exitCode ?? second.signalCode, null, 'automatic refresh must stop its owned consumer');

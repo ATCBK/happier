@@ -1,11 +1,13 @@
 import { readdir } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { readJsonIfExists } from '../fs/json.mjs';
-import { getDefaultAutostartPaths, getStacksStorageRoot, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
-import { resolveDependencyInstallRoot } from '../proc/dependency_refresh.mjs';
-import { isPidAlive } from '../proc/pids.mjs';
+import { getDefaultAutostartPaths, getRepoDir, getStacksStorageRoot, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
+import { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
+import { isPidAlive } from './pids.mjs';
 import { resolveRemoteStackStorageDir } from '../dev_targets/stack_paths.mjs';
+import { readEnvValueFromFile } from '../env/read.mjs';
+import { hasLiveStackRuntimeProcesses } from '../stack/runtime_processes.mjs';
 
 export const EXPO_DEPENDENCY_BARRIER_VERSION = 1;
 
@@ -25,10 +27,11 @@ async function directories(path) {
   }
 }
 
-// Expo's existing PID state is the consumer inventory. Include both the
-// canonical storage root and the explicit worker env-file base; no second PID
-// registry or port-based termination is involved.
-export async function stopExpoDependencyConsumers({ installDir, env = process.env }) {
+// Existing Stack, pending-start and Expo state are the consumer inventory.
+// Registration takes the dependency reader lease, so this inspection under
+// writer custody cannot race a new consumer's publication. Pending starts
+// refuse mutation; already-running runtimes supply restart advice only.
+export async function prepareDependencyConsumersForRefresh({ installDir, env = process.env }) {
   const baseDirs = new Set(await directories(getStacksStorageRoot(env)));
   // Both remote bootstrap dispatchers provide cache=<targetHome>/cache even
   // when no running Stack env is inherited. Consume that same target context
@@ -45,9 +48,25 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
   const stackName = String(env.HAPPIER_STACK_STACK ?? '').trim();
   const cliHomeDir = String(env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim();
   const consumers = [];
+  const stacksNeedingRestart = new Set();
   const seen = new Set();
   const targetRoot = resolve(installDir);
   for (const baseDir of baseDirs) {
+    const envPath = explicitEnvFile && resolve(dirname(explicitEnvFile)) === resolve(baseDir)
+      ? explicitEnvFile : join(baseDir, 'env');
+    const repoDir = await readEnvValueFromFile(envPath, 'HAPPIER_STACK_REPO_DIR');
+    if (repoDir && resolve(resolveDependencyInstallRoot(getRepoDir(baseDir, { ...env, HAPPIER_STACK_REPO_DIR: repoDir }))) === targetRoot) {
+      const { readPendingSourcePreparation } = await import('../../runtime/shared/pending_source_start.mjs');
+      const pending = await readPendingSourcePreparation({ stackBaseDir: baseDir });
+      const state = await readJsonIfExists(join(baseDir, 'stack.runtime.json'));
+      if (pending) {
+        throw Object.assign(new Error(`Dependency refresh cannot rewrite the installed tree while Stack ${basename(baseDir)} is starting; retry after it reaches readiness.`),
+          { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+      }
+      if (isPidAlive(Number(state?.ownerPid)) || (state && hasLiveStackRuntimeProcesses(state))) {
+        stacksNeedingRestart.add(basename(baseDir));
+      }
+    }
     for (const kind of ['expo-dev', 'mobile']) {
       for (const stateDir of await directories(join(baseDir, kind))) {
         const state = await readJsonIfExists(join(stateDir, 'expo.state.json'));
@@ -87,7 +106,7 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
   // Validate every consumer before stopping any; a legacy sibling must reject
   // the whole mutation while every current reader still has its admitted tree.
   for (const { pid, fingerprint } of consumers) {
-    const { killProcessGroupOwnedByStack } = await import('../proc/ownership.mjs');
+    const { killProcessGroupOwnedByStack } = await import('./ownership.mjs');
     const stopped = await killProcessGroupOwnedByStack(pid, {
       stackName,
       envPath: explicitEnvFile,
@@ -99,4 +118,5 @@ export async function stopExpoDependencyConsumers({ installDir, env = process.en
       throw restartRequired(`Cannot stop verified Expo pid=${pid}: ${stopped.reason}.`);
     }
   }
+  return { stacksNeedingRestart: [...stacksNeedingRestart].sort() };
 }

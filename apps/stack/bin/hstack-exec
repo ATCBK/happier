@@ -236,7 +236,7 @@ heavyweight_try_reentrant_admission() {
     case "$heavyweight_legacy_class" in ''|*[!a-z-]*) return 1 ;; esac
     (umask 077; mkdir -p -- "$heavyweight_admission_root/owners") || return 1
     exec 9>>"$heavyweight_admission_root/lock" || return 1
-    if [ "${heavyweight_no_wait-0}" = 1 ]; then
+    if [ "${heavyweight_prior_workspace_lease-0}" = 1 ]; then
       # Adoption retains a live ancestor's reservation. It must not wait on
       # the native mutex while that ancestor's workspace lease is held.
       flock -n 9 || { exec 9>&-; heavyweight_decline_before_dispatch "admission-decision-in-progress lock=$heavyweight_admission_root/lock"; }
@@ -648,11 +648,12 @@ heavyweight_release_lock() {
 }
 
 heavyweight_acquire_lock() {
-  if [ "${heavyweight_no_wait-0}" = 1 ]; then
+  if [ "${heavyweight_prior_workspace_lease-0}" = 1 ]; then
     flock -n 9 2>/dev/null || heavyweight_decline_before_dispatch "admission-decision-in-progress lock=$heavyweight_admission_root/lock"
   else
-    # Both admission paths join the same interruptible kernel queue before
-    # trying any new workspace lease. No lease is held across this wait.
+    # AUTO's --no-wait applies to capacity, not another decision in progress.
+    # Replacing a mutex waiter restarts placement and loses its queue age.
+    # Join the existing interruptible kernel queue before taking new leases.
     flock 9 &
     heavyweight_child_pid=$!
     wait "$heavyweight_child_pid"
@@ -921,7 +922,10 @@ run_heavyweight_admission() {
   heavyweight_count_entries() {
     heavyweight_active_count=0
     for heavyweight_entry in "$heavyweight_owners_dir"/*; do
-      [ -d "$heavyweight_entry" ] && heavyweight_active_count=$((heavyweight_active_count + 1))
+      [ -d "$heavyweight_entry" ] || continue
+      IFS=' ' read -r heavyweight_entry_pid heavyweight_entry_token 2>/dev/null < "$heavyweight_entry/process" || continue
+      heavyweight_reservation_is_live "$heavyweight_entry_pid" "$heavyweight_entry_token" || continue
+      heavyweight_active_count=$((heavyweight_active_count + 1))
     done
     heavyweight_waiting_count=0
     for heavyweight_entry in "$heavyweight_waiters_dir"/*; do
@@ -1687,7 +1691,7 @@ if [ -n "${HAPPIER_EXEC_CONFIG_PATH-}" ]; then
     && [ ! "$candidate_config" -nt "$candidate_projection" ] \
     && [ ! "$projection_generator" -nt "$candidate_projection" ] \
     && [ ! "$projection_command_policy" -nt "$candidate_projection" ]; then
-    unset projection_config_path
+    unset projection_config_path configured_target_names
     . "$candidate_projection" || {
       printf '%s\n' '[preferred-execution] explicit execution projection could not be loaded' >&2
       exit 1
@@ -1717,7 +1721,7 @@ for candidate_config in "$storage_root"/repo-"$repo_token"-*/dev-targets.json; d
     && [ ! "$projection_command_policy" -nt "$candidate_projection" ]; then
     # The projection is generated from the validated canonical config and is
     # private to the stack directory. It is data for this native dispatcher.
-    unset projection_config_path
+    unset projection_config_path configured_target_names
     . "$candidate_projection" || run_local_without_target_config "$@"
     if [ "${HSTACK_EXEC_PROJECTION_VERSION-}" = 2 ] && [ "${projection_repo_root-}" = "$repo_root" ]; then
       if [ -n "${projection_config_path-}" ] && ! projection_uses_config "$candidate_config"; then
@@ -1742,7 +1746,7 @@ if [ -z "$projection_path" ]; then
     candidate_projection=$(dirname -- "$candidate_config")/dev-target-exec-v1.sh
     [ -r "$candidate_projection" ] || continue
     if (
-      unset projection_repo_root
+      unset projection_repo_root configured_target_names
       . "$candidate_projection" && [ "${projection_repo_root-}" = "$repo_root" ]
     ); then
       if [ "$candidate_config" -nt "$candidate_projection" ] \
@@ -1751,7 +1755,7 @@ if [ -z "$projection_path" ]; then
         node "$projection_generator" "$candidate_config" "$candidate_projection" "$repo_root" || exit $?
         restart_launcher "$@"
       fi
-      unset projection_config_path
+      unset projection_config_path configured_target_names
       . "$candidate_projection" || run_local_without_target_config "$@"
       if [ "${HSTACK_EXEC_PROJECTION_VERSION-}" != 2 ] \
         || { [ -n "${projection_config_path-}" ] && ! projection_uses_config "$candidate_config"; }; then
@@ -1787,7 +1791,34 @@ if [ -n "$command_repo_root" ]; then
   config_path="$(dirname -- "$config_path")/commands-${command_repo_root##*/}/dev-targets.json"
   projection_path="$(dirname -- "$config_path")/dev-target-exec-v1.sh"
   repo_root=$command_repo_root
+  unset configured_target_names
   . "$projection_path" || exit 1
+fi
+
+runtime_skip_targets=
+if [ -n "${HSTACK_EXEC_RUNTIME_SKIP_TARGETS-}" ]; then
+  # Validate exclusions against the full inventory only when it is consumed.
+  # Older version-2 projections regenerate through their existing producer,
+  # including future-dated files; ordinary dispatch keeps its native hot path.
+  if [ "${configured_target_names+x}" != x ]; then
+    node "$projection_generator" "$config_path" "$projection_path" "$repo_root" || exit $?
+    restart_launcher "$@"
+  fi
+  runtime_skip_targets=$(printf '%s' "$HSTACK_EXEC_RUNTIME_SKIP_TARGETS" | LC_ALL=C tr ',[:space:]' ' ')
+  (
+    # Target names are data. Disable pathname expansion only while splitting the
+    # normalized list, preserving the launcher's caller-visible shell options.
+    set -f
+    for runtime_skip_target in $runtime_skip_targets; do
+      case " $configured_target_names " in
+        *" $runtime_skip_target "*) ;;
+        *)
+          printf '[preferred-execution] unknown target in HSTACK_EXEC_RUNTIME_SKIP_TARGETS: %s\n' "$runtime_skip_target" >&2
+          exit 64
+          ;;
+      esac
+    done
+  ) || exit $?
 fi
 
 if { [ -n "${CI-}" ] || [ "${command_mode-}" = local ]; } && [ -z "$explicit_target" ]; then
@@ -2143,7 +2174,7 @@ report_insufficient_memory_capacity() {
 probe_target() {
   number=$1
   name=$(value_for_target name "$number")
-  case " ${HSTACK_EXEC_RUNTIME_SKIP_TARGETS-} " in
+  case " $runtime_skip_targets " in
     *" $name "*) printf '%s %s 0 - 1 admission-busy\n' "$number" "$name"; return ;;
   esac
   case " ${HSTACK_EXEC_PRE_DISPATCH_EXCLUDED_TARGETS-} " in

@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { resolveStackEnvPath } from '../paths/paths.mjs';
+import { getRepoDir, resolveStackEnvPath } from '../paths/paths.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { isPidAlive, observePidLiveness } from '../proc/pids.mjs';
 import { isPidOwnedByStack } from '../proc/ownership.mjs';
@@ -10,6 +11,11 @@ import { resolveStackOwnedListenPid, STACK_LISTENER_OBSERVATION_TIMEOUT_MS } fro
 import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
 import { normalizeStackRuntimeOwnerStartedAt } from './runtime_owner_incarnation.mjs';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
+import { resolveDependencyInstallRoot, withDependencyConsumption } from '../proc/dependency_refresh.mjs';
+import { readEnvValueFromFile } from '../env/read.mjs';
+import { getStackRuntimeProcessEntries, normalizeProcessInstanceRecord,
+  normalizeRuntimePid, readStackRuntimeProcessMembership } from './runtime_processes.mjs';
+export { getStackRuntimeProcessEntries, getStackRuntimeProcessInstanceFingerprint, hasLiveStackRuntimeProcesses } from './runtime_processes.mjs';
 
 export { isPidAlive };
 
@@ -175,20 +181,6 @@ function deepMerge(a, b) {
   return out;
 }
 
-function normalizeRuntimePid(pid) {
-  const n = Number(pid);
-  return Number.isInteger(n) && n > 1 ? n : null;
-}
-
-function normalizeProcessInstanceRecord(value, pid) {
-  const normalizedPid = normalizeRuntimePid(pid);
-  const recordPid = normalizeRuntimePid(value?.pid);
-  const fingerprint = String(value?.fingerprint ?? '').trim();
-  return normalizedPid && recordPid === normalizedPid && fingerprint
-    ? { pid: normalizedPid, fingerprint }
-    : null;
-}
-
 function observeRuntimeProcessInstance(pid, previous = null) {
   const normalizedPid = normalizeRuntimePid(pid);
   if (!normalizedPid) return null;
@@ -197,16 +189,6 @@ function observeRuntimeProcessInstance(pid, previous = null) {
   const fingerprint = readProcessInstanceFingerprintSync(normalizedPid);
   if (fingerprint) return { pid: normalizedPid, fingerprint };
   return null;
-}
-
-function readStackRuntimeProcessMembership(runtimeState) {
-  const processes = { ...(isPlainObject(runtimeState?.processes) ? runtimeState.processes : {}) };
-  // Target service state belongs to the remote host, but its SSH forward is a
-  // controller-local child and must survive in stop custody until it is retired.
-  for (const [targetName, state] of Object.entries(isPlainObject(runtimeState?.remoteTargets) ? runtimeState.remoteTargets : {})) {
-    processes[`remoteTargets.${targetName}.forwardPid`] = state?.forwardPid ?? null;
-  }
-  return processes;
 }
 
 function reconcileStackRuntimeProcessInstances(runtimeState) {
@@ -246,21 +228,6 @@ function reconcileStackRuntimeProcessInstances(runtimeState) {
     delete next.processInstances;
   }
   return next;
-}
-
-export function getStackRuntimeProcessInstanceFingerprint(runtimeState, key, pid) {
-  const normalizedPid = normalizeRuntimePid(pid);
-  if (!normalizedPid) return null;
-  if (key === 'ownerPid') {
-    return normalizeProcessInstanceRecord(runtimeState?.processInstances?.owner, normalizedPid)?.fingerprint ?? null;
-  }
-  const value = runtimeState?.processInstances?.processes?.[key];
-  if (Array.isArray(value)) {
-    return value
-      .map((record) => normalizeProcessInstanceRecord(record, normalizedPid))
-      .find(Boolean)?.fingerprint ?? null;
-  }
-  return normalizeProcessInstanceRecord(value, normalizedPid)?.fingerprint ?? null;
 }
 
 function normalizeRuntimePort(port) {
@@ -332,47 +299,6 @@ export function createStackDevProxyRuntimePatch({
       fallbackReason: fallbackReason ?? null,
     },
   };
-}
-
-export function getStackRuntimeProcessEntries(runtimeState) {
-  const processes = readStackRuntimeProcessMembership(runtimeState);
-
-  const entries = [];
-  for (const [rawKey, value] of Object.entries(processes)) {
-    const key = String(rawKey);
-    if (/Pid$/.test(key)) {
-      const pid = Number(value);
-      if (Number.isFinite(pid) && pid > 1) {
-        const processInstanceFingerprint = getStackRuntimeProcessInstanceFingerprint(runtimeState, key, pid);
-        entries.push({
-          key,
-          pid,
-          ...(processInstanceFingerprint ? { processInstanceFingerprint } : {}),
-        });
-      }
-      continue;
-    }
-
-    if (/Pids$/.test(key) && Array.isArray(value)) {
-      const seen = new Set();
-      for (const entry of value) {
-        const pid = Number(entry);
-        if (!Number.isFinite(pid) || pid <= 1 || seen.has(pid)) continue;
-        seen.add(pid);
-        const processInstanceFingerprint = getStackRuntimeProcessInstanceFingerprint(runtimeState, key, pid);
-        entries.push({
-          key,
-          pid,
-          ...(processInstanceFingerprint ? { processInstanceFingerprint } : {}),
-        });
-      }
-    }
-  }
-  return entries;
-}
-
-export function hasLiveStackRuntimeProcesses(runtimeState, { isPidAliveImpl = isPidAlive } = {}) {
-  return getStackRuntimeProcessEntries(runtimeState).some(({ pid }) => isPidAliveImpl(pid));
 }
 
 export function resolveStackRuntimeProcessTrustContext({ stackName = '', envPath = '', cliHomeDir = '' } = {}) {
@@ -597,7 +523,25 @@ async function assertNoDifferentLiveRuntimeOwner(existing, { stackName, ownerPid
   }
 }
 
+async function withStackRuntimeDependencyConsumption(statePath, options, consume) {
+  const env = options.env ?? process.env;
+  const configuredRepoDir = await readEnvValueFromFile(join(dirname(statePath), 'env'), 'HAPPIER_STACK_REPO_DIR');
+  const repoDir = getRepoDir(fileURLToPath(new URL('../../../../../', import.meta.url)),
+    configuredRepoDir ? { ...env, HAPPIER_STACK_REPO_DIR: configuredRepoDir } : env);
+  return await withDependencyConsumption({ installDir: resolveDependencyInstallRoot(repoDir), env },
+    custodyEnv => consume({ ...options, env: custodyEnv }));
+}
+
 async function recordStackRuntimeStartUnlocked(
+  statePath,
+  input = {},
+  options = {},
+) {
+  return await withStackRuntimeDependencyConsumption(statePath, options,
+    custodyOptions => recordStackRuntimeStartUnderDependencyCustody(statePath, input, custodyOptions));
+}
+
+async function recordStackRuntimeStartUnderDependencyCustody(
   statePath,
   { stackName, script, ephemeral, ownerPid, ports, adoptedSourceRoles = [], ...rest } = {},
   options = {},
@@ -713,17 +657,17 @@ export async function withStackRuntimeStartClaim(
     const existing = (await readStackRuntimeStateFile(statePath)) ?? {};
     await assertNoDifferentLiveRuntimeOwner(existing, { stackName, ownerPid: null }, options);
     let committed = false;
-    return await fn({
+    return await withStackRuntimeDependencyConsumption(statePath, options, custodyOptions => fn({
       existing,
       recordStart: async (input) => {
         if (committed) {
           throw new Error('[stack] lifecycle owner claim was already committed');
         }
-        const next = await recordStackRuntimeStartUnlocked(statePath, input, options);
+        const next = await recordStackRuntimeStartUnlocked(statePath, input, custodyOptions);
         committed = true;
         return next;
       },
-    });
+    }));
   });
 }
 

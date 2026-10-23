@@ -43,8 +43,9 @@ esac
     try { return await readdir(`${admissionRoot}/${kind}`); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   };
-  const start = (locks, args = ['/bin/sh', '-c', 'printf payload'], admissionClass = 'package-dist') => {
+  const start = (locks, args = ['/bin/sh', '-c', 'printf payload'], admissionClass = 'package-dist', options = []) => {
     const child = spawn('/bin/sh', [launcher, '--heavyweight-admission', `--class=${admissionClass}`, '--machine=worker',
+      ...options,
       ...(locks === null ? [] : [`--workspace-locks=${JSON.stringify(locks)}`]), '--', ...args], { env });
     let stdout = '', stderr = '';
     child.stdout.on('data', value => { stdout += value; });
@@ -62,6 +63,57 @@ esac
   };
   return { ...fixture, launcher, admissionRoot, memory, env, entries, start, readWaiter };
 }
+
+test('AUTO nonblocking capacity contenders queue on the decision mutex and dispatch in order', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 62914560);
+  await mkdir(fixture.admissionRoot, { recursive: true });
+  const mutex = spawn('/usr/bin/flock', [`${fixture.admissionRoot}/lock`, '/bin/sh', '-c', 'printf ready; read release']);
+  let ready = '';
+  mutex.stdout.on('data', value => { ready += value; });
+  const mutexExited = new Promise(resolve => mutex.once('exit', resolve));
+  t.after(async () => { mutex.stdin.end('release\n'); await mutexExited; });
+  await waitForJointAdmission(() => ready === 'ready', mutex, () => ready);
+  const attempts = fixture.path('mutex-attempts');
+  writeFakeBin({ root: fixture.root, name: 'flock', content: `#!/bin/sh
+if [ "$1" != -u ]; then printf '%s\\n' "$PPID" >> '${attempts}'; fi
+exec /usr/bin/flock "$@"
+` });
+  const order = fixture.path('dispatch-order');
+  const runs = [];
+  for (let index = 0; index < 6; index++) {
+    const run = fixture.start(null, ['/bin/sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'payload', String(index), order], 'package-dist', ['--no-wait']);
+    runs.push(run);
+    await waitForJointAdmission(async () => {
+      try { return (await readFile(attempts, 'utf8')).trim().split('\n').length >= index + 1; }
+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    }, run.child, run.stderr);
+  }
+  assert.ok(runs.every(run => run.child.exitCode === null), runs.map(run => run.stderr()).join('\n'));
+  assert.equal((await fixture.entries('waiters')).length, runs.length);
+  mutex.stdin.end('release\n');
+  await mutexExited;
+  for (const run of runs) assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(await readFile(order, 'utf8'), '0\n1\n2\n3\n4\n5\n');
+  assert.deepEqual(await fixture.entries('owners'), []);
+  assert.deepEqual(await fixture.entries('waiters'), []);
+});
+
+test('terminal owner residue does not count as active admission custody', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t, 1);
+  const run = fixture.start(null);
+  await waitForJointAdmission(() => run.stderr().includes('waiting for heavyweight admission'), run.child, run.stderr);
+  const dead = `${fixture.admissionRoot}/owners/2147483647-1`;
+  await mkdir(dead);
+  await writeFile(`${dead}/process`, '2147483647 1\n');
+  await writeFile(`${dead}/class`, 'package-dist\n');
+  // An unknown neighbor prevents the existing narrow reaper's rmdir. It must
+  // be preserved without treating the terminal process as an active workload.
+  await writeFile(`${dead}/retained`, 'neighbor');
+  await writeFile(fixture.memory, '9437184 73400320\n');
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.match(run.stderr(), /admitted heavyweight command.*active=1,/);
+  assert.equal(await readFile(`${dead}/retained`, 'utf8'), 'neighbor');
+});
 
 test('real mixed publisher/plain contention uses one custody worker and drains on release', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
   const fixture = await createJointAdmissionFixture(t, 9437184, { realRetry: true });
@@ -529,7 +581,7 @@ printf 'service 0\\n'
   await assert.rejects(access(marker), { code: 'ENOENT' });
 });
 
-test('a contended admission decision waits in the kernel instead of polling the capacity lock', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+test('a no-wait capacity contender remains cancellable while queued on the decision mutex', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'host-admission-kernel-wait-' });
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
   await mkdir(admissionRoot, { recursive: true });
@@ -552,7 +604,7 @@ test('a contended admission decision waits in the kernel instead of polling the 
   // retry path, not a product admission-pressure wait after a real decision.
   writeFakeBin({ root: fixture.root, name: 'sleep', content: '#!/bin/sh\ntouch "$FIXTURE_POLLING"\nexec /bin/sleep "$@"\n' });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
+  child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
     env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
@@ -573,7 +625,7 @@ test('a contended admission decision waits in the kernel instead of polling the 
   // blocking flock child just as it owns the eventual payload child.
   child.kill('SIGTERM');
   assert.equal(await childExited, 130);
-  child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
+  child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
     env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });

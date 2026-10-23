@@ -8,6 +8,7 @@ heavyweight_memory_floor_kib() {
     source-bundle) heavyweight_policy_floor='10485760' ;;
     dependency-install) heavyweight_policy_floor='6291456' ;;
     package-dist) heavyweight_policy_floor='6291456' ;;
+    declaration-emit) heavyweight_policy_floor='5630864' ;;
     runtime-build) heavyweight_policy_floor='18874368' ;;
     compilation) heavyweight_policy_floor='20971520' ;;
     compilation-ui) heavyweight_policy_floor='20971520' ;;
@@ -386,6 +387,9 @@ native_command_policy_finish() {
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'package-dist' ]; }; then
     policy_heavyClass='package-dist'
   fi
+  if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'declaration-emit' ]; }; then
+    policy_heavyClass='declaration-emit'
+  fi
   if { [ "$policy_admissionWrapper" = '1' ]; } && { [ "$policy_admissionClass" = 'runtime-build' ]; }; then
     policy_heavyClass='runtime-build'
   fi
@@ -419,10 +423,13 @@ native_command_policy_finish() {
   if { [ "$policy_kind" = 'source-test' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_generatorCheck" = '0' ]; } && { [ "$policy_testFileSelected" = '0' ]; }; then
     policy_heavyClass='compilation'
   fi
-  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'apps/server' ]; } && { [ "$policy_config" = 'vitest.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
+  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/ui' ]; } && { [ "$policy_config" = 'vitest.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
-  if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ]; }; then
+  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/server' ]; } && { [ "$policy_config" = 'vitest.config.ts' ] || [ "$policy_config" = 'vitest.dbcontract.config.ts' ] || [ "$policy_config" = 'vitest.externalSessionMaterialize.integration.config.ts' ] || [ "$policy_config" = 'vitest.integration.config.ts' ] || [ "$policy_config" = 'vitest.ui.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
+    policy_kind='source-test'
+  fi
+  if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ] || [ "$policy_heavyClass" = 'declaration-emit' ]; }; then
     policy_localCompile='1'
   fi
   if { [ "$policy_kind" = source-test ] || [ "$policy_component" = apps/cli ]; } && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then

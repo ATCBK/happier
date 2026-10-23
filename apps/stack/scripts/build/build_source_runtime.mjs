@@ -21,7 +21,7 @@ import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } f
 import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
 import { BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH } from '../../../../packages/cli-common/bundledPluginPublicationPolicy.mjs';
 
-import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createCliSourceProjectionResolver, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 
 /** Finite web builds reuse workspace capture, not a second snapshot engine.
@@ -500,6 +500,11 @@ export async function buildSourceRuntimeBundle(options) {
 async function buildSourceRuntimeBundleOnce({ repoDir, outputDir, stackBaseDir, component, reuseSelected = false, serverComponent = 'happier-server-light', dbProvider,
   pending, preparation = pending, env = process.env, signal = pending?.signal, devStartup = false }) {
   repoDir = resolve(repoDir);
+  if (component === 'server') {
+    const { ensureServerGeneratedProviderOutputs } = await import('../utils/proc/pm.mjs');
+    // Prepare before the finite builder takes read custody or captures inputs.
+    await ensureServerGeneratedProviderOutputs(join(repoDir, 'apps', 'server'), repoDir, { env, quiet: true, signal });
+  }
   if (stackBaseDir) {
     stackBaseDir = resolve(stackBaseDir);
     const bundleRoot = join(dirname(stackBaseDir), 'source-bundles');
@@ -775,13 +780,6 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const plugin = {
     name: 'source-runtime-boundaries',
     setup(builder) {
-      if (derivesDaemonProjections) {
-        const path = join(daemonProjectionRoot, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
-        builder.onResolve({ filter: /(?:^|[/\\])generatedBundledPluginManifests(?:\.ts)?$/ }, () => ({path, namespace: 'daemon-projections'}));
-        builder.onLoad({ filter: /.*/, namespace: 'daemon-projections' }, async () => ({
-          contents: await readFile(path, 'utf8'), loader: 'ts', resolveDir: projectDir,
-        }));
-      }
       if (component === 'server') builder.onLoad({ filter: /publicProfileFonts\.ts$/ }, async args => {
         if (args.path !== join(projectDir, 'sources/app/account/profile/render/publicProfileFonts.ts')) return;
         // This physical asset reader belongs to the retained server package,
@@ -832,7 +830,10 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
     chunkNames: `${outputPrefix}/src/chunks/[name]-[hash]`,
     banner: { js: "import { createRequire as __sourceCreateRequire } from 'node:module'; import {fileURLToPath as __sourceFileURLToPath} from 'node:url'; import {dirname as __sourcePathDirname} from 'node:path'; const require = __sourceCreateRequire(import.meta.url); const __sourceFilename = __sourceFileURLToPath(import.meta.url); const __sourceDirname = __sourcePathDirname(__sourceFilename);" },
     define: { __dirname: '__sourceDirname', __filename: '__sourceFilename' },
-    metafile: true, logLevel: 'silent', plugins: [plugin, createWorkspaceSourceResolver({workspacePackages, requireFromProject})],
+    metafile: true, logLevel: 'silent', plugins: [
+      ...(derivesDaemonProjections ? [createCliSourceProjectionResolver({projectionRoot: daemonProjectionRoot})] : []),
+      plugin, createWorkspaceSourceResolver({workspacePackages, requireFromProject}),
+    ],
   });
   const runtimeManifest = component === 'daemon' ? {
     ...manifest, type: 'module', main: './src/index.mjs', module: './src/index.mjs',

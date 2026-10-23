@@ -670,7 +670,7 @@ async function main() {
       serveUi,
     });
     const startedRuntime = pendingSourceStart
-      ? await pendingSourceStart.publish(publishRuntimeStart) : await publishRuntimeStart();
+      ? await pendingSourceStart.publishPreparation(publishRuntimeStart) : await publishRuntimeStart();
     ownerDeathWatchdog = spawnStackOwnerDeathWatchdog({
       rootDir,
       stackName,
@@ -681,8 +681,6 @@ async function main() {
       ownerStartedAt: startedRuntime.startedAt,
       env: baseEnv,
     });
-  } else if (pendingSourceStart) {
-    await pendingSourceStart.publish(async () => {});
   }
 
   // Server
@@ -1123,6 +1121,10 @@ async function main() {
     }
   }
 
+  // State publication precedes spawn. Retire startup exclusion only after the
+  // existing service readiness checks above have completed.
+  await pendingSourceStart?.publish(async () => {});
+
   shutdown = async ({ signal = 'SIGTERM' } = {}) => {
     if (shuttingDown) {
       return;
@@ -1319,7 +1321,7 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
     placement: { server: placement.target.name, daemon: daemonPlacement,
       expo: (!sourceSnapshot || sourceUi === 'borrowed') && env.HAPPIER_STACK_EXPO_SOURCE_STACK ? 'borrowed' : 'disabled' } });
   const started = pendingSourceStart
-    ? await pendingSourceStart.publish(publishRuntimeStart) : await publishRuntimeStart();
+    ? await pendingSourceStart.publishPreparation(publishRuntimeStart) : await publishRuntimeStart();
   const ownerDeathWatchdog = spawnStackOwnerDeathWatchdog({ rootDir, stackName: context.stackName, baseDir: autostart.baseDir,
     envPath: context.envPath, runtimeStatePath: context.runtimeStatePath, ownerPid: process.pid, ownerStartedAt: started.startedAt, env });
   let controller;
@@ -1355,6 +1357,15 @@ async function runControlledRemoteStack({ rootDir, flags, json, autostart, runti
             ? { sourceUiLaunch: state.sourceUiLaunch } : {}),
           ...(state.services?.server && state.runtimeSnapshotId ? { runtimeSnapshotId: state.runtimeSnapshotId } : {}),
         });
+        // Remote dispatch returns before health readiness. Retire this
+        // controller's request from existing server readiness/failure facts.
+        // Auth-deferred daemon autostart is not a pending source start.
+        if (state.services?.server && (
+          (state.serviceStatus?.server ?? state.status) === 'running'
+          || ['failed', 'degraded', 'stopped'].includes(state.status)
+        )) {
+          await pendingSourceStart?.dispose();
+        }
       }, env,
     });
     if (localCli && !controller.isSuperseded) {

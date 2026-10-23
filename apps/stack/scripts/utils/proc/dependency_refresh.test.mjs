@@ -11,6 +11,170 @@ import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
 import { withWorkspaceBuildResources } from './workspace_build_admission.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { adoptInstalledDependencies } from '../dev_targets/remote_dependency_bootstrap.mjs';
+import { beginPendingSourceStart } from '../../runtime/shared/pending_source_start.mjs';
+import { recordStackRuntimeStart, withStackRuntimeStartClaim } from '../stack/runtime_state.mjs';
+
+for (const worker of [false, true]) test(`dependency refresh reports running Stacks without blocking or stopping them (worker=${worker})`, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-runtime-dependency-consumer-' });
+  const baseDir = worker ? fixture.path('target-home', 'stack-state', 'qa') : fixture.path('stacks', 'qa');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_STACK_REPO_DIR: fixture.root, HAPPIER_STACK_PM_CACHE_BASE_DIR: fixture.path('target-home', 'cache') };
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.root}\n`);
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  const marker = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  const statePath = join(baseDir, 'stack.runtime.json');
+  const messages = [];
+  t.mock.method(console, 'log', message => messages.push(message));
+  let mutations = 0;
+  for (const state of [{ ownerPid: process.pid }, { ownerPid: null, processes: { daemonPid: process.pid } },
+    { ownerPid: null, processes: { serverPid: process.pid } }]) {
+    await writeFile(statePath, JSON.stringify({ stackName: 'qa', ...state }));
+    assert.equal((await withDependencyRefresh({ installDir: fixture.root, env }, async () => { mutations++; })).refreshed, false,
+      'warm readiness remains a reader even while a Stack is running');
+    const recorded = await readFile(statePath, 'utf8');
+    const result = await withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => { mutations++; });
+    assert.equal(result.refreshed, true);
+    assert.deepEqual(result.stacksNeedingRestart, ['qa']);
+    assert.deepEqual(JSON.parse(await readFile(marker, 'utf8')).stacksNeedingRestart, ['qa']);
+    assert.equal(await readFile(statePath, 'utf8'), recorded, 'refresh must leave running Stack ownership intact');
+    assert.match(messages.at(-1), /restart.*qa/);
+  }
+  assert.equal(mutations, 3);
+  const beforeFailure = messages.length;
+  const failure = new Error('installer boundary failed');
+  await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => {
+    throw failure;
+  }), error => error === failure);
+  assert.equal(messages.length, beforeFailure, 'a failed refresh must not publish a restart advisory');
+  await writeFile(statePath, JSON.stringify({ stackName: 'qa', ownerPid: null, processes: {} }));
+  const stopped = await withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => { mutations++; });
+  assert.deepEqual(stopped.stacksNeedingRestart, []);
+  assert.deepEqual(JSON.parse(await readFile(marker, 'utf8')).stacksNeedingRestart, []);
+  assert.equal(mutations, 4, 'stopped consumers must permit refresh without a stale advisory');
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.path('unrelated')}\n`);
+  await writeFile(statePath, JSON.stringify({ stackName: 'qa', ownerPid: process.pid }));
+  const unrelated = await withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => { mutations++; });
+  assert.deepEqual(unrelated.stacksNeedingRestart, []);
+  assert.equal(mutations, 5, 'a different installed tree must not be listed for this refresh');
+});
+
+test('source preparation registers behind an active writer and excludes refresh until disposal', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-preparation-dependency-consumer-' });
+  const baseDir = fixture.path('stacks', 'qa');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_STACK_REPO_DIR: fixture.root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.root}\n`);
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  let start;
+  let pending;
+  try {
+    await withDependencyRefreshLock({ installDir: fixture.root, env, signal: t.signal }, async () => {
+      start = beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: fixture.root, env });
+      // A writer already owns the tree: no source consumer may register yet.
+      const outcome = await Promise.race([start.then(() => 'registered'),
+        new Promise(resolve => setTimeout(() => resolve('waiting'), 100))]);
+      assert.equal(outcome, 'waiting');
+    });
+    pending = await start;
+    // Runtime publication precedes service spawn and its health smoke. Keep
+    // the same pending request authoritative throughout that interval.
+    await pending.publishPreparation(() => recordStackRuntimeStart(join(baseDir, 'stack.runtime.json'),
+      { stackName: 'qa', ownerPid: process.pid, script: 'run.mjs' }, { env }));
+    const marker = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+    const admitted = await readFile(marker, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => {
+      assert.fail('refresh must not rewrite a starting source runtime');
+    }), { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+    assert.equal(await readFile(marker, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }), admitted, 'a pending-start refusal must not withdraw admission');
+    await pending.publish(async () => {
+      await assert.rejects(withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => {
+        assert.fail('refresh must not rewrite dependencies during the health smoke');
+      }), { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+    });
+    assert.deepEqual((await withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => {})).stacksNeedingRestart, ['qa']);
+  } finally {
+    pending ??= await start;
+    await pending?.dispose();
+  }
+  await withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => {});
+});
+
+for (const claimed of [false, true]) test(`runtime registration waits for the dependency writer (claim=${claimed})`, { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-runtime-registration-custody-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_REPO_DIR: fixture.root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('env'), `HAPPIER_STACK_REPO_DIR=${fixture.root}\n`);
+  const statePath = fixture.path('stack.runtime.json');
+  const input = { stackName: 'qa', ownerPid: process.pid, script: 'run.mjs' };
+  let registration;
+  let claimEntered = false;
+  const callerOptions = { env: { ...env, HAPPIER_STACK_REPO_DIR: fixture.path('caller-checkout') } };
+  try {
+    await withDependencyRefreshLock({ installDir: fixture.root, env, signal: t.signal }, async () => {
+      registration = claimed
+        ? withStackRuntimeStartClaim(statePath, { stackName: 'qa' }, claim => {
+          claimEntered = true;
+          return claim.recordStart(input);
+        }, callerOptions)
+        : recordStackRuntimeStart(statePath, input, callerOptions);
+      const outcome = await Promise.race([registration.then(() => 'registered'),
+        new Promise(resolve => setTimeout(() => resolve('waiting'), 100))]);
+      assert.equal(outcome, 'waiting');
+      assert.equal(claimEntered, false, 'a claimed start must not spawn its runner underneath an active writer');
+    });
+  } finally { await registration; }
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).ownerPid, process.pid);
+});
+
+test('dependency writer waits for a pending runtime start claim, then reports the running Stack', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-start-claim-refresh-order-' });
+  const baseDir = fixture.path('stacks', 'qa');
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+    HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_STACK_REPO_DIR: fixture.root };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await mkdir(fixture.path('node_modules'));
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${fixture.root}\n`);
+  let entered;
+  const starting = new Promise(resolve => { entered = resolve; });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let mutated = false;
+  const start = withStackRuntimeStartClaim(join(baseDir, 'stack.runtime.json'), { stackName: 'qa' }, async claim => {
+    entered();
+    await gate;
+    await claim.recordStart({ stackName: 'qa', ownerPid: process.pid, script: 'run.mjs' });
+  }, { env });
+  let refresh;
+  try {
+    await starting;
+    refresh = withDependencyRefresh({ installDir: fixture.root, env, force: true }, async () => { mutated = true; });
+    const outcome = await Promise.race([refresh.then(() => 'refreshed'),
+      new Promise(resolve => setTimeout(() => resolve('waiting'), 100))]);
+    assert.equal(outcome, 'waiting');
+    assert.equal(mutated, false, 'a refresh must not rewrite dependencies while a start claim is pending');
+  } finally { release(); await start; }
+  assert.deepEqual((await refresh).stacksNeedingRestart, ['qa']);
+  assert.equal(mutated, true);
+});
 
 test('dependency refresh installs new verifier dependencies before probing UI outputs', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-refresh-verifier-prerequisite-' });

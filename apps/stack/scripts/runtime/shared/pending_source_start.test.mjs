@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { beginPendingSourceStart, readPendingSourcePreparation, SOURCE_START_SUPERSEDED_MARKER } from './pending_source_start.mjs';
@@ -9,6 +11,78 @@ import { sanitizeStackTestRunnerEnv } from '../../utils/test/test_env.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../../testkit/core/run_node_capture.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
+import { withDependencyRefresh } from '../../utils/proc/dependency_refresh.mjs';
+
+test('real source runner keeps its pending marker through server spawn and cleans up failed readiness', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-start-readiness-' });
+  const stackName = 'readiness';
+  const stackBaseDir = fixture.path('stacks', stackName);
+  const fakeRepo = fixture.path('repo');
+  const bundle = fixture.path('stacks', 'source-bundles', 'retained');
+  const serverDir = join(bundle, 'apps', 'server');
+  const entrypoint = join(serverDir, 'src', 'index.mjs');
+  const pendingPath = join(stackBaseDir, 'source-runtime', 'start.pending.json');
+  const observation = fixture.path('spawn-observation.json');
+  await mkdir(join(stackBaseDir, 'source-runtime'), { recursive: true });
+  await mkdir(join(serverDir, 'src'), { recursive: true });
+  await mkdir(join(fakeRepo, 'node_modules'), { recursive: true });
+  for (const name of ['server', 'cli', 'ui']) {
+    await mkdir(join(fakeRepo, 'apps', name), { recursive: true });
+    await writeFile(join(fakeRepo, 'apps', name, 'package.json'), JSON.stringify({ name, private: true }));
+  }
+  await writeFile(join(fakeRepo, 'package.json'), JSON.stringify({ private: true }));
+  await writeFile(join(fakeRepo, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ type: 'module' }));
+  // Only the server executable is replaced. The real runner, pending owner,
+  // runtime publication, spawn and child-bound readiness remain composed.
+  await writeFile(entrypoint, `import { existsSync, writeFileSync } from 'node:fs';
+    import { withDependencyRefreshLock } from ${JSON.stringify(new URL('../../utils/proc/dependency_refresh.mjs', import.meta.url).href)};
+    import { prepareDependencyConsumersForRefresh } from ${JSON.stringify(new URL('../../utils/proc/dependency_consumers.mjs', import.meta.url).href)};
+    let refreshCode = null;
+    try {
+      await withDependencyRefreshLock({ installDir: ${JSON.stringify(fakeRepo)}, env: process.env },
+        () => prepareDependencyConsumersForRefresh({ installDir: ${JSON.stringify(fakeRepo)}, env: process.env }));
+    } catch (error) { refreshCode = error.code; }
+    writeFileSync(${JSON.stringify(observation)}, JSON.stringify({ pending: existsSync(${JSON.stringify(pendingPath)}), refreshCode }));
+    process.exit(9);
+  `);
+  await writeFile(join(bundle, 'source-bundle.json'), JSON.stringify({ identity: 'retained',
+    entrypoint, serverDir, serverComponent: 'happier-server-light', dbProvider: 'sqlite', env: {}, args: [] }));
+  await writeFile(join(stackBaseDir, 'source-runtime', 'selected-server.json'), JSON.stringify({ entrypoint }));
+  const envPath = join(stackBaseDir, 'env');
+  await writeFile(envPath, `HAPPIER_STACK_REPO_DIR=${fakeRepo}\n`);
+  const listener = createServer();
+  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const result = await runNodeCapture([fileURLToPath(new URL('../../run.mjs', import.meta.url)),
+    '--runtime=source', '--reuse-source-runtime', '--no-dev-targets', '--no-daemon', '--no-ui', '--no-browser'], {
+    env: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root, repoDir: fakeRepo }),
+      HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_STACK: stackName,
+      HAPPIER_STACK_ENV_FILE: envPath, HAPPIER_STACK_RUNTIME_STATE_PATH: join(stackBaseDir, 'stack.runtime.json'),
+      HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light', HAPPIER_DB_PROVIDER: 'sqlite',
+      HAPPIER_STACK_SERVER_PORT: String(port), HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+      HAPPIER_STACK_PRISMA_MIGRATE: '0', HAPPIER_STACK_AUTO_AUTH_SEED: '0',
+      HAPPIER_STACK_MIGRATE_CREDENTIALS: '0', HAPPIER_STACK_TAILSCALE_SERVE: '0',
+      HAPPIER_DEV_TARGET_EXECUTION: '1', CI: '1' },
+  });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr + result.stdout, /exited before becoming ready/i);
+  await assert.rejects(readFile(pendingPath), { code: 'ENOENT' });
+  // Once startup cleanup retires the marker, live runtime membership is
+  // advisory. Exercise the real dependency writer at that lifecycle seam.
+  await writeFile(join(stackBaseDir, 'stack.runtime.json'), JSON.stringify({ stackName, ownerPid: process.pid }));
+  const outcome = await withDependencyRefresh({ installDir: fakeRepo, force: true,
+    env: { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root,
+      HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'), HAPPIER_STACK_ENV_FILE: '',
+      HAPPIER_STACK_PM_CACHE_BASE_DIR: fixture.path('cache'), HAPPIER_STACK_REPO_DIR: fakeRepo } }, async () => {})
+    .then(refreshed => ({ refreshed: refreshed.refreshed, stacksNeedingRestart: refreshed.stacksNeedingRestart }),
+      error => ({ code: error.code }));
+  assert.deepEqual({ atSpawn: JSON.parse(await readFile(observation, 'utf8')), afterStartup: outcome }, {
+    atSpawn: { pending: true, refreshCode: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' },
+    afterStartup: { refreshed: true, stacksNeedingRestart: [stackName] },
+  });
+});
 
 test('real source runner emits canonical supersession and exits before starting services', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-superseded-runner-' });

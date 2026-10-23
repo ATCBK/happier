@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,6 +23,10 @@ export const REMOTE_COMMAND_CLASSIFICATION = Object.freeze({
   packageManagerCommands: Object.freeze(['npm', 'npx', 'pnpm', 'yarn']),
   sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/scm-gitlab', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog', 'packages/plugins/claude']),
   sourceTestConfigs: Object.freeze(['vitest.config.ts']),
+  // Server Vitest lanes share the workspace-source resolver. Derive their
+  // configs from the package so specialized lanes also skip dist publication.
+  serverSourceTestConfigs: Object.freeze(readdirSync(new URL('../../../../../apps/server/', import.meta.url))
+    .filter(name => /^vitest(?:\.[^.]+)*\.config\.ts$/u.test(name)).sort()),
   sourceTestScripts: Object.freeze(['vitest', 'vitest:local']),
 });
 const DEFAULT_COMMAND_POLICY = Object.freeze({
@@ -71,13 +75,18 @@ const HEAVYWEIGHT_MEMORY_KIB = Object.freeze({
   'source-bundle': 10 * 1024 * 1024,
   'dependency-install': 6291456,
   'package-dist': 6291456,
+  // Microsoft 7.1.0-beta, 85 declaration projects in one serialized batch:
+  // max child RSS 4,022,016 KiB (2026-10-23). Reuse the existing measured
+  // 1,608,848 KiB coordinator/headroom allowance. Unchanged readers emit
+  // nothing and never request this envelope.
+  'declaration-emit': 4_022_016 + 1_608_848,
   'runtime-build': 18874368,
   compilation: 20 * 1024 * 1024,
   'compilation-ui': 20 * 1024 * 1024,
   'compilation-cli': 15 * 1024 * 1024,
   'compilation-server': 16 * 1024 * 1024,
 });
-const HEAVYWEIGHT_COMPILE_CLASSES = ['compilation', 'compilation-ui', 'compilation-cli', 'compilation-server', 'package-dist', 'runtime-build'];
+const HEAVYWEIGHT_COMPILE_CLASSES = ['compilation', 'compilation-ui', 'compilation-cli', 'compilation-server', 'package-dist', 'runtime-build', 'declaration-emit'];
 
 // The primary VM's browser/agent workloads pause below 8 GiB MemAvailable
 // (2026-10-06 observation). Worker envelopes remain class-owned; only local
@@ -261,8 +270,9 @@ const FINAL_COMMAND_RULES = [
   { when: { kind: ['source-test'], component: ['apps/cli'], workerTool: ['vitest'],
     config: ['vitest.config.ts'], generatorCheck: ['0'], testFileSelected: ['0'] },
     set: { heavyClass: 'compilation' } },
-  // UI and server integration keep their workspace-source plugins and aliases.
-  { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/ui', 'apps/server'], config: ['vitest.integration.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
+  // UI integration and all server lanes keep their workspace-source resolvers.
+  { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/ui'], config: ['vitest.integration.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
+  { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/server'], config: REMOTE_COMMAND_CLASSIFICATION.serverSourceTestConfigs, resolverOverride: ['0'] }, set: { kind: 'source-test' } },
   { when: { heavyClass: HEAVYWEIGHT_COMPILE_CLASSES }, set: { localCompile: '1' } },
 ];
 function commandBasename(value) {

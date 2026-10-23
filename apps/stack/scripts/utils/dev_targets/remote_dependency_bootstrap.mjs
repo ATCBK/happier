@@ -87,7 +87,11 @@ export async function adoptInstalledDependencies({
       installDir: repoDir,
       componentDir: join(repoDir, 'apps', 'stack'),
       env,
-      onDependenciesReady: async () => await prepareInitialUiOutputs({ repoDir, env, force: false }),
+      onDependenciesReady: async ({ env: readyEnv }) => {
+        await prepareInitialUiOutputs({ repoDir, env: readyEnv, force: false });
+        const { ensureServerGeneratedProviderOutputs } = await import('../proc/pm.mjs');
+        await ensureServerGeneratedProviderOutputs(join(repoDir, 'apps', 'server'), repoDir, { env: readyEnv });
+      },
     },
     async () => {},
   );
@@ -135,7 +139,11 @@ export async function bootstrapRemoteDependencies({
   // Every role reads the same installed tree. Complete the canonical UI
   // postinstall under its mutation lock, including warm trees with lost patches.
   // A healthy warm tree is inspected without rewriting dependency bytes.
-  const onDependenciesReady = async () => await prepareInitialUiOutputs({ repoDir, env, force: refreshed });
+  const onDependenciesReady = async ({ env: readyEnv = env } = {}) => {
+    await prepareInitialUiOutputs({ repoDir, env: readyEnv, force: refreshed });
+    const { ensureServerGeneratedProviderOutputs } = await import('../proc/pm.mjs');
+    await ensureServerGeneratedProviderOutputs(join(repoDir, 'apps', 'server'), repoDir, { env: readyEnv });
+  };
   if (sourceToolsOnly) {
     // Warm validation is a reader. Queuing a writer for every readiness check
     // withdraws admission repeatedly and starves finite consumers behind work
@@ -191,6 +199,8 @@ export async function bootstrapRemoteDependencies({
     'remote Happier workspace',
     { env },
   );
+  const { ensureServerGeneratedProviderOutputs } = await import('../proc/pm.mjs');
+  await ensureServerGeneratedProviderOutputs(join(repoDir, 'apps', 'server'), repoDir, { env });
   // The launcher needs its dependency owner, while only Stack commands consume
   // Stack's emitted workspace closure. Other components prepare their own outputs.
   if (/^apps\/stack(?:\/|$)/u.test(componentPath)) {

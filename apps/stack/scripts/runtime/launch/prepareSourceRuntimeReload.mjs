@@ -28,7 +28,7 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
     resolvedLocalUrls: { internalServerUrl: '', publicServerUrl: '' } });
   const placement = onHost || flags.has('--no-dev-targets') ? null : await resolveControlledRuntimePlacement({
     stackName, stackBaseDir, sourceDir: repoDir, env });
-  const pending = await beginPendingSourceStart({ stackBaseDir, onPhase,
+  const pending = await beginPendingSourceStart({ stackBaseDir, onPhase, repoDir, env,
     requestId: sourceStartRequestId ?? kv.get('--source-start-request-id'),
     ...(onHost ? { replacePending: true } : {}) });
   const cancel = () => pending.abort(new Error('[reload] source preparation interrupted; incumbent retained'));

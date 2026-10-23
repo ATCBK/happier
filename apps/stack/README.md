@@ -100,10 +100,13 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 
 In 0.3 development source, `hstack dev` automatically refreshes stale dependencies
 at startup and when dependency inputs change in watch mode. Refresh briefly stops
-only that Stack's Expo process; its supervisor brings Expo back while the server
-and daemon keep their last-green processes. If another Stack's Expo uses the same
-installed tree, development warns and keeps the installed bytes, then retries on
-the next dependency input change or startup. `HAPPIER_STACK_SKIP_REFRESH_DEPS=1`
+only that Stack's Expo process. Pending source starts refuse refresh with
+`HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS` through service readiness; retry
+after the start completes. Running Stack runners and retained server/daemon
+processes keep running and do not block refresh. A successful refresh prints
+their Stack names and records `stacksNeedingRestart` in dependency readiness;
+restart listed Stacks at their owner's next boundary. Another Stack's Expo
+still blocks refresh. `HAPPIER_STACK_SKIP_REFRESH_DEPS=1`
 and `HAPPIER_STACK_DISABLE_REFRESH_DEPS=1` suppress refresh of an existing tree.
 Service mode still requires explicit refresh permission. Local validation checks
 dependency readiness without installing; worker mirrors keep their explicit

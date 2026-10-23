@@ -28,7 +28,13 @@ test('daemon support links native dependencies while preserving the code-owned p
   const nestedNative = join(support, 'node_modules', '@happier-dev', 'plugins-fixture', 'node_modules', 'native-fixture', 'binding.node');
   await mkdir(join(nestedNative, '..'), { recursive: true });
   await writeFile(nestedNative, 'nested native fixture');
+  const failurePath = '.project/tmp/bundled-plugin-publication/failures.json';
+  await mkdir(join(code, failurePath, '..'), { recursive: true });
+  await mkdir(join(support, failurePath, '..'), { recursive: true });
+  await writeFile(join(code, failurePath), 'source-derived diagnostics');
+  await writeFile(join(support, failurePath), 'stale checkout diagnostics');
   await linkDaemonSupportPayload({ codePayloadDir: code, supportPayloadDir: support });
+  assert.equal(await readFile(join(code, failurePath), 'utf8'), 'source-derived diagnostics');
   assert.equal(await readFile(plugin, 'utf8'), 'export const sharedGraph = true;');
   assert.equal(await readFile(sidecar, 'utf8'), 'module.exports = "source-owned sidecar";');
   assert.equal(await readFile(join(code, 'node_modules', '@img', 'sharp-linux-x64', 'binding.node'), 'utf8'), 'native fixture');
@@ -251,7 +257,6 @@ test('daemon support references request Windows junctions for directory payloads
 
   assert.deepEqual(calls, [
     ['/artifact/daemon-support/payload/tools', '/artifact/daemon/payload/tools', 'junction'],
-    ['/artifact/daemon-support/payload/.project', '/artifact/daemon/payload/.project', 'junction'],
   ]);
 });
 

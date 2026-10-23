@@ -406,6 +406,37 @@ createInterface({input:process.stdin}).once('line', line => { console.log('BODY:
   return { ...fixture, workers };
 }
 
+test('AUTO dispatch retains its selected worker through real decision-mutex contention', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await runtimeAdmissionTransportFixture(t);
+  // This is a separate worker test runner, not a child of this node:test run.
+  delete fixture.invocation.env.NODE_TEST_CONTEXT;
+  for (const target of fixture.config.targets) {
+    await writeFile(join(target.repoDir, 'focused.test.mjs'), 'import test from "node:test"; test("admitted payload", () => {});\n');
+  }
+  const admissionRoot = fixture.workers.starved.admissionRoot;
+  await mkdir(admissionRoot, { recursive: true });
+  const mutex = spawn('/usr/bin/flock', [join(admissionRoot, 'lock'), '/bin/sh', '-c', 'printf ready; read release']);
+  let ready = '';
+  mutex.stdout.on('data', chunk => { ready += chunk; });
+  const mutexExited = new Promise(resolve => mutex.once('exit', resolve));
+  t.after(async () => { mutex.stdin.end('release\n'); await mutexExited; });
+  await waitForRuntime(() => ready === 'ready', () => ready);
+  const child = spawn('/bin/sh', [launcher, '--', 'node', '--test', 'focused.test.mjs'], fixture.invocation);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
+  await waitForRuntime(async () => (await readdir(join(admissionRoot, 'waiters')).catch(() => [])).length === 1, () => stderr);
+  assert.equal(payloadOutput(stdout), '');
+  mutex.stdin.end('release\n');
+  await mutexExited;
+  assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+  assert.match(stdout, /admitted payload/, stderr);
+  assert.doesNotMatch(stderr, /admission busy before dispatch/);
+  assert.equal(await readFile(fixture.invocation.env.DISPATCHES, 'utf8'), 'starved\n');
+});
+
 function startRuntimeController(t, fixture, extra = {}, { target = 'darwin-arm64', components = 'server', nodeOptions = [] } = {}) {
   const child = spawn('/bin/sh', [launcher, `--runtime-build-target=${target}`, `--runtime-build-components=${components}`, '--control-stdin', '--', 'node', ...nodeOptions, 'apps/stack/scripts/build/remote_runtime_build.mjs', '--worker-request=stdin'], { ...fixture.invocation, env: { ...fixture.invocation.env, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] });
   const result = { child, stdout: '', stderr: '', completion: new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal }))) };
@@ -663,9 +694,11 @@ test('native launcher hands Mac workspace execution to the configured execution-
 test('runtime skip targets accepts comma and whitespace while retaining configured names outside the pool', async (t) => {
   const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
   fixture.config.targets.push({ ...fixture.config.targets[0], name: 'configured-only' });
+  fixture.config.targets.push({ name: 'windows-only', platform: 'windows', ssh: 'win-host',
+    repoDir: 'C:/repo', cliHomeDir: 'C:/home' });
   await writeFile(fixture.configPath, JSON.stringify(fixture.config));
   await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot }));
-  for (const skip of ['starved configured-only', 'starved,configured-only', ' \tstarved,,\n configured-only, ']) {
+  for (const skip of ['starved configured-only windows-only', 'starved,configured-only,windows-only', ' \tstarved,,\n configured-only, windows-only, ']) {
     const result = spawnSync('/bin/sh', [launcher, '--', 'probe-command'], {
       ...fixture.invocation,
       env: { ...fixture.invocation.env, HSTACK_EXEC_RUNTIME_SKIP_TARGETS: skip },
@@ -731,7 +764,14 @@ async function memoryRoutingFixture(t, { availableKiB = 5242880, totalKiB = 2831
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot }));
   const samplePath = join(root, 'starved-sample');
   await writeFile(samplePath, `8 0.1 ${availableKiB / totalKiB} 22000000 20 0 ${availableKiB} ${totalKiB} 0 0 0 0 0 0 0 linux ${availableKiB}\n`);
-  await executable(join(binDir, 'node'), '#!/bin/sh\ncase "$*" in *service_memory.mjs*) printf "service 0\\n"; exit 0 ;; esac\nprintf "node:%s\\n" "$*" >> "$FIXTURE_TRACE"\nexit 0\n');
+  await executable(join(binDir, 'node'), `#!/bin/sh
+case "\${1-}" in
+  */native_execution_projection.mjs) exec ${JSON.stringify(process.execPath)} "$@" ;;
+esac
+case "$*" in *service_memory.mjs*) printf "service 0\\n"; exit 0 ;; esac
+printf "node:%s\\n" "$*" >> "$FIXTURE_TRACE"
+exit 0
+`);
   // Yarn is external, but its package scripts remain real: a public script
   // can own a nested launcher dispatch rather than the outer manager process.
   const packageManager = `#!/bin/sh
@@ -961,7 +1001,7 @@ test('native nonblocking admission certifies busy without certifying state failu
   assert.doesNotMatch(result.stderr, /HSTACK_ADMISSION_UNAVAILABLE/);
 });
 
-test('nonblocking admission identifies the live queue head and a contended decision lock', { skip: process.platform !== 'linux' }, async t => {
+test('nonblocking capacity admission identifies the live queue head', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await memoryRoutingFixture(t);
   const native = await installNativeAdmissionFixture({ root: fixture.root });
   await executable(join(fixture.binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
@@ -974,12 +1014,6 @@ test('nonblocking admission identifies the live queue head and a contended decis
   const queued = invoke();
   assert.equal(queued.status, 75, queued.stderr);
   assert.match(queued.stderr, new RegExp(`class=runtime-build.*queue-ahead.*pid=${process.pid}.*class=runtime-build.*requires=18874368`));
-  // Only the OS lock boundary is unavailable; retain the real refusal path.
-  await executable(join(fixture.binDir, 'flock'), '#!/bin/sh\ncase "$*" in "-n 9") exit 1 ;; *) exec /usr/bin/flock "$@" ;; esac\n');
-  const contended = invoke();
-  assert.equal(contended.status, 75, contended.stderr);
-  assert.match(contended.stderr, /class=runtime-build.*admission-decision-in-progress/);
-  assert.doesNotMatch(contended.stderr, /\(admission busy\)/);
 });
 
 async function installBusyAdmissionTransport(fixture) {

@@ -21,7 +21,9 @@ import {
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
   verifyUiPatchedDependencies,
 } from '../../../../ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
-import { ensureDepsInstalled } from '../proc/pm.mjs';
+import { ensureDepsInstalled, ensureServerGeneratedProviderOutputs } from '../proc/pm.mjs';
+import { assertDependenciesReady } from '../proc/dependency_refresh.mjs';
+import { buildSourceRuntimeBundle } from '../../build/build_source_runtime.mjs';
 import { withPnpmInstallGuard } from '../worktrees/pnpm_install_guard.mjs';
 
 import {
@@ -29,6 +31,88 @@ import {
   adoptInstalledDependencies,
   bootstrapRemoteDependencies as bootstrapDependencies,
 } from './remote_dependency_bootstrap.mjs';
+
+async function setupPrismaFreshness(t) {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-prisma-freshness-' });
+  const root = fixture.root;
+  const server = join(root, 'apps/server');
+  for (const name of ['ui', 'cli', 'server']) await mkdir(join(root, 'apps', name), { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# fixture\n');
+  await writeFile(join(server, 'package.json'), JSON.stringify({ name: '@happier-dev/server', scripts: { 'generate:providers': 'node generate.mjs' } }));
+  for (const name of ['ui', 'cli']) await writeFile(join(root, 'apps', name, 'package.json'), '{}');
+  const binDir = fixture.path('bin');
+  await mkdir(binDir);
+  // Only the OS process boundary is replaced; real readiness and custody run.
+  await writeFile(join(binDir, 'pnpm'), `#!${process.execPath}
+    const fs = require('node:fs');
+    const path = require('node:path');
+    if (process.argv.includes('--version')) { console.log('12.14.0'); process.exit(0); }
+    const server = ${JSON.stringify(server)};
+    const input = fs.readFileSync(path.join(server, 'schema-input'), 'utf8');
+    const current = fs.readFileSync(path.join(server, 'generated-output'), 'utf8');
+    if (process.argv.includes('--check')) process.exit(input === current ? 0 : 1);
+    if (!process.env.HAPPIER_BUILD_DEPENDENCY_CUSTODY) process.exit(9);
+    if (process.env.HAPPIER_TEST_PRISMA_GENERATION_FAILURE === '1') process.exit(37);
+    fs.writeFileSync(path.join(server, 'generated-output'), input);
+  `);
+  await chmod(join(binDir, 'pnpm'), 0o755);
+  await writeFile(join(server, 'schema-input'), 'old');
+  await writeFile(join(server, 'generated-output'), 'old');
+  const env = { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+    npm_execpath: '', npm_node_execpath: '', HAPPIER_STACK_PM_CACHE_BASE_DIR: fixture.path('cache') };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await withDependencyRefresh({ installDir: root, env }, async () => mkdir(join(root, 'node_modules')));
+  return { root, server, env };
+}
+
+test('Prisma readiness rejects a schema-only change and generation repairs it under dependency custody', async t => {
+  const { root, server, env } = await setupPrismaFreshness(t);
+  await assertDependenciesReady({ installDir: root, env });
+  await writeFile(join(server, 'schema-input'), 'new');
+  await assert.rejects(assertDependenciesReady({ installDir: root, env }), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH', reason: 'prisma-outputs-incomplete' });
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'old', 'readiness is read-only');
+  await ensureServerGeneratedProviderOutputs(server, root, { env, quiet: true, signal: t.signal });
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'new');
+  await assertDependenciesReady({ installDir: root, env });
+});
+
+test('Prisma healthy verification shares finite custody and ready-action repair reuses its writer', async t => {
+  const { root, server, env } = await setupPrismaFreshness(t);
+  await withDependencyConsumption({ installDir: root, env, signal: t.signal }, async readEnv => {
+    await ensureServerGeneratedProviderOutputs(server, root, { env: readEnv, quiet: true, signal: t.signal });
+  });
+  await writeFile(join(server, 'schema-input'), 'updated');
+  await withDependencyRefresh({ installDir: root, env, onDependenciesReady: async ({ env: readyEnv }) => {
+    await ensureServerGeneratedProviderOutputs(server, root, { env: readyEnv, quiet: true, signal: t.signal });
+  } }, async () => assert.fail('schema-only repair must not install dependencies'));
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'updated');
+});
+
+test('Prisma warm worker bootstrap repairs schema-only changes without reinstalling dependencies', async t => {
+  const { root, server, env } = await setupPrismaFreshness(t);
+  await writeFile(join(server, 'schema-input'), 'new worker schema');
+  await bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', toolsOnly: true, env,
+    installInitialDependencies: async () => assert.fail('schema-only changes must not reinstall dependencies') });
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'new worker schema');
+  await assertDependenciesReady({ installDir: root, env });
+});
+
+test('Prisma source preparation repairs schemas before entering compilation; failed repair remains stale', async t => {
+  const { root, server, env } = await setupPrismaFreshness(t);
+  await writeFile(join(server, 'schema-input'), 'new source');
+  const failingEnv = { ...env, HAPPIER_TEST_PRISMA_GENERATION_FAILURE: '1' };
+  await assert.rejects(buildSourceRuntimeBundle({ repoDir: root, stackBaseDir: join(root, 'stacks/fixture'),
+    component: 'server', env: failingEnv, signal: t.signal }), { exitCode: 37 });
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'old');
+  await assert.rejects(assertDependenciesReady({ installDir: root, env }), { reason: 'prisma-outputs-incomplete' });
+  // This fixture deliberately has no compiler: fingerprinting must only reach
+  // that missing boundary after the real source preparation repaired outputs.
+  await assert.rejects(buildSourceRuntimeBundle({ repoDir: root, stackBaseDir: join(root, 'stacks/fixture'),
+    component: 'server', env, signal: t.signal }), { code: 'MODULE_NOT_FOUND' });
+  assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'new source');
+});
 
 test('remote dev startup refreshes a stale installed tree before publishing readiness', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-remote-dev-refresh-' });
@@ -82,6 +166,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('12.14.0'); process.exit(0); }
+if (args.includes('--check')) process.exit(fs.existsSync(${JSON.stringify(generated)}) ? 0 : 1);
 if (!fs.existsSync(${JSON.stringify(fixture.path('.project', 'tmp', 'dependency-install.lock'))})) throw new Error('Missing install custody');
 if (fs.existsSync(${JSON.stringify(marker)})) throw new Error('Premature admission');
 if (args[0] === 'install') {
@@ -704,6 +789,7 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
     'apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
     'apps/ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs',
+    'apps/ui/tools/postinstall/installedPackageDirs.mjs',
     'apps/ui/tools/postinstall/pnpmPatches.mjs',
   ]) {
     const destination = join(repoDir, relativePath);
@@ -752,6 +838,9 @@ test('cold UI source-test bootstrap prepares real postinstall outputs without pu
     await mkdir(join(output, '..'), { recursive: true });
     await writeFile(output, (markersByFile.get(relativePath) ?? []).join('\n'));
   }
+  // The package-manager boundary must produce an installed package, not only
+  // loose patch outputs: canonical discovery requires its on-disk manifest.
+  await writeFile(join(patchInputDir, 'package.json'), JSON.stringify({ name: 'react-native-enriched-markdown' }));
   const preparedModule = await readFile(join(patchInputDir, 'lib/module/web/streamingReveal.js'), 'utf8');
   await writeFile(patchPath, preparedModule);
   const requiredOutputPath = join(uiDir, 'node_modules', 'react-native-enriched-markdown', 'lib', 'module', 'web', 'streamingReveal.js');

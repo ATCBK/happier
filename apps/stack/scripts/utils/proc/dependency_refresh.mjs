@@ -9,7 +9,7 @@ import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { coerceHappyMonorepoRootFromPath, getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { describeJsonOwnerLock, isJsonOwnerFileLockActive, readJsonOwnerLockSnapshot, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
 import { collectWorkspacePackageJsonPaths, isYarnWorkspace } from './workspace_package_manifests.mjs';
-import { stopExpoDependencyConsumers } from '../expo/dependency_barrier.mjs';
+import { prepareDependencyConsumersForRefresh } from './dependency_consumers.mjs';
 import { inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
 import { isPidAlive } from './pids.mjs';
@@ -95,7 +95,9 @@ export async function withDependencyConsumption({ installDir, env = process.env,
 export async function withDependencyRefreshLock({ installDir, env = process.env, signal, wait = true, writerPriority = true }, action) {
   signal?.throwIfAborted();
   const lockPath = resolveDependencyRefreshLockPath(installDir, env);
-  if (writerPriority && readInheritedDependencyCustody(lockPath, env)?.priority === 'reader') {
+  const inherited = readInheritedDependencyCustody(lockPath, env);
+  if (inherited && inherited.priority !== 'reader') return await action({ lockPath, owner: inherited });
+  if (writerPriority && inherited?.priority === 'reader') {
     throw Object.assign(new Error(`HSTACK_WORKSPACE_ADMISSION_ORDER: a dependency writer cannot wait on inherited read custody (${lockPath}); prepare the producer before finite consumption`),
       { code: 'HSTACK_WORKSPACE_ADMISSION_ORDER' });
   }
@@ -450,6 +452,12 @@ export async function assertDependenciesReady({ installDir, componentDir = insta
   if (!isYarnPredecessor) {
     const failures = await inspectUiPostinstallOutputs(join(installDir, 'apps', 'ui'), installDir, { env });
     if (failures.length > 0) requireRefresh('ui-postinstall-incomplete', failures.join('; '));
+    const { ensureServerGeneratedProviderOutputs } = await import('./pm.mjs');
+    try {
+      await ensureServerGeneratedProviderOutputs(join(installDir, 'apps', 'server'), installDir, { env, quiet: true, checkOnly: true });
+    } catch {
+      requireRefresh('prisma-outputs-incomplete');
+    }
   }
   checkActiveWriter();
   return readiness;
@@ -485,6 +493,7 @@ export async function withDependencyRefresh({
   return await withDependencyRefreshLock({ installDir, env }, async ({ lockPath, owner }) => {
     const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
     if (!force && !afterDependencyLock.required && !shouldRunDependencyReadyAction) return { refreshed: false, reason: 'up-to-date' };
+    let stacksNeedingRestart = [];
     const mutate = async () => {
       let beforeMutation = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode, env });
       let result = { refreshed: false, reason: 'up-to-date' };
@@ -516,7 +525,7 @@ export async function withDependencyRefresh({
         }
         // The refresh runs under this writer lock; its installer spawns with this environment.
         if (didRefresh) await refresh({ env: resolveLockedInstallEnv(env, { lockPath, owner }) });
-        if (onDependenciesReady) await onDependenciesReady();
+        if (onDependenciesReady) await onDependenciesReady({ env: resolveLockedInstallEnv(env, { lockPath, owner }) });
         // Ready-only repairs preserve callers' explicit no-install policy.
         // They cannot certify stale dependency inputs as newly installed.
         if ((force || beforeMutation.required) && !didRefresh) {
@@ -561,8 +570,14 @@ export async function withDependencyRefresh({
           inputs: superseded ? beforeMutation.inputSnapshot : refreshedInputSnapshot,
           superseded,
           ...(installed ? { workerPnpmModules: installed.workerPnpmModules } : {}),
+          stacksNeedingRestart: didRefresh ? stacksNeedingRestart : [],
         });
-        if (didRefresh) result = { refreshed: true, reason: force ? 'forced-refresh' : 'stale-inputs' };
+        if (didRefresh) {
+          result = { refreshed: true, reason: force ? 'forced-refresh' : 'stale-inputs', stacksNeedingRestart };
+          if (stacksNeedingRestart.length) {
+            console.log(`[local] Stacks running on pre-refresh dependencies; restart at the next owner boundary: ${stacksNeedingRestart.join(', ')}`);
+          }
+        }
       }
       return result;
     };
@@ -578,7 +593,7 @@ export async function withDependencyRefresh({
     if (willRefresh
       || afterDependencyLock.selfReferentialNodeModulesLinkPath !== null
       || uiPrerequisites.length > 0 || componentPrerequisites.length > 0) {
-      await stopExpoDependencyConsumers({ installDir, env });
+      ({ stacksNeedingRestart } = await prepareDependencyConsumersForRefresh({ installDir, env }));
     }
     return await mutate();
   });

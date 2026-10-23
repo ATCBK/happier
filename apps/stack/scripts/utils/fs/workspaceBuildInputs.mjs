@@ -77,6 +77,7 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
   if (compiler) for (const path of [
     'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs',
     'apps/ui/scripts/generateBundledPluginUiArtifacts.mjs',
+    'apps/cli/scripts/build-owned/bundledPlugins/uiDeclarations.mjs',
     'apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs',
     'packages/cli-common/sourceRuntimeEntries.mjs',
     'scripts/workspaces/buildInputConvergence.mjs',
@@ -121,7 +122,9 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
         'apps/cli/scripts/build-owned/bundledPluginMembership.ts',
         // This collector imports the generator's path owner even when the
         // component closure does not otherwise include CLI tooling.
-        'apps/cli/scripts/build-owned/bundledPlugins/projectionPaths.mjs']
+        'apps/cli/scripts/build-owned/bundledPlugins/projectionPaths.mjs',
+        ...(component === 'expo' || component === 'daemon'
+          ? ['apps/cli/scripts/build-owned/bundledPlugins/uiDeclarations.mjs'] : [])]
         // Expo preparation imports the authored tools tree, including nested
         // postinstall modules. Capture and invalidate it with the same owner.
         : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'tools', 'sources/dev/testkit']

@@ -13,7 +13,7 @@ import {
   resolveMetroWaitIntervalMsFromEnv,
 } from '../expo/expo.mjs';
 import { selectExpoDevMetroPort } from '../expo/metro_ports.mjs';
-import { EXPO_DEPENDENCY_BARRIER_VERSION } from '../expo/dependency_barrier.mjs';
+import { EXPO_DEPENDENCY_BARRIER_VERSION } from '../proc/dependency_consumers.mjs';
 import { ensureEnvFileUpdated } from '../env/env_file.mjs';
 import {
   getStackRuntimeProcessInstanceFingerprint,

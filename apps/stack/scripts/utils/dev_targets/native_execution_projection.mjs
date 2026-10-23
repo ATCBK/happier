@@ -86,6 +86,7 @@ export function renderNativeExecutionProjection(config, { repoRoot = '', executo
     assignment('unavailable_ttl_seconds', Math.max(1, Math.ceil((policy.unavailableProbeTtlMs ?? 120000) / 1000))),
     assignment('execution_provenance_schema_version', EXECUTION_PROVENANCE_SCHEMA_VERSION),
     assignment('execution_provenance_filename', EXECUTION_PROVENANCE_FILENAME),
+    assignment('configured_target_names', normalized.targets.map(target => target.name).join(' ')),
     assignment('target_count', targets.length),
   ];
   targets.forEach((target, index) => {

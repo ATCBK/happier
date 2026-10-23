@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
 import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readJsonIfExists, writeJsonAtomic } from '../../utils/fs/json.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
 import { isPidAlive, observePidLiveness } from '../../utils/proc/pids.mjs';
+import { resolveDependencyInstallRoot, withDependencyConsumption } from '../../utils/proc/dependency_refresh.mjs';
+import { getRepoDir } from '../../utils/paths/paths.mjs';
 
 const preparationPhases = new Set(['preparing', 'queued', 'building', 'prepared', 'checking']);
 const phaseEventPrefix = 'HSTACK_SOURCE_PREPARATION_PHASE=';
@@ -86,7 +89,8 @@ export async function retainPendingSourcePreparation({ stackBaseDir, requestId, 
  * share the existing file-lock primitive so an old start cannot publish after a
  * successor claims this stack. No process is signalled by this owner.
  */
-export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId: inheritedRequestId, replacePending = !inheritedRequestId }) {
+export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId: inheritedRequestId, replacePending = !inheritedRequestId,
+  env = process.env, repoDir = getRepoDir(fileURLToPath(new URL('../../../../../', import.meta.url)), env) }) {
   const directory = join(stackBaseDir, 'source-runtime');
   const markerPath = join(directory, 'start.pending.json');
   const lockPath = `${markerPath}.lock`;
@@ -94,7 +98,7 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
   const controller = new AbortController();
   let ownsMarker = false;
   await mkdir(directory, { recursive: true });
-  await withJsonOwnerFileLock(async () => {
+  await withDependencyConsumption({ installDir: resolveDependencyInstallRoot(repoDir), env }, () => withJsonOwnerFileLock(async () => {
     const current = await readJsonIfExists(markerPath);
     const sameRequest = inheritedRequestId && current?.requestId === requestId;
     const ownerStatus = current ? observePidLiveness(current.pid).status : 'dead';
@@ -106,7 +110,7 @@ export async function beginPendingSourceStart({ stackBaseDir, onPhase, requestId
     // A dead worker's retry takes custody of the same request and its pins.
     await writeJsonAtomic(markerPath, { ...(sameRequest ? current : {}), requestId, pid: process.pid, phase: 'preparing' });
     ownsMarker = true;
-  }, { lockPath });
+  }, { lockPath }));
   let closed = false;
   let backgroundController;
   const backgroundPreparations = new Set();

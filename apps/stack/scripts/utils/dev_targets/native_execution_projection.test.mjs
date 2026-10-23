@@ -288,6 +288,7 @@ test('native execution projection contains all POSIX targets and marks automatic
   assert.match(output, /^execution_provenance_schema_version='1'$/m);
   assert.match(output, /^execution_provenance_filename='provenance\.jsonl'$/m);
   assert.match(output, /^target_count='1'$/m);
+  assert.match(output, /^configured_target_names='mac windows'$/m);
   assert.match(output, /^target_1_name='mac'$/m);
   assert.match(output, /^target_1_automatic='1'$/m);
   assert.match(output, /^target_1_ssh_config='\/tmp\/it'"'"'s\.conf'$/m);
