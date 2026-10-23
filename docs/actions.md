@@ -4172,9 +4172,17 @@ unreadable consumers have no scalar writer; a retained unsupported language is u
 not the service default. UI edits and Actions use the same preference owner and reject a
 prepared language change after the selected consumer or its activation retires.
 
-`settings.invoke` accepts a declared anchor and, for an executable Voice operation,
-a closed operation input (a model-pack or voice id, diagnostic artifact/session,
-revocation obligation, or diagnostic enable choice). Discovery advertises the
+Mounted Voice panels submit their compound edit through `settings.set` at the
+host-only `voiceConversations.edit` anchor. The public operand is null; the
+captured edit and language-owner lifetime remain private to that live invocation,
+including while approval is pending. The existing Account CAS writer rebases the
+whole edit on its current settings. Agents retain the exact declared field
+operations and their consent rules. This compound host binding is omitted from
+settings search and public discovery; without its mounted intent it has no writer.
+
+`settings.invoke` accepts a declared anchor and a closed operation input. Voice
+operations identify a model-pack or voice id, diagnostic artifact/session,
+revocation obligation, diagnostic enable choice, or credential-source selection. Discovery advertises the
 operation, its default approval requirement and whether it needs human interaction; callers cannot submit a
 provider id, JSON path, gesture claim or confirmation token. Contributed Voice
 settings operations share the UI's occurrence/currentness, real confirmation,
@@ -4182,6 +4190,26 @@ snapshot and Account-settings CAS owner. Provider-side success alone does not
 mean its patch was saved: the result reports completion only after that owner
 acknowledges the patch. Decline, unavailable prerequisites and uncertain write
 outcomes remain explicit.
+
+The contributed `credentialSource` operation accepts `voice_credential_source`
+with its declared slot, None/SavedSecret/Connected selection and expected Account
+settings version. A displayed choice may also carry the value-free declaration
+contract digest; automated callers can obtain the settings version through an
+existing versioned `settings.get`. The operation delegates source and qualified
+Connected-purpose changes to the same atomic owner as the UI. Its receipt reports
+applied, conflict or unknown outcome without returning secret material. Choosing
+the source type does not authorize creating or replacing a credential.
+
+In 0.3 development, `account.settingsHistory` also accepts
+`{ kind: 'account_settings_history_restore', historyVersion, expectedSettingsVersion }`.
+It restores through the existing classification-aware, one-shot Settings CAS;
+conflicts and uncertain outcomes remain explicit and are not silently replayed.
+`account.encryptionMode` accepts
+`{ kind: 'account_encryption_mode_convert', toMode: 'plain' | 'e2ee' }`.
+That operation shares Settings' complete conversion owner, including inventory,
+proofs, upload custody and activation. Both declarations require Ask-first
+approval before preparation. Inputs carry no credentials, keys, prepared
+migration payloads or caller-authored confirmation claims.
 
 In 0.3 development, cancellation or a changed Account/provider selection after a
 declared vendor mutation has been dispatched reports an unknown outcome unless
@@ -4303,6 +4331,23 @@ The private owner work projection retains the choice without exposing it in
 shared Session identity. Exact-target instruction preparation and all-carrier
 application are separate integration obligations, not implied by accepting a
 preference or returning an attempt status.
+
+Contributed provider action buttons, local TTS samples and Forget conversations
+enter their declared `settings.invoke` operation before provider calls, audio or
+transcript invalidation. Forget retains its existing confirmation after admission.
+Audited Voice operation declarations keep direct present-user UI gestures or their
+owner's existing consent dialog through `uiConfirmation: 'direct'`; explicit
+Action Ask preferences still win, and Agent/MCP danger defaults are unchanged.
+Unknown or unaudited required operations retain policy confirmation.
+Provider failures expose only the same allowlisted structural code, stage and HTTP
+status facts used by the UI; provider-authored error prose stays private.
+
+Manual daemon install/remove/default selection and native prepare/update/remove
+also enter their existing `settings.invoke` declarations before model effects,
+informational preflight or consent. The incumbent operation owners retain their
+scope, selection and consent checks. Native progress and recovery callbacks stay
+private to the mounted invocation. Observing an already admitted native download
+and cancelling the same invocation do not create new admission requests.
 
 Executable Voice settings operations use `settings.invoke` and return typed
 completion, cancellation or unavailability from the same operation owners used
