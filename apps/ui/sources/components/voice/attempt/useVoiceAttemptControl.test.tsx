@@ -1161,17 +1161,40 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         await hook.unmount();
     });
 
-    it('shows the retained startup failure with Retry and Dismiss after a recoverable disconnect', async () => {
+    it('keeps a disconnected playback failure presented with Retry and Dismiss', async () => {
         const hook = await renderControl({
             adapterId: 'local_conversation', sessionId: 'control-1', status: 'disconnected', mode: 'idle',
-            canStop: false, errorCode: 'provider_error', errorMessage: 'daemon_streaming_stt_model_not_installed',
+            canStop: false, errorCode: 'tts_failed', errorMessage: 'QA_OUTPUT_START_FAILED',
             errorPresentation: 'notice', errorRecoveryAction: 'retry',
         });
         expect(hook.getCurrent()).toMatchObject({
             surfaceState: 'error',
-            captionLabel: t('settingsVoice.local.machineErrors.provider_error'),
+            captionLabel: t('settingsVoice.local.machineErrors.tts_failed'),
+            live: true, availability: 'recoverable', primaryAction: 'recover',
+            primaryActionLabel: t('common.retry'), markPose: 'blocked',
+            canStart: true, canStop: false, canMute: false, capturing: false,
             recoveryAvailable: true, recoveryLabel: t('common.retry'),
             canDismissFailedAttempt: true,
+            ended: null,
+        });
+        const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+        // Even a failure with no repair action remains visible and dismissible, rather than
+        // looking like a clean end. A fresh Start is still admitted independently of presence.
+        await act(async () => setVoiceSessionSnapshot({
+            adapterId: 'local_conversation', sessionId: 'control-1', status: 'disconnected', mode: 'idle',
+            canStop: false, errorCode: 'tts_failed', errorPresentation: 'notice',
+        }));
+        expect(hook.getCurrent()).toMatchObject({
+            live: true, availability: 'recoverable', primaryAction: 'start',
+            recoveryAvailable: false, canDismissFailedAttempt: true, ended: null,
+        });
+        // Only clearing the canonical failure returns every consumer to the idle start control.
+        await act(async () => setVoiceSessionSnapshot({
+            adapterId: 'local_conversation', sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
+        }));
+        expect(hook.getCurrent()).toMatchObject({
+            live: false, availability: 'ready', primaryAction: 'start', markPose: 'mic',
+            recoveryAvailable: false, canDismissFailedAttempt: false,
         });
         await hook.unmount();
     });

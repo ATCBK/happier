@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveVoiceAttemptControl } from './resolveVoiceAttemptControl';
+import { resolveVoiceAttemptActionability, resolveVoiceAttemptControl } from './resolveVoiceAttemptControl';
 
 const base = {
     surfaceState: 'idle' as const,
@@ -24,6 +24,28 @@ const base = {
  * same answer. This projection only routes it.
  */
 describe('resolveVoiceAttemptControl', () => {
+    it('gives recovery priority over a newly admitted start, while End retains live custody', () => {
+        expect(resolveVoiceAttemptActionability({ canStart: true, canStop: false, recoveryAvailable: true }))
+            .toMatchObject({ availability: 'recoverable', primaryAction: 'recover' });
+        expect(resolveVoiceAttemptActionability({ canStart: true, canStop: true, recoveryAvailable: true }))
+            .toMatchObject({ availability: 'ready', primaryAction: 'end' });
+    });
+
+    it.each([true, false])('keeps a disconnected failure presented until acknowledgement (recovery: %s)', (hasRecovery) => {
+        expect(resolveVoiceAttemptControl({
+            ...base, surfaceState: 'error', tone: 'error', sessionId: 'failed-session',
+            hasRecovery, canDismissFailedAttempt: true,
+        })).toMatchObject({
+            live: true, availability: 'recoverable', primaryAction: hasRecovery ? 'recover' : 'start',
+            canStart: true, canStop: false, canMute: false, capturing: false,
+            canDismissFailedAttempt: true, markPose: 'blocked',
+        });
+        // Clearing the canonical failure (Dismiss or a clean End) restores the idle Start.
+        expect(resolveVoiceAttemptControl(base)).toMatchObject({
+            live: false, availability: 'ready', primaryAction: 'start', markPose: 'mic',
+        });
+    });
+
     it('keeps a dismissible failure reachable even without a recovery action', () => {
         expect(resolveVoiceAttemptControl({
             ...base, status: 'error', surfaceState: 'error', sessionId: 'failed-session',

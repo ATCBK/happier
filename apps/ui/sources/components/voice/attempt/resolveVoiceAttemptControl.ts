@@ -30,17 +30,17 @@ export function resolveVoiceAttemptActionability(input: Readonly<{
     primaryAction: VoiceAttemptPrimaryAction;
 }> {
     return {
-        availability: input.canStop || input.canStart
+        availability: input.canStop
             ? 'ready'
             : input.recoveryAvailable || input.canDismissFailedAttempt === true
                 ? 'recoverable'
-                : input.setupOffered === true ? 'setup' : 'unavailable',
+                : input.canStart ? 'ready' : input.setupOffered === true ? 'setup' : 'unavailable',
         primaryAction: input.canStop
             ? 'end'
-            : input.canStart
-                ? 'start'
-                : input.recoveryAvailable
-                    ? 'recover'
+            : input.recoveryAvailable
+                ? 'recover'
+                : input.canStart
+                    ? 'start'
                     : input.setupOffered === true ? 'setup' : null,
     };
 }
@@ -58,7 +58,7 @@ export function resolveVoiceAttemptActionability(input: Readonly<{
  */
 export type VoiceAttemptControl = Readonly<{
     availability: VoiceAttemptAvailability;
-    /** An attempt is running — global or session-bound. The orb mirrors whichever it is. */
+    /** An attempt is presented, including a retained terminal failure awaiting acknowledgement. */
     live: boolean;
     canStart: boolean;
     canStop: boolean;
@@ -115,11 +115,13 @@ export function resolveVoiceAttemptControl(input: Readonly<{
     /** Already projected by the shared Session awareness owner; never provider-authored copy. */
     sessionStatus?: Pick<SessionAwarenessPresentationV1, 'state' | 'statusText'> | null;
 }>): VoiceAttemptControl {
-    const live = input.status !== 'disconnected';
+    // Disconnected media can still belong to a failed attempt. Keep its existing recovery
+    // presentation until the lifecycle owner clears it; presence never implies an open microphone.
+    const live = input.status !== 'disconnected' || input.canDismissFailedAttempt === true;
     const canStop = input.canStop && input.status !== 'disconnected';
-    // Not admission: §2.5's mirroring rule. An attempt is already running, so this transport
-    // controls *that* one rather than starting a competing second attempt.
-    const canStart = !live && input.startAdmitted;
+    // Start still follows transport status and canonical admission, independently of retained
+    // failure presentation. A running attempt must be controlled rather than duplicated (§2.5).
+    const canStart = input.status === 'disconnected' && input.startAdmitted;
     /*
      * Availability is a statement about *commands*, not about presence.
      *

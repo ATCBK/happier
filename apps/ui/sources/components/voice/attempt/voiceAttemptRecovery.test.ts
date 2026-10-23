@@ -17,6 +17,7 @@ import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 
 import type { VoiceConnectRecoveryTarget } from '@/components/voice/surface/resolveVoiceConnectRecoveryTarget';
@@ -52,7 +53,7 @@ if (!entry) throw new Error('recovery_elevenlabs_entry_unavailable');
 async function admitFailedConversation(sessionId: string): Promise<void> {
   state.startSession.mockRejectedValueOnce(new Error('SDK connection failed'));
   await lifecycle.toggle({ serverId: account.home.id, sessionId }).catch(() => undefined);
-  expect(state.startSession).toHaveBeenCalledOnce();
+  expect(state.startSession, `Voice Start failure code: ${lifecycle.getSnapshot().errorCode ?? 'none'}`).toHaveBeenCalledOnce();
   expect(lifecycle.getSnapshot().status).toBe('error');
 }
 
@@ -107,7 +108,7 @@ describe('the one Voice recovery dispatch every placement fires', () => {
     const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
     account = await restoreServerAccountForTest({
       serverUrl: 'https://voice-recovery.example.test', accountId: 'recovery-account', credentialScope: 'restored-home',
-      request: async (url, init) => {
+      request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
         if (preparation) return preparation;
@@ -117,7 +118,7 @@ describe('the one Voice recovery dispatch every placement fires', () => {
         const response = sessionHttp.handle(url, init);
         if (response) return response;
         return null;
-      },
+      }),
     });
     expect(await TokenStorage.getCredentials()).toEqual(account.credentials);
     const voice = writeVoiceProviderSettingsConfig(initialStorage.settings.voice, entry.providerId, ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS);
