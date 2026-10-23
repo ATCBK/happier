@@ -38,15 +38,19 @@ it('inspects independent indexed folders while another marker lookup is pending'
     } finally { release(); await discovery; boundary.mockImplementation(actual.lstat); await rm(root, { recursive: true, force: true }); }
 });
 
-it('preserves an unreadable marker as a failed inspection instead of a non-repository', async () => {
+it.each(['EACCES', 'EPERM'])('retains an unreadable marker as an unresolved candidate without failing readable siblings (%s)', async code => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'storage-worktree-denied-')));
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-    const denied = Object.assign(new Error('Marker permission unavailable'), { code: 'EACCES' });
+    const sibling = join(root, 'readable'); await mkdir(sibling);
+    const denied = Object.assign(new Error('Marker permission unavailable'), { code });
     const boundary = vi.mocked(filesystem.lstat).mockImplementation(async (...args) => {
         if (String(args[0]) === join(root, '.git')) throw denied;
         return actual.lstat(...args);
     });
-    try { await expect(readStorageWorktrees({ cwds: [], candidatePaths: [root] })).rejects.toBe(denied); }
+    try {
+        expect(await readStorageWorktrees({ cwds: [], candidatePaths: [root, sibling] }))
+            .toEqual([{ path: root, repositoryRoot: root }, { path: sibling, repositoryRoot: sibling }]);
+    }
     finally { boundary.mockImplementation(actual.lstat); await rm(root, { recursive: true, force: true }); }
 });
 

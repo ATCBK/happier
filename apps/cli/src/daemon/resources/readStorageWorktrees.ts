@@ -32,6 +32,7 @@ export async function readStorageWorktrees(input: Readonly<{
     // Indexed siblings are independent filesystem observations. Walk each
     // ancestry in parallel so scan ingestion cannot delay an entire page once
     // per candidate. Promise.all preserves candidate order for SCM discovery.
+    const unresolved = new Set<string>();
     const markers = await Promise.all([...new Set(input.candidatePaths)].map(async requested => {
         let path = requested;
         for (;;) {
@@ -39,7 +40,11 @@ export async function readStorageWorktrees(input: Readonly<{
             // Markers only locate the SCM consultation; they confer no cleanup authority.
             try { await lstat(join(path, '.git')); return path; }
             catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && (error as NodeJS.ErrnoException).code !== 'ENOTDIR') throw error;
+                const code = (error as NodeJS.ErrnoException).code;
+                // Inaccessible ancestry is unresolved SCM evidence for this item,
+                // never proof of a non-repository or a failure of the entire page.
+                if (code === 'EACCES' || code === 'EPERM') { unresolved.add(requested); return; }
+                if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
             }
             const parent = dirname(path);
             if (parent === path) return;
@@ -47,7 +52,8 @@ export async function readStorageWorktrees(input: Readonly<{
         }
     }));
     const candidates = new Set(markers.filter((path): path is string => path !== undefined));
-    if (!input.cwds.length && !candidates.size) return [];
+    const unavailable = [...new Set(input.candidatePaths)].filter(path => unresolved.has(path)).map(path => ({ path, repositoryRoot: path }));
+    if (!input.cwds.length && !candidates.size) return unavailable;
     return runWithScmBackendRegistryLease(input.registry, async registry => {
         // One inspection's consumers share the same worktree evidence. A later
         // review/effect calls this owner again and receives entirely fresh facts.
@@ -72,7 +78,7 @@ export async function readStorageWorktrees(input: Readonly<{
             if (!current) { current = readWorktreeChangeFingerprint(path); fingerprints.set(key, current); }
             return current;
         };
-        const worktrees = new Map<string, StorageWorktree>();
+        const worktrees = new Map<string, StorageWorktree>(unavailable.map(item => [item.path, item]));
         const anchors: string[] = [];
         for (const path of candidates) {
             // Unavailable/older classifiers leave an explicit Check item; no filesystem bypass.

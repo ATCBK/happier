@@ -15,7 +15,11 @@ import { physicalStoragePathWithoutFollowingLeaf } from '../storagePath';
 type WorktreeContext = Pick<StorageCategoryContext, 'deps' | 'projects' | 'worktrees' | 'sessions' | 'inUse' | 'discoveryIssues'>;
 
 function roots(context: WorktreeContext) {
-    const repos = [...context.projects.map(project => project.repositoryRoot), ...context.worktrees.map(worktree => worktree.repositoryRoot)];
+    // An unresolved indexed folder is a Check item, not proof of a repository
+    // whose managed-worktree parent can be enumerated below an unreadable path.
+    const repos = [...context.projects.map(project => project.repositoryRoot), ...context.worktrees
+        .filter(worktree => worktree.isMain !== undefined || !canonicalAbsolutePathsEqual(worktree.path, worktree.repositoryRoot))
+        .map(worktree => worktree.repositoryRoot)];
     return [...new Set(repos)].map(root => join(root, WORKTREE_RELATIVE_PARENT_DIR));
 }
 const OwnerData = z.strictObject({ v: z.literal(1), repositoryRoot: z.string().check(z.minLength(1)), worktreePath: z.string().check(z.minLength(1)),
