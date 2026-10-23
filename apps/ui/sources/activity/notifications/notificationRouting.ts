@@ -98,7 +98,7 @@ export type ParsedNotificationTap = Readonly<{
     route: string | null;
     serverUrl: string | null;
     accountId?: string | null;
-    permissionAction: Readonly<{ action: 'allow' | 'deny'; sessionId: string; requestId: string }> | null;
+    permissionAction: Readonly<{ action: 'allow' | 'deny'; sessionId: string; requestId: string; occurrenceId?: string }> | null;
 }>;
 
 export function parseNotificationTap(params: Readonly<{
@@ -124,9 +124,10 @@ export function parseNotificationTap(params: Readonly<{
 
     const sessionId = readSessionIdFromNotificationData(data);
     const requestId = readRequestIdFromNotificationData(data);
+    const occurrenceId = isRecord(data) && typeof data.occurrenceId === 'string' ? data.occurrenceId.trim() : '';
     const resolvedPermissionAction =
         permissionAction && sessionId && requestId
-            ? { action: permissionAction, sessionId, requestId }
+            ? { action: permissionAction, sessionId, requestId, ...(occurrenceId ? { occurrenceId } : {}) }
             : null;
 
     const notificationId = readNotificationId({ response: params.response });

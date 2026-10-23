@@ -8,6 +8,7 @@ import {
 
 import { createScopedCacheTokenKeyRegistry } from './scopedCacheTokenKey';
 import { createScopedResolutionSingleFlight } from './scopedResolutionSingleFlight';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -20,7 +21,7 @@ function toSessionDataKeyCacheKey(serverId: string, sessionId: string, token: st
 
 export type ScopedSessionCryptoContext =
   | Readonly<{ encryptionMode: 'plain'; sessionDataKey: null }>
-  | Readonly<{ encryptionMode: 'e2ee'; sessionDataKey: Uint8Array }>
+  | Readonly<{ encryptionMode: 'e2ee'; sessionDataKey: Uint8Array | null }>
   | Readonly<{ encryptionMode: 'unknown'; sessionDataKey: null }>;
 
 const sessionCryptoContextCache = new Map<string, ScopedSessionCryptoContext>();
@@ -100,7 +101,10 @@ async function fetchSessionCryptoContext(params: Readonly<{
       return { encryptionMode: 'plain', sessionDataKey: null };
     }
 
-    const dek = typeof session.dataEncryptionKey === 'string' ? session.dataEncryptionKey : null;
+    // Authenticated legacy rows use the existing credential-key encryptor.
+    // A published envelope that cannot be opened must never take that path.
+    if (session.dataEncryptionKey === null) return { encryptionMode: 'e2ee', sessionDataKey: null };
+    const dek = session.dataEncryptionKey;
     if (!dek) return { encryptionMode: 'unknown', sessionDataKey: null };
 
     const sessionDataKey = await params.decryptEncryptionKey(dek);
@@ -128,7 +132,7 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<{
   const sessionId = normalizeId(params.sessionId);
   const serverId = normalizeId(params.serverId);
   const token = String(params.token ?? '');
-  const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 30_000;
+  const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
   const keyCacheKey = toSessionDataKeyCacheKey(serverId, sessionId, token);
 
   const cached = getSessionCryptoContextFromCache(keyCacheKey);

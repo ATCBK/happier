@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS } from '@/utils/platform/loadExpoNotifications';
+import { PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS } from '../permission/pushNotificationAccess';
 import { initializeNotificationBackgroundTask, notificationPermissionActionsOpenApp, resetNotificationBackgroundTaskStateForTests } from './notificationBackgroundTaskState';
 
 describe('Android background action capability', () => {
@@ -49,5 +50,18 @@ describe('Android background action capability', () => {
         resetNotificationBackgroundTaskStateForTests();
         await expect(notificationPermissionActionsOpenApp('android')).resolves.toBe(true);
         await expect(initializeNotificationBackgroundTask('android', () => ({ registerNotificationBackgroundTask: async () => true }))).resolves.toBe(true);
+    });
+
+    it('uses the notification native-call budget for a stalled registration', async () => {
+        let complete!: (value: boolean) => void;
+        const pending = initializeNotificationBackgroundTask('android', () => ({
+            registerNotificationBackgroundTask: () => new Promise((resolve) => { complete = resolve; }),
+        }));
+        let settled = false;
+        void pending.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS);
+        expect(settled).toBe(true);
+        complete(true);
+        await expect(pending).resolves.toBe(false);
     });
 });

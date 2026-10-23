@@ -94,7 +94,7 @@ export {
 
 // Permission operation types live with the shared permission-decision owner so
 // foreground ops and the headless notification executor send one wire shape.
-import { applySessionThinkingDecisionRecovery, type SessionPermissionRequest } from './sessionPermissionDecision';
+import { applySessionThinkingDecisionRecovery, dispatchSessionPermissionDecision, type SessionPermissionRequest } from './sessionPermissionDecision';
 
 // Mode change operation types
 interface SessionModeChangeRequest {
@@ -580,11 +580,7 @@ export async function sessionAllow(
         decision,
         execPolicyAmendment
     };
-    await sessionRpcWithPreferredSessionScope<void, SessionPermissionRequest>({
-        sessionId,
-        method: 'permission',
-        payload: request,
-    });
+    await dispatchSessionPermissionDecision({ sessionId, request });
 }
 
 /**
@@ -611,11 +607,7 @@ export async function sessionAllowWithPermissionUpdates(
         decision: params.decision,
         updatedPermissions: params.updatedPermissions,
     };
-    await sessionRpcWithPreferredSessionScope<void, SessionPermissionRequest>({
-        sessionId,
-        method: 'permission',
-        payload: request,
-    });
+    await dispatchSessionPermissionDecision({ sessionId, request });
 }
 
 /**
@@ -638,11 +630,7 @@ export async function sessionAllowWithAnswers(
         return;
     }
     const request: SessionPermissionRequest = { id, approved: true, answers: { ...payload.answers } };
-    await sessionRpcWithPreferredSessionScope<void, SessionPermissionRequest>({
-        sessionId,
-        method: SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_LEGACY,
-        payload: request,
-    });
+    await dispatchSessionPermissionDecision({ sessionId, request });
 }
 
 /**
@@ -657,15 +645,7 @@ export async function sessionDeny(
     reason?: string,
 ): Promise<void> {
     const request: SessionPermissionRequest = { id, approved: false, mode, allowedTools, decision, reason };
-    await sessionRpcWithPreferredSessionScope<void, SessionPermissionRequest>({
-        sessionId,
-        method: 'permission',
-        payload: request,
-    });
-
-    // Best-effort local UX recovery: deny/abort decisions should immediately return
-    // the session to non-thinking state even if lifecycle events arrive out of order.
-    applySessionThinkingDecisionRecovery(sessionId);
+    await dispatchSessionPermissionDecision({ sessionId, request });
 }
 
 /**

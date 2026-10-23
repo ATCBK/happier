@@ -10,16 +10,15 @@ import { executeNotificationPermissionAction, handleNotificationBackgroundTask }
 import { resolveNotificationPermissionTarget } from './resolveNotificationPermissionTarget';
 import { initializeNotificationBackgroundTask, resetNotificationBackgroundTaskStateForTests } from './notificationBackgroundTaskState';
 import { useNotificationResponseRouting } from './useNotificationResponseRouting';
-import { notificationPermissionJournal } from './notificationPermissionJournal';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { resetScopedSessionDataKeyCacheForTests, resolveScopedSessionCryptoContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveScopedSessionDataKey';
 import { isServerReachabilityNetworkAllowed, resetServerReachabilitySupervisors, setServerReachabilityNetworkAllowed } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
-import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS } from '@/utils/platform/loadExpoNotifications';
 
 const boundary = vi.hoisted(() => ({
     secrets: new Map<string, string>(),
     rpc: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     push: vi.fn(),
+    navigate: vi.fn(),
     disconnect: vi.fn(),
     alert: vi.fn(),
     connectsImmediately: true,
@@ -42,7 +41,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ router: { push: boundary.push } }).module;
+    return createExpoRouterMock({ router: { push: boundary.push, navigate: boundary.navigate } }).module;
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -76,9 +75,10 @@ vi.mock('socket.io-client', () => ({
 }));
 
 const serverUrl = 'https://notifications.example.test';
+let responseSequence = 0;
 function token(account = 'account') { return `e30.${btoa(JSON.stringify({ sub: account }))}.signature`; }
-function response(actionIdentifier = PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1 as string, identifier: string | null = 'n1') {
-    return { actionIdentifier, notification: { request: { identifier, content: { data: { serverUrl, sessionId: 'session', requestId: 'request' } } } } };
+function response(actionIdentifier = PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1 as string, identifier: string | null = `n${responseSequence}`) {
+    return { actionIdentifier, notification: { request: { identifier, content: { data: { serverUrl, sessionId: 'session', requestId: 'request', occurrenceId: `occurrence-${responseSequence}` } } } } };
 }
 function parsed(value = response()) {
     const tap = parseNotificationTap({ response: value, defaultActionIdentifier: 'expo.modules.notifications.actions.DEFAULT' });
@@ -88,6 +88,7 @@ function parsed(value = response()) {
 
 describe('Android notification permission entry points', () => {
     beforeEach(async () => {
+        responseSequence += 1;
         Platform.OS = 'android';
         // Exercise production secure storage, not the development entitlement fallback.
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_NATIVE_SECURE_STORE_DEV_FALLBACK', 'false');
@@ -95,6 +96,7 @@ describe('Android notification permission entry points', () => {
         boundary.secrets.clear();
         boundary.rpc.mockReset().mockResolvedValue({ ok: true, result: { ok: true } });
         boundary.push.mockClear();
+        boundary.navigate.mockClear();
         boundary.disconnect.mockClear();
         boundary.alert.mockClear();
         boundary.connectsImmediately = true;
@@ -107,6 +109,8 @@ describe('Android notification permission entry points', () => {
         profiles.setServerProfileIdentityForUrl(serverUrl, 'srv_notification_identity');
         profiles.setActiveServerId(profile.id, { scope: 'device' });
         expect(await TokenStorage.setCredentials({ token: token() })).toBe(true);
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ profileScope: { serverId: 'srv_notification_identity', accountId: 'account' } });
         vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async () => new Response(JSON.stringify({
             session: { id: 'session', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
                 metadata: '{}', metadataVersion: 0, agentState: null, agentStateVersion: 0,
@@ -137,12 +141,13 @@ describe('Android notification permission entry points', () => {
         await hook.unmount();
     });
 
-    it('deduplicates different or missing notification IDs by scoped request, including opposite actions', async () => {
+    it('uses the current application result rather than historical local success', async () => {
         await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'confirmed' });
-        await expect(handleNotificationBackgroundTask({ data: response(undefined, 'another') })).resolves.toMatchObject({ status: 'confirmed', duplicate: true });
-        await expect(handleNotificationBackgroundTask({ data: response(undefined, null) })).resolves.toMatchObject({ status: 'confirmed', duplicate: true });
-        await expect(executeNotificationPermissionAction(parsed(response(PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1)))).resolves.toMatchObject({ status: 'conflict' });
-        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        boundary.rpc.mockResolvedValue({ ok: true, result: { ok: false, errorCode: 'permission_request_not_found' } });
+        await expect(handleNotificationBackgroundTask({ data: response(undefined, 'another') })).resolves.toMatchObject({ status: 'rejected' });
+        await expect(handleNotificationBackgroundTask({ data: response(undefined, null) })).resolves.toMatchObject({ status: 'rejected' });
+        await expect(executeNotificationPermissionAction(parsed(response(PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1)))).resolves.toMatchObject({ status: 'rejected' });
+        expect(boundary.rpc).toHaveBeenCalledTimes(4);
     });
 
     it('executes a background press while normal app networking is paused', async () => {
@@ -176,7 +181,6 @@ describe('Android notification permission entry points', () => {
         await TokenStorage.setCredentials({ token: token('other-account') });
         await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'confirmed' });
         expect(profiles.getActiveServerUrl()).toBe(other.serverUrl);
-        expect(notificationPermissionJournal.read({ serverId: 'srv_notification_identity', accountId: 'account', sessionId: 'session', requestId: 'request', action: 'allow' })?.state).toBe('confirmed');
     });
 
     it('applies denial thinking recovery for the active scope but never for another scope', async () => {
@@ -228,6 +232,21 @@ describe('Android notification permission entry points', () => {
         expect(boundary.rpc).not.toHaveBeenCalled();
     });
 
+    it('does not send older notifications lacking occurrence identity', async () => {
+        const old = response();
+        const { occurrenceId: _occurrenceId, ...data } = old.notification.request.content.data;
+        const legacy = { ...old, notification: { request: { ...old.notification.request, content: { data } } } };
+        await expect(handleNotificationBackgroundTask({ data: legacy })).resolves.toMatchObject({ status: 'not_sent' });
+        expect(boundary.rpc).not.toHaveBeenCalled();
+    });
+
+    it('does not downgrade an unsupported occurrence response to the legacy method', async () => {
+        boundary.rpc.mockResolvedValue({ ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE', error: 'Unsupported receiver' });
+        await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'unconfirmed' });
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        expect(boundary.rpc.mock.calls[0]?.[1]).toMatchObject({ method: 'session:session.permission.respondToOccurrence.v1' });
+    });
+
     it('does not emit if the authenticated session endpoint denies access', async () => {
         vi.stubGlobal('fetch', vi.fn(createServerFetchWithReachabilityProbe(async () => new Response('{}', { status: 404 }))));
         await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'not_sent' });
@@ -237,7 +256,7 @@ describe('Android notification permission entry points', () => {
     it('keeps network acknowledgement failure unconfirmed and does not replay it', async () => {
         boundary.rpc.mockRejectedValue(new Error('ACK disconnected'));
         await expect(handleNotificationBackgroundTask({ data: response() })).resolves.toMatchObject({ status: 'unconfirmed' });
-        await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'unconfirmed', duplicate: true });
+        await expect(executeNotificationPermissionAction(parsed(), { allowExecution: false })).resolves.toMatchObject({ status: 'not_sent' });
         expect(boundary.rpc).toHaveBeenCalledTimes(1);
         expect(boundary.disconnect).toHaveBeenCalledTimes(1);
     });
@@ -319,54 +338,39 @@ describe('Android notification permission entry points', () => {
         } finally { vi.useRealTimers(); }
     });
 
-    it.each(['target', 'journal'] as const)('bounds a stalled %s import without issuing after it resolves late', async (stage) => {
+    it('bounds a stalled target import without issuing after it resolves late', async () => {
         const target = await import('./resolveNotificationPermissionTarget');
-        const journal = await import('./notificationPermissionJournal');
         await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc');
         let release!: () => void;
-        const stalledTarget = stage === 'target'
-            ? new Promise<typeof target>((resolve) => { release = () => resolve(target); })
-            : Promise.resolve(target);
-        const stalledJournal = stage === 'journal'
-            ? new Promise<typeof journal>((resolve) => { release = () => resolve(journal); })
-            : Promise.resolve(journal);
+        const stalledTarget = new Promise<typeof target>((resolve) => { release = () => resolve(target); });
         // Stall only the bundle loader. Resolved modules retain real auth/storage/RPC behavior.
         vi.useFakeTimers();
         try {
             const pending = executeNotificationPermissionAction(parsed(), {
                 importTarget: () => stalledTarget,
-                importJournal: () => stalledJournal,
             });
             let settled = false;
             void pending.then(() => { settled = true; });
             await vi.advanceTimersByTimeAsync(29_999);
             expect(settled).toBe(false);
-            await vi.advanceTimersByTimeAsync(1 + EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS);
+            await vi.advanceTimersByTimeAsync(1);
             await expect(pending).resolves.toMatchObject({ status: 'not_sent' });
             release();
             await vi.advanceTimersByTimeAsync(0);
             expect(boundary.rpc).not.toHaveBeenCalled();
-            expect(notificationPermissionJournal.read({ serverId: 'srv_notification_identity', accountId: 'account', sessionId: 'session', requestId: 'request', action: 'allow' })).toBeNull();
         } finally { vi.useRealTimers(); }
     });
 
-    it('settles recovery when its journal import never resolves and keeps the warning content-free', async () => {
-        vi.useFakeTimers();
+    it('records a content-free recovery notice without a second asynchronous load', async () => {
+        const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionRecovery');
+        consumeNotificationPermissionRecoveryNeeded();
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
-            const pending = executeNotificationPermissionAction({ ...parsed(), permissionAction: null }, {
-                importJournal: () => new Promise<typeof import('./notificationPermissionJournal')>(() => {}),
-            });
-            let settled = false;
-            void pending.then(() => { settled = true; });
-            await vi.advanceTimersByTimeAsync(EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS - 1);
-            expect(settled).toBe(false);
-            await vi.advanceTimersByTimeAsync(1);
-            await expect(pending).resolves.toMatchObject({ status: 'not_sent' });
+            await expect(executeNotificationPermissionAction({ ...parsed(), permissionAction: null })).resolves.toMatchObject({ status: 'not_sent' });
             expect(boundary.rpc).not.toHaveBeenCalled();
-            expect(warn).toHaveBeenCalledWith('[notifications] Permission action recovery storage unavailable');
+            expect(consumeNotificationPermissionRecoveryNeeded()).toBe(true);
             expect(warn.mock.calls.flat().join(' ')).not.toContain(serverUrl);
-        } finally { vi.useRealTimers(); warn.mockRestore(); }
+        } finally { warn.mockRestore(); }
     });
 
     it('ignores receipts, malformed bodies and Open/Answer, and refuses malformed or unsaved permission targets', async () => {
@@ -397,17 +401,55 @@ describe('Android notification permission entry points', () => {
         await hook.unmount();
     });
 
+    it('does not reopen a handled background action from the saved response cache', async () => {
+        await expect(handleNotificationBackgroundTask({ data: response() })).resolves.toMatchObject({ status: 'confirmed' });
+        const other = profiles.upsertServerProfile({ serverUrl: 'https://other.example.test', name: 'Other' });
+        profiles.setActiveServerId(other.id, { scope: 'device' });
+        await TokenStorage.setCredentials({ token: token('other-account') });
+        boundary.lastResponse = response();
+        const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
+        await flushHookEffects();
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        expect(boundary.push).not.toHaveBeenCalled();
+        expect(profiles.getActiveServerUrl()).toBe(other.serverUrl);
+        await hook.unmount();
+    });
+
+    it('still opens review for a newer occurrence reusing a native notification identifier', async () => {
+        await handleNotificationBackgroundTask({ data: response() });
+        const next = response();
+        next.notification.request.content.data.occurrenceId = 'next-occurrence';
+        boundary.lastResponse = next;
+        const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
+        await flushHookEffects();
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        expect(boundary.push).toHaveBeenCalledWith('/session/session');
+        await hook.unmount();
+    });
+
     it('keeps ordinary notification taps and Answer routed on Android and iOS', async () => {
         for (const platform of ['android', 'ios'] as const) {
             Platform.OS = platform;
             const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
-            await act(async () => { boundary.listener?.(response('expo.modules.notifications.actions.DEFAULT')); });
+            await act(async () => { boundary.listener?.(response('expo.modules.notifications.actions.DEFAULT', `${platform}-tap-${responseSequence}`)); });
             expect(boundary.push).toHaveBeenCalledWith('/session/session');
             boundary.push.mockClear();
-            await act(async () => { boundary.listener?.(response(PUSH_NOTIFICATION_ACTION_IDS.userActionOpenV1)); });
+            await act(async () => { boundary.listener?.(response(PUSH_NOTIFICATION_ACTION_IDS.userActionOpenV1, `${platform}-answer-${responseSequence}`)); });
             expect(boundary.push).toHaveBeenCalledWith('/session/session');
             await hook.unmount();
         }
         expect(boundary.rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1, PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1])('keeps iOS occurrence-bound permission responses and foreground navigation: %s', async (action) => {
+        Platform.OS = 'ios';
+        const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
+        await act(async () => { boundary.listener?.(response(action)); });
+        await flushHookEffects();
+        await vi.waitFor(() => expect(boundary.rpc).toHaveBeenCalledTimes(1));
+        expect(boundary.rpc.mock.calls[0]?.[1]).toMatchObject({ method: 'session:session.permission.respondToOccurrence.v1' });
+        expect(boundary.navigate).toHaveBeenCalled();
+        expect(profiles.getActiveServerUrl()).toBe(serverUrl);
+        await hook.unmount();
     });
 });

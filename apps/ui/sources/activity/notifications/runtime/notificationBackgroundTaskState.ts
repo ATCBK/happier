@@ -1,4 +1,4 @@
-import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS } from '@/utils/platform/loadExpoNotifications';
+import { PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS } from '../permission/pushNotificationAccess';
 import { withTimeout } from '@/utils/timing/time';
 
 type BackgroundTaskModule = { registerNotificationBackgroundTask(): Promise<boolean> };
@@ -13,7 +13,7 @@ export function initializeNotificationBackgroundTask(platform: string, load: () 
         try {
             const supported = await withTimeout(
                 () => load().registerNotificationBackgroundTask(),
-                EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS,
+                PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS,
                 'notification task registration',
             );
             if (!supported) console.warn('[notifications] Background actions unavailable; using foreground actions');

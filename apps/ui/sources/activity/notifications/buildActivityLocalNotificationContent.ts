@@ -97,6 +97,7 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
         data: {
             ...baseData,
             requestId: params.event.requestId,
+            ...(typeof params.event.occurrenceId === 'string' ? { occurrenceId: params.event.occurrenceId } : {}),
         },
         expo: {
             channelId:

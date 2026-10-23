@@ -567,6 +567,26 @@ opt-out restores previews; users can disable them again from an updated client. 
 the flag and retain their existing reduced hints. There is no new server operation,
 migration, duplicate settings owner, or client-update requirement.
 
+### Notification permission occurrences (development)
+
+Updated CLI permission publication adds an opaque `occurrenceId` to the existing
+agent-state request and notification payload. It remains stable when the same
+occurrence is republished, including session-reference replacement; a replacement
+occurrence receives a new identifier. It contains no tool arguments or their hash.
+
+The additive `session.permission.respondToOccurrence.v1` method requires that
+identifier and delegates to the existing permission admission/settlement owner.
+The actual agent-state update rechecks it, so a delayed response cannot settle a
+new occurrence sharing the local request ID. Existing `permission` callers retain
+their released method and payload; no second permission executor is introduced.
+
+Updated notification handlers do not fall back to the legacy method. A payload
+without occurrence identity opens for review, and an unsupported receiver or
+relay produces operation-scoped recovery. Other app operations and in-app
+permission controls remain available. An older UI can continue using its legacy
+permission operation against an updated CLI. No phone-side permission journal,
+parallel state writer or migration is needed.
+
 ## Migration history
 
 Migration source has a stricter authoring boundary than ordinary internal code:

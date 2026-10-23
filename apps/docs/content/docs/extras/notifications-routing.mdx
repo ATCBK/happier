@@ -47,6 +47,8 @@ Their behavior is intentionally different:
 - On iOS, `Allow` and `Deny` retain their foreground behavior: open the app, send the permission response when safe, and open the session.
 - `Answer` opens the app directly on the session so you can answer in context
 
+Automatic permission responses require an updated CLI and a notification identifying the exact permission occurrence. Older notifications open for in-app review; a response is never downgraded to an older request-ID-only operation if the receiver does not support the new operation.
+
 User-action requests include cases such as:
 
 - **AskUserQuestion**
@@ -109,21 +111,19 @@ If the server is unknown, Happier falls back to navigation and review instead of
 
 ## Android permission action safety and recovery
 
-Android permission actions require a saved server with matching URL, saved credentials, and a non-empty session and request ID. They use the saved profile's canonical server identity and authenticated account scope, including when that server is inactive. They never add an unknown server, change the selected server, or queue an automatic approval for later sign-in.
+Android permission actions require a saved server with matching URL, saved credentials, and session, request and permission-occurrence identifiers. They use the saved profile's canonical server identity and authenticated account scope, including when that server is inactive. They never add an unknown server, change the selected server, or queue an automatic approval for later sign-in.
 
 The existing account-scoped session RPC resolves session access and encryption without a mounted UI. An account hint, when present in the notification, must match the saved credentials. Older payloads do not include that hint: for those, authenticated session access and the CLI's live request validation remain the authority. Expired or missing requests must be reviewed in the session; the app does not infer success from transport delivery alone.
 
 Notification permission actions use a one-shot authenticated connection even while normal app networking is paused in the background. The connection closes after the action or when its execution deadline expires, even if native encryption has stalled; it does not resume background sync or change the active server. A late connection cannot send an expired action. The session lookup retains the same authenticated-origin checks and encryption handling as other account-scoped requests.
 
-The foreground listener and background task share one request coordinator. Its device-local journal is keyed by server, account, session, and request, not notification ID. Concurrent identical decisions share work; a conflicting decision cannot overwrite it. The journal records issuance before the RPC emits. Only an explicit application acknowledgement of success is confirmed. Rejection, timeout, or an older acknowledgement without a result is not reported as approval success.
+The foreground listener and background task share active work through one coordinator. Concurrent identical decisions share work; a conflicting active decision cannot overwrite it. The CLI checks the permission occurrence again when admitting the response, so an old notification cannot answer a newer request that happens to reuse the same request ID. Only an explicit application acknowledgement of success is confirmed. Rejection, timeout, or an acknowledgement without a result is not reported as approval success.
 
-Issued decisions are never automatically retried, including after restart or a lost acknowledgement. A saved cold-start notification response is an observation, not fresh permission to send again. A decision that is known to have never been sent (for example, the device was offline) can be retried — or changed — by pressing a notification button again; only an ambiguous issuance requires in-app review. This is conservative replay protection, not an exactly-once network guarantee.
+Decisions are never automatically retried after a failed or uncertain response. A saved cold-start notification response is an observation, not fresh permission to send again. A fresh button press can try again; the CLI remains responsible for accepting only a response to the current outstanding occurrence. After a lost acknowledgement, review the current request in the session before responding again. The phone does not keep a second persistent permission history or promise exactly-once network delivery.
 
-If Android opens Happier from a terminated state but only exposes a saved response (with no live listener or background task handling the press), the saved response does not send the approval. Instead, Happier navigates to the relevant session — using the same server-safety rules as an ordinary notification tap — so you can review and answer the current request in the app. This also applies to the foreground fallback when background registration is unavailable.
+If Android opens Happier from a terminated state but only exposes an unhandled saved response, the saved response does not send the approval. Instead, Happier navigates to the relevant session — using the same server-safety rules as an ordinary notification tap — so you can review and answer the current request in the app. This also applies to the foreground fallback when background registration is unavailable. A cached response already handled in the running app does not reopen the session or change the selected server on a later routing mount.
 
-If an action cannot be confirmed, a generic recovery notice is saved for when Happier is active. The notice does not open the app from the background and does not reveal session content. Open the relevant server/session yourself to check the current request before responding again. The journal stores only scope/request identifiers, decision, state, and timestamp, never tokens or tool arguments. It never evicts a record of an ambiguous (issued but unconfirmed) decision; if the journal holds only ambiguous records at its bounded capacity, or if storage fails, notification actions fail closed and require in-app review.
-
-The journal retains at most 512 request records. At capacity, the oldest settled or never-sent records are reclaimed automatically to admit new requests, so everyday use is not limited over the device's lifetime. Records of ambiguous issuance are never reclaimed; clearing replay-protection storage by hand is not a safe workaround. Use the normal in-app permission controls when an action reports that it needs review.
+If an action cannot be confirmed, a generic recovery notice is saved for when Happier is active. The notice does not open the app from the background and does not reveal session content. Open the relevant server/session yourself to check the current request before responding again. Only the presentation notice is persisted; it contains no approval, token or tool arguments, and imposes no lifetime request quota.
 
 ### Native build and lifecycle limits
 

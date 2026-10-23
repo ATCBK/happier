@@ -2,6 +2,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as Notifications from 'expo-notifications';
 import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS } from '@/utils/platform/loadExpoNotifications';
 import { withTimeout } from '@/utils/timing/time';
+import { markNotificationPermissionRecoveryNeeded } from './notificationPermissionRecovery';
 
 export const NOTIFICATION_BACKGROUND_TASK_NAME = 'happier-notification-actions';
 
@@ -24,9 +25,6 @@ export async function runNotificationBackgroundTask(
     } catch {
         console.warn('[notifications] Permission task runtime unavailable; open Happier to review');
         try {
-            const { markNotificationPermissionRecoveryNeeded } = await withTimeout(
-                () => import('./notificationPermissionJournal'), EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, 'notification recovery module load',
-            );
             markNotificationPermissionRecoveryNeeded();
         } catch {
             console.warn('[notifications] Permission action recovery storage unavailable');

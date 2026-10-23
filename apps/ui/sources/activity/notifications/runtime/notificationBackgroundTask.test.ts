@@ -49,7 +49,7 @@ describe('notification native task adapter', () => {
     it('bounds the task import without invoking a handler that loads after timeout', async () => {
         const { runNotificationBackgroundTask } = await import('./notificationBackgroundTask');
         const actions = await import('./notificationPermissionActions');
-        const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionJournal');
+        const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionRecovery');
         consumeNotificationPermissionRecoveryNeeded();
         let release!: () => void;
         const stalled = new Promise<typeof actions>((resolve) => { release = () => resolve(actions); });
@@ -75,7 +75,7 @@ describe('notification native task adapter', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
             await native.execute?.({ data: null, error: { message: 'sensitive-body' } });
-            const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionJournal');
+            const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionRecovery');
             expect(consumeNotificationPermissionRecoveryNeeded()).toBe(true);
             expect(warn.mock.calls.flat().join(' ')).not.toContain('sensitive-body');
         } finally { warn.mockRestore(); }

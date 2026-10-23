@@ -1,78 +1,57 @@
-import type { NotificationPermissionJournal, NotificationPermissionRequest, NotificationPermissionState } from './notificationPermissionJournal';
-import { withTimeout } from '@/utils/timing/time';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
+export type NotificationPermissionRequest = ServerAccountScope & Readonly<{
+    sessionId: string;
+    requestId: string;
+    occurrenceId: string;
+    action: 'allow' | 'deny';
+}>;
 export type NotificationPermissionOutcome = Readonly<{
-    status: Exclude<NotificationPermissionState, 'issued'> | 'ignored' | 'conflict';
-    duplicate?: boolean;
+    status: 'not_sent' | 'confirmed' | 'rejected' | 'unconfirmed' | 'ignored' | 'conflict';
 }>;
 
-export function createNotificationPermissionCoordinator(journal: NotificationPermissionJournal) {
+/** Coordinates active callbacks only. The CLI owns permission admission and settlement. */
+export function createNotificationPermissionCoordinator() {
     const inFlight = new Map<string, { action: 'allow' | 'deny'; promise: Promise<NotificationPermissionOutcome> }>();
 
     return function run(
         request: NotificationPermissionRequest,
         send: (onIssued: () => void, signal: AbortSignal) => Promise<unknown>,
-        options: Readonly<{ allowExecution?: boolean }> = {},
+        options: Readonly<{ allowExecution?: boolean; signal?: AbortSignal }> = {},
     ): Promise<NotificationPermissionOutcome> {
-        const key = journal.key(request);
+        const key = JSON.stringify([request.serverId, request.accountId, request.sessionId, request.requestId, request.occurrenceId]);
         const pending = inFlight.get(key);
-        if (pending) return pending.action === request.action
-            ? pending.promise
-            : Promise.resolve({ status: 'conflict' });
+        if (pending) return pending.action === request.action ? pending.promise : Promise.resolve({ status: 'conflict' });
+        // Observing a cached response must never acquire execution ownership.
+        if (options.allowExecution === false || options.signal?.aborted) return Promise.resolve({ status: 'not_sent' });
 
         const promise = (async (): Promise<NotificationPermissionOutcome> => {
             let issued = false;
             let finished = false;
             const lifetime = new AbortController();
+            const onAbort = () => lifetime.abort();
+            options.signal?.addEventListener('abort', onAbort, { once: true });
+            let rejectAborted: (() => void) | undefined;
+            const aborted = new Promise<never>((_, reject) => {
+                rejectAborted = () => reject(new Error('Notification action ended'));
+                lifetime.signal.addEventListener('abort', rejectAborted, { once: true });
+            });
             try {
-                const previous = journal.read(request);
-                if (previous && previous.state !== 'not_sent') {
-                    if (previous.action !== request.action) return { status: 'conflict' };
-                    return { status: previous.state === 'issued' ? 'unconfirmed' : previous.state, duplicate: true };
-                }
-                // A never-sent record issued nothing: a live press may retry or
-                // change the decision. Saved responses are observations, not
-                // fresh intent, and still cannot execute.
-                if (options.allowExecution === false) return { status: 'not_sent' };
-                journal.ensureCapacity(request);
-                const result = await withTimeout(() => send(() => {
-                    // Expo SDK 54 RNHeadlessAppLoader uses the app's ReactHost. Both
-                    // entry points run in its JS runtime. This synchronous read/write
-                    // has no await: persist BEFORE the existing RPC emits. This is not
-                    // an inter-process CAS or an exactly-once delivery guarantee.
-                    if (finished) throw new Error('Notification action execution ended');
-                    const current = journal.read(request);
-                    // A never-sent record of either action is overwritable by this
-                    // live press; anything else means an issuance already happened.
-                    if (current && current.state !== 'not_sent') {
-                        throw new Error('Notification permission was already issued');
-                    }
-                    journal.write(request, 'issued');
+                const result = await Promise.race([send(() => {
+                    if (finished || lifetime.signal.aborted) throw new Error('Notification action ended');
                     issued = true;
-                }, lifetime.signal), 30_000, 'notification permission RPC');
+                }, lifetime.signal), aborted]);
                 if (!issued) return { status: 'not_sent' };
                 const status = typeof result === 'object' && result !== null && 'ok' in result
                     ? result.ok === true ? 'confirmed' : result.ok === false ? 'rejected' : 'unconfirmed'
                     : 'unconfirmed';
-                journal.write(request, status);
                 return { status };
             } catch {
-                const status = issued ? 'unconfirmed' : 'not_sent';
-                // If persistence failed, leave any issued marker intact. A later
-                // launch treats it as unconfirmed and cannot blindly replay it.
-                try {
-                    const current = journal.read(request);
-                    if (!current || current.state === 'not_sent' || issued) journal.write(request, status);
-                } catch {
-                    // Caller reports a generic recovery signal, without sensitive errors.
-                }
-                return { status };
+                return { status: issued ? 'unconfirmed' : 'not_sent' };
             } finally {
-                // A timed-out async preflight can still resolve later. Its onIssued
-                // callback must throw before it can emit after we released ownership.
                 finished = true;
-                // Disposal must not wait for a stalled crypto/native await to
-                // reach the RPC's finally block. Issued work is never replayed.
+                options.signal?.removeEventListener('abort', onAbort);
+                if (rejectAborted) lifetime.signal.removeEventListener('abort', rejectAborted);
                 lifetime.abort();
             }
         })();

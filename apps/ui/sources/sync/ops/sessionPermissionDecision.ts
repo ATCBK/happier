@@ -8,31 +8,15 @@
  */
 import { storage } from '../domains/state/storage';
 import { nowServerMs } from '../runtime/time';
-import { getActiveServerId, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { sessionRpcWithServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SessionPermissionResponse } from '@happier-dev/protocol';
+import { areServerProfileIdentifiersEquivalent, getActiveServerId } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
+import { sessionRpcWithServerScope, sessionRpcWithServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 
-export interface SessionPermissionRequest {
-    id: string;
-    approved: boolean;
-    reason?: string;
-    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-    allowedTools?: string[];
-    decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
-    execPolicyAmendment?: {
-        command: string[];
-    };
-    /**
-     * Optional permission updates to apply inside the agent runtime (provider-specific).
-     * This is used to accept provider-suggested permission changes (e.g. Claude Agent SDK `permission_suggestions`).
-     */
-    updatedPermissions?: unknown;
-    /**
-     * AskUserQuestion: structured answers keyed by question text.
-     * When present, the agent can complete the tool call without requiring a follow-up user message.
-     */
-    answers?: Record<string, string>;
-}
+export type SessionPermissionRequest = SessionPermissionResponse;
 
 export const NOTIFICATION_PERMISSION_DENY_REASON = 'Denied from notification';
 
@@ -68,37 +52,89 @@ export function applySessionThinkingDecisionRecovery(sessionId: string): void {
     ]);
 }
 
+/** A successful transport is insufficient: the CLI must accept the decision. */
+export function isSessionPermissionDecisionAccepted(result: unknown): boolean {
+    return typeof result === 'object' && result !== null && 'ok' in result && result.ok === true;
+}
+
 /**
- * Send a notification permission decision to an explicit server/account scope,
- * preserving one-shot network mode, cancellation and issuance information, and
- * returning the raw application acknowledgement for the caller to interpret.
+ * One dispatcher for foreground, action-executor and headless permission calls.
+ * Target adapters retain their transport semantics; this owner interprets the
+ * application acknowledgment and applies local recovery only in its active scope.
  */
+export async function dispatchSessionPermissionDecision(params: Readonly<{
+    sessionId: string;
+    request: SessionPermissionRequest;
+    target?: Readonly<{ scope: ServerAccountScope }> | Readonly<{ serverId?: string | null }>;
+    networkMode?: 'background-task';
+    signal?: AbortSignal;
+    onIssued?: () => void;
+}>): Promise<unknown> {
+    const explicitScope = params.target && 'scope' in params.target ? params.target.scope : null;
+    const serverId = explicitScope?.serverId
+        ?? (params.target && 'serverId' in params.target ? params.target.serverId : resolvePreferredServerIdForSessionId(params.sessionId));
+    const recoveryScope = explicitScope ?? getActiveServerAccountScope();
+    const method = typeof params.request.occurrenceId === 'string'
+        ? SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_TO_OCCURRENCE_V1
+        : SESSION_RPC_METHODS.SESSION_PERMISSION_RESPOND_LEGACY;
+    const result = explicitScope
+        ? await sessionRpcWithServerAccountScope<unknown, SessionPermissionRequest>({
+            scope: explicitScope,
+            sessionId: params.sessionId,
+            method,
+            payload: params.request,
+            networkMode: params.networkMode,
+            signal: params.signal,
+            onIssued: params.onIssued,
+        })
+        : await sessionRpcWithServerScope<unknown, SessionPermissionRequest>({
+            sessionId: params.sessionId,
+            serverId,
+            method,
+            payload: params.request,
+            onIssued: params.onIssued,
+        });
+
+    const activeScope = getActiveServerAccountScope();
+    const stillTargetsActiveScope = recoveryScope
+        ? areServerAccountScopesEqual(recoveryScope, activeScope)
+        : activeScope === null && !explicitScope;
+    if (
+        params.request.approved === false
+        && isSessionPermissionDecisionAccepted(result)
+        && stillTargetsActiveScope
+        && (!serverId || areServerProfileIdentifiersEquivalent(serverId, getActiveServerId()))
+    ) {
+        try {
+            applySessionThinkingDecisionRecovery(params.sessionId);
+        } catch {
+            // Recovery is best-effort; never replace the authoritative CLI ack.
+            console.warn('[permissions] Permission deny local recovery unavailable');
+        }
+    }
+    return result;
+}
+
+/** Notification adapter for explicit server/account and one-shot network execution. */
 export async function sessionPermissionDecisionWithServerAccountScope(params: Readonly<{
     scope: ServerAccountScope;
     sessionId: string;
     requestId: string;
+    occurrenceId?: string;
     action: 'allow' | 'deny';
     networkMode?: 'background-task';
     signal?: AbortSignal;
     onIssued?: () => void;
 }>): Promise<unknown> {
-    const result = await sessionRpcWithServerAccountScope<unknown, SessionPermissionRequest>({
-        scope: params.scope,
+    return await dispatchSessionPermissionDecision({
         sessionId: params.sessionId,
-        method: 'permission',
+        request: {
+            ...buildNotificationPermissionDecisionRequest(params.action, params.requestId),
+            ...(typeof params.occurrenceId === 'string' ? { occurrenceId: params.occurrenceId } : {}),
+        },
+        target: { scope: params.scope },
         networkMode: params.networkMode,
         signal: params.signal,
-        payload: buildNotificationPermissionDecisionRequest(params.action, params.requestId),
         onIssued: params.onIssued,
     });
-    // Background execution must not mutate another scope's UI state, and local
-    // UX recovery must never corrupt the authoritative acknowledgement above.
-    if (params.action === 'deny' && params.scope.serverId === resolveServerProfileScopeIdForIdentifier(getActiveServerId())) {
-        try {
-            applySessionThinkingDecisionRecovery(params.sessionId);
-        } catch {
-            console.warn('[notifications] Permission deny local recovery unavailable');
-        }
-    }
-    return result;
 }

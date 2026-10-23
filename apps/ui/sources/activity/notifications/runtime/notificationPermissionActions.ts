@@ -1,28 +1,22 @@
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
 import { parseNotificationTap, type ParsedNotificationTap } from '../notificationRouting';
 import { createNotificationPermissionCoordinator, type NotificationPermissionOutcome } from './notificationPermissionCoordinator';
+import { markNotificationResponseHandled } from './notificationResponseConsumption';
+import { markNotificationPermissionRecoveryNeeded } from './notificationPermissionRecovery';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { withTimeout } from '@/utils/timing/time';
-import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS } from '@/utils/platform/loadExpoNotifications';
 
-type ImportJournal = () => Promise<typeof import('./notificationPermissionJournal')>;
-const importJournalModule: ImportJournal = () => import('./notificationPermissionJournal');
-
-let coordinator: ReturnType<typeof createNotificationPermissionCoordinator> | undefined;
+const coordinate = createNotificationPermissionCoordinator();
 
 export function isNotificationPermissionAction(parsed: ParsedNotificationTap): boolean {
     return parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1
         || parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1;
 }
 
-async function reportOutcome(outcome: NotificationPermissionOutcome, importJournal: ImportJournal = importJournalModule): Promise<NotificationPermissionOutcome> {
+function reportOutcome(outcome: NotificationPermissionOutcome): NotificationPermissionOutcome {
     if (outcome.status !== 'confirmed' && outcome.status !== 'ignored') {
-        // An on-by-default, content-free signal, including failures before a scope
-        // can be resolved. Detailed RPC errors may contain sensitive identifiers.
         console.warn('[notifications] Permission action requires in-app review:', outcome.status);
         try {
-            const { markNotificationPermissionRecoveryNeeded } = await withTimeout(
-                importJournal, EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, 'notification recovery module load',
-            );
             markNotificationPermissionRecoveryNeeded();
         } catch {
             console.warn('[notifications] Permission action recovery storage unavailable');
@@ -35,51 +29,42 @@ export async function executeNotificationPermissionAction(
     parsed: ParsedNotificationTap,
     options: Readonly<{
         allowExecution?: boolean;
-        // Bundle-loader seams, like loadExpoNotifications; domain behavior stays real.
+        // Bundle-loader boundary; target/authentication logic remains real.
         importTarget?: () => Promise<typeof import('./resolveNotificationPermissionTarget')>;
-        importJournal?: ImportJournal;
     }> = {},
 ): Promise<NotificationPermissionOutcome> {
-    const importJournal = options.importJournal ?? importJournalModule;
-    const report = (outcome: NotificationPermissionOutcome) => reportOutcome(outcome, importJournal);
     if (!isNotificationPermissionAction(parsed)) return { status: 'ignored' };
-    if (!parsed.permissionAction || !parsed.serverUrl) return report({ status: 'not_sent' });
+    // Cached notification delivery is observation, never authorization to send.
+    if (options.allowExecution === false) return { status: 'not_sent' };
+    markNotificationResponseHandled(parsed);
+    if (!parsed.permissionAction?.occurrenceId || !parsed.serverUrl) return reportOutcome({ status: 'not_sent' });
+    const { sessionId, requestId, occurrenceId, action } = parsed.permissionAction;
     const serverUrl = parsed.serverUrl;
-    const { sessionId, requestId, action } = parsed.permissionAction;
-    if (!sessionId.trim() || !requestId.trim()) return report({ status: 'not_sent' });
+    if (!sessionId.trim() || !requestId.trim()) return reportOutcome({ status: 'not_sent' });
+
+    const lifetime = new AbortController();
+    let issued = false;
     try {
-        // Share the existing authentication deadline across its lazy imports and
-        // target resolution. The preflight cannot issue; coordinator entry stays
-        // OUTSIDE the timed promise, so late completion never starts a decision.
-        const preflight = await withTimeout(async () => {
+        // One action lifetime uses the existing scoped-operation budget across
+        // preparation and dispatch. This is not an Android execution guarantee.
+        return reportOutcome(await withTimeout(async () => {
             const { resolveNotificationPermissionTarget } = await (options.importTarget ?? (() => import('./resolveNotificationPermissionTarget')))();
             const scope = await resolveNotificationPermissionTarget(serverUrl, parsed.accountId);
-            if (!scope) return null;
-            const { notificationPermissionJournal } = await importJournal();
-            return { scope, journal: notificationPermissionJournal };
-        }, 30_000, 'notification permission preflight');
-        if (!preflight) return report({ status: 'not_sent' });
-        const { scope, journal } = preflight;
-        coordinator ??= createNotificationPermissionCoordinator(journal);
-        const request = { ...scope, sessionId, requestId, action };
-        // getLastNotificationResponseAsync is a saved event, not new user intent.
-        // It may report an issued result, but must never initiate/retry a decision.
-        return report(await coordinator(request, async (onIssued, signal) => {
-            // The ops module owns the decision payload and dispatch, shared with
-            // the foreground sessionAllow/sessionDeny owner.
-            const { sessionPermissionDecisionWithServerAccountScope } = await import('@/sync/ops/sessionPermissionDecision');
-            return sessionPermissionDecisionWithServerAccountScope({
-                scope,
-                sessionId,
-                requestId,
-                action,
-                networkMode: 'background-task',
-                signal,
-                onIssued,
-            });
-        }, options));
+            if (!scope || lifetime.signal.aborted) return { status: 'not_sent' } as const;
+            return coordinate({ ...scope, sessionId, requestId, occurrenceId, action }, async (onIssued, signal) => {
+                const { sessionPermissionDecisionWithServerAccountScope } = await import('@/sync/ops/sessionPermissionDecision');
+                return sessionPermissionDecisionWithServerAccountScope({
+                    scope, sessionId, requestId, occurrenceId, action,
+                    networkMode: 'background-task',
+                    signal,
+                    onIssued: () => { onIssued(); issued = true; },
+                });
+            }, { signal: lifetime.signal });
+        }, DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS, 'notification permission action'));
     } catch {
-        return report({ status: 'not_sent' });
+        return reportOutcome({ status: issued ? 'unconfirmed' : 'not_sent' });
+    } finally {
+        lifetime.abort();
     }
 }
 

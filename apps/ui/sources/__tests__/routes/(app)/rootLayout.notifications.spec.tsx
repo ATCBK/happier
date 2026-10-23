@@ -479,7 +479,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_789');
     });
 
-    it('sends a permission allow response and navigates when notification action is pressed', async () => {
+    it('opens an older permission notification for review without automatically approving', async () => {
         const Notifications = await import('expo-notifications');
         vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
             actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
@@ -503,12 +503,12 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionAllowSpy).toHaveBeenCalledWith('s_allow', 'p_allow', undefined, undefined, 'approved');
+        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
 
-    it('switches to a saved inactive server and performs permission allow when notification action is pressed', async () => {
+    it('opens an older inactive-server permission notification for review without approving', async () => {
         mockState.serverProfilesValue = [
             { id: 'server-1', serverUrl: 'https://api.happier.dev' },
             { id: 'server-2', serverUrl: 'https://company.example.test' },
@@ -542,7 +542,7 @@ describe('App RootLayout notifications', () => {
             scope: 'device',
             refreshAuth: expect.any(Function),
         });
-        expect(mockState.sessionAllowSpy).toHaveBeenCalledWith('s_allow_2', 'p_allow_2', undefined, undefined, 'approved');
+        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_2', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
@@ -714,7 +714,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
     });
 
-    it('sends a permission deny response and navigates when notification action is pressed', async () => {
+    it('opens an older deny notification for review without automatically responding', async () => {
         const Notifications = await import('expo-notifications');
         vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
             actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
@@ -738,7 +738,7 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionDenySpy).toHaveBeenCalledWith('s_deny', 'p_deny', undefined, undefined, 'denied', 'Denied from notification');
+        expect(mockState.sessionDenySpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_deny', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });

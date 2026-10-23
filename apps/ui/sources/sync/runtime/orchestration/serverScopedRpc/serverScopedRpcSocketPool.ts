@@ -12,6 +12,7 @@ import {
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 
 import type { ScopedSocketClient, ScopedSocketConnectParams } from './serverScopedRpcTypes';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
 type SocketLike = Readonly<{
     connected: boolean;
@@ -306,7 +307,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
     const acquire = async (params: ScopedSocketConnectParams): Promise<ScopedSocketClient> => {
         const serverUrl = normalizeServerUrl(params.serverUrl);
         const token = String(params.token ?? '');
-        const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 30_000;
+        const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
         if (!serverUrl) {
             throw new Error('Missing server URL');
         }
