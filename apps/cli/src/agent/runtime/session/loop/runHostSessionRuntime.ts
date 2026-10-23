@@ -2463,7 +2463,9 @@ export async function runHostSessionRuntime(
       if (signal.aborted) abort();
       try {
         return await Promise.race([
-          waitForSessionFollowWakeInvalidation(readSessionFollowWakeInvalidationGeneration(), controller.signal),
+          // Retain a change between passes until taken; a refused host has no context to take.
+          waitForSessionFollowWakeInvalidation(nativeStartupRefusal
+            ? readSessionFollowWakeInvalidationGeneration() : observedSessionFollowWakeGeneration, controller.signal),
           ...(!nativeStartupRefusal && currentLifecycleSession.waitForExecutionRunWorkerUpdateChange
             ? [currentLifecycleSession.waitForExecutionRunWorkerUpdateChange(controller.signal)] : []),
           ...(!nativeStartupRefusal && readWorkflowInputPort() ? [readWorkflowInputPort()!.waitForChange(controller.signal)] : []),
