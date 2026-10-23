@@ -12,7 +12,7 @@ import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } 
 import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
 import { readRunnerActivationAuthentication } from "@/app/ephemeralRunner/activationAuthentication";
 import { readRunnerCreatorCurrentnessInTx } from "@/app/ephemeralRunner/activationCurrentness";
-import { resolveTeamCredentialBrokerMachineForSaveInTx } from "./brokerMachineEligibility";
+import { readEligibleBrokerMachineInTx } from "./brokerMachineEligibility";
 import { isTeamCredentialBrokerPlacementBoundToMachineInTx } from "./brokerPlacementResolver";
 
 export type RunnerBrokerReadinessAuthorization = Readonly<{
@@ -73,16 +73,12 @@ export async function readRunnerBrokerReadinessProjectionInTx(
     })).status !== "current") return null;
     // The broker is the exact Machine frozen into this activation's binding, not
     // the resource's placement column: a Pool placement has no column of its own.
-    const eligibleBroker = await resolveTeamCredentialBrokerMachineForSaveInTx(tx, {
+    const eligibleBroker = await readEligibleBrokerMachineInTx(tx, {
         custodianAccountId: resource.custodianAccountId,
         brokerMachineId: input.selection.brokerMachineId,
     });
     if (!eligibleBroker.ok) return null;
-    const machine = await tx.machine.findUnique({
-        where: { id: eligibleBroker.machineId },
-        select: { operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true },
-    });
-    if (!machine) return null;
+    const { machine } = eligibleBroker;
     const endpoint = readMachineIrohEndpointAuthorityV1({ capabilities: machine.operationProtocolCapabilities,
         revision: machine.operationProtocolCapabilitiesRevision });
     return endpoint ? {
@@ -148,7 +144,7 @@ export async function authorizeRunnerBrokerReadiness(input: Readonly<{
             custodianAccountId: resource.custodianAccountId,
             source,
         })).status !== "current") return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "source_unavailable" } };
-        const eligibleBroker = await resolveTeamCredentialBrokerMachineForSaveInTx(tx, {
+        const eligibleBroker = await readEligibleBrokerMachineInTx(tx, {
             custodianAccountId: input.custodianAccountId,
             brokerMachineId: activation.brokerMachineId,
         });
@@ -158,11 +154,7 @@ export async function authorizeRunnerBrokerReadiness(input: Readonly<{
             credentialSelectionBinding: activation.credentialSelectionBinding,
             readiness: { kind: eligibleBroker.error },
         };
-        const machine = await tx.machine.findUnique({
-            where: { id: eligibleBroker.machineId },
-            select: { operationProtocolCapabilities: true, operationProtocolCapabilitiesRevision: true },
-        });
-        if (!machine) return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "broker_unavailable" } };
+        const { machine } = eligibleBroker;
         const endpoint = readMachineIrohEndpointAuthorityV1({
             capabilities: machine.operationProtocolCapabilities,
             revision: machine.operationProtocolCapabilitiesRevision,

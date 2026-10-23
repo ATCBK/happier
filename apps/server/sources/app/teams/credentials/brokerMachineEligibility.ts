@@ -39,7 +39,14 @@ export type TeamCredentialBrokerMachineEligibilityError = Readonly<{
     error: "broker_unavailable" | "update_required";
 }>;
 
-async function readEligibleBrokerMachineInTx(tx: Tx, target: TeamCredentialBrokerMachineTarget) {
+/** Current admitted Machine facts for consumers that also need its endpoint. */
+export async function readEligibleBrokerMachineInTx(
+    tx: Tx,
+    target: TeamCredentialBrokerMachineTarget,
+): Promise<Readonly<{
+    ok: true;
+    machine: TeamCredentialBrokerMachineProjection & Readonly<{ id: string }>;
+}> | TeamCredentialBrokerMachineEligibilityError> {
     if (!target.brokerMachineId) return { ok: false, error: "broker_unavailable" } as const;
     const machine = await tx.machine.findFirst({
         where: { id: target.brokerMachineId, accountId: target.custodianAccountId },
