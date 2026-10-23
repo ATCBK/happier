@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deriveSessionFollowWakeEventLocalIdV1, SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol';
 import { decodeBase64 } from 'privacy-kit';
+import { PrismaClient } from '@prisma/client';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
@@ -15,6 +16,7 @@ import { setSessionManager } from './sessionManagerService';
 import { assertConcurrentFailedTurnRouteAcknowledgements } from './sessionFollowAcknowledgement.testkit';
 import { acceptAccountFollowPersonalProgress } from './accountFollowPersonalProgress';
 import { getAccountFollowRule, setAccountFollowRule } from './accountFollowRuleService';
+import { createDiscussion } from '@/app/discussions/mutations';
 
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Follow accepted-prefix ACK on PostgreSQL', () => {
     beforeAll(async () => {
@@ -23,6 +25,77 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('F
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it.each([1, 128])('reads one destination mute snapshot across %i Session and Discussion candidates', async count => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const destination = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        const sourceIds = Array.from({ length: count }, () => randomUUID());
+        await db.session.createMany({ data: sourceIds.map(id => ({ id, accountId: owner.id, tag: id, metadata: '{}', encryptionMode: 'plain', seq: 1 })) });
+        await db.sessionFollowEdge.createMany({ data: sourceIds.map(id => ({ sourceSessionId: id,
+            sourceKey: `session:${id}`, destinationSessionId: destination.id, policyJson: '{"preset":"everything"}' })) });
+        const created = await createDiscussion({ actorAccountId: owner.id,
+            authentication: createPresentUserSessionAccessAuthentication({ env: {} }), request: {
+                creationLocalId: randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Mute observation' } },
+                participants: [{ kind: 'session', sessionId: destination.id }],
+                firstMessage: { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Opening' }] } }, mentionedAccountIds: [] },
+            } });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) throw new Error(created.error);
+        const discussion = created.value.discussion;
+        // The canonical creator establishes key readiness, membership and Follow
+        // attachment. Only the scale-shaped immutable message rows are supplied.
+        await db.discussionMessage.createMany({ data: Array.from({ length: count + 1 }, (_, index) => ({
+            discussionId: discussion.id, localId: randomUUID(), requestEqualityEvidenceV1: {}, seq: index + 2,
+            authorAccountId: owner.id, content: { t: 'plain', v: { v: 1, parts: [
+                { t: 'mention', participant: { kind: 'session', sessionId: destination.id } },
+            ] } },
+            ...(index < count ? { producerV1: { v: 1, kind: 'agent', sessionId: sourceIds[0]! } } : {}),
+            addressingV1: { throughSeq: index + 2, participantSessionIds: [destination.id] },
+        })) });
+        await db.discussion.update({ where: { id: discussion.id }, data: { messageSeq: count + 2 } });
+        await db.session.update({ where: { id: destination.id }, data: { deliveryMutes: JSON.stringify([
+            { kind: 'sender_session', sessionId: sourceIds[0] },
+        ]) } });
+        const statements: string[] = [];
+        const traced = new PrismaClient({ log: [{ emit: 'event', level: 'query' }] });
+        traced.$on('query', event => statements.push(event.query));
+        await traced.$connect();
+        const originalTransaction = db.$transaction;
+        // Observe engine-emitted SQL; all observation/access/reply decisions stay real.
+        db.$transaction = new Proxy(originalTransaction, { apply(_target, _receiver, args) {
+            return Reflect.apply(traced.$transaction, traced, args);
+        } });
+        const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            destinationSessionId: destination.id,
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id,
+                authentication: createPresentUserSessionAccessAuthentication({ env: {} }) },
+        }));
+        try {
+            statements.length = 0;
+            const selected = await observe();
+            expect(selected.currentSourceSessionIds).toHaveLength(count);
+            expect(selected.observations.filter(row => 'sourceSessionId' in row)).toHaveLength(count - 1);
+            expect(selected.observations.filter(row => 'source' in row)).toEqual([
+                expect.objectContaining({ addressing: expect.objectContaining({ discussionId: discussion.id, throughSeq: count + 2 }) }),
+            ]);
+            const muteReads = statements.filter(query => /^SELECT\b/.test(query) && query.includes('"deliveryMutes"'));
+            expect(muteReads).toHaveLength(1);
+            await db.session.update({ where: { id: destination.id }, data: { deliveryMutes: '{malformed' } });
+            expect((await observe()).observations).toEqual([]);
+            await db.session.update({ where: { id: destination.id }, data: { deliveryMutes: null } });
+            const unmuted = await observe();
+            expect(unmuted.observations.filter(row => 'sourceSessionId' in row)).toHaveLength(count);
+            expect(unmuted.observations.filter(row => 'source' in row)).toEqual([
+                expect.objectContaining({ addressing: expect.objectContaining({ throughSeq: 2 }) }),
+            ]);
+            await db.discussionParticipant.update({ where: { discussionId_sessionId: { discussionId: discussion.id, sessionId: destination.id } }, data: { removedAt: new Date() } });
+            expect((await observe()).observations.filter(row => 'source' in row)).toEqual([]);
+        } finally {
+            db.$transaction = originalTransaction;
+            await traced.$disconnect();
+            // The disposable PostgreSQL harness owns related-row teardown.
+        }
+    });
 
     it('admits personal progress before a Session deletion lock can wait on its Account publication', async () => {
         const account = await db.account.create({ data: { id: `z-${randomUUID()}`, publicKey: randomUUID(), encryptionMode: 'plain' } });
