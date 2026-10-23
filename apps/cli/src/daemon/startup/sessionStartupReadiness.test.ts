@@ -6,6 +6,8 @@ import { Server } from 'socket.io';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { configuration, reloadConfiguration } from '@/configuration';
+import { reportSessionToDaemonIfRunning } from '@/agent/runtime/startupSideEffects';
+import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH, AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
@@ -34,7 +36,7 @@ import { createSessionStartupReadinessHandler } from './sessionStartupReadiness'
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
 
 describe('session startup acknowledgement', () => {
-    it.each(['service ingress', 'restart reattachment', 'foreground promotion'] as const)(
+    it.each(['service ingress', 'restart reattachment', 'foreground promotion', 'committed Team Session'] as const)(
         'settles fresh wrapper creation only after the captured child marker and runner authority are published: %s', async (phase) => {
         const home = await mkdtemp(join(tmpdir(), 'happier-fresh-wrapper-readiness-'));
         vi.stubEnv('HAPPIER_HOME_DIR', home);
@@ -54,13 +56,17 @@ describe('session startup acknowledgement', () => {
             sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: '1.2.3' } },
             locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
             normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js' });
-        const tracked: TrackedSession = { pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
+        const initialSessionId = phase === 'committed Team Session' ? sessionId : `PID-${wrapperPid}`;
+        const tracked: TrackedSession = { pid: wrapperPid, startedBy: 'daemon', happySessionId: initialSessionId,
             processStartTimeMs: 12_345, processCommandHash: hashProcessCommand('/runtime/scope-exit'),
             runnerAgentInvocationContext: Object.freeze({ cwd: home, environment: Object.freeze({}), providerBindingActive: false }),
             agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, acceptedSpawnMarkerGate: Promise.resolve(true),
             runnerAgentBootstrapIdentity: { agentId: 'fixture', backendId: 'fixture' },
-            spawnOptions: { directory: home, backendTarget: { kind: 'backend', backendId: 'fixture' }, spawnNonce: 'fresh-wrapper' } };
-        await writeSessionMarker({ pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: home,
+            spawnOptions: { directory: home, backendTarget: { kind: 'backend', backendId: 'fixture' }, spawnNonce: 'fresh-wrapper',
+                ...(phase === 'committed Team Session' ? { existingSessionId: sessionId, primaryTeamId: 'team',
+                    teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, teamId: 'team', resourceId: 'resource',
+                        expectedResourceRevision: 2, deliveryMode: 'brokered' }] } : {}) } };
+        await writeSessionMarker({ pid: wrapperPid, happySessionId: initialSessionId, startedBy: 'daemon', cwd: home,
             processStartTimeMs: 12_345,
             respawn: { version: 1, directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } });
         const sessions = new Map([[wrapperPid, tracked]]);
@@ -86,10 +92,30 @@ describe('session startup acknowledgement', () => {
             spawnSession: async () => { throw new Error('unexpected second spawn'); }, stopSession: async () => ({ status: 'not_found' }),
             requestShutdown: () => {}, controlToken: 'fresh-wrapper-token', onHappySessionWebhook: handler });
         try {
-            const response = await app.inject({ method: 'POST', url: '/session-started',
-                headers: { 'x-happier-daemon-token': 'fresh-wrapper-token' },
-                payload: { sessionId, metadata: createTestMetadata({ hostPid: runnerPid, startedBy: 'daemon', happyHomeDir: home, path: home }) } });
-            expect(response.statusCode, response.body).toBe(200);
+            const metadata = createTestMetadata({ hostPid: runnerPid, startedBy: 'daemon', happyHomeDir: home, path: home });
+            if (phase === 'committed Team Session') {
+                await app.listen({ host: '127.0.0.1', port: 0 });
+                const address = app.server.address();
+                if (!address || typeof address === 'string') throw new Error('Missing control listener');
+                await reportSessionToDaemonIfRunning({ sessionId, metadata, requireDaemonAck: true }, {
+                    notifyDaemonSessionStartedFn: (id, snapshot, options) => notifyDaemonSessionStarted(id, snapshot, {
+                        ...options, target: { pid: process.pid, httpPort: address.port, controlToken: 'fresh-wrapper-token' },
+                    }),
+                });
+                // A wrong control credential must fail at the real ingress,
+                // even though the matching requester Session was admitted.
+                await expect(reportSessionToDaemonIfRunning({ sessionId, metadata, requireDaemonAck: true }, {
+                    retryTimeoutMs: 0,
+                    notifyDaemonSessionStartedFn: (id, snapshot, options) => notifyDaemonSessionStarted(id, snapshot, {
+                        ...options, target: { pid: process.pid, httpPort: address.port, controlToken: 'wrong-token' },
+                    }),
+                })).rejects.toMatchObject({ code: 'native_agent_privileged_effect_outcome_unknown' });
+            } else {
+                const response = await app.inject({ method: 'POST', url: '/session-started',
+                    headers: { 'x-happier-daemon-token': 'fresh-wrapper-token' },
+                    payload: { sessionId, metadata } });
+                expect(response.statusCode, response.body).toBe(200);
+            }
             await expect(startup).resolves.toMatchObject({ type: 'success', sessionId });
             const marker = await readSessionMarkerForPid(runnerPid);
             expect(marker).toMatchObject({ pid: runnerPid, happySessionId: sessionId, processStartTimeMs: 23_456,
@@ -138,6 +164,17 @@ describe('session startup acknowledgement', () => {
             expect(awaiters.size).toBe(0);
             expect(resolvers.size).toBe(0);
             expect(timeouts.size).toBe(0);
+            if (phase === 'committed Team Session') {
+                tracked.sessionCreationOutcome = { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } };
+                const response = await app.inject({ method: 'POST', url: '/session-started',
+                    headers: { 'x-happier-daemon-token': 'fresh-wrapper-token' },
+                    payload: { sessionId, metadata, sessionCreationOutcome: {
+                        disposition: 'rejoined', organizationPlacement: { folderId: null, tagIds: [] },
+                    } } });
+                expect(response.statusCode).toBe(503);
+                expect(response.json()).toEqual({ status: 'error', errorCode: 'session_startup_reconciliation_failed' });
+                expect(tracked.spawnStartupReadinessFailure).toMatchObject({ errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED });
+            }
         } finally {
             startup.settleFailure({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'Fixture cleanup' });
             await app.close();

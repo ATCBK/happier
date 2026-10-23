@@ -21,7 +21,11 @@ import {
   reportSessionToDaemonIfRunning,
   reportSessionStartupFailureToDaemonIfRunning,
   sendTerminalFallbackMessageIfNeeded,
+  DaemonSessionReadinessError,
 } from '@/agent/runtime/startupSideEffects'
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue'
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle'
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents'
 import { readSessionStartupSpawnNonceFromEnv } from '@/session/runtime/control/sessionControlEnvironment'
 import {
   createPendingFirstInputCommitter,
@@ -240,9 +244,11 @@ export async function initializeBackendRunSession(
   const allowsRetainedHeadlessContinuation = opts.retainedTerminalRecovery === 'adopt'
     && opts.metadata.startedBy === 'daemon' && terminal?.mode === 'plain'
   let preservesRetainedTerminal = false
+  let initializationCompleted = false
   const terminalAgentBindingRequiresDaemonAttachment = terminal?.mode === 'herdr'
     && (!terminal.herdr?.sessionName || !terminal.herdr.socketPath || !terminal.herdr.terminalId)
-  const startDaemonReport = (
+  const startDaemonReport = async (
+    session: ApiSessionClient,
     sessionId: string,
     metadata: Metadata,
     mode: DaemonReportMode,
@@ -260,7 +266,39 @@ export async function initializeBackendRunSession(
       void reportPromise.catch(() => {})
       return Promise.resolve()
     }
-    return reportPromise
+    try {
+      await reportPromise
+    } catch (error) {
+      if (error instanceof DaemonSessionReadinessError && !initializationCompleted) {
+        // This Session exists before the host construction lifecycle takes
+        // custody. Publish while its real client is still available; the
+        // outer initialization finally owns transport disposal.
+        try {
+          // The report can outlive a replacement runner. Reuse the required
+          // snapshot reader before publishing a failure into that Session.
+          await session.refreshSessionSnapshotFromServerRequired({ reason: 'startup-drain', afterCurrentRead: true })
+          const matchesReportedRunner = (current: Metadata | null): current is Metadata =>
+            current !== null && !preservesRetainedTerminal && metadata.hostPid === process.pid
+              && current.hostPid === metadata.hostPid
+              && current.hostProcessStartTimeMs === metadata.hostProcessStartTimeMs
+          if (matchesReportedRunner(session.getMetadataSnapshot())) {
+            const agentId = resolveAgentIdFromSessionMetadata(metadata) ?? undefined
+            await createSessionTurnLifecycle({ session, agentId }).failTurn({ allocateWhenIdle: true,
+              issue: classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, provider: agentId }),
+            })
+            await session.updateMetadata(current => {
+              if (!matchesReportedRunner(current)) return current
+              const { hostPid: _pid, hostProcessStartTimeMs: _start,
+                lifecycleState: _state, lifecycleStateSince: _since, ...retired } = current
+              return retired
+            })
+          }
+        } catch {
+          logger.debug('[START] Failed to settle daemon readiness failure')
+        }
+      }
+      throw error
+    }
   }
   const runStartupSideEffects = async (
     sessionToUse: ApiSessionClient,
@@ -273,7 +311,7 @@ export async function initializeBackendRunSession(
     if (preservesRetainedTerminal) {
       // The headless controller is not a new physical placement. Leave the
       // exact current/predecessor record untouched until actual host adoption.
-      await startDaemonReport(sessionId, metadata, daemonReportMode, requireDaemonAck, sessionCreationOutcome)
+      await startDaemonReport(sessionToUse, sessionId, metadata, daemonReportMode, requireDaemonAck, sessionCreationOutcome)
       return
     }
     const bindTerminalAgent = async () => {
@@ -294,6 +332,7 @@ export async function initializeBackendRunSession(
       await sendTerminalFallbackMessageIfNeededFn({ session: sessionToUse, terminal })
       throwIfAborted()
       await startDaemonReport(
+        sessionToUse,
         sessionId,
         metadata,
         daemonReportMode,
@@ -308,6 +347,7 @@ export async function initializeBackendRunSession(
 
     throwIfAborted()
     await startDaemonReport(
+      sessionToUse,
       sessionId,
       metadata,
       daemonReportMode,
@@ -346,7 +386,6 @@ export async function initializeBackendRunSession(
       void disposeAttachedSession()
     }
     opts.signal?.addEventListener('abort', onAttachAbort, { once: true })
-    let attachCompleted = false
 
     try {
       throwIfAborted()
@@ -499,7 +538,7 @@ export async function initializeBackendRunSession(
         )
       }
 
-      attachCompleted = true
+      initializationCompleted = true
       return {
         session,
         reconnectionHandle: null,
@@ -509,7 +548,7 @@ export async function initializeBackendRunSession(
       }
     } finally {
       opts.signal?.removeEventListener('abort', onAttachAbort)
-      if (!attachCompleted) {
+      if (!initializationCompleted) {
         await disposeAttachedSession()
       }
     }
@@ -608,7 +647,6 @@ export async function initializeBackendRunSession(
     void disposeAcquiredResources()
   }
   opts.signal?.addEventListener('abort', onAcquiredResourceAbort, { once: true })
-  let initializationCompleted = false
 
   try {
     throwIfAborted()

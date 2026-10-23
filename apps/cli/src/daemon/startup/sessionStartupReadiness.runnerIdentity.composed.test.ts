@@ -45,7 +45,7 @@ import { createSessionStartupReadinessHandler } from './sessionStartupReadiness'
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); os.reused = false; });
 
 describe('wrapped daemon Session startup', () => {
-    it.each(['duplicate report', 'accepted marker'] as const)('publishes runner authority and retains the wrapper witness after %s', async refreshKind => {
+    it.each(['duplicate report', 'accepted marker', 'pre-created Team'] as const)('publishes runner authority and retains the wrapper witness after %s', async refreshKind => {
         const home = await mkdtemp(join(tmpdir(), 'happier-wrapped-startup-'));
         vi.stubEnv('HAPPIER_HOME_DIR', home);
         reloadConfiguration();
@@ -73,10 +73,15 @@ describe('wrapped daemon Session startup', () => {
             },
             persistAcceptedSpawnMarker: async session => await persistAcceptedSpawnMarker({ trackedSession: session, deviceLocalSecretStorage }),
         });
+        const spawnOptions = { directory: home, spawnNonce: 'wrapped-startup',
+            ...(refreshKind === 'pre-created Team' ? { existingSessionId: 'canonical-wrapped-session',
+                teamCredentialBindings: [{ v: 1 as const, slot: { kind: 'provider_model' as const },
+                    teamId: 'team-fixture', resourceId: 'resource-fixture', expectedResourceRevision: 1,
+                    deliveryMode: 'brokered' as const }] } : {}) };
         const pending = spawnRegularProcessAndWaitForWebhook({
-            directory: home, args: ['claude'], options: { directory: home, spawnNonce: 'wrapped-startup' },
-            trackedSpawnOptions: { directory: home, spawnNonce: 'wrapped-startup' },
-            normalizedExistingSessionId: '', effectiveResume: '', directoryCreated: false,
+            directory: home, args: ['claude'], options: spawnOptions,
+            trackedSpawnOptions: spawnOptions,
+            normalizedExistingSessionId: spawnOptions.existingSessionId ?? '', effectiveResume: '', directoryCreated: false,
             extraEnvForChildWithMessage: {}, processEnv: {},
             runnerLaunchOptions: { runtimeDecision: { runtime: 'node', argvPrefix: ['/fixture/runtime/versions/1.2.3/bin/happier'] } },
             pidToTrackedSession: tracked, pidToAwaiter: awaiters,
@@ -92,11 +97,13 @@ describe('wrapped daemon Session startup', () => {
         });
         const followUpErrors: unknown[] = [];
         const readinessErrors: unknown[] = [];
+        let releaseFollowUp!: () => void;
+        const followUp = new Promise<void>(resolve => { releaseFollowUp = resolve; });
         const readiness = createSessionStartupReadinessHandler({
             onHappySessionWebhook: createOnHappySessionWebhook({ pidToTrackedSession: tracked, pidToAwaiter: awaiters,
                 deviceLocalSecretStorage, getParentPidFn: async () => os.wrapperPid, readCredentialsFn: async () => null }),
             reconcileCanonicalReadiness: async () => { await refresh(); },
-            reconcileFollowUp: async () => {}, onFollowUpError: error => followUpErrors.push(error),
+            reconcileFollowUp: async () => { await followUp; }, onFollowUpError: error => followUpErrors.push(error),
         });
         const app = createDaemonControlApp({ getChildren: () => [...tracked.values()], machineId: 'machine-fixture',
             spawnSession: async () => { throw new Error('unexpected second spawn'); },
@@ -142,6 +149,7 @@ describe('wrapped daemon Session startup', () => {
             expect(session.processCommandHash).toBe(hashProcessCommand((await readProcessIdentityByPid(os.wrapperPid))!.command));
             expect(followUpErrors).toEqual([]);
         } finally {
+            releaseFollowUp();
             const current = tracked.get(os.wrapperPid);
             if (current?.childProcess instanceof ChildProcess) current.childProcess.emit('exit', 0, null);
             await pending;

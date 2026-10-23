@@ -59,6 +59,10 @@ import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/proje
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { loadSessionClientDurableMutationOutbox, resolveSessionClientDurableMutationOutboxPath } from './client/transport/mutations/sessionClientDurableMutationPersistence';
 import { SessionMutationJournalAdmissionBlockedError } from './client/transport/mutations/createSessionClientDurableMutationOutbox';
+import { ApiClient } from '@/api/api';
+import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
+import { reportSessionToDaemonIfRunning } from '@/agent/runtime/startupSideEffects';
+import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -66,7 +70,7 @@ vi.mock('axios');
 const { mockIo } = vi.hoisted(() => ({ mockIo: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: mockIo }));
 // Daemon IPC is the notification boundary; semantic capture and publication stay real.
-const { daemonPost } = vi.hoisted(() => ({ daemonPost: vi.fn(async (_path: string, _body?: unknown) => ({ ok: true })) }));
+const { daemonPost } = vi.hoisted(() => ({ daemonPost: vi.fn(async (_path: string, _body?: unknown): Promise<unknown> => ({ ok: true })) }));
 vi.mock('@/daemon/controlHttp', () => ({ daemonPost }));
 // Expo is the external push transport; notification admission/channel policy stay real.
 const { expoSend } = vi.hoisted(() => ({ expoSend: vi.fn(async (_messages: unknown[]) => [{ status: 'ok', id: 'push-ticket' }]) }));
@@ -98,6 +102,70 @@ const currentFeatures = FeaturesResponseSchema.parse({
 describe('ApiSessionClient socket write readiness', () => {
   const clients: ApiSessionClient[] = [];
   const connectGates: ReturnType<typeof createDeferred>[] = [];
+
+  it.each(['current', 'replacement'] as const)('settles required daemon readiness failure before host construction for the %s runner', async runner => {
+    const metadata = createTestMetadata({ hostPid: process.pid, hostProcessStartTimeMs: 10,
+      startedBy: 'daemon', lifecycleState: 'running', lifecycleStateSince: 1, flavor: 'codex' });
+    const session = createPlainSessionFixture({ id: `s-daemon-readiness-failure-${runner}`, metadata });
+    const row = createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(metadata), metadataVersion: session.metadataVersion, share: null });
+    serveSession(row);
+    const turns: ReturnType<typeof SessionTurnMutationV1Schema.parse>[] = [];
+    vi.mocked(axios.post).mockImplementation(async (url, payload) => {
+      if (!String(url).endsWith('/turns/mutations')) throw new Error('Unexpected fixture POST');
+      const mutation = SessionTurnMutationV1Schema.parse(payload);
+      turns.push(mutation);
+      return { status: 200, data: { success: true, applied: true,
+        receipt: createSessionTurnMutationAppliedSocketAck(mutation).receipt } };
+    });
+    const socket = createSocket({ emitWithAck: async (event, payload) => {
+      if (event === 'session-turn-mutation') {
+        const mutation = SessionTurnMutationV1Schema.parse(payload);
+        turns.push(mutation);
+        return createSessionTurnMutationAppliedSocketAck(mutation);
+      }
+      return { result: 'success' };
+    } });
+    mockIo.mockImplementation(() => socket);
+    // This is the daemon HTTP boundary. Initialization, report retries, issue
+    // classification, turn publication, metadata CAS and cleanup remain real.
+    const credentials = { token: 'tok', encryption: null };
+    daemonPost.mockImplementation(async () => {
+      if (runner === 'replacement') {
+        const tuple = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain', storedContentMode: 'plain',
+          metadata: { ...metadata, hostPid: process.pid + 1, hostProcessStartTimeMs: 20 }, agentState: {} });
+        row.metadataLayoutVersion = 1;
+        row.metadata = tuple.sharedMetadata.ciphertext;
+        row.ownerMetadata = tuple.ownerMetadata;
+        row.metadataVersion += 1;
+      }
+      return { error: 'Request failed: /session-started, HTTP 503' };
+    });
+    const api = await ApiClient.create(credentials);
+    let acquired: ApiSessionClient | undefined;
+    await expect(initializeBackendRunSession({ api, existingSessionId: session.id, metadata, state: {},
+      sessionTag: session.id, uiLogPrefix: '[readiness-test]', requireDaemonAckOnAttach: true,
+      sessionAttachSecret: { encryptionMode: 'plain', snapshot: { metadata, metadataVersion: session.metadataVersion,
+        agentState: {}, agentStateVersion: 0 } },
+      sessionClientOptions: { initialRegisteredSessionStateFieldMutations: [], metadataAuthority: { kind: 'owner', credentials } },
+      configureSessionClient: client => { acquired = client; clients.push(client); },
+      startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
+    }, { reportSessionToDaemonIfRunningFn: input => reportSessionToDaemonIfRunning(input, { retryTimeoutMs: 0 }) }))
+      .rejects.toMatchObject({ code: 'native_agent_privileged_effect_outcome_unknown' });
+    if (runner === 'replacement') {
+      expect(turns).toEqual([]);
+      expect(acquired?.getMetadataSnapshot()).toMatchObject({ hostPid: process.pid + 1,
+        hostProcessStartTimeMs: 20, lifecycleState: 'running' });
+      return;
+    }
+    expect(turns).toContainEqual(expect.objectContaining({ action: 'fail', issue: expect.objectContaining({
+      scope: 'primary_session', code: 'native_agent_privileged_effect_outcome_unknown', status: 'failed',
+      sanitizedPreview: SESSION_PREPARATION_FAILURE_PREVIEWS.native_agent_privileged_effect_outcome_unknown,
+    }) }));
+    expect(acquired?.getMetadataSnapshot()).not.toHaveProperty('hostPid');
+    expect(acquired?.getMetadataSnapshot()).not.toHaveProperty('hostProcessStartTimeMs');
+    expect(acquired?.getMetadataSnapshot()).not.toHaveProperty('lifecycleState');
+  });
 
   it.each(['preparation', 'native-refusal'] as const)('admits an optional Skill notice before its Home ACK (%s)', async kind => {
     const started = createDeferred();
@@ -393,6 +461,7 @@ describe('ApiSessionClient socket write readiness', () => {
       status: new URL(String(url)).pathname === '/v1/auth/ping' ? 200 : 404, data: {},
     }));
     vi.mocked(axios.patch).mockReset();
+    vi.mocked(axios.post).mockReset();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(currentFeatures), { status: 200,
       headers: { 'content-type': 'application/json' } })));
   });
