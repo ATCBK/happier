@@ -25,6 +25,8 @@ import {
 import { installVoiceModelPackPluginArchiveFixture } from './publicModelPacks/pluginArchiveFixture';
 import { hashVoiceModelPackManifest } from './voiceModelPackInstaller';
 import * as lifecycleModule from './voiceInferenceWorker.lifecycle';
+import { createNodeInstalledModelPackIntegrityHost } from './nodeModelPackIntegrityHost';
+import { resolveVoiceInferencePaths } from './voiceInferencePaths';
 
 const ZIPFORMER_PACK_ID = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
 const KOKORO_PACK_ID = 'kokoro-82m-v1.0-onnx-q8-wasm';
@@ -194,7 +196,11 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     });
   }
 
-  async function createInstalledPublicPack(homeDir: string, localId: string) {
+  async function createInstalledPublicPack(
+    homeDir: string,
+    localId: string,
+    fingerprintInstalledPack?: Parameters<typeof createDaemonPublicVoiceModelPackRuntime>[0]['fingerprintInstalledPack'],
+  ) {
     // The real controller owns one file-lifetime publication; keep its source roots until shutdown.
     retainedRuntimeHomes.add(homeDir);
     const { resolveVoiceInferencePaths } = await import('./voiceInferencePaths');
@@ -266,6 +272,7 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
       paths: resolveVoiceInferencePaths(),
       host,
       createInstallerHost: (input) => createAssetInstallerHost(input, assets),
+      fingerprintInstalledPack,
     });
     const key = `${plugin.id}/${localId}`;
     await publicModelPacks.install({ key, signal: new AbortController().signal });
@@ -1045,6 +1052,37 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
       oldReleaseGate.resolve();
       await stopLifecycle?.();
       vi.useRealTimers();
+    }
+  });
+
+  it('verifies a public pack once per warm request without rereading its admitted manifest', async () => {
+    const homeDir = await createHomeDir();
+    const { createVoiceInferenceWorkerLifecycle } = await importLifecycleModuleForHome(homeDir);
+    const host = createNodeInstalledModelPackIntegrityHost(resolveVoiceInferencePaths().packsRootDir);
+    const fingerprinted: string[] = [];
+    const { publicModelPacks, key } = await createInstalledPublicPack(homeDir, 'warm-read', async (packId, filePaths) => {
+      fingerprinted.push(packId);
+      return await host.fingerprint(packId, filePaths);
+    });
+    const lifecycle = createVoiceInferenceWorkerLifecycle({
+      publicModelPacks,
+      runtimeLoader: async () => ({
+        warmModel: async () => {},
+        synthesizeTts: async () => { throw new Error('not exercised'); },
+        transcribeAudio: async () => { throw new Error('not exercised'); },
+      }),
+    });
+    try {
+      for (let request = 0; request < 2; request += 1) {
+        fingerprinted.length = 0;
+        await lifecycle.warmModelPack(key);
+        expect(fingerprinted).toHaveLength(1);
+      }
+      fingerprinted.length = 0;
+      await lifecycle.stop();
+      expect(fingerprinted).toHaveLength(0);
+    } finally {
+      await lifecycle.stop();
     }
   });
 
