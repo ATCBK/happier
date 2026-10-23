@@ -264,13 +264,10 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
     try {
       for (let invocation = 1; invocation <= 2; invocation++) {
         const before = verifications;
-        const started = performance.now();
         const result = await h.run({ workspace: { serverId: h.ref.serverId, refId: h.ref.id },
           destination: { kind: 'machine', machineId: h.workerRef.machineId }, purpose: 'service-start' },
         'cli', false, 'present_user', 'projects.worker.status');
         expect(result).toMatchObject({ ok: true, result: { eligible: true } });
-        console.info('FX124 status measurement', { invocation, homeVerifications: verifications - before,
-          durationMs: Math.round(performance.now() - started) });
         expect(verifications - before).toBe(3);
       }
       expect(h.copies()).toBe(0);
