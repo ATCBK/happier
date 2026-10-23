@@ -4961,27 +4961,15 @@ export class ApiMachineClient {
     }
 
     /**
-     * Synchronizes the Account-scoped Saved Secret catalog through its one
-     * feature decision. Shared Saved Secrets belong to Teams itself; the
-     * narrower credential-resource product is not their activation owner.
+     * The Home resource read authorizes private and granted Saved Secrets.
+     * It does not consume features; refreshing them here would also invoke
+     * authenticated-ready hydration before repeating the same resource read.
      */
     private async synchronizeSavedSecretCatalog(signal: AbortSignal): Promise<void> {
-        let snapshot: Awaited<ReturnType<NonNullable<
-            ApiMachineClientLifecycleDependencies['resolveServerFeaturesSnapshot']
-        >>> | undefined;
-        try {
-            snapshot = await this.lifecycleDependencies.resolveServerFeaturesSnapshot?.();
-        } catch (error) {
-            signal.throwIfAborted();
-            logger.debug('[API MACHINE] Saved Secret feature decision unavailable; withdrawing shared catalog', {
-                message: error instanceof Error ? error.message : String(error),
-            });
-            snapshot = undefined;
-        }
         signal.throwIfAborted();
         await hydrateSavedSecretCatalog({
             token: this.token,
-            serverFeatures: snapshot?.status === 'ready' ? snapshot.features : null,
+            serverFeatures: null,
             signal,
         });
     }

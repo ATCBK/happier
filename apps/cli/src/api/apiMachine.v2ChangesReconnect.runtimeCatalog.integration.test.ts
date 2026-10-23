@@ -23,6 +23,8 @@ import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/se
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
+import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 import type { Machine } from '@/api/types';
 import { encodeBase64, encrypt } from '@/api/encryption';
@@ -987,7 +989,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('project-row-account', 9);
     });
 
-    it('hydrates private Saved Secrets and advances its AccountChange cursor when Teams is disabled', async () => {
+    it('hydrates private Saved Secrets once per durable change without an unused feature refresh', async () => {
         const machine: Machine = {
             id: 'machine-1',
             encryptionKey: new Uint8Array(32).fill(7),
@@ -997,29 +999,30 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             daemonState: null,
             daemonStateVersion: 0,
         };
+        let changed = true;
+        let cursor = 0;
         mockAccountGet(async (url: string) => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account-1' } };
             if (url.includes('/v2/changes')) {
                 return {
                     status: 200,
                     data: {
-                        changes: [{
-                            cursor: 1,
+                        changes: changed ? [{
+                            cursor: ++cursor,
                             kind: 'savedSecretResource',
                             entityId: 'resource-1',
                             changedAt: 1,
                             hint: null,
-                        }],
-                        nextCursor: 1,
+                        }] : [],
+                        nextCursor: cursor,
                     },
                 };
             }
             throw new Error(`unexpected url: ${url}`);
         });
         writeAccountChangesCursor.mockClear();
-        const resolveServerFeaturesSnapshot = vi.fn(async () => ({
-            status: 'ready' as const,
-            features: FeaturesResponseSchema.parse({
+        vi.mocked(globalThis.fetch).mockImplementation(async () => Response.json(
+            FeaturesResponseSchema.parse({
                 features: {
                     teams: {
                         enabled: false,
@@ -1028,18 +1031,39 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 },
                 capabilities: {},
             }),
-        }));
-        const client = new ApiMachineClient('token', machine, undefined, {
-            resolveServerFeaturesSnapshot,
+        ));
+        // Compose the real daemon feature store's authenticated-ready hydration
+        // with the real feed reader. Only Fetch/Axios are boundary substitutes.
+        const features = createServerUrlServerFeaturesSnapshotStore({
+            serverUrl: 'https://api.example.test', token: 'token',
+            onAuthenticatedReady: async serverFeatures => {
+                await hydrateSavedSecretCatalog({ token: 'token', serverFeatures });
+            },
         });
+        const client = new ApiMachineClient('token', machine, undefined, {
+            resolveServerFeaturesSnapshot: () => features.refresh(),
+        });
+        const sync = () => (client as unknown as {
+            syncChangesOnConnect(options: { reason: 'live' }): Promise<void>;
+        }).syncChangesOnConnect({ reason: 'live' });
+        const resourceReads = () => axiosGet.mock.calls.filter(([url]) => String(url).endsWith('/saved-secrets/resources/materials')).length;
+        try {
+            for (let change = 1; change <= 3; change += 1) {
+                await sync();
+                expect(resourceReads()).toBe(change);
+                expect(writeAccountChangesCursor).toHaveBeenLastCalledWith('account-1', change);
+            }
+            changed = false;
+            await sync();
+            expect(resourceReads()).toBe(3);
 
-        await expect((client as any).syncChangesOnConnect({ reason: 'live' })).resolves.toBeUndefined();
-
-        expect(resolveServerFeaturesSnapshot).toHaveBeenCalledTimes(1);
-        expect(axiosGet.mock.calls.some(([url]) => String(url).includes('/saved-secrets/resources/materials')))
-            .toBe(true);
-        expect(writeAccountChangesCursor).toHaveBeenCalledTimes(1);
-        expect(writeAccountChangesCursor).toHaveBeenCalledWith('account-1', 1);
+            // Genuine authenticated-ready observations retain their own fresh
+            // resource admission, even when the feature values are unchanged.
+            await features.refresh();
+            await features.refresh();
+            expect(resourceReads()).toBe(5);
+            expect(features.getSnapshot()).toMatchObject({ status: 'ready', provenance: 'authenticated' });
+        } finally { await client.shutdown(); }
     });
 
     it('resolves an exact Session Resource admission without acknowledging the returned Account cursor', async () => {
