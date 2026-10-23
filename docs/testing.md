@@ -74,8 +74,11 @@ Unresolved, cyclic or outside-repository script graphs retain conservative
 outer admission instead of assuming that a leaf owns it.
 An authenticated inherited dependency reader, like an inherited workspace
 publication lease, cannot wait for capacity or a foreign producer while holding
-that resource. Native and in-process preparation use the existing custody
-owner to enforce this ordering. Simulated independent workers in tests use
+that resource. The declaration phase of an already-admitted typecheck is the
+narrow exception: it reuses compilation capacity and may wait for package
+publication while holding only its dependency reader, with no inherited package
+writer. Native and in-process preparation use the existing custody owner to
+enforce this ordering. Simulated independent workers in tests use
 `buildNativeAdmissionFixtureEnv` so the containing suite's real custody does not
 cross their physical-worker boundary.
 
@@ -135,7 +138,7 @@ The development push Gate runs each non-UI partition through `pnpm run test:gate
 
 In 0.3 development, runtime worker bootstrap, runtime validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode and public packing/publication still check semantics. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
-Public package typechecks derive private dependency declarations through `prepareReferencedTypecheckDeclarations.mjs`, before checker admission. Microsoft emits one declaration-only batch with each producer's package-build settings and `--noCheck --emitDeclarationOnly`; the consumer keeps its selected checker, strict options and authored admission envelope. Generated consumer configs redirect workspace exports to these declarations. Worker-local outputs are shared behind the existing workspace admission/lock owner and reused when source, dependency inputs and toolchain are unchanged: warm checks launch no emitter. Typechecks never prepare package dist, native tools or bundled-plugin artifacts. Native Windows compilation uses the same declaration owner directly; CLI cross-app source references retain their existing preparation owner. Set `HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS=1` on Linux to report declaration preparation, compiler start and RSS measurements.
+Public package typechecks derive current dependency declarations through `prepareReferencedTypecheckDeclarations.mjs`, inside the consumer's existing compilation admission and before its compiler starts. Microsoft emits one declaration-only batch into each producer's canonical `dist` with its package-build settings and `--noCheck --emitDeclarationOnly`; consumers resolve public package exports with their selected checker, strict options and authored admission envelope. The existing resource owner acquires package-build locks and dependency-reader custody for emission, then releases publication locks before the consumer starts. There is no separate declaration admission class. Source, dependency, toolchain and declaration-output inputs govern reuse: warm checks launch no emitter. JavaScript and package build stamps stay untouched, so declaration preparation cannot make stale runtime output current. Typechecks do not run package builds or prepare native tools or bundled-plugin artifacts. Native Windows compilation uses the same declaration owner directly; CLI cross-app source references retain their existing preparation owner. Set `HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS=1` on Linux to report declaration preparation, compiler start and RSS measurements.
 
 Expo dev/mobile startup is source-first: its canonical UI preflight compiles only
 plugin UI assets and publishes the app-owned inventory through the existing

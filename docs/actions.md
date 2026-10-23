@@ -5194,6 +5194,18 @@ This default grants no authority: replay still checks the approving person's
 authority and current target access. The same origin rule supplies the
 [Skills reach default](#session-origin-defaults-on-approval-replay).
 
+An MCP Action's transcript origin keeps the native transcript call identity in
+`toolCallId` and its connection-local JSON-RPC request identity separately in
+`mcpRequestId`. The built-in MCP registration reads Codex's `_meta.callId` and
+Claude Code's `_meta["claudecode/toolUseId"]`; the stdio bridge preserves this
+metadata. Clients without either field omit `toolCallId`. The existing transcript
+matcher then requires the exact tool name and reviewed operands, using the
+canonical Action-payload reader to remove transcript normalization metadata.
+It never matches on a tool name alone or stores another raw input copy. This
+fallback cannot distinguish repeated calls with identical operands; native call
+identity remains the precise path. Correlation selects presentation only and
+does not authorize a decision or an effect.
+
 ### Session-local MCP confirmations (0.3 development)
 
 An Agent calling an Action in its own Session can use the existing Session

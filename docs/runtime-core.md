@@ -128,6 +128,10 @@ overrides, then opens only selected Artifact bodies through the shared skill-pla
 preparer. Startup, Session-owned Runs and live reapply do not enumerate unrelated
 Account Artifacts. Machine previews still supply a complete choice inventory to
 that same preparer; library listing and cache collection retain their inventory owners.
+An exact Artifact read confirming absence makes retained skill rules and Session
+includes inert: the deleted skill is not delivered and emits no load warning.
+Read failures and malformed existing content remain unavailable; a readable
+Artifact title supplies the warning's name when its skill content cannot be read.
 The synchronizer waits for a settled turn and uses P3's `reapplySessionSkills` for declared library-skill
 live reload. Native-skill overlay changes and MCP changes use the daemon's existing
 restart-with-resume owner with reason `capability_selection_change` and

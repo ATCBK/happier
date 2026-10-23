@@ -1052,6 +1052,18 @@ A cancelled child alone does not establish whole-Run cancellation. The existing
 recovery reader verifies the root and current child custody before committing
 the terminal parent state, after which ordinary history deletion is available.
 
+In 0.3 development source, the same recovery owner publishes accepted Discussion
+results before retiring custody. Its publisher projects the accepted tagged
+result destination into the strict committed-origin envelope used by the Machine
+transport. A definitive publication refusal on a terminal
+Run records a Run/invocation-qualified failure diagnostic and permits custody
+settlement while preserving the accepted result. Pending approval, unavailable
+transport or encryption material, and a lost append acknowledgement retain
+custody and the same publication identity for recovery. A missing publication
+hook also retains custody. A publication failure affects its own Run; recovery
+continues through independent candidates and pages. These source contracts
+still require the integrated loaded-runtime replay.
+
 Environment-only setup uses the same environment body without inventing a
 command. The plugin request's launch is optional; an adapter that returns a
 wrapper without a real command explicitly refuses
@@ -1404,6 +1416,16 @@ resize; recipients receive shared capacity/Happier totals and only Session folde
 whose Account custody is proven by the incumbent requester owner. Inventory and
 scan paths remain in Machine RPC payloads, not Machine metadata or broadcast Sync;
 the user's protected-folder policy is the exception described below.
+
+Storage keeps the dispatcher's initial Home admission, then verifies current
+Machine authority at two boundaries: the service's effect callback, after local
+owner initialization, policy and Session-custody awaits, and the RPC handler
+immediately before result disclosure. Passive reads only need the disclosure
+verification after dispatch. Local target, installation, actor, role, custodian
+and request-lifetime checks remain around local awaits. Parked watches verify
+before returning their answer. Accepted cleanup retains its detached authority
+checks when the requesting transport closes. Each subsequent effect and reply
+requires current Home authority at its own boundary.
 
 The category catalog borrows current managed-session, Project/SCM, model-pack,
 recording, process-use and temporary-custody facts. Worktree retention goes through
@@ -2011,6 +2033,16 @@ through the claim client and executor into the origin-neutral coordinator, so
 Continue and daemon replacement preserve frozen definitions and per-run keys.
 The signed claim receipt excludes private snapshot bytes and reads them from
 the canonical Run row on replay.
+
+Before that first snapshot, a failed Workflow-source or materialization-host read,
+including a nested child definition, required Role inventory or external-plugin
+source, returns a typed admission refusal. Known source/content/target refusal
+codes are preserved; other read failures become `source_unavailable`. The executor settles the current occurrence
+through the existing pre-start failure transport after rechecking Account content
+identity and claim lifetime. Required inventories never become empty defaults.
+Exceptions during accepted-snapshot resolution/storage and subsequent execution
+retain their existing recovery semantics; this classification adds no retry loop
+or lease change.
 
 Accepted snapshots also freeze `targetSessionIds`: resolved `origin_session`
 and explicit `existing_session` destinations from the materialized leaves.
@@ -3464,6 +3496,14 @@ the existing lifecycle owner; deliberate Session end stamps stop intent before s
 so the respawn owner does not treat it as a crash. Start again keeps the service's original
 reviewed effect digest on the same stopped-root record; definition changes return the
 launcher's existing review-required result and use the existing review flow.
+In current 0.3 development source, each owner row's `canStartAgain` comes from
+the exact live process root's retained `startAgain` callback. Missing or false
+means the UI offers no Start again button. Language-server roots retain a
+callback to their existing session restart owner: it starts only that server
+and replays its open documents, including unsaved buffers. Closing all documents,
+disposing the session or replacing its generation makes the old callback refuse.
+Both controls use the existing `machines.processes.stop` and
+`machines.processes.startAgain` Actions with their family approval defaults.
 Stop and lifecycle-backed tree Kill share the same ended-member accounting:
 `freedBytes` sums the admitted members' last measured memory only when a fresh
 census confirms those generations ended. Survivors and unreadable disappearance
@@ -5191,9 +5231,9 @@ with shared physical ESM chunks. Bun compiles a launcher that loads
 module graph. It does not prepare a CLI dist snapshot or run
 pkgroll first. First-party JavaScript, JavaScript sidecars and plugin resources/UI
 package files belong to code. Target-native external dependencies, tools and Go
-payloads remain independently reusable daemon support, with publication metadata in
-`.project`; support does not own `scripts`. The daemon manifest owns that support
-reference.
+payloads remain independently reusable daemon support. JavaScript sidecars and
+source-derived plugin failure diagnostics remain code-owned; linking static
+support preserves those diagnostics. The daemon manifest owns that support reference.
 
 Public npm/SDK publication is separate: CommonJS/ESM exports, checked declarations
 and their package-build admission/locks remain required. Native emission is not a
