@@ -103,7 +103,6 @@ import {
   readAccountIdFromToken as readPreviewAccountIdFromToken,
 } from '@/cloud/decodeJwtPayload';
 import { ExternalActionActionIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
@@ -15747,7 +15746,7 @@ export async function startDaemonSessionControlRuntime(
           : async () => await readStoredCredentialsForServerId(params.serverId),
         ...(requesterAccountContext
           ? { actionsSettingsProvider: {
-              getActionsSettings: () => normalizeActionsSettingsV1(readRequesterAccountSnapshot().settings.actionsSettingsV1),
+              getActionsSettings: () => readRequesterAccountSnapshot().settings.actionsSettingsV1,
               getAccountSettings: () => readRequesterAccountSnapshot().settings,
               getAccountRoleOverrides: () => readAccountRoleOverridesFromSnapshot(readRequesterAccountSnapshot()),
             } }
@@ -15755,10 +15754,7 @@ export async function startDaemonSessionControlRuntime(
           ? {
               actionsSettingsProvider: {
                 getActionsSettings: () =>
-                  normalizeActionsSettingsV1(
-                    requesterRuntime.readAccountSettingsSnapshot().settings
-                      .actionsSettingsV1,
-                  ),
+                  requesterRuntime.readAccountSettingsSnapshot().settings.actionsSettingsV1,
                 getAccountSettings: () =>
                   requesterRuntime.readAccountSettingsSnapshot().settings,
                 getAccountRoleOverrides: () =>
