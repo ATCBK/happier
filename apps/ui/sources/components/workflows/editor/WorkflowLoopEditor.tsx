@@ -266,7 +266,7 @@ export function WorkflowLoopOptions(props: Readonly<{
                     ) : (
                         <View testID={`${idPrefix}-max-iterations-from-input`} style={workflowEditorStyles.metaRow}>
                             <Text style={workflowEditorStyles.metaText}>
-                                {`${t('workflows.loop.maxIterations')} · ${t('workflows.page.blocks.maxFromInput', { name: repetition.maxIterations.name })}`}
+                                {`${t('workflows.loop.maxIterations')} · ${t('workflows.page.blocks.fromInput', { name: repetition.maxIterations.name })}`}
                             </Text>
                             <HappierPressable
                                 testID={`${idPrefix}-max-iterations-use-number`}

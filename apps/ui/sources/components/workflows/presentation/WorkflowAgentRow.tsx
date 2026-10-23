@@ -132,7 +132,10 @@ export const WorkflowAgentRow = React.memo<WorkflowAgentRowProps>((props) => {
                     {content}
                 </HappierPressable>
                 {isExpanded && expandedDetail ? (
-                    <WorkflowAgentDetail text={expandedDetail} detailTestID={detailTestID} messageId={props.messageId} findBlockId={`${prefix}-detail`} />
+                    // The detail reads under the title, past the row's glyph column.
+                    <View style={styles.detailIndent}>
+                        <WorkflowAgentDetail text={expandedDetail} detailTestID={detailTestID} messageId={props.messageId} findBlockId={`${prefix}-detail`} />
+                    </View>
                 ) : null}
             </View>
         );
@@ -147,6 +150,9 @@ export const WorkflowAgentRow = React.memo<WorkflowAgentRowProps>((props) => {
 WorkflowAgentRow.displayName = 'WorkflowAgentRow';
 
 const styles = StyleSheet.create((theme) => ({
+    detailIndent: {
+        marginLeft: 18 + theme.space.s8,
+    },
     row: {
         gap: theme.space.s4,
         paddingVertical: theme.space.s4,

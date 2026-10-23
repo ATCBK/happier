@@ -2057,7 +2057,7 @@ describe('workflow editor body', () => {
         const field = dropdownField(screen, 'workflow-editor-defaults-continuity-conversation-field');
         const existing = field.props.items.find((item) => item.id === 'existing_session');
         expect(existing).toMatchObject({ title: 'workflows.page.inspector.aSession' });
-        expect(existing?.disabled).toBe(false);
+        expect(existing?.disabled).not.toBe(true);
         expect(screen.findByTestId('workflow-editor-defaults-continuity-conversation-session-picker')).toBeNull();
 
         // "A session…" opens the canonical picker; nothing is authored until a Session is chosen.

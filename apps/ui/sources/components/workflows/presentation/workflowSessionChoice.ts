@@ -44,7 +44,8 @@ export const WORKFLOW_SESSION_RETRY_ITEM_ID = 'workflow-session-choice:retry';
 
 /**
  * A menu that lists the Sessions themselves (built-ins, examples): loading and empty are its quiet
- * empty line; a failed read leads with one Try again row above whatever it already knows.
+ * empty line; a failed read leads with one row that says what happened and offers Try again beneath it, above whatever
+ * the menu already knows.
  */
 export function workflowSessionMenuState(
   choice: WorkflowSessionChoice,
@@ -69,8 +70,8 @@ export function workflowSessionMenuState(
         leadingItems: [
           {
             id: WORKFLOW_SESSION_RETRY_ITEM_ID,
-            title: t('workflows.conversation.retryLoadingSessions'),
-            subtitle: t('workflows.conversation.sessionsFailed'),
+            title: t('workflows.conversation.sessionsFailed'),
+            subtitle: t('workflows.conversation.retryLoadingSessions'),
           },
         ],
       };

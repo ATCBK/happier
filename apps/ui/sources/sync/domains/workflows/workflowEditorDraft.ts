@@ -3,8 +3,12 @@ import type { WorkflowBlock, WorkflowStepExecutionSelection } from '@happier-dev
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { WorkflowStarterExampleSelection, WorkflowStarterSessionTarget } from '@happier-dev/protocol/workflows/builtins/examples';
 import type { AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import type { WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 
-export type WorkflowEditorDraft = WorkflowDefinitionDraftV1 & Readonly<{ draftId: string }>;
+export type WorkflowEditorDraft = WorkflowDefinitionDraftV1 & Readonly<{
+  draftId: string;
+  captureProvenance?: WorkflowDefinitionMetadataV1['captureProvenance'];
+}>;
 
 /** Every editor Add entry point uses the same scope-aware creation and previous-result default. */
 export function insertWorkflowEditorBlock(draft: WorkflowEditorDraft, params: Readonly<{

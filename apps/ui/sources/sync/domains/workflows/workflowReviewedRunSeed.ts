@@ -4,7 +4,7 @@ import type {
     WorkflowRunSummaryV1,
     JsonValue,
 } from '@happier-dev/protocol';
-import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
+import type { WorkflowProjectTargetV1, WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows';
 
 import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -30,6 +30,7 @@ import { prepareWorkflowRunStartV1 } from '@happier-dev/protocol/workflows';
 export type WorkflowReviewedRunSeed = Readonly<{
     name: string;
     description?: string;
+    captureProvenance?: WorkflowDefinitionMetadataV1['captureProvenance'];
     /** The accepted host placement, so the new Run starts where the old one ran. */
     project: WorkflowProjectTargetV1;
     /** The accepted definition with root Agent-step runtime choices pinned for a fresh admission. */
@@ -67,6 +68,8 @@ export function buildWorkflowReviewedRunSeed(params: Readonly<{
         name: params.acceptedContext.metadata?.title ?? workflowDefinitionPromptTitle(params.definition) ?? '',
         ...(params.acceptedContext.metadata?.description === undefined
             ? {} : { description: params.acceptedContext.metadata.description }),
+        ...(params.acceptedContext.metadata?.captureProvenance === undefined
+            ? {} : { captureProvenance: params.acceptedContext.metadata.captureProvenance }),
         project: params.acceptedContext.workspaceTarget.project,
         definition: prepared.definition,
         executionTarget: params.acceptedContext.executionTarget,

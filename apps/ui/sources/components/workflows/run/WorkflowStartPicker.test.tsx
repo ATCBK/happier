@@ -1139,8 +1139,8 @@ describe('WorkflowStartPicker plugin workflows', () => {
       onComplete: { kind: 'originating_discussion' } });
     if (prepare) expect(preparedQuestion).toMatchObject({ localId: starts()[0]?.input.runId,
       retainedDraft: 'Check the relay migration', submittedDraft: 'Check the revised relay migration' });
-    expect(hook.getCurrent().saveAsPattern).toEqual({ status: 'unavailable',
-      reason: 'workflow_definition_capture_unavailable', actionId: 'workflow.definition.capture' });
+    expect(hook.getCurrent().saveAsPattern).toMatchObject({ state: { status: 'closed' },
+      open: expect.any(Function), review: expect.any(Function), openEditor: expect.any(Function) });
   });
   it('keeps a reviewed start on its captured Account when a later render has no caller scope', async () => {
     const { useWorkflowComposerStart } = await import('./useWorkflowComposerStart');

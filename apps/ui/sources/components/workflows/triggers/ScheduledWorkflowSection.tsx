@@ -25,7 +25,7 @@ import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListR
 import { formatNextScheduledRun, formatNextScheduledRunAccessibilityLabel, formatNextScheduledRunTime, formatTriggerSummary, readNextScheduledRunRefreshAtMs } from './formatTriggerSummary';
 import { resolveTriggerEventGroup } from './triggerEventGroups';
 import { describeTriggerTarget } from './sessionTriggerGroups';
-import { useTriggerThenOptions } from './useTriggerThenOptions';
+import { useWorkflowReferenceTitles } from '@/components/workflows/presentation/workflowReferenceOptions';
 import { useWorkflowTriggerSets } from './useWorkflowTriggerSets';
 import { projectScheduledWorkflowRows } from './scheduledWorkflowRows';
 import type { ScheduledWorkflowRow } from './scheduledWorkflowRows';
@@ -72,7 +72,8 @@ export const ScheduledWorkflowRows = React.memo(function ScheduledWorkflowRows(p
     density?: SessionListRowDensity;
 }>) {
     const { read } = props;
-    const titles = useTriggerThenOptions({ libraryEnabled: read.available });
+    const refs = React.useMemo(() => read.rows.flatMap(row => row.set.target?.kind === 'workflow' ? [row.set.target.ref] : []), [read.rows]);
+    const resolveWorkflowTitle = useWorkflowReferenceTitles(refs, read.available);
     const router = useRouter();
     const serverId = read.serverId;
     const open = React.useCallback((row: ScheduledWorkflowRow) => {
@@ -86,7 +87,7 @@ export const ScheduledWorkflowRows = React.memo(function ScheduledWorkflowRows(p
         else router.push({ pathname: '/workflows', params: { trigger: set.automationId } } as never);
     }, [router, serverId]);
     return <>
-        <ScheduledWorkflowSectionView rows={read.rows} onOpen={open} resolveWorkflowTitle={titles.resolveWorkflowTitle}
+        <ScheduledWorkflowSectionView rows={read.rows} onOpen={open} resolveWorkflowTitle={resolveWorkflowTitle}
             sessionId={props.sessionId} density={props.density} />
         {props.sessionId !== undefined ? <ScheduledWorkflowReadFailure read={read} sessionId={props.sessionId} /> : null}
     </>;

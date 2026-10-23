@@ -90,7 +90,6 @@ WorkflowAgentDetail.displayName = 'WorkflowAgentDetail';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        marginLeft: 18 + theme.space.s8,
         paddingHorizontal: theme.space.s8,
         paddingVertical: theme.space.s8,
         borderRadius: theme.borderRadius.md,

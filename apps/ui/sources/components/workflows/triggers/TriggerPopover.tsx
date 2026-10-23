@@ -262,6 +262,8 @@ function FieldSelect(props: Readonly<{
     emptyLabel?: string;
     /** An option that acts in place (a retry) and leaves the menu open on its result. */
     keepsOpen?: (id: string) => boolean;
+    /** The stored value no longer resolves: the field wears the invalid border instead of looking chosen. */
+    invalid?: boolean;
 }>) {
     const [open, setOpen] = React.useState(false);
     React.useEffect(() => {
@@ -284,6 +286,7 @@ function FieldSelect(props: Readonly<{
             itemTrigger={{
                 title: props.title,
                 ...(props.subtitle === undefined ? {} : { subtitle: props.subtitle }),
+                ...(props.invalid ? { field: { invalid: true } } : {}),
                 itemProps: { subtitleLines: 0, accessoryLayout },
             }}
             {...(props.search ? { search: true } : {})}
@@ -873,6 +876,7 @@ function RunsInRows(props: Readonly<{
                     {...(sessionMenu.emptyLabel === undefined ? {} : { emptyLabel: sessionMenu.emptyLabel })}
                     selectedId={props.runsIn.sessionId}
                     keepsOpen={keepsOpen}
+                    invalid={stored?.disabled === true}
                     onSelect={(sessionId) => {
                         if (sessionId === WORKFLOW_SESSION_RETRY_ITEM_ID) { retrySessionOptions(); return; }
                         const option = existingSessions.find((candidate) => candidate.sessionId === sessionId);
@@ -897,7 +901,7 @@ function useStoredSessionItem(params: Readonly<{ sessionId: string; serverId: st
     const unavailable = deleted || params.settled;
     return {
         id: params.sessionId,
-        title: name ?? (unavailable ? t('workflows.conversation.sessionNoLongerAvailable') : t('workflows.conversation.savedSession')),
+        title: name ?? (unavailable ? t('workflows.conversation.unavailableSession') : t('workflows.conversation.savedSession')),
         ...(unavailable ? { disabled: true, subtitle: deleted ? t('workflows.conversation.sessionGone') : t('workflows.conversation.sessionNotHere') } : {}),
     };
 }

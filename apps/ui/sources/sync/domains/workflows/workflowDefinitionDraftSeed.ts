@@ -1,6 +1,7 @@
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 import type { WorkflowStarterSessionTarget } from '@happier-dev/protocol/workflows/builtins/examples';
+import type { WorkflowDefinitionCaptureResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -12,6 +13,8 @@ export type WorkflowDefinitionDraftSeed = Readonly<{
     definition: WorkflowDefinitionV1;
     trigger?: AutomationTriggerDefinitionInput;
     sessionTarget?: WorkflowStarterSessionTarget;
+    /** Attribution stays out of the executable graph and never confers source access. */
+    captureProvenance?: WorkflowDefinitionCaptureResultV1['provenance'];
 }>;
 
 const WORKFLOW_DEFINITION_DRAFT_SEED_KIND = 'workflow-definition-draft-seed';

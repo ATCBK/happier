@@ -233,7 +233,9 @@ export function WorkflowStepEditor(props: Readonly<{
     // engine facts, not the whole draft, so typing elsewhere never re-renders this composer.
     const effective = resolveEffectiveWorkflowStepExecution(props.draft, step);
     const agentId = resolveSessionAuthoringAgentId({ agentTarget: effective.agentTarget, facts: props.authoringFacts });
-    const engine = step.execution?.engine ?? props.draft.defaults.engine;
+    // A participant a Run supplies for this step owns its Session and launch: the chip names it and offers no Agent choice.
+    const participant = step.execution?.participant;
+    const engine = participant ?? step.execution?.engine ?? props.draft.defaults.engine;
     const engineChangeRef = React.useRef({ fields: props.onChangeExecutionFields, engine: props.onChangeEngine });
     engineChangeRef.current = { fields: props.onChangeExecutionFields, engine: props.onChangeEngine };
     const changeEngineFields = React.useCallback((fields: Partial<WorkflowStepExecutionSelection>) => engineChangeRef.current.fields?.(fields), []);
@@ -257,14 +259,14 @@ export function WorkflowStepEditor(props: Readonly<{
         modelMode: effective.modelSelection?.ref.modelId,
         permissionMode,
         showStatusPermissionMode: false,
-        agentPickerOptions: editable ? enginePicker.options : [],
+        agentPickerOptions: editable && participant === undefined ? enginePicker.options : [],
         agentPickerSelectedOptionId: enginePicker.selectedOptionId,
         onAgentPickerSelect: enginePicker.onSelect,
         // The native AgentInput owns opening its options. This presence also keeps
         // the effective engine chip visible in a read-only document.
         onAgentClick: enginePicker.onAgentClick,
     }), [agentId, effective.modelSelection, permissionMode, enginePicker.agentId,
-        editable, roleName, engineSummary, enginePicker.label, enginePicker.onAgentClick, enginePicker.onSelect, enginePicker.options, enginePicker.selectedOptionId]);
+        editable, participant, roleName, engineSummary, enginePicker.label, enginePicker.onAgentClick, enginePicker.onSelect, enginePicker.options, enginePicker.selectedOptionId]);
     const composerChips = React.useMemo(() => [stepOptionsChip], [stepOptionsChip]);
     const promptFrameRef = React.useRef<View>(null);
     const issues = workflowIssuesForBlock(validation, step.id, props.draft);

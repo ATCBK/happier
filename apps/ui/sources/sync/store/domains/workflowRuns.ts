@@ -604,6 +604,16 @@ function selectCurrentSummaryProjection(
         || (incoming.summary.revision === stored.summary.revision
             && toEpochMilliseconds(incoming.summary.updatedAt) > toEpochMilliseconds(stored.summary.updatedAt))
         ? incomingSummary : stored.summary;
+    // Accepted Discussion routing is immutable and opened by the Action host.
+    // Raw control rows omit it; equal-revision full reads can first reveal it.
+    if (summary.origin.kind === 'direct') {
+        const discussion = parentCurrent && incoming.summary.origin.kind === 'direct' && incoming.summary.origin.discussion
+            ? incoming.summary.origin.discussion
+            : stored.summary.origin.kind === 'direct' ? stored.summary.origin.discussion : undefined;
+        if (discussion && !sameStrictJsonValue(summary.origin.discussion, discussion)) {
+            summary = { ...summary, origin: { ...summary.origin, discussion } };
+        }
+    }
     // Attention is an indexed child-row fact. A demanded server read can
     // refresh it without moving the parent's control revision or timestamp.
     // Projections that did not read membership cannot clear known attention.

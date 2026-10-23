@@ -5,6 +5,18 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { appendMountedComposerDraft } from '@/sync/ops/actions/appendMountedComposerDraft';
 import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workflowAgentAuthoringSeed';
 import { useWorkflowsAvailability } from '../gating/workflowsAvailability';
+import type { WorkflowDefinitionCaptureResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { storeWorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
+
+/** Discussion capture extends the same draft-only authoring intent through the ordinary editor intake. */
+export function prepareWorkflowCaptureEditorEntry(draft: WorkflowDefinitionCaptureResultV1, accountLifetime: ServerAccountScopeLifetime) {
+    if (draft.status !== 'ready' || !draft.definition || !accountLifetime.isCurrent()
+        || !areServerProfileIdentifiersEquivalent(draft.provenance.discussion.serverId, accountLifetime.scope.serverId)) return null;
+    const definitionDraftSeedId = storeWorkflowDefinitionDraftSeed({ name: draft.name, definition: draft.definition,
+        captureProvenance: draft.provenance }, accountLifetime);
+    return { pathname: '/workflows/[id]' as const, params: { id: 'new', definitionDraftSeedId, serverId: accountLifetime.scope.serverId } };
+}
 
 type RepeatableSource = Readonly<{
     sessionId: string;

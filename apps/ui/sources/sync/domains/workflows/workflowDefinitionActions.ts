@@ -8,6 +8,18 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { WorkflowDefinitionExportResultV1Schema, type WorkflowDefinitionExportResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { WorkflowDefinitionCaptureRequestV1Schema, WorkflowDefinitionCaptureResultV1Schema,
+    type WorkflowDefinitionCaptureRequestV1, type WorkflowDefinitionCaptureResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+
+/** Read/transform only; persistence and start remain their existing Actions. */
+export async function captureWorkflowDefinition(params: WorkflowDefinitionCaptureRequestV1 & Readonly<{
+    signal?: AbortSignal; accountLifetime?: ServerAccountScopeLifetime | null;
+}>): Promise<WorkflowDefinitionCaptureResultV1> {
+    const { signal, accountLifetime, ...input } = params;
+    return callDefinitionAction({ actionId: 'workflow.definition.capture', input: WorkflowDefinitionCaptureRequestV1Schema.parse(input),
+        parseResult: value => WorkflowDefinitionCaptureResultV1Schema.parse(value), ...signalOption(signal),
+        ...(accountLifetime === undefined ? {} : { accountLifetime }) });
+}
 
 /** Export reads the saved Artifact once at the canonical document owner. The platform owns delivery. */
 export async function exportSavedWorkflowDocument(params: Readonly<{ definitionId: string; signal?: AbortSignal }>): Promise<WorkflowDefinitionExportResultV1> {

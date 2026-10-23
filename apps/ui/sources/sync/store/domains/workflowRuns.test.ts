@@ -8,6 +8,7 @@ import {
     createWorkflowDefinitionFixture,
 } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import type { AutomationDefinitionRun } from '@/sync/domains/automations/automationTypes';
+import { buildDiscussionTimelineItems } from '@/components/discussions/discussionTimelineProjection';
 
 import {
     createWorkflowRunsDomain,
@@ -446,6 +447,36 @@ describe('workflow run body store', () => {
         expect(unreadable['run-1']?.summary).toHaveProperty('where', null);
         expect(mergeWorkflowRunBodies(unreadable, [workflowRunRowFromSummary({ ...run, revision: 5, where: null })])).toBe(unreadable);
         expect(mergeWorkflowRunBodies(unreadable, [workflowRunRowFromSummary({ ...run, revision: 3, where })])).toBe(unreadable);
+    });
+
+    it('opens the Discussion fold at the same revision and retains its origin across control refreshes', () => {
+        const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
+        const run = summary({ id: 'discussion-run', revision: 4, origin: 'direct' });
+        const origin = { kind: 'direct' as const, discussion: {
+            discussion: { serverId: 'home-1', discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 7,
+        } };
+        const upsert = (value: typeof run) => store.getState().upsertWorkflowRuns([workflowRunRowFromSummary(value)], null);
+        upsert(run);
+        upsert({ ...run, origin });
+        const opened = store.getState();
+        const openedSummary = resolveWorkflowRunRows(opened.workflowRunsById, [run.id])[0]!.summary!;
+        expect(openedSummary.origin).toEqual(origin);
+        expect(buildDiscussionTimelineItems({ serverId: 'home-1', discussionId: 'discussion-1',
+            messages: [{ id: 'question-1', seq: 7 }], subagents: [], readExecutionRunEntry: () => null,
+            workflowRuns: [openedSummary],
+        }).map(item => item.kind)).toEqual(['human_message', 'workflow_run']);
+        let notifications = 0;
+        const unsubscribe = store.subscribe(() => notifications++);
+        upsert(run);
+        upsert(structuredClone({ ...run, origin }));
+        expect(store.getState()).toBe(opened);
+        expect(notifications).toBe(0);
+        upsert({ ...run, revision: 5, state: 'running' });
+        expect(resolveWorkflowRunRows(store.getState().workflowRunsById, [run.id])[0]?.summary)
+            .toMatchObject({ revision: 5, state: 'running', origin });
+        upsert({ ...run, revision: 3, origin: { ...origin, discussion: { ...origin.discussion, messageId: 'stale-question' } } });
+        expect(resolveWorkflowRunRows(store.getState().workflowRunsById, [run.id])[0]?.summary?.origin).toEqual(origin);
+        unsubscribe();
     });
 
     it('retains private starter and authored progress across control rows, but clears explicitly unreadable content', () => {

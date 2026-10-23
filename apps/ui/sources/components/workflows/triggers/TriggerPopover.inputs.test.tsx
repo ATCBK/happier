@@ -433,7 +433,10 @@ describe('a workflow trigger in its popover (07 S4)', () => {
             expect(field === 'runs-in' ? items.find(item => item.id === 'session')?.disabled
                 : items.some(item => item.id === session.id)).toBe(field === 'runs-in' ? undefined : true);
         });
-        expect(served.requests.some(request => request.path === '/v2/sessions/read-batch')).toBe(true);
+        expect(served.requests.some(request => request.path === '/v2/sessions/archived')).toBe(true);
+        // The inventory already admitted these plain owner facts. Opening a
+        // destination chooser must not reacquire the same full Session.
+        expect(served.requests.some(request => request.path === '/v2/sessions/read-batch')).toBe(false);
         expect(getStorage().getState().sessions[session.id]).toBeUndefined();
         await screen.unmount();
     });
@@ -471,10 +474,48 @@ describe('a workflow trigger in its popover (07 S4)', () => {
         await waitForHomeGovernance(() => expect(sessionChoice()?.subtitle).toBe('workflows.conversation.sessionsFailedRetry'));
         expect(sessionChoice()?.disabled).not.toBe(true);
         failing = false;
-        await act(async () => { menu().props.onSelect('session'); });
+        // The person's own press on the open menu's row, not a call into the select's handler.
+        await screen.pressByTestIdAsync('retry-prompt-runs-in:session');
         expect(menu().props.open).toBe(true);
         await waitForHomeGovernance(() => expect(sessionChoice()?.subtitle).toBeUndefined());
         expect(sessionChoice()?.disabled).not.toBe(true);
+        await screen.unmount();
+    });
+    it('calls a stored Session unavailable only once a settled read no longer offers it', async () => {
+        const { createDefaultWhen } = await import('./sessionTriggerForm');
+        const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'offered-destination', active: true, metadata: {
+            flavor: 'claude', claudeSessionId: 'resume', claudeTranscriptPath: '/tmp/offered.jsonl',
+            machineId: 'machine-1', path: '/repo', host: 'host', name: 'Nightly summary',
+        } });
+        const batch = createSessionReadBatchHttpBoundary(request => request.path === `/v2/sessions/${session.id}`
+            ? Response.json({ session }) : undefined);
+        const served = await serveAccountHomes({ homes: [{ key: 'stored', serverUrl: 'https://trigger-stored.test', accountId: 'stored-account' }],
+            route: request => {
+                if (request.path === '/v2/sessions') return Response.json({ sessions: [session], nextCursor: null, hasNext: false });
+                if (request.path === '/v2/sessions/archived' || request.path === '/v2/sessions/active') {
+                    return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                }
+                return batch.handle(request);
+            } });
+        onTestFinished(() => served.dispose());
+        const storedServerId = served.homes.stored!.id;
+        getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {}, deletedSessionIds: {} });
+        const screen = await renderScreen(<TriggerPopover testID="stored-prompt" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null} serverId={storedServerId} machineId="machine-1"
+            initial={{ when: createDefaultWhen('schedule'), enabled: true, then: { kind: 'sendPrompt', prompt: 'Summarize the night', selection: {},
+                runsIn: { kind: 'session', sessionId: 'not-offered-destination', machineId: 'machine-1' } } }}
+            workflowOptions={[]} onSubmit={vi.fn<ExistingTriggerSubmit>(async () => {})} />);
+        const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+        await act(async () => { expect((await resolveServerCredentialAccountScope(storedServerId)).kind).toBe('bound'); });
+        const menu = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'stored-prompt-runs-in-session')!;
+        const stored = () => (menu().props.items as readonly { id: string; title: string; disabled?: boolean; subtitle?: string }[])
+            .find(item => item.id === 'not-offered-destination');
+        // Closed, nothing has read the Sessions: an unloaded Session is not a missing one.
+        expect(stored()).toMatchObject({ title: 'workflows.conversation.savedSession' });
+        expect(stored()?.disabled).not.toBe(true);
+        await act(async () => { menu().props.onOpenChange(true); });
+        await waitForHomeGovernance(() => expect(stored()).toMatchObject({ disabled: true,
+            title: 'workflows.conversation.unavailableSession', subtitle: 'workflows.conversation.sessionNotHere' }));
         await screen.unmount();
     });
     it.each(['account', 'session'] as const)('does not submit a retired prompt destination from the %s editor, but keeps an unloaded destination', async (scope) => {
@@ -506,10 +547,12 @@ describe('a workflow trigger in its popover (07 S4)', () => {
         expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(true);
         if (scope === 'account') {
             // The stored Session stays named with why it cannot be chosen, never an empty "Choose…".
-            const stored = screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session')
-                ?.props.items.find((item: { id: string }) => item.id === session.id);
-            expect(stored).toMatchObject({ disabled: true, subtitle: 'workflows.conversation.sessionGone' });
-            expect(stored.title).not.toBe('workflows.conversation.savedSession');
+            const storedMenu = screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session');
+            const stored = storedMenu?.props.items.find((item: { id: string }) => item.id === session.id);
+            // The value is short enough to survive a narrow panel; the explanation is the field's helper text.
+            expect(stored).toMatchObject({ disabled: true, title: 'workflows.conversation.unavailableSession',
+                subtitle: 'workflows.conversation.sessionGone' });
+            expect(storedMenu?.props.itemTrigger.field).toMatchObject({ invalid: true });
         }
         await screen.pressByTestIdAsync('retired-target-submit');
         expect(submit).not.toHaveBeenCalled();

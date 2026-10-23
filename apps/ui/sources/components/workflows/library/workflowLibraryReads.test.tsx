@@ -1,6 +1,6 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -10,8 +10,10 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema, WorkflowTriggerSetV1Schema } from '@happier-dev/protocol';
+import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
+import { WORKFLOW_DEFINITION_PLUGIN_CURSOR_PREFIX_V1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 // Only Home HTTP/credentials and the native Machine RPC leave the real path.
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -29,7 +31,10 @@ const { apiSocket } = await import('@/sync/api/session/apiSocket');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
-const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+const { createWorkflowDefinition, getWorkflowDefinition, listWorkflowDefinitions } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+const { ScheduledWorkflowRows } = await import('../triggers/ScheduledWorkflowSection');
+const { projectScheduledWorkflowRows } = await import('../triggers/scheduledWorkflowRows');
+const { listBuiltinWorkflowReferenceOptions, useWorkflowReferenceTitles } = await import('../presentation/workflowReferenceOptions');
 const { useWorkflowDefinitionLibrary, useWorkflowRunWindow, resetWorkflowLibraryReadsForTests } = await import('./workflowLibraryReads');
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const route = '/v3/automations/runs/workflow-storage';
@@ -99,8 +104,125 @@ async function runPage(runs: readonly ReturnType<typeof createWorkflowRunSummary
 
 const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') => createWorkflowRunSummaryFixture({ id, state, ownerAccountId: accountId });
 const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
+const artifactInventoryReads = () => home.requests.filter(request => request.input === null
+    && new URL(request.path, request.serverUrl).pathname === '/v1/artifacts');
 
 describe('Workflow library reads through real Account Actions and HTTP', () => {
+    it('names scheduled rows from admitted Artifact headers without demanding the full library', async () => {
+        // The production activation owner establishes Settings before Profile scope.
+        await storage.getState().activateSettingsScope({ serverId, accountId });
+        await saved(definitionId, 'Readable scheduled title');
+        await saved(secondId, 'Unreadable scheduled title');
+        const stored = home.artifacts(serverId).read(secondId)!;
+        home.artifacts(serverId).replaceStoredRow({ ...stored, body: encodePlainArtifactStoredContent({ body: 'invalid workflow JSON' }) });
+        await expect(getWorkflowDefinition({ definitionId: secondId })).rejects.toMatchObject({ code: 'content_unavailable' });
+        expect(storage.getState().artifacts[secondId]?.rawHeader?.metadata).toMatchObject({ title: 'Unreadable scheduled title' });
+        const builtin = listBuiltinWorkflowReferenceOptions()[0]!;
+        const sets = [definitionId, secondId, builtin.ref].map((ref, index) => WorkflowTriggerSetV1Schema.parse({
+            automationId: `scheduled-${index}`, revision: 1, enabled: true, health: 'available', target: { kind: 'workflow', ref },
+            triggers: [{ id: `timer-${index}`, revision: 1, enabled: true, kind: 'schedule', nextRunAt: Date.now() + 120_000,
+                createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }],
+        }));
+        const before = artifactInventoryReads().length;
+        const screen = await renderScreen(<ScheduledWorkflowRows read={{ available: true, rows: projectScheduledWorkflowRows(sets),
+            status: 'ready', retry: () => {}, serverId }} />);
+        await waitForHomeGovernance(() => {
+            expect(screen.getTextContent()).toContain('Readable scheduled title');
+            expect(screen.getTextContent()).toContain('Unreadable scheduled title');
+            expect(screen.getTextContent()).toContain(builtin.title);
+        });
+        expect(artifactInventoryReads()).toHaveLength(before);
+    });
+
+    it('names scheduled plugin rows from the admitted projection without loading unrelated saved bodies', async () => {
+        await storage.getState().activateSettingsScope({ serverId, accountId });
+        await saved();
+        storage.getState().applyMachines([createMachineFixture({ id: 'title-machine', activeAt: Date.now(),
+            daemonState: { status: 'running', pid: 17, contributionRegistryProjectionRevision: 0 } })], true, { sourceServerId: serverId });
+        machineRpc.mockResolvedValue({ protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { 'example.recipe': { id: 'example.recipe', displayName: 'Recipe', version: '1.2.3', enabled: true,
+                source: { kind: 'path', locator: '/plugins/example.recipe' } } },
+            familiesById: { workflows: { family: 'workflows', entriesById: { 'example.recipe/review': {
+                id: 'example.recipe/review', pluginId: 'example.recipe', pluginVersion: '1.2.3',
+                definition: { id: 'review', title: 'Admitted plugin title', definition: content },
+            } } } },
+        }) });
+        const admitted = await listWorkflowDefinitions({ cursor: `${WORKFLOW_DEFINITION_PLUGIN_CURSOR_PREFIX_V1}0` });
+        const plugin = admitted.pluginWorkflows?.[0];
+        expect(plugin?.title).toBe('Admitted plugin title');
+        if (!plugin) throw new Error('Expected the real plugin projection');
+        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'scheduled-plugin', revision: 1, enabled: true, health: 'available',
+            target: { kind: 'workflow', ref: plugin.workflow }, triggers: [{ id: 'plugin-timer', revision: 1, enabled: true,
+                kind: 'schedule', nextRunAt: Date.now() + 120_000, createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }],
+        });
+        const before = artifactInventoryReads().length;
+        const rpcBefore = machineRpc.mock.calls.length;
+        const screen = await renderScreen(<ScheduledWorkflowRows read={{ available: true, rows: projectScheduledWorkflowRows([set]),
+            status: 'ready', retry: () => {}, serverId }} />);
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain(plugin.title));
+        expect(artifactInventoryReads()).toHaveLength(before);
+        expect(machineRpc).toHaveBeenCalledTimes(rpcBefore);
+        await act(async () => storage.getState().applyMachines([
+            createMachineFixture({ id: 'title-machine', active: false, activeAt: 0,
+                daemonState: { status: 'running', pid: 17, contributionRegistryProjectionRevision: 0 } }),
+            createMachineFixture({ id: 'successor-title-machine', active: true, activeAt: Date.now(),
+                daemonState: { status: 'running', pid: 18, contributionRegistryProjectionRevision: 0 } }),
+        ], true, { sourceServerId: serverId }));
+        expect(screen.getTextContent()).toContain(plugin.title);
+        const successor = storage.getState().machines['successor-title-machine']!;
+        const retainedSource = storage.getState().machines['title-machine']!;
+        await act(async () => storage.getState().applyMachines([successor], true, { sourceServerId: serverId }));
+        expect(screen.getTextContent()).not.toContain(plugin.title);
+        await act(async () => storage.getState().applyMachines([retainedSource, successor], true, { sourceServerId: serverId }));
+        expect(screen.getTextContent()).toContain(plugin.title);
+        await act(async () => {
+            accountId = 'account-b';
+            await home.switchAccount(serverId, accountId);
+            storage.setState({ profileScope: { serverId, accountId } });
+        });
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).not.toContain(plugin.title));
+        expect(machineRpc).toHaveBeenCalledTimes(rpcBefore);
+    });
+
+    it('keeps admitted shared titles on the first cached render and withdraws locked, removed, or foreign-scope facts', async () => {
+        await storage.getState().activateSettingsScope({ serverId, accountId });
+        await saved(definitionId, 'Shared scheduled title');
+        const boundary = home.artifacts(serverId);
+        boundary.replaceStoredRow({ ...boundary.read(definitionId)!, ownerAccountId: 'sharing-owner' });
+        boundary.seedAccountGrant(definitionId, accountId, 'view');
+        await getWorkflowDefinition({ definitionId });
+        const admitted = storage.getState().artifacts[definitionId]!;
+        expect(admitted).toMatchObject({ ownerAccountId: 'sharing-owner', access: 'view', isDecrypted: true });
+        const refs = [definitionId];
+        const before = artifactInventoryReads().length;
+        const first = await renderHook(() => useWorkflowReferenceTitles(refs));
+        expect(first.getCurrent()(definitionId)).toBe('Shared scheduled title');
+        await first.unmount();
+        const renders: (string | null)[] = [];
+        const reopened = await renderHook(() => {
+            const resolve = useWorkflowReferenceTitles(refs);
+            renders.push(resolve(definitionId));
+            return resolve;
+        });
+        expect(renders[0]).toBe('Shared scheduled title');
+        await act(async () => storage.getState().updateArtifact({ ...admitted, isDecrypted: false,
+            availability: { kind: 'locked', reason: 'encryption_material_unavailable' }, storageMode: 'plain',
+            rawHeader: null, header: null, title: null, body: undefined, sessions: undefined, draft: undefined }));
+        expect(reopened.getCurrent()(definitionId)).toBeNull();
+        await act(async () => storage.getState().updateArtifact(admitted));
+        expect(reopened.getCurrent()(definitionId)).toBe('Shared scheduled title');
+        await act(async () => storage.getState().deleteArtifact(definitionId));
+        expect(reopened.getCurrent()(definitionId)).toBeNull();
+        await act(async () => {
+            storage.getState().updateArtifact(admitted);
+            storage.setState({ profileScope: { serverId, accountId: 'account-b' } });
+        });
+        expect(reopened.getCurrent()(definitionId)).toBeNull();
+        expect(artifactInventoryReads()).toHaveLength(before);
+    });
+
     it('keeps an addressed trigger picker on B while the active library shows the same id from A', async () => {
         await saved(definitionId, 'A workflow');
         const serverB = await home.addHome({ name: 'B library', serverUrl: 'https://workflow-library-b.test',

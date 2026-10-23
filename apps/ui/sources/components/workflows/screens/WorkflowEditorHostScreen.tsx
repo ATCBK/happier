@@ -334,6 +334,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 draftId: randomUUID(),
                 name: seed.name,
                 definition: seed.definition,
+                captureProvenance: seed.captureProvenance,
             })
             : definitionDraftSeed !== null
                 ? buildWorkflowEditorDraftFromDefinition({ draftId: randomUUID(), ...definitionDraftSeed })
@@ -670,6 +671,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                     draftId: randomUUID(),
                     name: result.metadata.title,
                     definition: result.definition,
+                    captureProvenance: result.metadata.captureProvenance,
                 });
                 savedDescriptionRef.current = result.metadata.description ?? '';
                 setDescription(result.metadata.description ?? '');
@@ -837,13 +839,16 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         // admitted title is `min(1)` at its Protocol owner, so an unnamed draft
         // admits with no metadata rather than an empty title the schema refuses.
         const title = (testSource?.metadata.title ?? draft.name).trim();
+        const captureProvenance = testSource === null ? draft.captureProvenance : testSource.metadata.captureProvenance;
         const start = () => runNow.runNow({
             runId,
             ...(retained !== null ? {
                 ...retained.input,
                 ...(retained.project === undefined ? {} : { project: retained.project }),
             } : {
-                ...(title.length === 0 ? {} : { metadata: { title } }),
+                ...(title.length === 0 ? {} : { metadata: { title,
+                    ...(captureProvenance === undefined ? {} : { captureProvenance }),
+                } }),
                 executionTarget: admittedTarget,
                 source,
                 ...(inputs === undefined ? {} : { inputs }),
@@ -1072,6 +1077,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                     const metadata = {
                         title: draft.name.trim(),
                         ...(savedDescription.length === 0 ? {} : { description: savedDescription }),
+                        ...(draft.captureProvenance === undefined ? {} : { captureProvenance: draft.captureProvenance }),
                     };
                     const result = asCopy || saved === null
                         ? await createWorkflowDefinition({
@@ -1167,6 +1173,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                                 draftId: randomUUID(),
                                 name: current.metadata.title,
                                 definition: current.definition,
+                                captureProvenance: current.metadata.captureProvenance,
                             }),
                             currentRevision: current.revision,
                         });
@@ -1366,6 +1373,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             draftId: draft?.draftId ?? randomUUID(),
             name: agentRevision.metadata.title,
             definition: agentRevision.definition,
+            captureProvenance: agentRevision.metadata.captureProvenance,
         });
         if (draft !== null && (routeDraftDirty || savePending)) {
             setSaveConflict({ currentDraft: incoming, currentRevision: agentRevision.revision });

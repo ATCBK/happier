@@ -14,15 +14,16 @@ export const NO_DISCLOSURE: ReadonlyMap<string, boolean> = new Map();
 /**
  * Whether a group is open: attention (an issue or a required-but-missing
  * field) always opens it; otherwise the person's recorded choice; otherwise
- * whether it holds a value set for this subject.
+ * whether it held a value set when it first rendered for this subject
+ * (`initialValueSet`; a value that arrives later never opens a group).
  */
 export function resolveWorkflowInspectorGroupExpanded(params: Readonly<{
     attention: boolean;
     recorded: boolean | undefined;
-    valueSet: boolean;
+    initialValueSet: boolean;
 }>): boolean {
     if (params.attention) return true;
-    return params.recorded ?? params.valueSet;
+    return params.recorded ?? params.initialValueSet;
 }
 
 export function issuesUnder(issues: readonly WorkflowValidationIssue[], prefixes: readonly string[]): boolean {
@@ -46,10 +47,13 @@ export function WorkflowInspectorGroup(props: Readonly<{
     children: React.ReactNode;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
+    // Expansion follows the person's intent or the first render, never a value that arrives later
+    // (the contextual Agent seeding a new workflow would move the content under an open menu).
+    const [initialValueSet] = React.useState(props.valueSet);
     const expanded = resolveWorkflowInspectorGroupExpanded({
         attention: props.attention,
         recorded: props.disclosure.get(props.groupId),
-        valueSet: props.valueSet,
+        initialValueSet,
     });
     const { groupId, onChangeDisclosure } = props;
     const onExpandedChange = React.useCallback((next: boolean) => {

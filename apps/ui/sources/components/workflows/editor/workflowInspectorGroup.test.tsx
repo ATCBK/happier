@@ -28,3 +28,17 @@ it('reserves the effective-value summary for the closed settings group', async (
     ><Text>Engine controls</Text></WorkflowInspectorGroup>);
     expect(text().some((node) => node.children.includes('Configured engine'))).toBe(true);
 });
+
+it('does not open a closed group when a value arrives after the first render', async () => {
+    // A late initialization (the contextual Agent seeding a new workflow) is not the person's intent.
+    const group = (valueSet: boolean) => (<WorkflowInspectorGroup
+        groupId="agent" title="Agent" summary="Configured engine" attention={false} valueSet={valueSet}
+        disclosure={new Map()} testID="settings-group"
+    ><Text>Engine controls</Text></WorkflowInspectorGroup>);
+    const screen = await renderScreen(group(false));
+    const text = () => screen.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'Text');
+    expect(text().some((node) => node.children.includes('Configured engine'))).toBe(true);
+    await screen.update(group(true));
+    expect(text().some((node) => node.children.includes('Engine controls'))).toBe(false);
+    expect(text().some((node) => node.children.includes('Configured engine'))).toBe(true);
+});

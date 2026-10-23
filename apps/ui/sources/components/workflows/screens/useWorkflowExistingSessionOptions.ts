@@ -10,11 +10,17 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { ensureSessionMetadataInventoryForServerAccountScope } from '@/sync/domains/session/fetchSessionMetadataInventoryForServerAccountScope';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { captureServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { createOperationAccountCurrentnessSource } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
 import { readSessionSnapshotsForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { serverFetch } from '@/sync/http/client';
 import { readAccountSettingsForScope } from '@/sync/domains/state/accountSettingsPersistence';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { waitForServerReachable } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 type WorkflowSessionOptions = Readonly<{
     existingSessions: readonly WorkflowExistingSessionOption[];
@@ -43,13 +49,14 @@ function createUnopenedRowsSelector(serverId: string | null) {
             readSessionListRowsForServerId(state.sessionListRowsByServerId, serverId) ?? {},
         ).filter(row => isAutomationSessionCandidateVisible(row)
             && !areServerProfileIdentifiersEquivalent(state.sessions[row.id]?.serverId, serverId));
-        // Activity publications do not change continuation facts. The exact read
-        // owner, not a display row's compact metadata, supplies those facts.
+        // Activity publications do not change continuation facts. A new retained
+        // owner projection does; its presence alone is not content admission.
         if (rows.length === previous.length && rows.every((row, i) => {
             const before = previous[i];
             return row.id === before.id && row.metadataVersion === before.metadataVersion
                 && row.metadataLayoutVersion === before.metadataLayoutVersion && row.metadata === before.metadata
                 && row.metadataUnavailable === before.metadataUnavailable && row.access === before.access
+                && row[SESSION_OWNER_METADATA_PROJECTION] === before[SESSION_OWNER_METADATA_PROJECTION]
                 && row.accessLevel === before.accessLevel && row.encryptedContentAvailability === before.encryptedContentAvailability;
         })) return previous;
         previous = rows;
@@ -123,14 +130,29 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     React.useEffect(() => {
         if (!enabled || !binding) return;
         const controller = new AbortController();
-        void ensureSessionMetadataInventoryForServerAccountScope({ scope: binding.scope, accountLifetime: binding,
-            signal: controller.signal }).then(() => {
+        const retirement = binding.onRetire(() => controller.abort());
+        void (async () => {
+            if (retries > 0) {
+                const profile = getServerProfileById(binding.scope.serverId);
+                if (!profile) throw new Error('Session inventory Home unavailable');
+                const credentials = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: binding.scope.serverId });
+                if (!credentials) throw new Error('Session inventory credentials unavailable');
+                // The existing transport owner retains carrier selection, probes
+                // and recovery cadence. Retry remains loading until it verifies
+                // reachability or this demand/Account leaves; no chooser timer.
+                await waitForServerReachable({ serverUrl: profile.serverUrl, token: credentials.token, signal: controller.signal });
+            }
+            throwIfAborted(controller.signal);
+            if (!binding.isCurrent()) return;
+            await ensureSessionMetadataInventoryForServerAccountScope({ scope: binding.scope, accountLifetime: binding,
+                signal: controller.signal });
+        })().then(() => {
             if (!controller.signal.aborted && binding.isCurrent()) setInventory({ acquisition, status: 'ready' });
         }).catch(() => {
             if (!controller.signal.aborted && binding.isCurrent()) setInventory({ acquisition, status: 'error' });
         });
-        return () => controller.abort();
-    }, [acquisition, binding, enabled]);
+        return () => { controller.abort(); retirement.dispose(); };
+    }, [acquisition, binding, enabled, retries]);
     const inventoryStatus = !binding ? 'ready' : inventory.acquisition === acquisition ? inventory.status : 'loading';
 
     const unopenedSelector = React.useMemo(() => createUnopenedRowsSelector(serverId), [serverId]);
@@ -144,7 +166,10 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     }> & AcquisitionStatus>({ binding: null, options: NO_OPTIONS, acquisition: null, status: 'ready' });
     const snapshotAcquisition = React.useMemo(() => ({}), [acquisition, unopenedRows, settings]);
     React.useEffect(() => {
-        if (!enabled || !binding || unopenedRows.length === 0) return;
+        // Bootstrap may publish partial rows while the shared inventory is paging.
+        // Start the aggregate detail read only after that acquisition completes;
+        // subsequent material row changes still refresh through this same owner.
+        if (!enabled || !binding || inventoryStatus !== 'ready' || unopenedRows.length === 0) return;
         const controller = new AbortController();
         const retirement = binding.onRetire(() => controller.abort());
         setUnopened(previous => ({ binding, options: previous.binding === binding ? previous.options : NO_OPTIONS,
@@ -152,30 +177,97 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
         void (async () => {
             const authority = await captureServerRequestAuthorityForServerAccountScope({ scope: binding.scope,
                 activeRequest: (path, init) => serverFetch(path, init) });
+            let currentness: ReturnType<typeof createOperationAccountCurrentnessSource> | undefined;
             try {
-                const results = await readSessionSnapshotsForAuthority({ authority, sessionIds: unopenedRows.map(row => row.id),
-                    signal: controller.signal, isCurrent: binding.isCurrent });
+                const credentials = authority.context.credentials;
+                if (!credentials) throw new Error('Session options credentials unavailable');
+                const accountCurrentnessSource = createOperationAccountCurrentnessSource({ credentials, request: authority.request,
+                    serverId: authority.scope.serverId });
+                currentness = accountCurrentnessSource;
+                const isCurrent = () => !controller.signal.aborted && binding.isCurrent() && accountCurrentnessSource.isCurrent();
+                const accountCurrentness = await accountCurrentnessSource.read();
+                if (!isCurrent()) return;
                 const state = getStorage().getState();
                 const accountSettings = readAccountSettingsForScope({ scope: binding.scope,
                     focusedScope: state.settingsScope, focusedSettings: settings ?? state.settings });
-                const options: WorkflowExistingSessionOption[] = [];
+                const optionsById = new Map<string, WorkflowExistingSessionOption>();
                 let failed = false;
-                for (const result of results.values()) {
-                    if (!result.ok) { failed = true; continue; }
-                    const session = result.snapshot.session;
-                    if (!isAutomationSessionCandidate(session, accountSettings)) continue;
-                    const sessionMachineId = resolveDisplayMachineIdForSessionFromState({ state: getStorage().getState(),
-                        serverId: binding.scope.serverId, sessionId: session.id, metadata: session.metadata });
-                    if (sessionMachineId) options.push({ sessionId: session.id, machineId: sessionMachineId, label: getSessionName(session) });
+                const publishOption = (sessionId: string, option: WorkflowExistingSessionOption | undefined) => {
+                    if (option) optionsById.set(sessionId, option);
+                    if (!isCurrent()) return;
+                    setUnopened(previous => {
+                        // Keep last-known options for not-yet-settled rows on
+                        // refresh. Only a settled row may replace its answer.
+                        const retained = previous.binding === binding ? previous.options : NO_OPTIONS;
+                        const index = retained.findIndex(value => value.sessionId === sessionId);
+                        if (index < 0 && !option) return previous;
+                        const next = [...retained];
+                        if (index < 0 && option) next.push(option);
+                        else if (option) next[index] = option;
+                        else next.splice(index, 1);
+                        if (sameOptions(retained, next)) return previous;
+                        return { binding, acquisition: snapshotAcquisition,
+                            options: next, status: 'loading' };
+                    });
+                };
+                const missingIds: string[] = [];
+                for (const row of unopenedRows) {
+                    const metadata = readSessionListRenderableOwnerMetadataView(row, {
+                        requireAdmitted: { credentials, accountCurrentness, isCurrent },
+                    });
+                    if (!metadata) { missingIds.push(row.id); continue; }
+                    let option: WorkflowExistingSessionOption | undefined;
+                    if (isAutomationSessionCandidate({ ...row, ownerMetadataView: metadata }, accountSettings)) {
+                        const sessionMachineId = resolveDisplayMachineIdForSessionFromState({ state: getStorage().getState(),
+                            serverId: binding.scope.serverId, sessionId: row.id, metadata });
+                        if (sessionMachineId) option = { sessionId: row.id, machineId: sessionMachineId, label: getSessionName(row) };
+                    }
+                    if (option) optionsById.set(row.id, option);
                 }
-                if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ binding, acquisition: snapshotAcquisition,
+                if (missingIds.length > 0) {
+                    // The admitted cohort settles together, without N queued
+                    // option-array copies. Missing rows keep their last answer
+                    // until the exact owner settles each one progressively.
+                    const missing = new Set(missingIds);
+                    setUnopened(previous => {
+                        const retained = new Map((previous.binding === binding ? previous.options : NO_OPTIONS)
+                            .map(option => [option.sessionId, option]));
+                        const options = unopenedRows.flatMap(row => {
+                            const option = optionsById.get(row.id) ?? (missing.has(row.id) ? retained.get(row.id) : undefined);
+                            return option ? [option] : [];
+                        });
+                        return { binding, acquisition: snapshotAcquisition,
+                            options: sameOptions(previous.options, options) ? previous.options : options, status: 'loading' };
+                    });
+                    await readSessionSnapshotsForAuthority({ authority, sessionIds: missingIds,
+                        includeTurns: false, signal: controller.signal, isCurrent, accountCurrentnessSource: currentness,
+                        onResult: (sessionId, result) => {
+                            let option: WorkflowExistingSessionOption | undefined;
+                            if (!result.ok) failed = true;
+                            else {
+                                const session = result.snapshot.session;
+                                if (isAutomationSessionCandidate(session, accountSettings)) {
+                                    const sessionMachineId = resolveDisplayMachineIdForSessionFromState({ state: getStorage().getState(),
+                                        serverId: binding.scope.serverId, sessionId, metadata: readSessionOwnerMetadataView(session) });
+                                    if (sessionMachineId) option = { sessionId, machineId: sessionMachineId, label: getSessionName(session) };
+                                }
+                            }
+                            publishOption(sessionId, option);
+                        } });
+                }
+                await currentness.ensureCurrent();
+                const options = unopenedRows.flatMap(row => {
+                    const option = optionsById.get(row.id);
+                    return option ? [option] : [];
+                });
+                if (isCurrent()) setUnopened(previous => ({ binding, acquisition: snapshotAcquisition,
                     options: sameOptions(previous.options, options) ? previous.options : options, status: failed ? 'error' : 'ready' }));
-            } finally { await authority.release(); }
+            } finally { currentness?.dispose(); await authority.release(); }
         })().catch(() => {
             if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ ...previous, acquisition: snapshotAcquisition, status: 'error' }));
         });
         return () => { controller.abort(); retirement.dispose(); };
-    }, [snapshotAcquisition, binding, enabled, unopenedRows, settings]);
+    }, [snapshotAcquisition, binding, enabled, inventoryStatus, unopenedRows, settings]);
     const unopenedStatus = unopened.acquisition === snapshotAcquisition ? unopened.status : 'loading';
     // Every Session the canonical candidacy owner can continue, on any Machine
     // of this server: the drop target needs them to state *why* a Session on

@@ -12,6 +12,7 @@ import {
   workflowInputToFieldHint,
 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { JsonValue } from '@happier-dev/protocol';
+import type { WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 import type { ActionSessionAddressV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { resolveWorkflowContextInputDefaultsV1 } from '@happier-dev/protocol/workflows';
 import { validateInputFieldSchema } from '@happier-dev/protocol/inputs/runtime';
@@ -121,6 +122,7 @@ export function buildWorkflowEditorDraftFromDefinition(params: Readonly<{
   draftId: string;
   name: string;
   definition: WorkflowDefinitionV1;
+  captureProvenance?: WorkflowDefinitionMetadataV1['captureProvenance'];
 }>): WorkflowEditorDraft {
   const base = createWorkflowEditorDraft({
     draftId: params.draftId,
@@ -129,6 +131,7 @@ export function buildWorkflowEditorDraftFromDefinition(params: Readonly<{
     blocks: params.definition.blocks,
   });
   const withInputs: WorkflowEditorDraft = { ...base, inputs: params.definition.inputs,
+    ...(params.captureProvenance === undefined ? {} : { captureProvenance: params.captureProvenance }),
     ...(params.definition.roles === undefined ? {} : { roles: params.definition.roles }),
   };
   return params.definition.finalOutput === undefined

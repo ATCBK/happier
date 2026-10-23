@@ -53,12 +53,13 @@ describe('workflow reviewed-run seed', () => {
         publishAppliedActiveServerSnapshot(previousSnapshot, previousAvailable);
     });
     it('keeps accepted library metadata when opening a run as an unsaved workflow', () => {
+        const captureProvenance = { discussion: { serverId: 'server-a', discussionId: 'discussion-a' }, messages: [] };
         const seed = buildWorkflowReviewedRunSeed({
             run: createWorkflowRunSummaryFixture({ id: 'run-completed' }),
             definition: createWorkflowDefinitionFixture(),
-            acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Release review', description: 'Review the release changes' } },
+            acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Release review', description: 'Review the release changes', captureProvenance } },
         });
-        expect(seed).toMatchObject({ name: 'Release review', description: 'Review the release changes' });
+        expect(seed).toMatchObject({ name: 'Release review', description: 'Review the release changes', captureProvenance });
         expect(seed.reasonCode).toBeUndefined();
         expect(seed.supersededRunId).toBeUndefined();
     });

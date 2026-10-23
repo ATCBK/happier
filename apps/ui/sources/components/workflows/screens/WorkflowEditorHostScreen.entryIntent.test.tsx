@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, renderHook, standardCleanup } from '@/dev/testkit';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { authoringMemoryDefaults } from '@/sync/store/domains/authoringMemory';
@@ -159,7 +159,139 @@ afterEach(async () => {
     restoreWebGlobals?.();
 });
 
+async function answerCaptureDiscussion() {
+    const { DiscussionSummaryV1Schema } = await import('@happier-dev/protocol/discussions/models');
+    const discussionId = 'capture-discussion';
+    const actor = { v: 1 as const, accountId: 'account-a', profile: null };
+    home.answer(serverId, `/v1/discussions/${discussionId}`, { body: { discussion: DiscussionSummaryV1Schema.parse({
+        id: discussionId, ownerAccountId: 'account-a', encryptionMode: 'plain', anchor: null, access: 'owner', keyReadiness: true,
+        dataEncryptionKey: null, creationLocalId: null, titleContent: { t: 'plain', v: { v: 1, title: 'Compare the proposals' } },
+        latestMessage: { id: 'answer', localId: null, seq: 2, authorAccountId: 'account-a', accountActor: actor,
+            producerV1: { v: 1, kind: 'agent', sessionId: 'answerer' }, createdAt: 2 }, messageSeq: 2, lastReadSeq: 0,
+        unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: ['account-a'], archivedAt: null,
+        capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+    }) } });
+    const messages = [
+        { id: 'question', discussionId, seq: 1, localId: null, authorAccountId: 'account-a', accountActor: actor, producerV1: null,
+            content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Compare the proposals' }] } }, mentionedAccountIds: [], createdAt: 1 },
+        { id: 'answer', discussionId, seq: 2, localId: null, authorAccountId: 'account-a', accountActor: actor,
+            producerV1: { v: 1, kind: 'agent', sessionId: 'answerer' }, replyTarget: { kind: 'message', messageId: 'question' },
+            content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Private answer prose' }] } }, mentionedAccountIds: [], createdAt: 2 },
+        { id: 'unlinked-human', discussionId, seq: 3, localId: null, authorAccountId: 'account-a', accountActor: actor, producerV1: null,
+            content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Separate human note' }] } }, mentionedAccountIds: [], createdAt: 3 },
+    ];
+    home.answer(serverId, `/v1/discussions/${discussionId}/messages`, { body: { messages, hasMoreOlder: false, messageSeq: 3 } });
+    return discussionId;
+}
+
 describe('WorkflowEditorHostScreen saved-entry intents', () => {
+    it('reviews an authorized Discussion capture before editor handoff and retains source attribution on save', async () => {
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { useDiscussionWorkflowCapture } = await import('@/components/discussions/useDiscussionWorkflowCapture');
+        const discussionId = await answerCaptureDiscussion();
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('missing_account_scope');
+        const hook = await renderHook(() => useDiscussionWorkflowCapture({ discussion: { serverId, discussionId }, accountLifetime: lifetime }));
+        await act(async () => { await hook.getCurrent().open(['question', 'answer', 'unlinked-human']); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'review', draft: { status: 'needs_review', definition: null,
+            unresolved: [{ messageId: 'unlinked-human', reason: 'unlinked_message' }] } });
+        expect(hook.getCurrent().canOpenEditor).toBe(false);
+        await act(async () => { hook.getCurrent().openEditor(); });
+        expect(pushSpy()).not.toHaveBeenCalled();
+        expectNoWorkflowWrites();
+        await act(async () => { await hook.getCurrent().review({ choices: [{ messageId: 'unlinked-human', role: 'exclude' }] }); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'review', draft: { status: 'ready' } });
+        // The name typed in the review panel names the unsaved editor draft; the graph is unchanged.
+        await act(async () => { hook.getCurrent().openEditor({ name: '  Retry policy check ' }); });
+        const route = pushSpy().mock.calls.at(-1)?.[0] as { pathname: string; params: { definitionDraftSeedId: string } };
+        expect(route).toMatchObject({ pathname: '/workflows/[id]', params: { id: 'new' } });
+        const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId: route.params.definitionDraftSeedId }} />,
+            { wrapper: EditorPaneWrapper });
+        expect(screen.findByTestId('workflow-editor-name')?.props.value).toBe('Retry policy check');
+        expect(screen.findByTestId('workflow-editor-step-step_1')).not.toBeNull();
+        expectNoWorkflowWrites();
+        // A failed revision retains the last draft for recovery, but reopening
+        // must not silently approve it as the newly requested capture.
+        home.answer(serverId, `/v1/discussions/${discussionId}/messages`, { status: 403, body: { error: 'discussion_read_denied' } });
+        await act(async () => { await hook.getCurrent().review({ name: 'Revised capture' }); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'failed', draft: { status: 'ready' } });
+        await act(async () => { hook.getCurrent().close(); });
+        await act(async () => { await hook.getCurrent().open(); });
+        expect(hook.getCurrent().state.status).toBe('failed');
+        expect(hook.getCurrent().canOpenEditor).toBe(false);
+        const navigations = pushSpy().mock.calls.length;
+        await act(async () => { hook.getCurrent().openEditor(); });
+        expect(pushSpy().mock.calls).toHaveLength(navigations);
+        const { listWorkflowDefinitions, getWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        await act(async () => { screen.changeTextByTestId('workflow-editor-name', 'Captured exchange'); });
+        await screen.pressByTestIdAsync('workflow-editor-save');
+        const created = (await listWorkflowDefinitions()).definitions.find(row => row.metadata?.title === 'Captured exchange');
+        if (!created) throw new Error('missing_saved_capture');
+        const captureProvenance = { discussion: { serverId, discussionId }, messages: expect.arrayContaining([
+            expect.objectContaining({ source: { kind: 'discussion', discussion: { serverId, discussionId }, messageId: 'question' }, authorAccountId: 'account-a' }),
+            expect.objectContaining({ source: { kind: 'discussion', discussion: { serverId, discussionId }, messageId: 'answer' }, participantSessionId: 'answerer' }),
+        ]) };
+        expect((await getWorkflowDefinition({ definitionId: created.definitionId })).metadata).toMatchObject({ captureProvenance });
+        await screen.update(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: created.definitionId }} />);
+        await act(async () => { screen.changeTextByTestId('workflow-editor-name', 'Reused exchange'); });
+        await screen.pressByTestIdAsync('workflow-editor-save');
+        const reopened = await getWorkflowDefinition({ definitionId: created.definitionId });
+        expect(reopened.metadata).toMatchObject({ title: 'Reused exchange', captureProvenance });
+        expect(JSON.stringify(reopened.definition)).not.toContain(discussionId);
+    });
+
+    it('Save as pattern review chooses messages in thread order, keeps each choice, and opens the named draft', async () => {
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { useDiscussionWorkflowCapture } = await import('@/components/discussions/useDiscussionWorkflowCapture');
+        const { DiscussionPatternCapturePanel } = await import('@/components/discussions/DiscussionPatternCapturePanel');
+        const discussionId = await answerCaptureDiscussion();
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('missing_account_scope');
+        const captureRef: { current: ReturnType<typeof useDiscussionWorkflowCapture> | null } = { current: null };
+        const messages = [{ id: 'question', author: 'Ana', text: 'Compare the proposals' },
+            { id: 'answer', author: 'Reviewer', text: 'Private answer prose' },
+            { id: 'unlinked-human', author: 'Ana', text: 'Separate human note' }];
+        function Harness() {
+            const capture = useDiscussionWorkflowCapture({ discussion: { serverId, discussionId }, accountLifetime: lifetime! });
+            captureRef.current = capture;
+            const anchor = React.useRef(null);
+            return <DiscussionPatternCapturePanel capture={capture} anchorRef={anchor} discussionTitle="Compare the proposals"
+                messages={messages} accountLifetime={lifetime!} />;
+        }
+        const screen = await renderScreen(<Harness />);
+        await act(async () => { await captureRef.current!.open(); });
+        for (const id of ['unlinked-human', 'answer', 'question']) await screen.pressByTestIdAsync(`discussion-pattern-capture-message:${id}`);
+        await screen.pressByTestIdAsync('discussion-pattern-capture-review');
+        expect(captureRef.current!.state).toMatchObject({ status: 'review', request: { messageIds: ['question', 'answer', 'unlinked-human'] },
+            draft: { status: 'needs_review' } });
+        // The answer is settled first; settling the unresolved note must keep that earlier choice.
+        await screen.pressByTestIdAsync('discussion-pattern-capture-step:answer:header');
+        await screen.pressByTestIdAsync('discussion-pattern-capture-role:answer:step');
+        await screen.pressByTestIdAsync('discussion-pattern-capture-role:unlinked-human:exclude');
+        expect(captureRef.current!.state.request?.choices).toEqual(expect.arrayContaining([
+            expect.objectContaining({ messageId: 'answer', role: 'step' }),
+            expect.objectContaining({ messageId: 'unlinked-human', role: 'exclude' })]));
+        expect(captureRef.current!.state).toMatchObject({ status: 'review', draft: { status: 'ready' } });
+        expectNoWorkflowWrites();
+        // The name is an editable, prefilled value (the Discussion's title), not an empty field behind a placeholder.
+        expect(screen.findByTestId('discussion-pattern-capture-name')?.props.value).toBe('Compare the proposals');
+        // "Asked each time you run it" are chips over the steps; a chip's state is the step's per-run choice,
+        // and a step row carries its own chip exactly while that choice is on.
+        const answerAsked = () => captureRef.current!.state.draft!.steps.find((step) => step.messageId === 'answer')!.perRun;
+        const askedBefore = answerAsked();
+        await screen.pressByTestIdAsync('discussion-pattern-capture-ask:answer');
+        expect(answerAsked()).toBe(!askedBefore);
+        expect(screen.findByTestId('discussion-pattern-capture-step-input:answer') !== null).toBe(!askedBefore);
+        await act(async () => { screen.changeTextByTestId('discussion-pattern-capture-name', 'Proposal check'); });
+        await screen.pressByTestIdAsync('discussion-pattern-capture-open-editor');
+        const route = pushSpy().mock.calls.at(-1)?.[0] as { pathname: string; params: { definitionDraftSeedId: string } };
+        expect(route).toMatchObject({ pathname: '/workflows/[id]', params: { id: 'new' } });
+        expect(captureRef.current!.state.status).toBe('closed');
+        const editor = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId: route.params.definitionDraftSeedId }} />,
+            { wrapper: EditorPaneWrapper });
+        expect(editor.findByTestId('workflow-editor-name')?.props.value).toBe('Proposal check');
+        expectNoWorkflowWrites();
+    });
     it('inserts an example into the current draft as one undoable change without saving or running', async () => {
         const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new' }} />, { wrapper: EditorPaneWrapper });
         await screen.pressByTestIdAsync('workflow-editor-add-root-examples');
