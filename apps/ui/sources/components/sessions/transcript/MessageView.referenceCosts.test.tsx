@@ -31,9 +31,9 @@ describe('transcript inline reference arrival costs', () => {
             return { kind: 'happier.session', ref, label, token: formatInlineReferenceTokenV1({ label, ref }) };
         });
         let referenceAdmissions = 0;
-        const meta = { happier: null, get happierStructuredInputV1() {
+        const meta: NonNullable<UserTextMessage['meta']> = { get happierStructuredInputV1() {
             referenceAdmissions += 1;
-            return { v: 1, mentions };
+            return { v: 1 as const, mentions };
         } };
         const message: UserTextMessage = {
             kind: 'user-text', id: 'hover-reference-costs', localId: null, createdAt: 1,
@@ -103,7 +103,9 @@ describe('transcript inline reference arrival costs', () => {
         expect(screen.findAllByType('EnrichedMarkdownText').length).toBeGreaterThanOrEqual(historicalCount);
         historicalCommits = 0;
         for (let index = historicalCount; index < historicalCount + 5; index += 1) {
-            await act(async () => storage.getState().applyMessages(session.id, [makeMessage(index, 'Unrelated arrival')]));
+            await act(async () => {
+                await storage.getState().applyMessages(session.id, [makeMessage(index, 'Unrelated arrival')]);
+            });
         }
         expect(historicalCommits).toBe(0);
     });
