@@ -189,6 +189,12 @@ export type PluginUiPresentationHost = Readonly<{
   find?: FindSurfaceRegistrationHost;
   /** The incumbent host viewport policy, carried by a same-realm physical scroller. */
   createScrollActivityTracker?(scrollRef: RefObject<unknown>, horizontal: boolean): PluginUiScrollActivityTracker;
+  /**
+   * The containing pane header's scroll-linked shade. A surface's primary vertical scroller reports its
+   * distance from the top through the hook's reporter; nested and horizontal scrollers never do. The hook
+   * is stable for the host's life and returns null outside a header-owning pane. Presentation only.
+   */
+  paneHeaderScroll?: Readonly<{ useReporter(): ((distancePx: number) => void) | null }>;
   renderVoiceMarkArt?(input: Omit<VoiceMarkArtProps, 'fallback'>): ReactNode;
   /**
    * Draw one Daybreak empty-state scene through the host's scene renderer, which owns the ink, line

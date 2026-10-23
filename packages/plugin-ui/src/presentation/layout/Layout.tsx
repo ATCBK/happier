@@ -1,4 +1,4 @@
-import { Children, cloneElement, Fragment, isValidElement, useMemo, useRef, type ReactElement, type ReactNode } from 'react';
+import { Children, cloneElement, createContext, Fragment, isValidElement, useContext, useMemo, useRef, type ReactElement, type ReactNode } from 'react';
 import {
   ScrollView,
   View,
@@ -164,6 +164,10 @@ export function HappierStack({
   );
 }
 
+/** Set inside a scroll area: a nested scroller is never the pane's primary body. */
+const HappierScrollAreaNestedContext = createContext(false);
+const useNoPaneHeaderReporter = (): ((distancePx: number) => void) | null => null;
+
 export function HappierScrollArea({
   children,
   accessibilityLabel,
@@ -180,6 +184,11 @@ export function HappierScrollArea({
   const columnMaxWidthPx = scrollProps.horizontal === true ? undefined : pageChrome?.columnMaxWidthPx;
   // A scroll inside a column that already draws the edge (a detail's body, a menu on the page) adds none.
   const edgePx = useHappierColumnEdgePx() === 0 ? HAPPIER_PAGE_METRICS.sheetInsetPx : 0;
+  // The outermost vertical scroll area is the surface's primary body: it drives the pane header's shade.
+  const nested = useContext(HappierScrollAreaNestedContext);
+  const usePaneHeaderReporter = host?.paneHeaderScroll?.useReporter ?? useNoPaneHeaderReporter;
+  const paneHeaderReporter = usePaneHeaderReporter();
+  const reportTop = !nested && scrollProps.horizontal !== true ? paneHeaderReporter : null;
   const createTracker = host?.createScrollActivityTracker;
   const tracker = useMemo(() => createTracker?.(scrollSourceRef, scrollProps.horizontal === true) ?? null,
     [createTracker, scrollProps.horizontal]);
@@ -194,12 +203,14 @@ export function HappierScrollArea({
   return (
     <PluginUiPopoverScrollSourceProvider scrollSourceRef={scrollSourceRef}>
       <PluginUiScrollActivityProvider tracker={tracker}>
+      <HappierScrollAreaNestedContext.Provider value={true}>
       <ScrollView
         ref={scrollSourceRef}
         {...scrollProps}
-        onScroll={event => { tracker?.onScroll(event); scrollProps.onScroll?.(event); }}
+        onScroll={event => { tracker?.onScroll(event); reportTop?.(event.nativeEvent.contentOffset.y); scrollProps.onScroll?.(event); }}
         onLayout={event => { tracker?.onLayout(event); scrollProps.onLayout?.(event); }}
         onContentSizeChange={tracker?.onContentSizeChange}
+        scrollEventThrottle={scrollProps.scrollEventThrottle ?? (reportTop ? 16 : undefined)}
         testID={testID}
         accessibilityLabel={accessibilityLabel}
         style={style}
@@ -216,6 +227,7 @@ export function HappierScrollArea({
           </View>
         )}
       </ScrollView>
+      </HappierScrollAreaNestedContext.Provider>
       </PluginUiScrollActivityProvider>
     </PluginUiPopoverScrollSourceProvider>
   );
