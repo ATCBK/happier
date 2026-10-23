@@ -1478,6 +1478,28 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
     }
   });
 
+  it.each([
+    { first: 'resolved', last: 'pending', escalations: 1 },
+    { first: 'pending', last: 'resolved', escalations: 0 },
+  ] as const)('uses the last mid-turn stall probe outcome ($first then $last)', async ({ first, last, escalations }) => {
+    const onStalled = vi.fn<() => 'resolved' | 'pending'>()
+      .mockReturnValueOnce(first)
+      .mockReturnValue(last);
+    const onStarvation = vi.fn();
+    const bridge = startBridgeWithTurnStallProbe({ onStalled, onStarvation });
+
+    try {
+      await vi.waitFor(() => {
+        expect(onStalled).toHaveBeenCalledTimes(2);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(onStalled).toHaveBeenCalledTimes(2);
+      expect(onStarvation).toHaveBeenCalledTimes(escalations);
+    } finally {
+      bridge.dispose();
+    }
+  });
+
   it('escalates once when the mid-turn stall budget exhausts with the screen still unresolved', async () => {
     const onStalled = vi.fn(() => 'pending' as const);
     const onStarvation = vi.fn();
