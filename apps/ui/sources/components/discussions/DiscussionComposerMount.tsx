@@ -15,7 +15,6 @@ import {
 } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { useComposerPresentationInputEffects } from '@/components/sessions/presentation/useComposerPresentationInputEffects';
 import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { readDiscussionMentionParticipant } from './discussionComposerDocument';
 import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 
 type InputBinding = Pick<React.ComponentProps<typeof AgentInput>,
@@ -59,11 +58,10 @@ export function DiscussionComposerMount(props: Readonly<{
         const document = props.readDocument();
         if (input.expectedRevision !== document.revision) return { status: 'conflict', currentRevision: document.revision };
         const mentions = composerStructuredMentionsFromReferences({ references: input.mutation.references, existing: document.mentions });
-        // The local draft admits only Discussion Account, Session and inert
-        // reserved-slot references. Send alone resolves slots to real Session mentions.
+        // The shared document owner retains typed references. Only the closed
+        // Discussion participant projection can give them addressing meaning on Send.
         const parsed = parseComposerStructuredInputMentionsForText(mentions, input.mutation.text);
         if (!parsed.fullyDecoded || parsed.mentions.length !== input.mutation.references.length
-            || parsed.mentions.some(mention => readDiscussionMentionParticipant(mention) === null)
             || input.mutation.attachments.length > 0) {
             return { status: 'invalidOperation', operationIndex: 0, reason: 'unsupportedField' };
         }

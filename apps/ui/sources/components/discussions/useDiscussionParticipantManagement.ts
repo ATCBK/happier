@@ -10,6 +10,7 @@ import { normalizeExecutableParticipantSelectionV1 } from '@happier-dev/protocol
 import type { SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { resolveExecutableModelParticipantDisplay } from '@/components/sessions/authoring/useExecutableParticipantLabel';
+import { watchMountedDiscussions } from '@/sync/domains/discussions/discussionChangeWatch';
 
 type Participant = DiscussionParticipantsListResponseV1['participants'][number];
 type PolicyParticipant = Parameters<DiscussionRepository['setParticipantPolicy']>[0]['participant'];
@@ -77,12 +78,16 @@ export function useDiscussionParticipantManagement(input: Readonly<{
     }> | null>(null);
     const roster = projection?.accountLifetime === accountLifetime && projection.discussionId === discussionId
         && input.enabled && live ? projection.roster : null;
+    const latestRead = React.useRef<ReturnType<DiscussionRepository['participants']> | null>(null);
     const refresh = React.useCallback(async (signal?: AbortSignal) => {
         if (!isCurrent() || !accountLifetime || signal?.aborted) return;
         setLoad({ accountLifetime, discussionId, status: 'loading', errorCode: null });
+        const read = repository.participants(discussionId, signal);
+        latestRead.current = read;
         try {
-            const outcome = await repository.participants(discussionId, signal);
-            if (!isCurrent() || signal?.aborted) return;
+            const outcome = await read;
+            // An earlier read cannot undo a newer membership/policy admission.
+            if (latestRead.current !== read || !isCurrent() || signal?.aborted) return;
             if (outcome.kind === 'succeeded') {
                 setProjection({ accountLifetime, discussionId, roster: outcome.value });
                 setLoad({ accountLifetime, discussionId, status: 'ready', errorCode: null });
@@ -92,16 +97,20 @@ export function useDiscussionParticipantManagement(input: Readonly<{
             }
             return outcome;
         } catch {
-            if (isCurrent() && !signal?.aborted) setLoad({ accountLifetime, discussionId, status: 'error', errorCode: 'offline' });
-        }
+            if (latestRead.current === read && isCurrent() && !signal?.aborted) setLoad({ accountLifetime, discussionId, status: 'error', errorCode: 'offline' });
+        } finally { if (latestRead.current === read) latestRead.current = null; }
     }, [accountLifetime, discussionId, isCurrent, repository]);
     React.useEffect(() => {
         if (!input.enabled || !accountLifetime?.isCurrent()) return;
         const abort = new AbortController();
         const retirement = accountLifetime.onRetire(() => abort.abort());
+        // AccountChange coalesces by resource, not mutation subtype. The exact
+        // Discussion invalidation must re-admit its roster, including policy/access.
+        const watch = watchMountedDiscussions({ scope: accountLifetime.scope, address: { serverId: accountLifetime.scope.serverId },
+            onInvalidated: discussionIds => { if (discussionIds.includes(discussionId)) void refresh(abort.signal); } });
         void refresh(abort.signal);
-        return () => { retirement.dispose(); abort.abort(); };
-    }, [accountLifetime, input.enabled, refresh]);
+        return () => { watch.dispose(); retirement.dispose(); abort.abort(); };
+    }, [accountLifetime, discussionId, input.enabled, refresh]);
     const [result, setResult] = React.useState<Readonly<{ accountLifetime: ServerAccountScopeLifetime | null;
         discussionId: string; operation: DiscussionParticipantManagementOperation; modelAttempt?: ModelAttempt }> | null>(null);
     const currentResult = result?.accountLifetime === accountLifetime && result.discussionId === discussionId && live && input.enabled ? result : null;

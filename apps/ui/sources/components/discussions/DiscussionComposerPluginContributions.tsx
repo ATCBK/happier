@@ -3,6 +3,10 @@ import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composer';
 import { composerRefV1Key } from '@happier-dev/protocol/plugins/ui/composerRef';
 
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { getSuggestions } from '@/components/autocomplete/suggestions';
+import { resolveComposerSuggestionKind } from '@/components/autocomplete/composerSuggestionKinds';
+import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { composerControlKey } from '@/components/plugins/actions/pluginContributedActionComposerChips';
 import { usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
@@ -21,6 +25,7 @@ type Slots = Readonly<{
     extraActionChips: readonly AgentInputExtraActionChip[];
     beforeComposer: React.ReactNode;
     afterComposer: React.ReactNode;
+    suggestReferences(query: string, signal: AbortSignal): Promise<AutocompleteSuggestion[]>;
 }>;
 type Contributor = Readonly<{ id: string; pluginId: string }>;
 type PresentationSlots = Readonly<{
@@ -28,6 +33,7 @@ type PresentationSlots = Readonly<{
     composerKey: string;
     lifetime: ServerAccountScopeLifetime;
     presentation: ComposerScopePluginPresentation;
+    suggestReferences: Slots['suggestReferences'];
 }>;
 type SharedProps = Readonly<{
     composer: DiscussionComposer;
@@ -60,26 +66,33 @@ export function DiscussionComposerPluginContributions(props: SharedProps & Reado
     const contributors = React.useMemo(() => {
         const byPlugin = new Map<string, Contributor>();
         if (projection && props.enabled && active) {
-            for (const entry of [...Object.values(projection.composerControlsById), ...Object.values(projection.composerRegionsById)]) {
-                if (entry.definition.scopes && !entry.definition.scopes.includes('discussion')) continue;
+            for (const entry of [...Object.values(projection.composerControlsById), ...Object.values(projection.composerRegionsById),
+                ...Object.values(projection.composerReferencesById)]) {
+                if ('scopes' in entry.definition && entry.definition.scopes && !entry.definition.scopes.includes('discussion')) continue;
+                if (byPlugin.has(entry.identity.pluginId)) continue;
                 byPlugin.set(entry.identity.pluginId, { id: entry.id, pluginId: entry.identity.pluginId });
             }
         }
         return [...byPlugin.values()].sort((left, right) => left.pluginId.localeCompare(right.pluginId));
     }, [active, projection, props.enabled]);
     const composerKey = composerRefV1Key(props.composer);
-    const presentations = contributors.flatMap(contributor => {
+    const admittedSlots = React.useMemo(() => contributors.flatMap(contributor => {
         const value = slots.get(contributor.pluginId);
         return value && value.contributor.id === contributor.id && value.composerKey === composerKey
-            && value.lifetime === props.lifetime && props.lifetime.isCurrent() ? [value.presentation] : [];
-    });
+            && value.lifetime === props.lifetime && props.lifetime.isCurrent() ? [value] : [];
+    }), [composerKey, contributors, props.lifetime, slots]);
+    const suggestReferences = React.useCallback<Slots['suggestReferences']>(async (query, signal) => {
+        const rows = await Promise.all(admittedSlots.map(value => value.suggestReferences(query, signal)));
+        return signal.aborted || !props.lifetime.isCurrent() ? []
+            : rows.flat().slice(0, resolveComposerSuggestionKind('composerReference').limit);
+    }, [admittedSlots, props.lifetime]);
     const render = () => {
         const controls = new Map(Object.values(projection?.composerControlsById ?? {}).map(entry => [composerControlKey(entry), entry]));
-        const chips = presentations.flatMap(presentation => presentation.extraActionChips.flatMap(chip => {
+        const chips = admittedSlots.flatMap(({ presentation }) => presentation.extraActionChips.flatMap(chip => {
             const contribution = controls.get(chip.key);
             return contribution ? [{ contribution, chip }] : [];
         })).sort((left, right) => compareOrderedComposerContributions(left.contribution, right.contribution));
-        const regions = presentations.flatMap(presentation => presentation.composerRegions.map(contribution => ({
+        const regions = admittedSlots.flatMap(({ presentation }) => presentation.composerRegions.map(contribution => ({
             contribution, render: () => presentation.renderComposerRegion(contribution),
         }))).sort((left, right) => compareOrderedComposerContributions(left.contribution, right.contribution));
         return props.children({
@@ -88,6 +101,7 @@ export function DiscussionComposerPluginContributions(props: SharedProps & Reado
                 .map(entry => <React.Fragment key={entry.contribution.id}>{entry.render()}</React.Fragment>),
             afterComposer: regions.filter(entry => entry.contribution.definition.placement === 'afterComposer')
                 .map(entry => <React.Fragment key={entry.contribution.id}>{entry.render()}</React.Fragment>),
+            suggestReferences,
         });
     };
     return <>
@@ -109,13 +123,29 @@ const ContributorSlots = React.memo(function ContributorSlots(props: SharedProps
     onPresentation(value: PresentationSlots, remove?: boolean): void;
 }>): null {
     const contributor = props.contributor;
-    const entry = props.projection.composerControlsById[contributor.id] ?? props.projection.composerRegionsById[contributor.id];
+    const presentationEntry = props.projection.composerControlsById[contributor.id] ?? props.projection.composerRegionsById[contributor.id];
+    const entry = presentationEntry ?? props.projection.composerReferencesById[contributor.id];
     const origin = usePluginSurfaceExecutionOrigin({ pluginId: contributor.pluginId, entry,
         projection: props.projection, enabled: props.enabled, includeMachineCandidates: false });
     const supply = origin.selectedSupply;
     const enabled = props.enabled && props.lifetime.isCurrent() && origin.selection.canExecute;
     const daemon = useDaemonMergedProjectionInputs({ machineId: supply?.machineId ?? null,
-        serverId: supply?.serverId, enabled, load: enabled });
+        serverId: supply?.serverId, enabled, load: enabled && Boolean(presentationEntry) });
+    const suggestReferences = React.useCallback<Slots['suggestReferences']>(async (query, signal) => {
+        const current = () => enabled && props.lifetime.isCurrent() && origin.isExecutionOriginCurrent() && !signal.aborted;
+        if (!current() || !supply?.machineId) return [];
+        // The cache's existing acquisition owner shares in-flight work with
+        // rendered controls; reference-only plugins stay cold until this query.
+        const loaded = await loadDaemonMergedProjectionCacheEntry({ machineId: supply.machineId,
+            serverId: supply.serverId, accountLifetime: props.lifetime, reuseFreshReady: true, signal });
+        if (!current() || loaded?.kind !== 'ready' || !loaded.inputs.pluginProjectionV2
+            || loaded.inputs.pluginProjectionById[contributor.pluginId]?.occurrenceId !== supply.occurrenceId) return [];
+        return getSuggestions(null, query, { kinds: ['composerReference'], signal, composerReferenceHost: {
+            machineId: supply.machineId, serverId: supply.serverId,
+            projection: loaded.inputs.pluginProjectionV2, pluginUiProjection: loaded.inputs.pluginUiProjection,
+            contributorPluginId: contributor.pluginId, isCurrent: current,
+        } });
+    }, [contributor.pluginId, enabled, origin.isExecutionOriginCurrent, props.lifetime, supply]);
     // The Account union selects a producer, not any later installation that
     // happens to occupy the same Machine's daemon cache.
     const matchesSelectedSupply = Boolean(supply?.occurrenceId
@@ -131,8 +161,8 @@ const ContributorSlots = React.memo(function ContributorSlots(props: SharedProps
         attachmentsEnabled: false, includeSessionActions: false,
     });
     const value = React.useMemo<PresentationSlots>(() => ({ contributor, lifetime: props.lifetime,
-        composerKey: composerRefV1Key(props.composer), presentation,
-    }), [contributor, presentation, props.composer, props.lifetime]);
+        composerKey: composerRefV1Key(props.composer), presentation, suggestReferences,
+    }), [contributor, presentation, props.composer, props.lifetime, suggestReferences]);
     React.useLayoutEffect(() => {
         props.onPresentation(value);
         return () => props.onPresentation(value, true);

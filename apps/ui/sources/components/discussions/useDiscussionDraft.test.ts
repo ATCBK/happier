@@ -38,6 +38,25 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('clears the submitted passage, reply and invitees independently of newer text after acceptance', async () => {
+        const passage = { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: scope.serverId },
+            revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 6 }, quote: 'source' };
+        writeDiscussionSessionDraft({ scope, address: newAddress, patch: { title: 'Review', text: 'First question', passage,
+            participants: [{ kind: 'account', accountId: 'ana' }], replyTarget: { kind: 'doc_passage', doc: { ref: passage.ref, revision: passage.revision } } } });
+        const hook = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
+        let submission: DiscussionDraftSubmission | undefined;
+        act(() => { submission = hook.getCurrent().captureSubmittedCurrentness({ kind: 'create', creationLocalId: 'accepted', messageLocalId: 'first' }); });
+        act(() => hook.getCurrent().setText('Next question'));
+        expect(hook.getCurrent().passage).toEqual(passage);
+        await act(async () => { await hook.getCurrent().clearAfterObservedSuccess(submission!); });
+        expect(hook.getCurrent().text).toBe('Next question');
+        expect(hook.getCurrent().passage).toBeNull();
+        expect(hook.getCurrent().replyTarget).toBeNull();
+        expect(hook.getCurrent().participants).toEqual([]);
+        expect(hook.getCurrent().submitted).toBeNull();
+        expect(hook.getCurrent().pendingMutationAttempt).toBeNull();
+        await hook.unmount();
+    });
     it('persists only explicit Reply intent, supports clearing, and consumes it after observed send success', async () => {
         const plain = buildDiscussionContent('A new post', []);
         const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));

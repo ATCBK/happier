@@ -28,6 +28,8 @@ import { WorkflowRunPeekDetailsView } from '@/components/sessions/work/WorkflowR
 import { SessionWorkMapDetailsView, isSessionWorkMapDetailsResource } from '@/components/sessions/work/SessionWorkMapDetailsView';
 import { SessionBoardDetailsSurface } from '@/components/sessions/board/SessionBoardDetailsSurface';
 import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
+import { readDiscussionRouteDraftId } from '@/components/discussions/discussionRoutes';
+import { DiscussionAnchorV1Schema } from '@happier-dev/protocol/discussions/replyTargets';
 import {
     createSessionBoardDetailsTab,
     createSessionDiscussionDetailsTab,
@@ -166,6 +168,9 @@ function readSessionDiscussionDetailsTarget(value: unknown): SessionDiscussionDe
         kind?: unknown;
         address?: { serverId?: unknown; sessionId?: unknown };
         discussionId?: unknown;
+        draftId?: string | string[];
+        anchor?: unknown;
+        messageId?: unknown;
     };
     if (
         (target.kind !== 'new' && target.kind !== 'discussion')
@@ -176,9 +181,14 @@ function readSessionDiscussionDetailsTarget(value: unknown): SessionDiscussionDe
         || !target.address.sessionId.trim()
     ) return null;
     if (target.kind === 'new') {
+        const draftId = readDiscussionRouteDraftId(target.draftId);
+        const anchor = target.anchor === undefined ? undefined : DiscussionAnchorV1Schema.safeParse(target.anchor);
+        if (draftId === null || anchor && !anchor.success) return null;
         return {
             kind: 'new',
             address: { serverId: target.address.serverId, sessionId: target.address.sessionId },
+            ...(draftId ? { draftId } : {}),
+            ...(anchor?.success ? { anchor: anchor.data } : {}),
         };
     }
     if (typeof target.discussionId !== 'string' || !target.discussionId.trim()) return null;
@@ -186,6 +196,7 @@ function readSessionDiscussionDetailsTarget(value: unknown): SessionDiscussionDe
         kind: 'discussion',
         address: { serverId: target.address.serverId, sessionId: target.address.sessionId },
         discussionId: target.discussionId,
+        ...(typeof target.messageId === 'string' ? { messageId: target.messageId } : {}),
     };
 }
 
@@ -376,8 +387,11 @@ export function createSessionDetailsSurfaceRenderers(
                 return (
                     <DiscussionDetailsView
                         target={target.kind === 'new'
-                            ? { kind: 'new', address: { serverId: target.address.serverId }, anchor: { kind: 'session', sessionId: target.address.sessionId } }
-                            : { kind: 'discussion', address: { serverId: target.address.serverId }, discussionId: target.discussionId }}
+                            ? { kind: 'new', address: { serverId: target.address.serverId },
+                                anchor: target.anchor ?? { kind: 'session', sessionId: target.address.sessionId },
+                                ...(target.draftId ? { draftId: target.draftId } : {}) }
+                            : { kind: 'discussion', address: { serverId: target.address.serverId }, discussionId: target.discussionId,
+                                ...(target.messageId ? { messageId: target.messageId } : {}) }}
                         active={input.active}
                         hostSessionAddress={target.address}
                         onClose={() => options.closeDetailsTab(input.tab.key)}
@@ -403,6 +417,7 @@ export function createSessionDetailsSurfaceRenderers(
                                     address: target.address,
                                     discussionId: discussion.id,
                                     title: discussion.title,
+                                    ...(target.kind === 'discussion' && target.messageId ? { messageId: target.messageId } : {}),
                                 }),
                                 { intent: input.tab.isPreview ? 'preview' : 'pinned' },
                             );

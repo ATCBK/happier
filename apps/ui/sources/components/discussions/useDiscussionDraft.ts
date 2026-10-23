@@ -88,8 +88,8 @@ export type DiscussionDraft = Readonly<{
     purgeSourcePresentation(): Promise<void>;
 }>;
 
-const COMPOSER_FIELD_IDS = ['composer.text', 'composer.mentions', 'passage', 'submission'] as const;
-const SUBMITTED_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'replyTarget'] as const;
+const COMPOSER_FIELD_IDS = ['composer.text', 'composer.mentions'] as const;
+const SUBMITTED_FIELD_IDS = [...COMPOSER_FIELD_IDS, 'passage', 'submission', 'replyTarget'] as const;
 const NEW_DISCUSSION_FIELD_IDS = [...SUBMITTED_FIELD_IDS, 'title', 'participants'] as const;
 const NO_RECIPIENTS: readonly DiscussionParticipantRefV1[] = Object.freeze([]);
 
@@ -324,34 +324,14 @@ export function useDiscussionDraft(params: Readonly<{
         submission: DiscussionDraftSubmission,
     ): Promise<boolean> => {
         if (!sameScope(submission.scope, scope) || !sameAddress(submission.address, address)) return false;
-        const current = captureSessionDraftCurrentness({
-            scope,
-            address,
-            fieldIds: address.kind === 'newDiscussion'
-                ? [...NEW_DISCUSSION_FIELD_IDS]
-                : [...SUBMITTED_FIELD_IDS],
-        });
-        const capturedText = submission.currentness.mutationIds['composer.text'];
-        const capturedMentions = submission.currentness.mutationIds['composer.mentions'];
-        const composerIsCurrent = capturedText !== undefined
-            && capturedMentions !== undefined
-            && current.mutationIds['composer.text'] === capturedText
-            && current.mutationIds['composer.mentions'] === capturedMentions;
-        const titleIsCurrent = address.kind === 'newDiscussion'
-            && submission.currentness.mutationIds.title !== undefined
-            && current.mutationIds.title === submission.currentness.mutationIds.title;
-        // The invitees were sent with this create; a later change to them stays for the next one.
-        const participantsIsCurrent = address.kind === 'newDiscussion'
-            && submission.currentness.mutationIds.participants !== undefined
-            && current.mutationIds.participants === submission.currentness.mutationIds.participants;
-        const fieldIds = [
-            ...(composerIsCurrent ? COMPOSER_FIELD_IDS : []),
-            ...(!composerIsCurrent ? ['submission' as const] : []),
-            ...(titleIsCurrent ? ['title' as const] : []),
-            ...(participantsIsCurrent ? ['participants' as const] : []),
-            // A newer Reply choice belongs to the next post even if its text is unchanged.
-            'replyTarget' as const,
-        ];
+        const current = captureSessionDraftCurrentness({ scope, address, fieldIds: COMPOSER_FIELD_IDS });
+        const composerIsCurrent = COMPOSER_FIELD_IDS.every(field => submission.currentness.mutationIds[field] !== undefined
+            && submission.currentness.mutationIds[field] === current.mutationIds[field]);
+        // The repository checks each field against the submitted document. Passage,
+        // Reply and invitees clear independently of edits to the next question;
+        // newer values remain, just as Session attachments do after acceptance.
+        const fieldIds = (address.kind === 'newDiscussion' ? NEW_DISCUSSION_FIELD_IDS : SUBMITTED_FIELD_IDS)
+            .filter(field => composerIsCurrent || !COMPOSER_FIELD_IDS.some(composerField => composerField === field));
         // Field currentness decides which drafted fields are cleared, never
         // whether the attempt is retired. The attempt identifies a submission
         // the server already accepted, so once every captured field has moved

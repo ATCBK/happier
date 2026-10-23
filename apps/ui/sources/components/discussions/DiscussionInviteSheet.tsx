@@ -427,6 +427,7 @@ function DiscussionInviteSheet(
     /** `compact` is the header's Invite; `inline` is the participants panel, whose search invites. */
     presentation?: 'compact' | 'inline';
     composition?: DiscussionRosterComposition;
+    maxHeight?: number;
   }>,
 ) {
   const controller = useDiscussionInviteController({
@@ -441,6 +442,7 @@ function DiscussionInviteSheet(
     onRequestClose: props.onRequestClose,
     presentation: props.presentation ?? 'compact',
     ...(props.composition ? { composition: props.composition } : {}),
+    ...(props.maxHeight === undefined ? {} : { maxHeight: props.maxHeight }),
   } as const;
   return (
     <View testID={props.presentation === 'inline' ? 'discussion-participants-sheet' : 'discussion-invite-panel'} style={inviteStyles.panel}>
@@ -464,6 +466,8 @@ type DiscussionShareSheetShared = Readonly<{
   onRequestClose: () => void;
   presentation: 'compact' | 'inline';
   composition?: DiscussionRosterComposition;
+  /** A popover host's bound: the sheet's list scrolls within it (the surface itself does not scroll). */
+  maxHeight?: number;
 }>;
 
 function DiscussionInviteSheetWithAgents(
@@ -523,6 +527,7 @@ function DiscussionInviteShareSheet(
       presentation={props.presentation}
       onRequestClose={props.onRequestClose}
       testID={inline ? 'discussion-participants-share' : 'discussion-invite-sheet'}
+      {...(props.maxHeight === undefined ? {} : { maxHeight: props.maxHeight })}
     />
   );
 }
@@ -684,6 +689,7 @@ function participantKey(participant: DiscussionInitialParticipantV1): string {
 function DiscussionDraftInviteList(props: Readonly<{
   accountLifetime: ServerAccountScopeLifetime;
   draft: DiscussionInviteDraft;
+  maxHeight: number;
 }>) {
   const { draft } = props;
   const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
@@ -730,6 +736,8 @@ function DiscussionDraftInviteList(props: Readonly<{
       onSelect={() => undefined}
       onRequestClose={() => undefined}
       disableTransitions
+      maxHeight={props.maxHeight}
+      heightBehavior="fixedToMaxHeight"
     />
   );
 }
@@ -745,6 +753,13 @@ export const DiscussionInviteButton = React.memo(
     const [open, setOpen] = React.useState(false);
     const anchorRef = React.useRef<View>(null);
     const close = React.useCallback(() => setOpen(false), []);
+    // The candidate list owns its scroll (SelectionList contract), so the popover's surface does not
+    // scroll; the list gets what the pinned header and operation line leave of the popover's height.
+    const [chromeHeights, setChromeHeights] = React.useState({ header: 0, footer: 0 });
+    const measureChrome = React.useCallback((part: 'header' | 'footer', height: number) => {
+      const rounded = Math.round(height);
+      setChromeHeights((current) => current[part] === rounded ? current : { ...current, [part]: rounded });
+    }, []);
     const inviteComposition = React.useMemo(
       () => ({ notes: [t('session.collaboration.discussion.participants.mentionNote')] }),
       [],
@@ -794,12 +809,15 @@ export const DiscussionInviteButton = React.memo(
             backdrop={{ enabled: false }}
             portal={MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS}
           >
-            {({ maxHeight }) => (
+            {({ maxHeight }) => {
+              const listMaxHeight = Math.max(0, maxHeight - chromeHeights.header - chromeHeights.footer);
+              return (
               <FloatingOverlay
                 maxHeight={maxHeight}
+                scrollEnabled={false}
                 surfaceChrome="theme"
                 // Which Discussion this adds to stays in view while the candidates scroll.
-                header={<View style={inviteStyles.header}>
+                header={<View style={inviteStyles.header} onLayout={(event) => measureChrome('header', event.nativeEvent.layout.height)}>
                   <DiscussionSheetHeader
                     icon="user-plus"
                     title={props.draft
@@ -811,13 +829,14 @@ export const DiscussionInviteButton = React.memo(
                   />
                 </View>}
                 // Where an agent invitation stands stays visible under any scroll position.
-                footer={!props.draft && props.management ? <DiscussionParticipantOperationLine
-                  management={props.management}
-                  serverId={props.scope.serverId}
-                /> : undefined}
+                footer={!props.draft && props.management ? <View onLayout={(event) => measureChrome('footer', event.nativeEvent.layout.height)}>
+                  <DiscussionParticipantOperationLine
+                    management={props.management}
+                    serverId={props.scope.serverId}
+                  /></View> : undefined}
               >
                 {props.draft ? (
-                  <DiscussionDraftInviteList accountLifetime={props.accountLifetime} draft={props.draft} />
+                  <DiscussionDraftInviteList accountLifetime={props.accountLifetime} draft={props.draft} maxHeight={listMaxHeight} />
                 ) : (
                 <DiscussionInviteSheet
                   scope={props.scope}
@@ -830,10 +849,12 @@ export const DiscussionInviteButton = React.memo(
                   composition={inviteComposition}
                   onChanged={props.onChanged}
                   onRequestClose={close}
+                  maxHeight={listMaxHeight}
                 />
                 )}
               </FloatingOverlay>
-            )}
+              );
+            }}
           </Popover>
         ) : null}
       </>

@@ -33,6 +33,7 @@ import { executableParticipantOptionId, useExecutableParticipantSections } from 
 import { useDiscussionWorkflowProject } from './useDiscussionWorkflowProject';
 import { WorkflowProjectTargetControl } from '@/components/workflows/editor/WorkflowProjectTargetControl';
 import { useExecutableParticipantLabel } from '@/components/sessions/authoring/useExecutableParticipantLabel';
+import { useOpenDiscussion } from './useOpenDiscussion';
 
 export type DiscussionSecondOpinionIntent = 'second_opinion' | 'discuss';
 
@@ -42,8 +43,9 @@ type SheetProps = Readonly<{
   /** The committed answer as the person read it; the quote leads the sheet before any preview. */
   sourceText: string;
   onClose: () => void;
-  /** Opens a route the sheet produced (the Discussion, or the Fresh opinions Run) through the host's navigation owner. */
+  /** Opens the Fresh opinions Run through the host's navigation owner. */
   onNavigate: (href: string) => void;
+  sourcePaneScopeId?: string;
 }>;
 
 const NO_SERVER_IDS: readonly string[] = [];
@@ -132,6 +134,10 @@ function BoundForm(
     availabilityRef.current = availability;
   }, [availability]);
   const sourceSession = props.source.message.session;
+  const anchor = React.useMemo(() => ({ kind: 'session' as const, sessionId: sourceSession.sessionId,
+    messageId: props.source.message.messageId }), [props.source.message.messageId, sourceSession.sessionId]);
+  const { openDiscussion } = useOpenDiscussion({ address: binding.scope, anchor, sourceSurface: 'collaboration',
+    paneScopeId: props.sourcePaneScopeId });
   const [sourceTitle] = useSessionDisplayTitles(
     React.useMemo(() => [sourceSession], [sourceSession]),
   );
@@ -233,7 +239,7 @@ function BoundForm(
     await controller.ask({ project });
   };
 
-  const done = snapshot.discussionHref !== null;
+  const done = snapshot.discussionMessage !== null;
   const several = snapshot.draft.reviewers.length > 1;
   const preview = snapshot.preview?.preview ?? null;
   const reviewerPreviews = preview?.reviewers ?? [];
@@ -274,7 +280,8 @@ function BoundForm(
         size="small"
         title={t('session.collaboration.discussion.secondOpinion.open')}
         onPress={() => {
-          props.onNavigate(snapshot.discussionHref!);
+          const message = snapshot.discussionMessage!;
+          openDiscussion(message.discussion.discussionId, snapshot.draft.title, message.messageId);
           props.onClose();
         }}
       />

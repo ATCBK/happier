@@ -122,6 +122,7 @@ export const NEW_SESSION_COMPOSER_SUGGESTION_KINDS = [
 export const DISCUSSION_COMPOSER_SUGGESTION_KINDS = [
     'accountMention',
     'session',
+    'composerReference',
 ] as const satisfies readonly ComposerSuggestionKindId[];
 
 /**
@@ -152,6 +153,8 @@ export type ComposerReferenceSearchHost = Readonly<{
     serverId?: string | null;
     projection: PluginProjectionV2;
     pluginUiProjection: PluginUiProjectionModel;
+    /** Account compositions may select a different producer for each plugin. */
+    contributorPluginId?: string;
     /** False as soon as this composer loses focus, scope, or projection currency. */
     isCurrent(): boolean;
 }>;
@@ -536,6 +539,7 @@ async function resolveComposerReferenceSuggestions(
 
     const references = listCurrentComposerReferences(host.projection).filter((contribution) => (
         contribution.presentation.triggers.includes(context.trigger)
+        && (!host.contributorPluginId || contribution.reference.pluginId === host.contributorPluginId)
     ));
     if (references.length === 0) return [];
 

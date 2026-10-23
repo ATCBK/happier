@@ -35,26 +35,33 @@ async function sourceHome() {
     const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'source-session' });
     homes.answer(serverId, '/v2/sessions/source-session', { body: { session } });
     homes.answer(serverId, '/v2/sessions/source-session?accessProjectionVersion=1', { body: { session } });
-    homes.answer(serverId, '/v1/sessions/source-session/messages', { body: {
-        messages: [{ id: 'committed-answer', seq: 7, localId: null, createdAt: 1, messageRole: 'agent',
-            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'The source answer.' } } } }],
-        hasMore: false, nextBeforeSeq: null,
+    const messageRequests: URL[] = [];
+    homes.answer(serverId, '/v1/sessions/source-session/messages', { select: (_input, request) => {
+        messageRequests.push(new URL(request.url));
+        return { body: {
+            messages: [{ id: 'committed-answer', seq: 7, localId: null, createdAt: 1, messageRole: 'agent',
+                content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'The source answer.' } } } }],
+            hasMore: false, nextBeforeSeq: null,
+        } };
     } });
     const preview = DiscussionSecondOpinionPreviewV1Schema.parse({ source, sourceAudienceAccountIds: ['alice'],
         sourceContentReady: true, discussionAudienceAccountIds: ['alice'], missingDiscussionSourceAccountIds: [],
         discussionDisclosure: { ok: true }, canGrantSource: true, reviewers: [] });
     homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { body: { ok: true, value: preview } });
-    return { serverId, source, preview };
+    return { serverId, source, preview, messageRequests };
 }
 
 it('previews the exact committed server answer independently of Voice privacy or loaded transcript state', async () => {
-    const { serverId, source, preview } = await sourceHome();
+    const { serverId, source, preview, messageRequests } = await sourceHome();
     getStorage().setState({ sessionMessages: {}, sessions: {}, settings: { ...initial.settings,
         voice: { ...initial.settings.voice, privacy: { ...initial.settings.voice.privacy, shareRecentMessages: false } } } });
     const client = createDiscussionClient({ scope: { serverId, accountId: 'alice' }, availability: 'available' });
     const outcome = await client.secondOpinion({ intent: 'preview', source, title: 'Review', question: 'What changes?', reviewers: [],
         retry: { creationLocalId: 'creation', quoteLocalId: 'quote', questionLocalId: 'question' } });
     expect(outcome).toEqual({ kind: 'succeeded', value: { status: 'preview', preview, sourceText: 'The source answer.' } });
+    expect(messageRequests).toHaveLength(1);
+    expect(messageRequests[0]!.searchParams.get('messageId')).toBe(source.message.messageId);
+    expect(messageRequests[0]!.searchParams.has('limit')).toBe(false);
     expect(homes.requests.filter(row => row.input !== null && row.path !== '/v1/discussions/second-opinion/preview')).toEqual([]);
     const voice = await createDefaultActionExecutor().execute('session.transcript.get', { sessionId: 'source-session' },
         { surface: 'voice', serverId, expectedAccountId: 'alice' });
@@ -129,14 +136,19 @@ it('keeps Voice path and tool disclosure policy on server-backed semantic rows e
         ...initial.settings, voice: { ...initial.settings.voice, privacy: { ...initial.settings.voice.privacy,
             shareRecentMessages: true, shareToolNames, shareToolArgs, shareFilePaths: false } },
     } });
-    homes.answer(serverId, '/v1/sessions/source-session/messages', { body: { messages: [
+    const messages = [
         { id: 'committed-answer', seq: 7, localId: null, createdAt: 1, messageRole: 'agent',
             content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Read /home/alice/private/file.ts' } } } },
         { id: 'tool-row', seq: 8, localId: null, createdAt: 2, messageRole: 'agent', content: { t: 'plain', v: {
             role: 'agent', content: { type: 'acp', data: { type: 'tool-call', name: 'shell', callId: 'call',
                 input: { command: 'private-command /home/alice/private/file.ts' } } },
         } } },
-    ], hasMore: false } });
+    ];
+    homes.answer(serverId, '/v1/sessions/source-session/messages', { select: (_input, request) => {
+        const messageId = new URL(request.url).searchParams.get('messageId');
+        return { body: { messages: messageId ? messages.filter(row => row.id === messageId) : messages,
+            hasMore: false, nextBeforeSeq: null, nextAfterSeq: null } };
+    } });
     const execute = () => createDefaultActionExecutor().execute('session.transcript.get', { sessionId: 'source-session',
         includeTools: true, includeRaw: true, includeStructuredPayload: true },
         { surface: 'voice', serverId, expectedAccountId: 'alice' });
@@ -328,22 +340,23 @@ it('removes a configured model by its retained selection and refuses changes dur
     expect(homes.requestsFor('/v1/discussions')).toHaveLength(0);
 });
 
-it('pages committed source rows and refuses a mismatched envelope without using a loaded quote', async () => {
+it('reads the exact committed source row and refuses a mismatched envelope without using a loaded quote', async () => {
     const { serverId, source } = await sourceHome();
     let pageReads = 0;
     homes.answer(serverId, '/v1/sessions/source-session/messages', { select: (_input, request) => {
         pageReads++;
-        const older = new URL(request.url).searchParams.get('beforeSeq') === '8';
-        return { body: { messages: [{ id: older ? 'committed-answer' : 'later-answer', seq: older ? 7 : 8,
+        const query = new URL(request.url).searchParams;
+        const selected = query.get('messageId') === 'committed-answer' || query.get('beforeSeq') === '8';
+        return { body: { messages: [{ id: selected ? 'committed-answer' : 'later-answer', seq: selected ? 7 : 8,
             localId: null, createdAt: 1, messageRole: 'agent',
-            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: older ? 'The source answer.' : 'Later answer.' } } } }],
-            hasMore: !older, nextBeforeSeq: older ? null : 8 } };
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: selected ? 'The source answer.' : 'Later answer.' } } } }],
+            hasMore: !selected, nextBeforeSeq: selected ? null : 8 } };
     } });
     const client = createDiscussionClient({ scope: { serverId, accountId: 'alice' }, availability: 'available' });
     const input = { intent: 'preview' as const, source, title: 'Review', question: 'What changes?', reviewers: [],
         retry: { creationLocalId: 'creation', quoteLocalId: 'quote', questionLocalId: 'question' } };
     expect(await client.secondOpinion(input)).toMatchObject({ kind: 'succeeded', value: { status: 'preview', sourceText: 'The source answer.' } });
-    expect(pageReads).toBe(2);
+    expect(pageReads).toBe(1);
     homes.answer(serverId, '/v1/sessions/source-session/messages', { body: { messages: [{ id: 'committed-answer', seq: 7,
         localId: null, createdAt: 1, messageRole: 'agent', content: { t: 'encrypted', c: 'unavailable' } }], hasMore: false } });
     expect(await client.secondOpinion(input)).toEqual({ kind: 'failed', errorCode: 'session_transcript_content_unavailable' });

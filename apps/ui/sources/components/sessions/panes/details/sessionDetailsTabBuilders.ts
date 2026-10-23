@@ -2,6 +2,7 @@ import { createSessionDetailsTerminalTab } from '@/components/sessions/terminal/
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
 import { SCM_COMPARISON_VIEWS, type ScmComparisonView } from '@happier-dev/protocol/scm';
+import type { DiscussionAnchorV1 } from '@happier-dev/protocol/discussions/replyTargets';
 
 export const SESSION_DETAILS_SCM_REVIEW_TAB_KEY = 'scmReview:working';
 export const SESSION_DETAILS_SCM_STASH_TAB_KEY = 'scmStash';
@@ -14,13 +15,13 @@ export type SessionBoardDetailsFocusTarget = Readonly<{
 }>;
 
 export type SessionDiscussionDetailsTarget =
-    | Readonly<{ kind: 'new'; address: SessionAddress }>
-    | Readonly<{ kind: 'discussion'; address: SessionAddress; discussionId: string }>;
+    | Readonly<{ kind: 'new'; address: SessionAddress; draftId?: string; anchor?: DiscussionAnchorV1 }>
+    | Readonly<{ kind: 'discussion'; address: SessionAddress; discussionId: string; messageId?: string }>;
 
 export function createSessionDiscussionDetailsTab(
     target: SessionDiscussionDetailsTarget & Readonly<{ title?: string | null }>,
 ) {
-    const targetKey = target.kind === 'new' ? 'new' : target.discussionId;
+    const targetKey = target.kind === 'new' ? target.draftId ? `new:${target.draftId}` : 'new' : target.discussionId;
     return {
         key: `discussion:${sessionAddressKey(target.address)}:${targetKey}`,
         kind: 'discussion' as const,
@@ -30,11 +31,13 @@ export function createSessionDiscussionDetailsTab(
         resource: {
             kind: 'discussion' as const,
             target: target.kind === 'new'
-                ? { kind: 'new' as const, address: target.address }
+                ? { kind: 'new' as const, address: target.address,
+                    ...(target.draftId ? { draftId: target.draftId } : {}), ...(target.anchor ? { anchor: target.anchor } : {}) }
                 : {
                     kind: 'discussion' as const,
                     address: target.address,
                     discussionId: target.discussionId,
+                    ...(target.messageId ? { messageId: target.messageId } : {}),
                 },
         },
     };

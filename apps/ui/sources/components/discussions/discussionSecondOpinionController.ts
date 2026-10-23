@@ -5,7 +5,7 @@ import { createDiscussionClient, type DiscussionClientOutcome } from '@/sync/api
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import { randomUUID } from '@/platform/randomUUID';
-import { buildDiscussionRouteHref } from './discussionRoutes';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
@@ -23,7 +23,7 @@ export type DiscussionSecondOpinionSnapshot = Readonly<{
     result: Result | null;
     working: boolean;
     submitted: boolean;
-    discussionHref: string | null;
+    discussionMessage: DiscussionMessageRefV1 | null;
     /** Asking several starts Fresh opinions; this is that Run. */
     runHref: string | null;
 }>;
@@ -39,7 +39,7 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
     let snapshot: DiscussionSecondOpinionSnapshot = {
         source: options.source, draft: options.draft,
         retry: { creationLocalId: randomUUID(), quoteLocalId: randomUUID(), questionLocalId: randomUUID() },
-        preview: null, result: null, working: false, submitted: false, discussionHref: null, runHref: null,
+        preview: null, result: null, working: false, submitted: false, discussionMessage: null, runHref: null,
     };
     const listeners = new Set<() => void>();
     const publish = (patch: Partial<DiscussionSecondOpinionSnapshot>) => {
@@ -48,18 +48,13 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
     };
     let retainedAsk: DiscussionSecondOpinionStartInputV1 | null = null;
     let retainedDiscuss: Parameters<typeof client.create>[0] | null = null;
-    const href = (serverId: string, discussionId: string, messageId?: string) => buildDiscussionRouteHref({
-        target: { kind: 'discussion', address: { serverId }, discussionId, ...(messageId ? { messageId } : {}) },
-        sourceSurface: 'collaboration',
-    });
     const applyAsk = (outcome: DiscussionClientOutcome<DiscussionSecondOpinionStartResultV1>) => {
         const value = outcome.kind === 'succeeded' ? outcome.value : null;
         publish({ working: false, result: { operation: 'second_opinion', outcome },
             ...(value?.status === 'preview' ? { preview: value } : {}),
             ...(value?.status === 'preview_changed' && snapshot.preview
                 ? { preview: { ...snapshot.preview, preview: value.preview } } : {}),
-            ...(value?.status === 'asked' ? { discussionHref: href(value.discussion.serverId,
-                value.discussion.discussionId, value.messageRef.messageId),
+            ...(value?.status === 'asked' ? { discussionMessage: value.messageRef,
                 runHref: value.runId ? createWorkflowRunRoute(value.runId, value.discussion.serverId) : null } : {}),
         });
         return outcome;
@@ -72,8 +67,7 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
         publish({ working: true });
         const outcome = await client.create(input, signal);
         publish({ working: false, result: { operation: 'discuss', outcome },
-            ...(outcome.kind === 'succeeded' ? { discussionHref: href(outcome.value.serverId,
-                outcome.value.discussion.id, outcome.value.firstMessage.id) } : {}) });
+            ...(outcome.kind === 'succeeded' ? { discussionMessage: outcome.value.firstMessage.messageRef } : {}) });
         return outcome;
     };
     return {

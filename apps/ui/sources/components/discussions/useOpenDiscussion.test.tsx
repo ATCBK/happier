@@ -2,26 +2,53 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { useOpenSessionDiscussion } from '@/components/sessions/conversations/useOpenSessionDiscussion';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
+import { createSessionDiscussionDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { useOpenDiscussion } from './useOpenDiscussion';
+import { seedDiscussionDraft } from './useDiscussionDraft';
+import { getSessionComposerDraftSnapshot } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 const route = vi.hoisted(() => ({ push: vi.fn(), pathname: '/discussions', params: {} as Record<string, string | string[]> }));
+const viewport = vi.hoisted(() => ({ width: 390, height: 844, scale: 1, fontScale: 1 }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => viewport,
+}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ router: { push: route.push }, pathname: () => route.pathname, params: () => route.params }).module;
 });
+const runtime = installSessionPaneRuntimeTestHarness({ scopeId: ({ sessionId, serverId }) => createSessionPaneScopeId(sessionId, serverId) });
 
 describe('open Discussion', () => {
     beforeEach(() => {
         route.push.mockClear();
         route.pathname = '/discussions';
         route.params = { serverId: 'home-b' };
+        viewport.width = 390;
     });
     afterEach(standardCleanup);
+
+    it.each([
+        { width: 1440, sessionId: undefined },
+        { width: 1440, sessionId: 'source-a' },
+        { width: 390, sessionId: 'source-a' },
+    ])('pushes routes without a pane provider at $width with source $sessionId', async ({ width, sessionId }) => {
+        viewport.width = width;
+        const hook = await renderHook(() => useOpenDiscussion({ address: { serverId: 'home-b' },
+            ...(sessionId ? { anchor: { kind: 'session' as const, sessionId }, sourceSurface: 'collaboration' as const } : {}),
+        }));
+        await act(async () => hook.getCurrent().openDiscussion('review'));
+        expect(route.push).toHaveBeenLastCalledWith(`/discussions/review?serverId=home-b${sessionId ? '&sourceSurface=collaboration' : ''}`);
+        await act(async () => hook.getCurrent().openNewDiscussion());
+        expect(new URL(route.push.mock.lastCall![0], 'https://happier.test').searchParams.get('draftId')).toMatch(/^[0-9a-f-]{36}$/i);
+    });
 
     it('opens the canonical resource without a parent Session and retains the captured Home', async () => {
         const hook = await renderHook(({ serverId }: { serverId: string }) => useOpenDiscussion({ address: { serverId } }), {
             initialProps: { serverId: 'home-b' },
+            wrapper: runtime.Wrapper,
         });
         const capturedOpen = hook.getCurrent().openDiscussion;
         await hook.rerender({ serverId: 'home-c' });
@@ -30,13 +57,17 @@ describe('open Discussion', () => {
         await act(async () => hook.getCurrent().openDiscussion('same-id'));
         expect(route.push).toHaveBeenLastCalledWith('/discussions/same-id?serverId=home-c');
         await act(async () => hook.getCurrent().openNewDiscussion());
-        expect(route.push).toHaveBeenLastCalledWith('/discussions/new?serverId=home-c');
+        const first = new URL(route.push.mock.lastCall![0], 'https://happier.test');
+        expect(first.searchParams.get('draftId')).toMatch(/^[0-9a-f-]{36}$/i);
+        await act(async () => hook.getCurrent().openNewDiscussion());
+        const second = new URL(route.push.mock.lastCall![0], 'https://happier.test');
+        expect(second.searchParams.get('draftId')).not.toBe(first.searchParams.get('draftId'));
     });
 
     it('derives selection from the canonical route and exact Home', async () => {
         route.pathname = '/discussions/same-id';
         route.params = { serverId: 'home-b', discussionId: 'same-id' };
-        const hook = await renderHook(() => useOpenDiscussion({ address: { serverId: 'home-b' } }));
+        const hook = await renderHook(() => useOpenDiscussion({ address: { serverId: 'home-b' } }), { wrapper: runtime.Wrapper });
         expect(hook.getCurrent().activeDiscussionKey).toBe('same-id');
         route.params = { serverId: 'home-c', discussionId: 'same-id' };
         await hook.rerender();
@@ -47,11 +78,48 @@ describe('open Discussion', () => {
         expect(hook.getCurrent().activeDiscussionKey).toBe('new');
     });
 
+    it('seeds an explicit New intent into that fresh route draft without borrowing the singleton', async () => {
+        const scope = runtime.accountScope!;
+        const hook = await renderHook(() => useOpenDiscussion({ address: scope,
+            prepareNewDraft: draftId => { seedDiscussionDraft({ scope, address: { kind: 'newDiscussion', draftId },
+                text: 'Please help with this Bot', mentions: [] }); },
+        }), { wrapper: runtime.Wrapper });
+        await act(async () => hook.getCurrent().openNewDiscussion());
+        const draftId = new URL(route.push.mock.lastCall![0], 'https://happier.test').searchParams.get('draftId')!;
+        expect(getSessionComposerDraftSnapshot(scope, { kind: 'newDiscussion', draftId })?.composer.text.value).toBe('Please help with this Bot');
+        expect(getSessionComposerDraftSnapshot(scope, { kind: 'newDiscussion' })).toBeNull();
+    });
+
     it('makes People an anchor adapter to the same canonical destination', async () => {
-        const hook = await renderHook(() => useOpenSessionDiscussion({ address: { serverId: 'home-b', sessionId: 'source-a' } }));
+        const hook = await renderHook(() => useOpenDiscussion({ address: { serverId: 'home-b' }, anchor: { kind: 'session', sessionId: 'source-a' }, sourceSurface: 'collaboration' }), { wrapper: runtime.Wrapper });
         await act(async () => hook.getCurrent().openDiscussion('same-id'));
         expect(route.push).toHaveBeenLastCalledWith('/discussions/same-id?serverId=home-b&sourceSurface=collaboration');
         await act(async () => hook.getCurrent().openNewDiscussion());
-        expect(route.push).toHaveBeenLastCalledWith('/discussions/new?serverId=home-b&sourceSurface=collaboration&anchorSessionId=source-a');
+        const href = new URL(route.push.mock.lastCall![0], 'https://happier.test');
+        expect(href.pathname).toBe('/discussions/new');
+        expect(href.searchParams.get('anchorSessionId')).toBe('source-a');
+        expect(href.searchParams.get('draftId')).toMatch(/^[0-9a-f-]{36}$/i);
+    });
+
+    it('opens beside the source on desktop and derives selection from the actual active tab', async () => {
+        viewport.width = 1440;
+        const address = { serverId: runtime.serverId, sessionId: 's1' };
+        const anchor = { kind: 'session' as const, sessionId: 's1', messageId: 'source-answer' };
+        const hook = await renderHook(() => useOpenDiscussion({ address, anchor, sourceSurface: 'collaboration' }), { wrapper: runtime.Wrapper });
+        await act(async () => hook.getCurrent().openDiscussion('review', 'Review'));
+        expect(route.push).not.toHaveBeenCalled();
+        expect(runtime.pane.scopeState?.details.tabs).toEqual([expect.objectContaining({
+            title: 'Review', isPreview: true, resource: { kind: 'discussion', target: { kind: 'discussion', address, discussionId: 'review' } },
+        })]);
+        expect(hook.getCurrent().activeDiscussionKey).toBe('review');
+        await act(async () => runtime.pane.openDetailsTab(createSessionDiscussionDetailsTab({ kind: 'discussion',
+            address: { ...address, serverId: 'other-home' }, discussionId: 'review' }), { intent: 'preview' }));
+        expect(hook.getCurrent().activeDiscussionKey).toBeNull();
+        await act(async () => hook.getCurrent().openNewDiscussion());
+        const first = runtime.pane.scopeState!.details.tabs.at(-1)!;
+        expect(first.resource).toMatchObject({ target: { kind: 'new', address, anchor, draftId: expect.stringMatching(/^[0-9a-f-]{36}$/i) } });
+        await act(async () => hook.getCurrent().openNewDiscussion());
+        expect(runtime.pane.scopeState!.details.tabs.at(-1)!.key).not.toBe(first.key);
+        expect(hook.getCurrent().activeDiscussionKey).toBe('new');
     });
 });

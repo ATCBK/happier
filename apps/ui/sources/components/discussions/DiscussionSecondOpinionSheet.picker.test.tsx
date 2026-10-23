@@ -14,6 +14,9 @@ import { answerDiscussionThreadForTests } from '@/dev/testkit/harness/homeGovern
 import { Item } from '@/components/ui/lists/Item';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -29,6 +32,11 @@ const { SessionServerStartDraftComposerModal } = await import('@/components/sess
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
 let boundary: SessionListQuerySourceHarness;
+let sourcePane: AppPaneScopeApi;
+function SourcePaneProbe(props: { scopeId: string }) {
+  sourcePane = useAppPaneScope(props.scopeId);
+  return null;
+}
 beforeEach(async () => {
   boundary = await createSessionListQuerySourceHarness();
   setRuntimeFetch(createSessionReadBatchFetchBoundary(boundary.http.request));
@@ -74,9 +82,10 @@ async function mount(options: { sharingEnabled?: boolean; intent?: 'second_opini
   boundary.http.answer(serverId, 'POST /v1/discussions', { status: 503, body: { error: 'unavailable' } });
   storage.setState({ machineListByServerId: { ...storage.getState().machineListByServerId,
     [serverId]: [createMachineFixture({ id: 'review-machine', active: false, activeAt: 0 })] } });
-  const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+  const sourcePaneScopeId = createSessionPaneScopeId('source-session', serverId, 'second-opinion-source');
+  const screen = await renderScreen(<AppPaneProvider><SourcePaneProbe scopeId={sourcePaneScopeId} /><ModalProvider>{null}</ModalProvider></AppPaneProvider>);
   await act(async () => { presentDiscussionSecondOpinion({ source, sourceText: 'The source answer.', intent: options.intent ?? 'second_opinion',
-    onNavigate: () => {}, }); });
+    onNavigate: () => {}, sourcePaneScopeId }); });
   return { screen, serverId, previewPath };
 }
 
@@ -237,6 +246,11 @@ it('lets a retained Discuss draft preview, create and retry with the same identi
   expect(creates().every(request => request.creationLocalId === original.creationLocalId
     && request.firstMessage.localId === original.firstMessage.localId)).toBe(true);
   expect(thread.messages).toHaveLength(1);
+  await screen.pressByTestIdAsync('second-opinion.open');
+  expect(sourcePane.scopeState?.details.tabs).toEqual([expect.objectContaining({
+    resource: { kind: 'discussion', target: { kind: 'discussion', address: { serverId, sessionId: 'source-session' },
+      discussionId: thread.stored()!.discussion.id, messageId: thread.messages[0]!.id } },
+  })]);
   await screen.unmount();
 });
 

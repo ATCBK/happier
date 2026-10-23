@@ -71,6 +71,31 @@ function modelParticipant(serverId: string, participantSlotId = 'retained-slot',
         sessionId, answerPolicy: 'when_addressed' as const, createdAt: 1 };
 }
 
+it('does not restore a removed participant when an older invalidation read arrives late', async () => {
+    const f = await fixture();
+    const { publishMountedDiscussionChanges } = await import('@/sync/domains/discussions/discussionChangeWatch');
+    const held = createDeferred<void>();
+    const previous = f.roster();
+    let reads = 0;
+    homes.answer(f.serverId, `${f.path}/participants`, { select: () => ++reads === 1
+        ? { body: previous, respondAfter: held.promise } : { body: f.roster() } });
+    const invalidate = (cursor: number) => publishMountedDiscussionChanges({ serverId: f.serverId, accountId: 'alice',
+        changes: [{ kind: 'discussion', entityId: previous.discussionId, cursor, changedAt: cursor, hint: null }] });
+    try {
+        await act(async () => invalidate(1));
+        await vi.waitFor(() => expect(reads).toBe(1));
+        f.setParticipants([]);
+        await act(async () => invalidate(2));
+        await vi.waitFor(() => expect(f.hook.getCurrent().roster?.participants).toEqual([]));
+        expect(reads).toBe(2);
+        await act(async () => { held.resolve(); await held.promise; });
+        await vi.waitFor(() => expect(f.hook.getCurrent().roster?.participants).toEqual([]));
+    } finally {
+        held.resolve();
+        await f.hook.unmount();
+    }
+});
+
 it('names a saved model choice without treating an unwitnessed null binding as starting', async () => {
     const f = await fixture();
     const model = modelParticipant(f.serverId);

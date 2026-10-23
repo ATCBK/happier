@@ -21,6 +21,9 @@ import { readableSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessio
 import { selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { useSettlingHomeServerId } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -294,6 +297,59 @@ describe('Discussion Invite source composition', () => {
                 sessionsContext: 'Reviewer', onChoose: vi.fn() }));
             return { accountLifetime, hook };
         };
+
+        it('shows a terminal first-page refusal on the settling applied Home and retries exactly that request', async () => {
+            const home = boundary.focusedHome();
+            const accountLifetime = await captureHome(home);
+            boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+            const gate = createDeferred<void>();
+            boundary.http.answer(home, '/v2/sessions/query', { status: 400, body: {}, respondAfter: gate.promise });
+            const hook = await renderHook(() => ({
+                ...useExecutableParticipantSections({ accountLifetime, enabled: true,
+                    sessionsContext: 'Reviewer', onChoose: vi.fn() }),
+                settlingHome: useSettlingHomeServerId(),
+            }));
+            const queryCount = () => boundary.http.requests.filter(request => request.path === '/v2/sessions/query'
+                && request.serverId === home).length;
+            await vi.waitFor(() => expect(queryCount()).toBeGreaterThan(0));
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')).toBeDefined();
+            // Real transport loss keeps the Home settling even after the Home
+            // owner corrects its unknown-Machine-count projection.
+            await act(async () => { boundary.loseTransport(home); });
+            expect(hook.getCurrent().settlingHome).toBe(home);
+            await act(async () => gate.resolve());
+            await vi.waitFor(() => expect(hook.getCurrent().sessions.state).toMatchObject({
+                phase: 'error', failureReason: 'invalid_query', failedOperation: 'replace', appliedQueryKey: null,
+            }));
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')).toBeUndefined();
+            const retry = find(hook.getCurrent().sections, 'discussion-invite-sessions-retry');
+            expect(retry).toBeDefined();
+            const beforeUnrelated = queryCount();
+            await act(async () => {
+                for (let index = 0; index < 10; index += 1) storage.getState().applyLocalSettings({
+                    uiFontScale: index % 2 === 0 ? 1.1 : 1.2,
+                }, { persist: false });
+            });
+            expect(queryCount()).toBe(beforeUnrelated);
+
+            await act(async () => { boundary.socket(home).connect(); });
+            await vi.waitFor(() => expect(storage.getState().socketStatus).toBe('connected'));
+            boundary.http.answer(home, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
+                sessions: [{ ...createPlainSessionCurrentProjectionRecordFixture({ id: 'recovered-terminal' }),
+                    viewer: createSessionOwnerViewerFixture(createSessionFixture({ id: 'recovered-terminal' })) }],
+                nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            }) });
+            const beforeRetry = queryCount();
+            await act(async () => { await retry!.onSelect?.(); });
+            await vi.waitFor(() => expect({ phase: hook.getCurrent().sessions.state?.phase,
+                failureReason: hook.getCurrent().sessions.state?.failureReason,
+                requests: queryCount() - beforeRetry,
+            }).toEqual({ phase: 'ready', failureReason: null, requests: 1 }));
+            await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id))
+                .toContain('session:recovered-terminal'));
+            expect(queryCount() - beforeRetry).toBe(1);
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
+        });
 
         it('says it is looking while the first page loads, then offers Retry for a failed first page and recovers the choices', async () => {
             const home = boundary.serverIds[1]!;
