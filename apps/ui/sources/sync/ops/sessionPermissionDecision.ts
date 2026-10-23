@@ -126,7 +126,7 @@ export async function sessionPermissionDecisionWithServerAccountScope(params: Re
     scope: ServerAccountScope;
     sessionId: string;
     requestId: string;
-    occurrenceId?: string;
+    occurrenceId: string;
     action: 'allow' | 'deny';
     networkMode?: 'background-task';
     signal?: AbortSignal;
@@ -136,7 +136,7 @@ export async function sessionPermissionDecisionWithServerAccountScope(params: Re
         sessionId: params.sessionId,
         request: {
             ...buildNotificationPermissionDecisionRequest(params.action, params.requestId),
-            ...(typeof params.occurrenceId === 'string' ? { occurrenceId: params.occurrenceId } : {}),
+            occurrenceId: params.occurrenceId,
         },
         target: { scope: params.scope },
         networkMode: params.networkMode,

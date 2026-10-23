@@ -23,8 +23,8 @@ import {
     forkSession as forkSessionOp,
     rollbackSessionConversation as rollbackSessionConversationOp,
     sessionStopWithServerScope,
+    sessionRespondToPermission,
 } from '@/sync/ops/sessions';
-import { dispatchSessionPermissionDecision } from '@/sync/ops/sessionPermissionDecision';
 import { delegateSessionHandoffToSourceDaemon } from '@/sync/ops/delegatedSessionHandoff';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import { sendSessionMessageWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage';
@@ -334,7 +334,7 @@ export function createDefaultActionExecutor(opts?: Readonly<{
       const request = decision === 'allow'
         ? { id: reqId, approved: true }
         : { id: reqId, approved: false };
-      return await dispatchSessionPermissionDecision({ sessionId, request, target: { serverId } });
+      return await sessionRespondToPermission({ sessionId, request, serverId });
     },
     sessionUserActionAnswer: async ({ sessionId, requestId, answers, decision, reason, updatedPermissions, serverId }) => {
       const reqId = String(requestId ?? '').trim();
@@ -369,9 +369,9 @@ export function createDefaultActionExecutor(opts?: Readonly<{
           payload: { id: reqId, structuredAnswersV1: answerPayload.send.structuredAnswersV1 },
         });
       }
-      return await dispatchSessionPermissionDecision({
+      return await sessionRespondToPermission({
         sessionId,
-        target: { serverId },
+        serverId,
         request: {
           id: reqId,
           approved,

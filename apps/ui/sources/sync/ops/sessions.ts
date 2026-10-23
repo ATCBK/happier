@@ -11,7 +11,7 @@ import { readForkSessionRpcTimeoutMsFromEnv, readSpawnSessionRpcTimeoutMsFromEnv
 import { randomUUID } from '@/platform/randomUUID';
 import { storage } from '../domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { resolveSessionArchiveServerId } from '@/sync/domains/session/listing/sessionArchiveState';
 import { readMachineDaemonCliVersionForServerScope } from '../domains/machines/readMachineDaemonCliVersionForServerScope';
 import { nowServerMs } from '../runtime/time';
@@ -21,7 +21,9 @@ import { emitSessionMetadataUpdateWithServerScope } from '@/sync/runtime/orchest
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { resolveServerScopedSessionContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedSessionContext';
 import { sessionRpcWithPreferredSessionScope } from '@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope';
-import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { sessionRpcWithServerScope, sessionRpcWithServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch';
 import type {
     LlmTaskRunnerConfigV1,
@@ -94,7 +96,7 @@ export {
 
 // Permission operation types live with the shared permission-decision owner so
 // foreground ops and the headless notification executor send one wire shape.
-import { applySessionThinkingDecisionRecovery, dispatchSessionPermissionDecision, type SessionPermissionRequest } from './sessionPermissionDecision';
+import { applySessionThinkingDecisionRecovery, dispatchSessionPermissionDecision, isSessionPermissionDecisionAccepted, type SessionPermissionRequest } from './sessionPermissionDecision';
 
 // Mode change operation types
 interface SessionModeChangeRequest {
@@ -521,15 +523,22 @@ export async function rollbackSessionConversation(options: Readonly<{
     }
 }
 
-export async function sessionAbort(sessionId: string): Promise<void> {
+export async function sessionAbort(sessionId: string, options?: Readonly<{ scope: ServerAccountScope }>): Promise<void> {
+    const recoveryScope = options?.scope ?? getActiveServerAccountScope();
+    const serverId = options?.scope.serverId ?? resolvePreferredServerIdForSessionId(sessionId);
     try {
-        await sessionRpcWithPreferredSessionScope<void, { reason: string }>({
+        const request = {
             sessionId,
             method: 'abort',
             payload: {
             reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.`
             },
-        });
+        };
+        if (options?.scope) {
+            await sessionRpcWithServerAccountScope({ ...request, scope: options.scope });
+        } else {
+            await sessionRpcWithPreferredSessionScope(request);
+        }
     } catch (e) {
         const errorCode = readSessionRpcErrorCode(e);
         if (
@@ -558,7 +567,57 @@ export async function sessionAbort(sessionId: string): Promise<void> {
 
     // Best-effort local UX recovery: aborts should immediately return the session
     // to non-thinking state even if lifecycle events arrive out of order.
-    applySessionThinkingDecisionRecovery(sessionId);
+    const activeScope = getActiveServerAccountScope();
+    if ((recoveryScope ? areServerAccountScopesEqual(recoveryScope, activeScope) : activeScope === null)
+        && (!serverId || areServerProfileIdentifiersEquivalent(serverId, getActiveServerId()))) {
+        applySessionThinkingDecisionRecovery(sessionId);
+    }
+}
+
+/** Foreground/action permission responses must be accepted before their callers settle. */
+export async function sessionRespondToPermission(params: Readonly<{
+    sessionId: string;
+    request: SessionPermissionRequest;
+    serverId?: string | null;
+    permissionModeAfterStop?: PermissionMode;
+}>): Promise<unknown> {
+    const stopsRun = params.request.approved === false && params.request.decision === 'abort';
+    let stopScope: ServerAccountScope | null = null;
+    if (stopsRun) {
+        const serverId = params.serverId ?? resolvePreferredServerIdForSessionId(params.sessionId);
+        const activeScope = getActiveServerAccountScope();
+        if (activeScope && (!serverId || areServerProfileIdentifiersEquivalent(serverId, activeScope.serverId))) {
+            stopScope = activeScope;
+        } else {
+            const context = await resolveServerScopedSessionContext({ serverId, preferScoped: true });
+            if (context.scope !== 'scoped') throw new Error('Permission Stop requires an authenticated session account');
+            stopScope = createServerAccountScope(context.targetServerId, context.targetAccountId);
+        }
+        if (!stopScope) throw new Error('Permission Stop requires an authenticated session account');
+    }
+    const result = await dispatchSessionPermissionDecision({
+        sessionId: params.sessionId,
+        request: params.request,
+        ...(stopScope ? { target: { scope: stopScope } } : params.serverId !== undefined ? { target: { serverId: params.serverId } } : {}),
+    });
+    if (!isSessionPermissionDecisionAccepted(result)) {
+        const rejection = typeof result === 'object' && result !== null ? result as Record<string, unknown> : null;
+        throw createRpcCallError({
+            error: rejection?.ok === false
+                ? typeof rejection.errorMessage === 'string' ? rejection.errorMessage : 'Permission response was rejected'
+                : 'Permission RPC returned an invalid response',
+            errorCode: typeof rejection?.errorCode === 'string' ? rejection.errorCode : undefined,
+        });
+    }
+    if (stopScope) {
+        // Each phase validates the saved target credentials, so changing focus remains supported
+        // while replacing the target account cannot redirect the continuation to another account.
+        await sessionAbort(params.sessionId, { scope: stopScope });
+        if (params.permissionModeAfterStop && areServerAccountScopesEqual(stopScope, getActiveServerAccountScope())) {
+            storage.getState().updateSessionPermissionMode(params.sessionId, params.permissionModeAfterStop);
+        }
+    }
+    return result;
 }
 
 /**
@@ -580,7 +639,7 @@ export async function sessionAllow(
         decision,
         execPolicyAmendment
     };
-    await dispatchSessionPermissionDecision({ sessionId, request });
+    await sessionRespondToPermission({ sessionId, request });
 }
 
 /**
@@ -607,7 +666,7 @@ export async function sessionAllowWithPermissionUpdates(
         decision: params.decision,
         updatedPermissions: params.updatedPermissions,
     };
-    await dispatchSessionPermissionDecision({ sessionId, request });
+    await sessionRespondToPermission({ sessionId, request });
 }
 
 /**
@@ -630,7 +689,7 @@ export async function sessionAllowWithAnswers(
         return;
     }
     const request: SessionPermissionRequest = { id, approved: true, answers: { ...payload.answers } };
-    await dispatchSessionPermissionDecision({ sessionId, request });
+    await sessionRespondToPermission({ sessionId, request });
 }
 
 /**
@@ -645,7 +704,7 @@ export async function sessionDeny(
     reason?: string,
 ): Promise<void> {
     const request: SessionPermissionRequest = { id, approved: false, mode, allowedTools, decision, reason };
-    await dispatchSessionPermissionDecision({ sessionId, request });
+    await sessionRespondToPermission({ sessionId, request });
 }
 
 /**

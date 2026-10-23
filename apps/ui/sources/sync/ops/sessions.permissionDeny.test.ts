@@ -12,9 +12,9 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: { sessionRPC: (...args: unknown[]) => sessionRpc(...args) },
 }));
 
-import { sessionAllow, sessionAllowWithPermissionUpdates, sessionDeny } from './sessions';
+import { sessionAbort, sessionAllow, sessionAllowWithPermissionUpdates, sessionDeny } from './sessions';
 import { dispatchSessionPermissionDecision, sessionPermissionDecisionWithServerAccountScope } from './sessionPermissionDecision';
-import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { V2SessionByIdResponseSchema } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createServerFetchWithReachabilityProbe, createSocketHarness, createSessionFixture, createDeferred } from '@/dev/testkit';
@@ -68,7 +68,7 @@ describe('sessionDeny', () => {
         connectSocket.mockReset();
     });
 
-    it('clears local thinking state after a deny/abort permission decision', async () => {
+    it('clears local thinking state after an accepted deny permission decision', async () => {
         const sessionId = 's_permission_deny';
         storage.getState().applySessions([{
             ...buildSession(sessionId),
@@ -77,7 +77,7 @@ describe('sessionDeny', () => {
         storage.getState().markSessionOptimisticThinking(sessionId);
         sessionRpc.mockResolvedValue({ ok: true });
 
-        await sessionDeny(sessionId, 'perm_1', undefined, undefined, 'abort');
+        await sessionDeny(sessionId, 'perm_1', undefined, undefined, 'denied');
 
         const session = storage.getState().sessions[sessionId];
         expect(session?.thinking).toBe(false);
@@ -85,7 +85,7 @@ describe('sessionDeny', () => {
         expect(typeof session?.thinkingGraceUntil).toBe('number');
         expect(sessionRpc).toHaveBeenCalledWith(
             sessionId, 'permission',
-            expect.objectContaining({ id: 'perm_1', approved: false, decision: 'abort' }),
+            expect.objectContaining({ id: 'perm_1', approved: false, decision: 'denied' }),
             expect.any(Object),
         );
     });
@@ -97,7 +97,7 @@ describe('sessionDeny', () => {
         const before = storage.getState().sessions[sessionId];
         sessionRpc.mockResolvedValue({ ok: false, errorCode: 'permission_request_not_found' });
 
-        await sessionDeny(sessionId, 'missing');
+        await expect(sessionDeny(sessionId, 'missing')).rejects.toMatchObject({ rpcErrorCode: 'permission_request_not_found' });
 
         expect(storage.getState().sessions[sessionId]).toBe(before);
     });
@@ -108,7 +108,7 @@ describe('sessionDeny', () => {
         const before = storage.getState().sessions[sessionId];
         sessionRpc.mockResolvedValue(undefined);
 
-        await sessionDeny(sessionId, 'perm_1');
+        await expect(sessionDeny(sessionId, 'perm_1')).rejects.toThrow();
 
         expect(storage.getState().sessions[sessionId]).toBe(before);
     });
@@ -125,6 +125,19 @@ describe('sessionDeny', () => {
         });
 
         await sessionDeny(sessionId, 'perm_1');
+
+        expect(storage.getState().sessions[sessionId]).toBe(before);
+    });
+
+    it('does not recover active-home state after an ordinary abort targets a cached foreign-home session', async () => {
+        const sessionId = 's_foreign_home_abort';
+        const foreign = upsertServerProfile({ serverUrl: 'https://permission-abort-foreign.example.test' });
+        const session = { ...buildSession(sessionId), serverId: foreign.id };
+        storage.setState({ sessions: { ...storage.getState().sessions, [sessionId]: session } });
+        const before = storage.getState().sessions[sessionId];
+        installScopedPermissionSocket(sessionId, async () => ({ ok: true, result: undefined }));
+
+        await sessionAbort(sessionId);
 
         expect(storage.getState().sessions[sessionId]).toBe(before);
     });
