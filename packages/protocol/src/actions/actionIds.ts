@@ -560,6 +560,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'browser.context.annotation.attachComment',
     'browser.context.annotation.attachStroke',
     'browser.context.annotation.attachStyleIntent',
+    'browser.context.annotation.attachDraft',
     'browser.context.attachToComposer',
     'browser.context.attachToAgentTurn',
     'browser.context.clear',

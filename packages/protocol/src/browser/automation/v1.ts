@@ -152,6 +152,21 @@ export type BrowserAutomationRequesterRefV1 = z.infer<typeof BrowserAutomationRe
 export const BrowserAutomationControllerKindV1Schema = lazyZodSchema(() => z.enum(['none', 'human', 'agent', 'system']));
 export type BrowserAutomationControllerKindV1 = z.infer<typeof BrowserAutomationControllerKindV1Schema>;
 
+export const BrowserAutomationJavaScriptDialogKindV1Schema = lazyZodSchema(() => z.enum(['alert', 'confirm', 'prompt']));
+export type BrowserAutomationJavaScriptDialogKindV1 = z.infer<
+  typeof BrowserAutomationJavaScriptDialogKindV1Schema
+>;
+
+/** One exact page question answered within the containing approved Action; otherwise dismiss. */
+export const BrowserAutomationJavaScriptDialogResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: BrowserAutomationJavaScriptDialogKindV1Schema,
+  message: z.string(),
+  accept: z.boolean(),
+  promptText: z.optional(z.string()),
+}).check(z.refine(response => response.promptText === undefined || response.kind === 'prompt' && response.accept,
+  { message: 'Prompt text is only valid when accepting a prompt' })));
+export type BrowserAutomationJavaScriptDialogResponseV1 = z.infer<typeof BrowserAutomationJavaScriptDialogResponseV1Schema>;
+
 export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     automationRequestId: IdSchema,
@@ -162,8 +177,12 @@ export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z.stri
     requesterRef: BrowserAutomationRequesterRefV1Schema,
     actionKind: BrowserAutomationActionKindV1Schema,
     payload: z._default(z.optional(z.record(z.string(), z.unknown())), {}),
+    dialogResponse: z.optional(BrowserAutomationJavaScriptDialogResponseV1Schema),
     timeoutMs: PositiveTimeoutMsSchema,
   }).check(z.superRefine((request, context) => {
+    if (request.dialogResponse && !isBrowserAutomationMutatingActionKind(request.actionKind)) {
+      context.addIssue({ code: 'custom', path: ['dialogResponse'], message: 'Dialog responses require a mutating Browser Action' });
+    }
     if (request.actionKind !== 'evaluate') return;
 
     const payload = request.payload;
@@ -206,25 +225,25 @@ export const BrowserAutomationActionStatusV1Schema = lazyZodSchema(() => z.enum(
 ]));
 export type BrowserAutomationActionStatusV1 = z.infer<typeof BrowserAutomationActionStatusV1Schema>;
 
-export const BrowserAutomationJavaScriptDialogKindV1Schema = lazyZodSchema(() => z.enum(['alert', 'confirm', 'prompt']));
-export type BrowserAutomationJavaScriptDialogKindV1 = z.infer<
-  typeof BrowserAutomationJavaScriptDialogKindV1Schema
->;
-
 /**
- * UB-5 dialog contract. A page modal (`alert`/`confirm`/`prompt`) blocks the page thread, so an
- * automation action that trips one used to stall silently until `timeoutMs` elapsed. The injected
- * page runtime now auto-dismisses any dialog raised while an action executes and reports it under
- * `resultSummary.javascriptDialogs` on the action result — the agent learns the page asked instead
- * of reading a bare timeout. Auto-dismiss is the whole contract: there is no dialog state machine,
- * no pending-dialog registry, and no accept/respond verb.
- *
- * Metadata only. Dialog messages and prompt default values are page content and never egress.
+ * Managed Chromium dismisses page dialogs by default. An approved Action may answer one matching
+ * kind/message via dialogResponse. Observations are untrusted page content and pass through the
+ * existing result/timeline redactor; prompt defaults and submitted answers are never reported.
+ * Responses share the containing Action's deadline; no pending-dialog registry is needed.
  */
+const ObservedJavaScriptDialogKindSchema = lazyZodSchema(() => z.enum([
+  ...BrowserAutomationJavaScriptDialogKindV1Schema.options, 'beforeunload', 'unknown',
+]));
+
 export const BrowserAutomationJavaScriptDialogSummaryV1Schema = lazyZodSchema(() => z.strictObject({
-    count: z.number().check(z.int(), z.positive(), z.maximum(50)),
-    kinds: z.array(BrowserAutomationJavaScriptDialogKindV1Schema).check(z.minLength(1), z.maxLength(3)),
-    handling: z.literal('dismissed'),
+    count: z.number().check(z.int(), z.positive()),
+    kinds: z.array(ObservedJavaScriptDialogKindSchema).check(z.minLength(1), z.maxLength(ObservedJavaScriptDialogKindSchema.options.length)),
+    handling: z.enum(['dismissed', 'accepted', 'mixed']),
+    dialogs: z.optional(z.array(z.strictObject({
+      kind: ObservedJavaScriptDialogKindSchema,
+      message: z.string(),
+      handling: z.enum(['dismissed', 'accepted']),
+    }))),
   }));
 export type BrowserAutomationJavaScriptDialogSummaryV1 = z.infer<
   typeof BrowserAutomationJavaScriptDialogSummaryV1Schema

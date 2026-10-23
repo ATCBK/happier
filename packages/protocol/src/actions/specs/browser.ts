@@ -131,6 +131,24 @@ const RuntimeBrowserRecordingAttachInputSchema = lazyZodSchema(() => z.looseObje
     sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
   }));
 
+const RuntimeMountedBrowserContextInputSchema = lazyZodSchema(() => z.strictObject({
+  ...RuntimeBrowserViewInputSchema.shape,
+  navigationGeneration: z.number().check(z.int(), z.nonnegative()),
+}));
+
+const RuntimeBrowserContextAttachInputSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...RuntimeMountedBrowserContextInputSchema.shape, source: z.literal('activePage') }),
+  z.looseObject({ ...RuntimeBrowserContextActionInputSchema.shape, source: z.optional(z.never()) }),
+]));
+
+const BrowserAnnotationDraftCommitResultSchema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  actionId: z.literal('browser.context.annotation.attachDraft'),
+  status: z.literal('committed'),
+  annotationId: RuntimeBrowserViewInputSchema.shape.viewId,
+  itemIds: z.array(RuntimeBrowserViewInputSchema.shape.viewId),
+}));
+
 export const BROWSER_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActionIdV1, string>>> = Object.freeze({
   'browser.sandbox.install': 'Install managed browser sandbox permission',
   'browser.control.takeControl': 'Yield browser control to the human',
@@ -167,6 +185,7 @@ export const BROWSER_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActio
   'browser.context.annotation.attachComment': 'Attach browser annotation comment',
   'browser.context.annotation.attachStroke': 'Attach browser annotation stroke',
   'browser.context.annotation.attachStyleIntent': 'Attach browser annotation style intent',
+  'browser.context.annotation.attachDraft': 'Attach browser annotation draft',
   'browser.context.attachToComposer': 'Attach browser context to composer',
   'browser.context.attachToAgentTurn': 'Attach browser context to agent turn',
   'browser.context.clear': 'Clear browser context',
@@ -230,6 +249,7 @@ export const BROWSER_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record<Runtim
   'browser.context.annotation.attachComment': 'Attach a comment to the active browser annotation.',
   'browser.context.annotation.attachStroke': 'Attach a freehand stroke to the active browser annotation.',
   'browser.context.annotation.attachStyleIntent': 'Set the drawing style for the active browser annotation.',
+  'browser.context.annotation.attachDraft': 'Capture and attach the exact mounted view\'s annotation draft to its Session composer.',
   'browser.automation.status': 'Read the current browser automation status.',
   'browser.automation.snapshot': 'Capture an automation snapshot of the browser view.',
   'browser.automation.semanticSnapshot': 'Capture a semantic accessibility snapshot of the browser view.',
@@ -263,7 +283,7 @@ export const BROWSER_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record<Runtim
   'browser.diagnostics.releaseObjectGroup': 'Let go of page values that were kept for inspection.',
   'browser.diagnostics.elementPicker.start': 'Start picking an element by pointing at it in the page.',
   'browser.diagnostics.elementPicker.cancel': 'Stop picking an element without choosing one.',
-  'browser.context.attachToComposer': 'Add what you captured from the browser to the message you are writing.',
+  'browser.context.attachToComposer': 'Add captured browser context to the message you are writing. source="activePage" captures and attaches the exact mounted page, qualified by browserSessionId, viewId and navigationGeneration.',
   'browser.context.attachToAgentTurn': 'Give what you captured from the browser to the agent with its next turn.',
   'browser.context.clear': 'Throw away what was captured from the browser and not yet sent.',
   'browser.recording.start': 'Start recording a video of a browser view.',
@@ -320,7 +340,8 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.context.annotation.attachComment': RuntimeBrowserContextActionInputSchema,
   'browser.context.annotation.attachStroke': RuntimeBrowserContextActionInputSchema,
   'browser.context.annotation.attachStyleIntent': RuntimeBrowserContextActionInputSchema,
-  'browser.context.attachToComposer': RuntimeBrowserContextActionInputSchema,
+  'browser.context.annotation.attachDraft': RuntimeMountedBrowserContextInputSchema,
+  'browser.context.attachToComposer': RuntimeBrowserContextAttachInputSchema,
   'browser.context.attachToAgentTurn': RuntimeBrowserContextActionInputSchema,
   'browser.context.clear': RuntimeBrowserContextActionInputSchema,
   'browser.automation.status': createBrowserAutomationActionInputSchema('getStatus'),
@@ -392,6 +413,7 @@ const browserRuntimeOutputGeneralSchemas = {
   'browser.context.annotation.attachComment': BrowserContextRouteResultV1Schema,
   'browser.context.annotation.attachStroke': BrowserContextRouteResultV1Schema,
   'browser.context.annotation.attachStyleIntent': BrowserContextRouteResultV1Schema,
+  'browser.context.annotation.attachDraft': BrowserAnnotationDraftCommitResultSchema,
   'browser.context.attachToComposer': BrowserContextAttachmentV1Schema,
   'browser.context.attachToAgentTurn': BrowserContextAttachmentV1Schema,
   'browser.context.clear': BrowserContextRouteResultV1Schema,
@@ -480,6 +502,7 @@ export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY: Readonly<{
     'browser.context.captureConsoleSummary': { agentDefault: 'egress' },
     'browser.context.annotation.captureRegion': { agentDefault: 'egress' },
     'browser.context.annotation.captureElement': { agentDefault: 'egress' },
+    'browser.context.annotation.attachDraft': { agentDefault: 'egress' },
     'browser.context.attachToComposer': { agentDefault: 'egress' },
     'browser.context.attachToAgentTurn': { agentDefault: 'egress' },
     'browser.recording.attachToComposer': { agentDefault: 'egress' },

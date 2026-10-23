@@ -45,7 +45,7 @@ export type BrowserAutomationCdpTransport = Readonly<{
   readFocusedCredentialTarget?(view: BrowserAutomationViewRef): Promise<BrowserFocusedCredentialTargetV1 | undefined>;
   /** Observe and handle page dialogs for the entire action, including navigation and queries. */
   executePageOperation?(
-    input: BrowserAutomationViewRef & BrowserAutomationAdapterExecutionContext,
+    input: BrowserAutomationViewRef & BrowserAutomationAdapterExecutionContext & Pick<BrowserAutomationActionRequestV1, 'dialogResponse'>,
     execute: () => Promise<BrowserAutomationAdapterExecuteResult>,
   ): Promise<BrowserAutomationAdapterExecuteResult>;
   dispatchControlCommand(command: BrowserCommandV1, context?: BrowserAutomationAdapterExecutionContext): Promise<BrowserCommandDispatchResultV1>;
@@ -170,6 +170,10 @@ export function createBrowserAutomationCdpAdapter(input: Readonly<{
       return { status: 'failed', fidelity: 'unavailable', trustedInput, errorCode: 'view_closed' };
     }
 
+    if (request.dialogResponse && !input.transport.executePageOperation) {
+      return { status: 'unsupported', fidelity: 'cdp', trustedInput, errorCode: 'unsupported_action' };
+    }
+
     if (READ_ONLY_QUERY_ACTIONS.has(request.actionKind)) {
       const query = await input.transport.dispatchPageQuery({
         ...executionContext,
@@ -258,7 +262,8 @@ export function createBrowserAutomationCdpAdapter(input: Readonly<{
     execute: (request, context = {}) => {
       const executionContext = { ...context, deadlineMs: context.deadlineMs ?? Date.now() + request.timeoutMs };
       return input.transport.executePageOperation
-        ? input.transport.executePageOperation({ browserSessionId: request.browserSessionId, viewId: request.viewId, ...executionContext }, () => execute(request, executionContext))
+        ? input.transport.executePageOperation({ browserSessionId: request.browserSessionId, viewId: request.viewId,
+          ...(request.dialogResponse ? { dialogResponse: request.dialogResponse } : {}), ...executionContext }, () => execute(request, executionContext))
         : execute(request, executionContext);
     },
   };

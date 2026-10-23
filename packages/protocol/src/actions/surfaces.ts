@@ -50,6 +50,7 @@ const RUNTIME_ACTION_REAL_EXECUTOR_ACTION_IDS: readonly RuntimeActionIdV1[] = [
   'browser.context.annotation.attachComment',
   'browser.context.annotation.attachStroke',
   'browser.context.annotation.attachStyleIntent',
+  'browser.context.annotation.attachDraft',
   'browser.context.attachToComposer',
   'browser.context.attachToAgentTurn',
   'browser.context.clear',

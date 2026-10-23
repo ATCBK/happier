@@ -480,12 +480,21 @@ Only actions declared by `INJECTED_PAGE_AUTOMATION_ACTIONS` enter the installed 
   drag-and-drop will not respond; that is the same best-effort class as synthetic `click`.
 - **Daemon `drag` uses native pointer input** between the resolved source and destination. It
   does not fabricate an HTML5 `DataTransfer` or claim identical behavior to the injected collector.
-- **JavaScript dialogs are auto-dismissed** while an automation action runs (`alert` → dismissed,
-  `confirm` → `false`, `prompt` → `null`), and the action result reports
-  `resultSummary.javascriptDialogs` (`{ count, kinds, handling: 'dismissed' }`). Before this, a
-  modal blocked the page thread and the action simply timed out with no explanation. Dialog text is
-  page content and never egresses. The originals are restored when the command returns, so a
-  page-driven dialog outside an automation action behaves normally.
+- **JavaScript dialogs default to dismissal** while an automation action runs (`alert` → dismissed,
+  `confirm` → `false`, `prompt` → `null`). In 0.3 development source, managed Chromium also accepts
+  one explicit `dialogResponse` on the same Browser Action: `{ kind: 'confirm', message: 'Continue?',
+  accept: true }`, or `{ kind: 'prompt', message: 'Your name?', accept: true, promptText: 'Alice' }`.
+  The kind and full message must match exactly; an unrelated or subsequent dialog is dismissed.
+  Include this response when requesting approval for the action that opens the dialog. It shares
+  that action's approval and deadline, without keeping a dialog pending across Actions. Plugins
+  use the same Browser Action input through `@happier-dev/plugin-ui`'s ordinary Action API.
+  Managed results report `resultSummary.javascriptDialogs` with `count`, `kinds`, aggregate
+  `handling` (`accepted`, `dismissed` or `mixed`), and `dialogs` containing each question's `kind`,
+  `message` and `handling`. These messages are untrusted page content and use the existing
+  result/timeline redactor. Prompt defaults and submitted answers are not included. UI injected
+  engines retain automatic dismissal and refuse an explicit response as `unsupported_action`
+  before executing the action; they do not claim to have answered it. Their original dialog
+  functions are restored when the command returns, so dialogs outside an action behave normally.
 - **Picked elements carry `componentName` and `sourceLocation`** where the engine can resolve them
   from React fiber metadata, so an attached element points at the edit site and not only the
   selector. Both are absent on non-React pages and production builds.

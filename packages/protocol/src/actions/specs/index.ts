@@ -160,6 +160,12 @@ function createRuntimeActionSpecFor<
     sideEffectClass,
     outputSchema: params.outputSchema,
     inputSchema: params.inputSchema,
+    ...(actionId === 'browser.context.annotation.attachDraft' ? { executionPlacement: 'client' as const } : {}),
+    ...(actionId === 'browser.context.attachToComposer' ? {
+      executionPlacements: ['client', 'machine'] as const,
+      executionPlacementForInput: (input: unknown) => typeof input === 'object' && input !== null
+        && 'source' in input && input.source === 'activePage' ? 'client' as const : 'machine' as const,
+    } : {}),
     ...((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(actionId) ? {
       executionPlacements: ['client', 'machine'] as const,
       executionPlacementForInput: (input: unknown) => typeof input === 'object' && input !== null

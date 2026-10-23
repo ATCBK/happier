@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BrowserAutomationControllerStateV1Schema } from './v1';
+import { BrowserAutomationControllerStateV1Schema, BrowserAutomationActionRequestV1Schema } from './v1';
 
 async function loadAutomationModule(): Promise<Record<string, unknown> | null> {
   const path = './v1.js';
@@ -21,6 +21,20 @@ const baseRequest = {
 } as const;
 
 describe('browser automation protocol contracts', () => {
+  it('admits a closed exact-match dialog response only on a mutating action', () => {
+    const request = { ...baseRequest, actionKind: 'click', payload: { selector: '#continue' },
+      dialogResponse: { kind: 'prompt', message: 'Your name?', accept: true, promptText: 'Alice' } };
+    expect(BrowserAutomationActionRequestV1Schema.parse(request)).toEqual(request);
+    for (const dialogResponse of [
+      { ...request.dialogResponse, force: true },
+      { ...request.dialogResponse, kind: 'confirm' },
+      { ...request.dialogResponse, accept: false },
+      { kind: 'prompt', accept: true },
+    ]) {
+      expect(BrowserAutomationActionRequestV1Schema.safeParse({ ...request, dialogResponse }).success).toBe(false);
+    }
+    expect(BrowserAutomationActionRequestV1Schema.safeParse({ ...request, actionKind: 'snapshot' }).success).toBe(false);
+  });
   it('accepts the optional advisory confidentiality fact and retains strict controller validation', () => {
     const state = { browserSessionId: 'browser', viewId: 'view', controller: 'none', controlEpoch: 0 };
     expect(BrowserAutomationControllerStateV1Schema.safeParse(state).success).toBe(true);

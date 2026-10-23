@@ -307,6 +307,7 @@ const RUNTIME_ACTION_IDS = [
   'browser.context.annotation.attachComment',
   'browser.context.annotation.attachStroke',
   'browser.context.annotation.attachStyleIntent',
+  'browser.context.annotation.attachDraft',
   'browser.context.attachToComposer',
   'browser.context.attachToAgentTurn',
   'browser.context.clear',

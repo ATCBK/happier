@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { BrowserActiveTargetV1Schema, normalizeBrowserActiveTargetRect, readBrowserActiveTargetLabel } from '@happier-dev/protocol/browser/events/activeTarget';
 import { browserViewContextId } from '@happier-dev/protocol/browser/view/key';
 import { normalizeBrowserAutomationLocator, parseLocator, type ParsedLocator } from '@happier-dev/protocol/browser/automation/locators';
-import type { BrowserAutomationSecretFillRequestV1 } from '@happier-dev/protocol/browser/automation/v1';
+import type { BrowserAutomationSecretFillRequestV1, BrowserAutomationActionRequestV1, BrowserAutomationJavaScriptDialogSummaryV1 } from '@happier-dev/protocol/browser/automation/v1';
 import type { SecretFillSettlementV1 } from '@happier-dev/protocol/computer/v1';
 import type { ConfidentialSecretFillTarget } from '../../../surfaces/confidentialSecretFill';
 
@@ -483,40 +483,59 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
     return { ok: false, errorCode: context.signal?.aborted ? 'user_canceled' : context.deadlineMs !== undefined && Date.now() >= context.deadlineMs ? 'timed_out' : 'runtime_unavailable' };
   }
 
-  async function withDismissedDialogs(
+  async function withHandledDialogs(
     handle: BrowserSidecarCdpPageHandle,
     context: BrowserAutomationAdapterExecutionContext,
     execute: () => Promise<BrowserAutomationAdapterExecuteResult>,
+    response?: BrowserAutomationActionRequestV1['dialogResponse'],
   ): Promise<BrowserAutomationAdapterExecuteResult> {
-    const dismissals: Promise<void>[] = [];
-    const kinds = new Set<string>();
-    let dismissed = 0;
+    type Dialog = NonNullable<BrowserAutomationJavaScriptDialogSummaryV1['dialogs']>[number];
+    const handlings: Promise<Dialog | null>[] = [];
+    let responseUsed = false;
     let failed = false;
-    let uncertainDismissal = false;
+    let uncertainHandling = false;
     const unsubscribe = contextCapture?.subscribeCdpEvents?.(event => {
       if (event.method !== 'Page.javascriptDialogOpening' || event.sessionId !== handle.sessionId) return;
-      const kind = ['alert', 'confirm', 'prompt', 'beforeunload'].includes(String(event.params?.type)) ? String(event.params?.type) : 'unknown';
-      const dismissal = dispatchPageCommand(handle, 'Page.handleJavaScriptDialog', { accept: false }, { deadlineMs: context.deadlineMs })
-        .then(() => { dismissed += 1; kinds.add(kind); }, error => {
+      const type = event.params?.type;
+      const kind = type === 'alert' || type === 'confirm' || type === 'prompt' || type === 'beforeunload' ? type : 'unknown';
+      const message = typeof event.params?.message === 'string' ? event.params.message : '';
+      const matches = typeof event.params?.message === 'string' && !context.signal?.aborted
+        && !responseUsed && response?.kind === kind && response.message === message;
+      // Claim synchronously: resuming this page can open another dialog before the CDP ack arrives.
+      if (matches) responseUsed = true;
+      const accept = matches && response?.accept === true;
+      const dialog: Dialog = { kind, message, handling: accept ? 'accepted' : 'dismissed' };
+      const handling = dispatchPageCommand(handle, 'Page.handleJavaScriptDialog', { accept,
+        ...(accept && kind === 'prompt' && response?.promptText !== undefined ? { promptText: response.promptText } : {}),
+      }, { deadlineMs: context.deadlineMs })
+        .then(() => dialog, error => {
           failed = true;
-          if (!isBrowserSidecarCdpCommandNotDispatched(error)) uncertainDismissal = true;
+          if (!isBrowserSidecarCdpCommandNotDispatched(error)) uncertainHandling = true;
+          return null;
         });
-      dismissals.push(dismissal);
+      handlings.push(handling);
     });
     try {
       const result = await execute();
-      // A dismissal can resume page script which immediately opens another dialog.
-      for (let index = 0; index < dismissals.length; index += 1) await dismissals[index];
+      const dialogs: Dialog[] = [];
+      // Handling can resume page script which immediately opens another dialog.
+      for (let index = 0; index < handlings.length; index += 1) {
+        const dialog = await handlings[index];
+        if (dialog) dialogs.push(dialog);
+      }
       if (failed) {
         const error = operationError(context);
         return { ...result, status: context.signal?.aborted ? 'canceled' : error.ok === false && error.errorCode === 'timed_out' ? 'timed_out' : 'failed', errorCode: error.ok === false ? error.errorCode : 'runtime_unavailable',
-          interruptionCompletion: uncertainDismissal || result.interruptionCompletion === 'uncertain' ? 'uncertain' : 'stopped' };
+          interruptionCompletion: uncertainHandling || result.interruptionCompletion === 'uncertain' ? 'uncertain' : 'stopped' };
       }
-      if (dismissed === 0) return result;
-      return { ...result, resultSummary: { ...result.resultSummary, javascriptDialogs: { count: dismissed, kinds: [...kinds], handling: 'dismissed' } } };
+      if (dialogs.length === 0) return result;
+      const handling = dialogs.every(dialog => dialog.handling === dialogs[0].handling) ? dialogs[0].handling : 'mixed';
+      return { ...result, resultSummary: { ...result.resultSummary, javascriptDialogs: {
+        count: dialogs.length, kinds: [...new Set(dialogs.map(dialog => dialog.kind))], handling, dialogs,
+      } } };
     } finally {
       unsubscribe?.();
-      for (const dismissal of dismissals) await dismissal;
+      for (const handling of handlings) await handling;
     }
   }
 
@@ -894,9 +913,13 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
     readFocusedCredentialTarget,
     ...(contextCapture ? {
       dispatchInputCommand,
-      executePageOperation: (context: BrowserAutomationViewRef & BrowserAutomationAdapterExecutionContext, execute: () => Promise<BrowserAutomationAdapterExecuteResult>) => {
+      executePageOperation: (context: BrowserAutomationViewRef & BrowserAutomationAdapterExecutionContext & Pick<BrowserAutomationActionRequestV1, 'dialogResponse'>,
+        execute: () => Promise<BrowserAutomationAdapterExecuteResult>) => {
         const handle = contextCapture.resolvePageHandle(context);
-        return handle ? withDismissedDialogs(handle, context, execute) : execute();
+        if (context.dialogResponse && !contextCapture.subscribeCdpEvents) {
+          return Promise.resolve({ status: 'unsupported', fidelity: 'cdp', trustedInput: false, errorCode: 'unsupported_action' });
+        }
+        return handle ? withHandledDialogs(handle, context, execute, context.dialogResponse) : execute();
       },
     } : {}),
   };

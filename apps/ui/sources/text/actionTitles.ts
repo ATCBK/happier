@@ -392,6 +392,7 @@ const ACTION_TITLE_KEYS = {
     'browser.context.annotation.attachComment': 'actionPresentation.titles.browser_context_annotation_attachComment',
     'browser.context.annotation.attachStroke': 'actionPresentation.titles.browser_context_annotation_attachStroke',
     'browser.context.annotation.attachStyleIntent': 'actionPresentation.titles.browser_context_annotation_attachStyleIntent',
+    'browser.context.annotation.attachDraft': 'actionPresentation.titles.browser_context_annotation_attachDraft',
     'browser.context.attachToComposer': 'actionPresentation.titles.browser_context_attachToComposer',
     'browser.context.attachToAgentTurn': 'actionPresentation.titles.browser_context_attachToAgentTurn',
     'browser.context.clear': 'actionPresentation.titles.browser_context_clear',
