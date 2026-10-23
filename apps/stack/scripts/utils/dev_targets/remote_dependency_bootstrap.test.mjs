@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -11,7 +13,8 @@ import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { inspectDependencyRefresh, resolveDependencyRefreshLockPath, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { readJsonOwnerLockSnapshot } from '../proc/jsonOwnerFileLock.mjs';
 import { resolveRemoteCommandPolicy } from './remote_commands.mjs';
 import { ensureWorkspacePackagesBuiltForComponent, inspectWorkspaceQaStalePackages, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
@@ -23,6 +26,7 @@ import {
 } from '../../../../ui/tools/postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 import { ensureDepsInstalled, ensureServerGeneratedProviderOutputs } from '../proc/pm.mjs';
 import { assertDependenciesReady } from '../proc/dependency_refresh.mjs';
+import { beginPendingSourceStart } from '../../runtime/shared/pending_source_start.mjs';
 import { buildSourceRuntimeBundle } from '../../build/build_source_runtime.mjs';
 import { withPnpmInstallGuard } from '../worktrees/pnpm_install_guard.mjs';
 
@@ -66,6 +70,180 @@ async function setupPrismaFreshness(t) {
   await withDependencyRefresh({ installDir: root, env }, async () => mkdir(join(root, 'node_modules')));
   return { root, server, env };
 }
+
+test('source-test readiness releases its reader for a queued start writer before waiting for the start', { timeout: 10000 }, async t => {
+  const { root, server, env: fixtureEnv } = await setupPrismaFreshness(t);
+  const baseDir = join(root, 'stacks', 'foreign');
+  const env = { ...fixtureEnv, HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_REPO_DIR: root,
+    HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${root}\n`);
+  const pending = await beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: root, env });
+  await writeFile(join(server, 'schema-input'), 'changed schema');
+  const lockPath = resolveDependencyRefreshLockPath(root, env);
+  const cancellation = new AbortController();
+  let writer;
+  let writerQueued;
+  const queued = new Promise(resolve => { writerQueued = resolve; });
+  let readerBlocked;
+  const blocked = new Promise(resolve => { readerBlocked = resolve; });
+  let startWaiting;
+  const waiting = new Promise(resolve => { startWaiting = resolve; });
+  let queueObserved = false;
+  t.mock.method(process.stderr, 'write', chunk => {
+    const message = String(chunk);
+    if (message.startsWith('[local] waiting for dependency refresh lock')) {
+      if (!queueObserved) { queueObserved = true; writerQueued(); }
+      else if (readJsonOwnerLockSnapshot(lockPath).owner?.priority === 'reader') readerBlocked('nested-reader-blocked');
+    }
+    if (message.startsWith('[local] waiting for Stack foreign readiness')) startWaiting('start-wait');
+    return true;
+  });
+  const read = fsPromises.readFile;
+  let scheduled = false;
+  // Schedule the start's real writer after bootstrap has registered its outer
+  // reader but before readiness reaches the generator's nested consumption.
+  // Only filesystem timing is controlled; all custody/admission logic is real.
+  t.mock.method(fsPromises, 'readFile', async (path, ...args) => {
+    if (!scheduled && path === join(root, 'package.json')
+      && readJsonOwnerLockSnapshot(lockPath).owner?.priority === 'reader') {
+      scheduled = true;
+      writer = pending.publishPreparation(() => withDependencyRefreshLock({ installDir: root, env,
+        signal: cancellation.signal }, async () => 'writer-completed'));
+      writer.catch(() => {});
+      await queued;
+    }
+    return await read(path, ...args);
+  });
+  syncBuiltinESMExports();
+  const bootstrap = bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'source-test',
+    componentRelativeDir: 'apps/ui', env, signal: t.signal,
+    installInitialDependencies: async () => assert.fail('schema repair must not install') });
+  const outcome = bootstrap.then(() => 'completed', error => error);
+  try {
+    assert.equal(await Promise.race([blocked, waiting, outcome]), 'start-wait',
+      'readiness must release its reader instead of queuing a nested reader behind the start writer');
+    assert.equal(await writer, 'writer-completed');
+    assert.equal(readJsonOwnerLockSnapshot(lockPath).exists, false, 'waiting bootstrap holds zero registrations');
+    const tickets = await readdir(`${lockPath}.waiters`).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    assert.equal(tickets.filter(name => /^\d+\.json$/.test(name)).length, 0, 'waiting bootstrap holds zero priority tickets');
+    await pending.publish(async () => {});
+    await bootstrap;
+    assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'changed schema');
+    assert.equal(readJsonOwnerLockSnapshot(lockPath).exists, false, 'successful repair releases custody');
+  } finally {
+    cancellation.abort();
+    await writer?.catch(() => {});
+    await pending.dispose();
+    await outcome;
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+for (const retirement of ['ready', 'failure']) test(`typecheck refresh waits outside dependency custody for foreign start ${retirement}`, { timeout: 10000 }, async t => {
+  const { root, env: fixtureEnv } = await setupPrismaFreshness(t);
+  const baseDir = join(root, 'stacks', 'foreign');
+  const env = { ...fixtureEnv, HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_REPO_DIR: root,
+    HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '' };
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${root}\n`);
+  const pending = await beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: root, env });
+  const markerPath = join(root, 'node_modules', '.happier-stack-dependencies-ready');
+  const admitted = await readFile(markerPath, 'utf8');
+  let installs = 0;
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# real dependency change\n');
+  const bootstrap = bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'typecheck', env,
+    signal: t.signal, installInitialDependencies: async () => { installs++; } });
+  // Observe early refusal without leaving a rejected promise unhandled.
+  const outcome = bootstrap.then(() => 'completed', error => error.code);
+  try {
+    assert.equal(await Promise.race([outcome, new Promise(resolve => setTimeout(() => resolve('waiting'), 150))]), 'waiting');
+    assert.equal(installs, 0, 'a pending Stack must retain its installed bytes');
+    assert.equal(await readFile(markerPath, 'utf8'), admitted, 'waiting must not withdraw admission');
+    // Already-pending starts need later read custody to reach readiness. This
+    // is the 1022d cycle if the waiting refresh retains a writer or its ticket.
+    await pending.publishPreparation(() => withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => {}));
+    if (retirement === 'ready') await pending.publish(async () => {});
+    else await pending.dispose();
+    await bootstrap;
+    assert.equal(installs, 1, 'one legitimate change causes one refresh after retirement');
+    await assertDependenciesReady({ installDir: root, env, installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE });
+    await bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'typecheck', env,
+      installInitialDependencies: async () => { installs++; } });
+    assert.equal(installs, 1, 'unchanged subsequent readers cause zero additional refreshes');
+  } finally {
+    await pending.dispose();
+    await outcome;
+  }
+});
+
+test('typecheck start waiting cancels without custody and never waits for its own marker', { timeout: 10000 }, async t => {
+  const { root, env: fixtureEnv } = await setupPrismaFreshness(t);
+  const baseDir = join(root, 'stacks', 'own');
+  const env = { ...fixtureEnv, HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_REPO_DIR: root,
+    HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '' };
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${root}\n`);
+  const pending = await beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: root, env });
+  await writeFile(join(root, 'pnpm-lock.yaml'), '# real dependency change\n');
+  const installInitialDependencies = async () => assert.fail('a pending start must prevent installation');
+  try {
+    await assert.rejects(bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'typecheck',
+      env: { ...env, HAPPIER_STACK_ENV_FILE: join(baseDir, 'env') }, signal: t.signal, installInitialDependencies }),
+    { code: 'HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS' });
+    const controller = new AbortController();
+    const bootstrap = bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'typecheck', env,
+      signal: controller.signal, installInitialDependencies });
+    const outcome = bootstrap.then(() => 'completed', error => error);
+    assert.equal(await Promise.race([outcome, new Promise(resolve => setTimeout(() => resolve('waiting'), 150))]), 'waiting');
+    const cancelled = new Error('reader cancelled');
+    controller.abort(cancelled);
+    assert.equal(await outcome, cancelled);
+    await pending.publishPreparation(() => withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => {}));
+  } finally {
+    await pending.dispose();
+  }
+});
+
+test('typecheck schema-only repair waits for a foreign start before rewriting generated dependencies', { timeout: 10000 }, async t => {
+  const { root, server, env: fixtureEnv } = await setupPrismaFreshness(t);
+  const baseDir = join(root, 'stacks', 'foreign');
+  const env = { ...fixtureEnv, HAPPIER_STACK_HOME_DIR: root, HAPPIER_STACK_REPO_DIR: root,
+    HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '',
+    HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, 'env'), `HAPPIER_STACK_REPO_DIR=${root}\n`);
+  const pending = await beginPendingSourceStart({ stackBaseDir: baseDir, repoDir: root, env });
+  await writeFile(join(server, 'schema-input'), 'changed schema');
+  let observeWait;
+  const waiting = new Promise(resolve => { observeWait = () => resolve('waiting'); });
+  // Observe the existing user-visible wait notification at the stderr boundary;
+  // do not assume a slow generator means it has stopped for the pending start.
+  t.mock.method(process.stderr, 'write', chunk => {
+    if (String(chunk).startsWith('[local] waiting')) observeWait();
+    return true;
+  });
+  const bootstrap = bootstrapDependencies({ repoDir: root, executionPlacement: 'remote', validationKind: 'typecheck', env,
+    signal: t.signal, installInitialDependencies: async () => assert.fail('schema-only repair must not install dependencies') });
+  const outcome = bootstrap.then(() => 'completed', error => error.code);
+  try {
+    assert.equal(await Promise.race([outcome, waiting]), 'waiting');
+    assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'old');
+    await pending.publishPreparation(() => withDependencyConsumption({ installDir: root, env, signal: t.signal }, async () => {}));
+    await pending.dispose();
+    await bootstrap;
+    assert.equal(await readFile(join(server, 'generated-output'), 'utf8'), 'changed schema');
+    await assertDependenciesReady({ installDir: root, env });
+  } finally {
+    await pending.dispose();
+    await outcome;
+  }
+});
 
 test('Prisma readiness rejects a schema-only change and generation repairs it under dependency custody', async t => {
   const { root, server, env } = await setupPrismaFreshness(t);

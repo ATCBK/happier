@@ -74,8 +74,8 @@ export async function adoptInstalledDependencies({
   if (readiness.workerPnpmModules !== null) {
     // Worker adoption only reuses proven bytes. Recheck inside read custody so
     // a tree replaced while waiting can never reach a no-op writer refresh.
-    return await withDependencyConsumption({ installDir: repoDir, env }, async () => {
-      await assertDependenciesReady({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
+    return await withDependencyConsumption({ installDir: repoDir, env }, async readEnv => {
+      await assertDependenciesReady({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env: readEnv });
       return { refreshed: false, reason: 'up-to-date' };
     });
   }
@@ -151,8 +151,8 @@ export async function bootstrapRemoteDependencies({
     // that never installs anything. Recheck under the existing shared custody;
     // release it before requesting an actual installation or output repair.
     try {
-      await withDependencyConsumption({ installDir: repoDir, env, signal }, async () => {
-        await assertDependenciesReady({ installDir: repoDir, componentDir, env,
+      await withDependencyConsumption({ installDir: repoDir, env, signal }, async readEnv => {
+        await assertDependenciesReady({ installDir: repoDir, componentDir, env: readEnv,
           installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE });
       });
       return { refreshed: false, reason: 'up-to-date' };
