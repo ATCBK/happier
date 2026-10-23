@@ -393,7 +393,8 @@ describe('Machine guard current admission and original Action restoration', () =
         viewId: 'view', kind: 'openView', platform: 'desktop', target: { kind: 'externalUrl', targetId: 'page', url: 'https://example.test/' } } }] }));
     const undo = f.handlers.get(RPC_METHODS.MACHINES_GUARD_ACTIVITY_UNDO)!;
     expect(await undo({ machineId: 'machine', entryId: 'browser' }, viewer)).toMatchObject({
-      status: 'failed', commandId: 'reopen', error: { code: 'adapter_unavailable' } });
+      ok: false, errorCode: 'adapter_unavailable',
+      details: { status: 'failed', commandId: 'reopen', error: { code: 'adapter_unavailable' } } });
     expect((await f.activity.read('browser'))?.undoneAt).toBeUndefined();
     f.setBrowserFailed(false);
     expect(await undo({ machineId: 'machine', entryId: 'browser' }, viewer)).toMatchObject({ status: 'dispatched' });

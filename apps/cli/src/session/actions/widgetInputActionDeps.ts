@@ -129,7 +129,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
                     .find(candidate => candidate.availability === 'available' && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition)) : null;
                 const descriptor = authored ? { ...candidate, ...authored, authoredDefinition: authored } : candidate;
                 if (descriptor) descriptors.set(request, descriptor);
-                return descriptor;
+                return descriptor ?? null;
             }
             if (authored?.body.kind === 'builtin') {
                 const native = readBuiltinWidgetDescriptorV1(authored.body);

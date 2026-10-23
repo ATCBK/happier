@@ -25,7 +25,8 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   const daemonCredentials = requesterOptions?.credentials ?? { token: 'custodian-token', encryption: null };
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
-  const fixture = await createInstalledProjectAgentLaunchFixture({ accountActionCredentials });
+  const fixture = await createInstalledProjectAgentLaunchFixture(unassociated
+    ? { prepareProject: false } : { accountActionCredentials });
   const { f, machine } = fixture;
   const signal: AbortSignal = fixture.signal;
   const runtimeController = controller ?? createPluginReloadController({ happyHomeDir: f.directory });

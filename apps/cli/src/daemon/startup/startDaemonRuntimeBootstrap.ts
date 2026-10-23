@@ -435,7 +435,7 @@ export async function startDaemonConnectedServiceRuntime(
       params.subscribeConnectedAccountInvalidations?.(onInventoryChanged),
       params.subscribeAccountSettingsSnapshot?.(onInventoryChanged)
         ?? (!params.accountSettingsSnapshot ? subscribeActiveAccountSettingsSnapshotChanges(() => onInventoryChanged()) : undefined),
-      pluginReloadController.subscribe(onInventoryChanged),
+      pluginReloadController.subscribe(() => onInventoryChanged()),
     ];
     return () => { for (const cleanup of cleanups) cleanup?.(); };
   };

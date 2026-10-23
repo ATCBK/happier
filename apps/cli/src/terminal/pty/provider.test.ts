@@ -126,7 +126,8 @@ async function loadProviderWithModules(
   }));
   vi.doMock('@/ui/logger', () => ({
     logger: {
-      debug,
+      // Observe diagnostic values when emitted, not later mutations of their arrays.
+      debug: (...args: unknown[]) => debug(...structuredClone(args)),
     },
   }));
 
@@ -148,6 +149,16 @@ afterEach(() => {
 });
 
 describe('createNodePtyProvider', () => {
+  it.each(['linux', 'darwin', 'win32'] as const)('keeps %s native bindings unloaded until spawn demand', async platform => {
+    const { provider, requireCalls } = await loadProviderWithModules({
+      'node-pty': { spawn: () => createFakeProcess() },
+      '@homebridge/node-pty-prebuilt-multiarch': { spawn: () => createFakeProcess() },
+    }, { platform, fallbackProvider: null });
+
+    expect(requireCalls).toEqual([]);
+    expect(typeof provider.prepare).toBe('function');
+  });
+
   it('keeps one finite Job when a native backend falls back to the real Node relay', async () => {
     const { createNodePtyRelayProvider } = await import('./nodeRelay');
     const child = Object.assign(new EventEmitter(), { pid: 5001,
@@ -167,7 +178,7 @@ describe('createNodePtyProvider', () => {
     const fallbackProvider = createNodePtyRelayProvider(relayOptions)!;
     const createOptions = { platform: 'win32' as const, fallbackProvider,
       resolveProcessCustodyRuntimeExecutable: () => 'C:\\tools\\happier-process-custody.exe' };
-    const { provider } = await loadProviderWithModules({ 'node-pty': { spawn: () => { throw new Error('OS native backend unavailable before launch'); } } }, createOptions);
+    const { provider, debug } = await loadProviderWithModules({ 'node-pty': { spawn: () => { throw new Error('OS native backend unavailable before launch'); } } }, createOptions);
     const input = { file: 'C:\\target.exe', args: ['argument'], options: {}, finiteProcess: true as const };
     const pty = provider.spawn(input);
     const args = spawnRelay.mock.calls[0]![1];
@@ -177,6 +188,11 @@ describe('createNodePtyProvider', () => {
     expect(args.slice(-2)).toEqual([input.file, 'argument']);
     const custody: unknown = Reflect.get(pty, 'windowsJobCustody');
     if (custody && typeof custody === 'object' && 'established' in custody) await custody.established;
+    expect(debug).toHaveBeenCalledWith('[terminal-pty] backend resolution', expect.objectContaining({
+      nativeLoadErrors: expect.arrayContaining([expect.objectContaining({
+        id: '@homebridge/node-pty-prebuilt-multiarch', message: expect.any(String),
+      })]),
+    }));
   });
 
   it('preserves a finite Windows literal command-line tail through the Job helper', async () => {
@@ -276,7 +292,7 @@ describe('createNodePtyProvider', () => {
     const nodePty = { spawn: vi.fn(() => pty) };
     const homebridge = { spawn: vi.fn(() => pty) };
 
-    const { provider, debug } = await loadProviderWithModules({
+    const { provider, debug, requireCalls } = await loadProviderWithModules({
       'node-pty': nodePty,
       '@homebridge/node-pty-prebuilt-multiarch': homebridge,
     });
@@ -285,11 +301,11 @@ describe('createNodePtyProvider', () => {
 
     expect(nodePty.spawn).toHaveBeenCalledTimes(1);
     expect(homebridge.spawn).toHaveBeenCalledTimes(0);
+    expect(requireCalls).toEqual(['node-pty']);
     expect(debug).toHaveBeenCalledWith(
       '[terminal-pty] backend resolution',
       expect.objectContaining({
         preferredBackend: 'node-pty',
-        secondaryBackend: '@homebridge/node-pty-prebuilt-multiarch',
       }),
     );
   });
@@ -349,7 +365,7 @@ describe('createNodePtyProvider', () => {
     const nodePty = { spawn: vi.fn(() => pty) };
     const homebridge = { spawn: vi.fn(() => pty) };
 
-    const { provider, debug } = await loadProviderWithModules({
+    const { provider, debug, requireCalls } = await loadProviderWithModules({
       'node-pty': nodePty,
       '@homebridge/node-pty-prebuilt-multiarch': homebridge,
     }, {
@@ -361,11 +377,11 @@ describe('createNodePtyProvider', () => {
 
     expect(nodePty.spawn).toHaveBeenCalledTimes(1);
     expect(homebridge.spawn).toHaveBeenCalledTimes(0);
+    expect(requireCalls).toEqual(['node-pty']);
     expect(debug).toHaveBeenCalledWith(
       '[terminal-pty] backend resolution',
       expect.objectContaining({
         preferredBackend: 'node-pty',
-        secondaryBackend: '@homebridge/node-pty-prebuilt-multiarch',
       }),
     );
   });
@@ -439,12 +455,13 @@ describe('createNodePtyProvider', () => {
 
   it('falls back to homebridge when node-pty spawn throws', async () => {
     const pty = createFakeProcess();
-    const nodePty = { spawn: vi.fn(() => { throw new Error('boom'); }) };
-    const homebridge = { spawn: vi.fn(() => pty) };
+    const events: string[] = [];
+    const nodePty = { spawn: vi.fn(() => { events.push('primary-spawn'); throw new Error('boom'); }) };
+    const homebridge = { spawn: vi.fn(() => { events.push('secondary-spawn'); return pty; }) };
 
     const { provider } = await loadProviderWithModules({
-      'node-pty': nodePty,
-      '@homebridge/node-pty-prebuilt-multiarch': homebridge,
+      get 'node-pty'() { events.push('primary-load'); return nodePty; },
+      get '@homebridge/node-pty-prebuilt-multiarch'() { events.push('secondary-load'); return homebridge; },
     });
 
     const spawned = provider.spawn({ file: '/bin/bash', args: [], options: {} });
@@ -459,6 +476,7 @@ describe('createNodePtyProvider', () => {
     });
     expect(nodePty.spawn).toHaveBeenCalledTimes(1);
     expect(homebridge.spawn).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['primary-load', 'primary-spawn', 'secondary-load', 'secondary-spawn']);
   });
 
   it.each(['linux', 'darwin'] as const)('uses the external fallback on %s Bun even when native spawn succeeds', async (platform) => {

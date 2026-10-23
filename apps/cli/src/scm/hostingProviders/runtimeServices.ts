@@ -276,6 +276,7 @@ async function resolveScmHostingConfiguredDeployments(
     const deploymentsByProviderId = new Map<string, ScmHostingProviderConfiguredDeployments>();
     const owner = input.resolveConnectedAccountPurposeBindingOwner?.() ?? null;
     if (!owner?.listAccounts) return deploymentsByProviderId;
+    const listAccounts = owner.listAccounts.bind(owner);
     // Each provider has its own authorized metadata read. Waiting for an unrelated
     // deployment inventory must not serialize local repository discovery.
     await Promise.all((input.contributes.scmHostingProviders ?? []).map(async (provider) => {
@@ -285,7 +286,7 @@ async function resolveScmHostingConfiguredDeployments(
         const authorization = resolveProviderPurposeAuthorization(input, providerId);
         if (!authorization) return;
         try {
-            const listed = await owner.listAccounts({
+            const listed = await listAccounts({
                 ...authorization,
                 limit: CONNECTED_ACCOUNT_METADATA_LIST_MAX_LIMIT,
                 signal,

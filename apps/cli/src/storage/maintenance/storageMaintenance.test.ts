@@ -138,7 +138,7 @@ describe('one due-time storage maintenance owner with real retained files', () =
       isIdle: f.isIdle, subscribeIdle: f.subscribeIdle, getTrashStore: async () => store, logs: f.logs,
       recordings: f.recordings, runScheduledScan: async () => {
         await service.scanStart({ machineId: 'machine', target: { folderPath: f.home } }, { actor: { accountId: 'custodian', custodianAccountId: 'custodian',
-          kind: 'person', assertCurrentAuthority: async () => {} } });
+          kind: 'person', assertCurrent: async () => {}, assertCurrentAuthority: async () => {} } });
       }, activityLog, actorAccountId: 'custodian', onError: error => f.errors.push(error) });
     const releaseDemand = sampler.demand('live');
     let storageWakes = 0;

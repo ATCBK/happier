@@ -2,6 +2,9 @@ import { vi } from 'vitest';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptorV1 } from '@/testkit/runtimeDescriptorFixtures';
 
+import type { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
+import type { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
+
 export function rawSession(id: string): RawSessionRecord {
   // Session-store boundary fixture: populate the persisted fields consumed by controls.
   return {
@@ -27,7 +30,18 @@ export function metadata() {
   };
 }
 
-export function commonRouteParams(sessionId: string) {
+export function commonRouteParams(sessionId: string): Pick<
+  Extract<Parameters<typeof routeSessionCatalogControl>[0], { mode: 'plain' }>,
+  | 'token'
+  | 'sessionId'
+  | 'rawSession'
+  | 'currentMachineId'
+  | 'ctx'
+  | 'mode'
+  | 'callLiveSessionRpc'
+> & {
+  metadata: NonNullable<Parameters<typeof routeSessionCatalogControl>[0]['metadata']>;
+} & Pick<Parameters<typeof routeSessionGoalControl>[0], 'stageWorkStateMutation'> {
   return {
     token: 'token',
     sessionId,

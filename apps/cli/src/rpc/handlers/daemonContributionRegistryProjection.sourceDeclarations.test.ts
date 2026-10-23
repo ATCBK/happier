@@ -22,9 +22,12 @@ describe('current Machine source declarations for an Account target', () => {
                 }, { resolveRuntimeRegistry: async () => runtime });
                 const handler = handlers.get(RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ);
                 if (!handler) throw new Error('Target read RPC was not registered');
-                return DaemonPluginUiTargetedContributionsReadResponseSchema.parse(await handler({
-                    machineId: 'machine-source', pluginId: 'happier.triage', readMode: 'sourceDeclarations',
-                }));
+                let response: unknown;
+                try {
+                    response = await handler({ machineId: 'machine-source', pluginId: 'happier.triage', readMode: 'sourceDeclarations' });
+                } catch (error) { throw new Error('Machine source-declaration producer failed before response parsing', { cause: error }); }
+                try { return DaemonPluginUiTargetedContributionsReadResponseSchema.parse(response); }
+                catch (error) { throw new Error('Machine source-declaration response parsing failed', { cause: error }); }
             };
             const response = await read(fixture.registry);
             expect(response.status).toBe('sourceDeclarations');
@@ -37,7 +40,10 @@ describe('current Machine source declarations for an Account target', () => {
             }]);
             expect(response.sourceDeclarations[0]?.manifest.contributes.targetedPluginContributions
                 .every((entry) => entry.target.pluginId === 'happier.triage')).toBe(true);
-            const parsedTarget = ingestPluginManifestV2(TRIAGE_MANIFEST);
+            const parsedTarget = (() => {
+                try { return ingestPluginManifestV2(TRIAGE_MANIFEST); }
+                catch (error) { throw new Error('Account Triage target manifest ingestion failed', { cause: error }); }
+            })();
             if (!parsedTarget.ok) throw new Error('Expected the current Triage declaration');
             const declarations = [{ manifest: parsedTarget.manifest, occurrenceId: 'account-target', sourceCustody: {
                 kind: 'account_release' as const, pluginId: 'happier.triage', version: parsedTarget.manifest.version,
@@ -49,7 +55,9 @@ describe('current Machine source declarations for an Account target', () => {
             }).bind({ pluginId: 'happier.triage', signal: new AbortController().signal, isCurrent: () => true });
             const observation = service.observeForSelf(TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1, { onInvalidated() {} });
             try {
-                const snapshot = await observation.readCurrent();
+                const snapshot = await observation.readCurrent().catch((error) => {
+                    throw new Error('Account Triage target snapshot admission failed', { cause: error });
+                });
                 const github = snapshot.contributions.find((entry) => entry.contributor.pluginId === sourceId);
                 expect(github).toBeDefined();
                 if (!github) throw new Error('Expected the actual Machine GitHub source');

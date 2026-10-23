@@ -1090,7 +1090,7 @@ async function projectRuntimeTranscriptEventNow(
     return result;
   };
   const publication = commit();
-  pending.set(event.messageId, { role: event.role, sidechainId: event.sidechainId ?? null,
+  pending.set(event.messageId, { role: channel, sidechainId: event.sidechainId ?? null,
     hasText: event.text.trim().length > 0, result: publication });
   try {
     const result = await publication;
