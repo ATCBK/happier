@@ -39,6 +39,7 @@ import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServe
 import { readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { logger } from '@/ui/logger';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -782,7 +783,14 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
 ): Promise<AgentRuntimeDaemonServiceResponseV1> {
   const authority =
     await readAgentRuntimeDaemonServiceAuthority(input.authority);
-  if (!authority) return unavailableResponse();
+  if (!authority) {
+    logger.infoFile('[AgentRuntime] Daemon service authority refused', {
+      sessionId: input.authority.sessionId,
+      checkpoint: 'authority_read',
+      code: NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE,
+    });
+    return unavailableResponse();
+  }
 
   const issuedRequest = input.createRequest(authority.capability);
   const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ ...issuedRequest,
@@ -835,14 +843,29 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
       try { settledCandidate = rawBody.trim() ? JSON.parse(rawBody) as unknown : null; }
       catch { /* Malformed control responses retain the existing classification. */ }
       const settled = AgentRuntimeDaemonServiceResponseV1Schema.safeParse(settledCandidate);
+      // Preserve the failed boundary before the effect classifier deliberately
+      // collapses it. Only admitted diagnostic codes enter this local record;
+      // capability paths, tokens, request content and response text never do.
+      const diagnosticCode = settled.success && !settled.data.ok
+        ? readMcpRequestAuthDiagnosticCode(settled.data.error)
+        : settledCandidate && typeof settledCandidate === 'object' && 'errorCode' in settledCandidate
+          && settledCandidate.errorCode === 'daemon_shutting_down'
+          ? 'daemon_shutting_down'
+          : NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE;
+      logger.infoFile('[AgentRuntime] Daemon service authority refused', {
+        sessionId: input.authority.sessionId,
+        checkpoint: 'daemon_response',
+        operation: request.operation.kind,
+        httpStatus: response.status,
+        code: diagnosticCode,
+      });
       // The existing private cause carries code-only evidence for MCP omission
       // logs. It never changes whether a privileged effect was attempted.
       let cause: RunnerDaemonPluginServicesPreparationCauseV1 | undefined;
       if (request.operation.kind === 'mcp.request_auth.open') {
-        let code: ReturnType<typeof readMcpRequestAuthDiagnosticCode> = 'mcp_request_auth_unavailable';
-        if (settled.success && !settled.data.ok) code = readMcpRequestAuthDiagnosticCode(settled.data.error);
-        else if (settledCandidate && typeof settledCandidate === 'object' && 'errorCode' in settledCandidate
-          && settledCandidate.errorCode === 'daemon_shutting_down') code = 'daemon_shutting_down';
+        const code = diagnosticCode === NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE
+          && !(settled.success && !settled.data.ok)
+          ? 'mcp_request_auth_unavailable' : diagnosticCode;
         cause = { code, stage: 'dispatch' };
       }
       if (response.status === 503) {
