@@ -218,6 +218,26 @@ describe('embed host', () => {
     expect(m.onError).toHaveBeenCalledWith('session_key_not_transferable');
     m.handle.destroy();
   });
+  it('surfaces an initial credential failure when an existing-session frame is recreated after host reload', async () => {
+    const firstLoad = mount('A');
+    firstLoad.ready(); await flush();
+    firstLoad.receive({ kind: 'state', sessionId: 'A', phase: 'ready' }, 1);
+    firstLoad.handle.destroy();
+
+    const reloaded = mount('A');
+    reloaded.getCredential.mockRejectedValueOnce(new Error('session_key_not_transferable'));
+    reloaded.ready(); await flush();
+
+    const failure = reloaded.container.querySelector('[role="alert"]');
+    expect(failure).not.toBeNull();
+    expect(failure?.textContent).toBe("This conversation isn't available here.");
+    expect(reloaded.frame.style.opacity).toBe('0');
+    expect(reloaded.onStateChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'A', phase: 'error', error: 'session_key_not_transferable',
+    });
+    expect(reloaded.onError).toHaveBeenCalledExactlyOnceWith('session_key_not_transferable');
+    reloaded.handle.destroy();
+  });
   it('admits only the exact source, origin and identity; delivers init only to the exact origin', async () => {
     const m = mount('A');
     m.ready({ origin: 'https://evil.example' });
@@ -338,6 +358,10 @@ describe('embed host', () => {
     m.ready(); await flush();
     expect(m.post).not.toHaveBeenCalled();
     expect(m.onError).toHaveBeenCalledWith('credential_unavailable');
+    expect(m.onStateChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'A', phase: 'error', error: 'credential_unavailable',
+    });
+    expect(m.container.querySelector('[role="alert"]')?.textContent).toBe("This conversation isn't available here.");
     m.handle.destroy();
   });
   it('keeps the last good presentation when an update is malformed', async () => {
@@ -355,6 +379,8 @@ describe('embed host', () => {
     const m = mount('A');
     vi.advanceTimersByTime(30_000);
     expect(m.onError).toHaveBeenCalledExactlyOnceWith('frame_unreachable');
+    expect(m.container.querySelector('[role="alert"]')?.textContent).toBe("This conversation isn't available here.");
+    expect(m.frame.style.opacity).toBe('0');
     m.handle.destroy();
   });
 });

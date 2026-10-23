@@ -3,12 +3,27 @@ import {
   EmbedFrameToHostEnvelopeV1Schema, EmbedReadyV1Schema, EmbedStyleV1Schema, EmbedUiOverridesV1Schema, wireIdentitiesEqual,
   EmbedHostToFrameEnvelopeV1Schema, EmbedCredentialResultEnvelopeV1Schema, EmbedCredentialErrorEnvelopeV1Schema, EmbedOpenV1Schema,
   type EmbedCredentialRequestV1,
+  type EmbedErrorCodeV1,
 } from '@happier-dev/protocol/embed';
-import type { EmbedHandle, EmbedOptions, EmbedUpdate } from './types.js';
+import type { EmbedError, EmbedHandle, EmbedOptions, EmbedUpdate } from './types.js';
 import { EMBED_PLACEHOLDER_THEME } from './themeTokenIds.js';
 
 /** The same ready deadline as the hosted-web bootstrap, not a credential lifetime. */
 const READY_TIMEOUT_MS = 30_000;
+const BOOTSTRAP_ERROR_MESSAGE = "This conversation isn't available here.";
+
+function readEmbedErrorCode(error: unknown): EmbedErrorCodeV1 {
+  const object = error !== null && typeof error === 'object' ? error : null;
+  for (const candidate of [
+    object === null ? undefined : Reflect.get(object, 'code'),
+    object === null ? undefined : Reflect.get(object, 'message'),
+    error,
+  ]) {
+    const parsed = EmbedErrorCodeV1Schema.safeParse(candidate);
+    if (parsed.success) return parsed.data;
+  }
+  return 'credential_unavailable';
+}
 
 /** Strict embed presentation values are JSON-only; compare them before crossing the frame wire. */
 function areEmbedPresentationValuesEqual(left: unknown, right: unknown): boolean {
@@ -75,9 +90,37 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
   skeleton.style.cssText = `position:absolute;left:50%;transform:translateX(-50%);bottom:${EMBED_PLACEHOLDER_THEME.bottom}px;height:${EMBED_PLACEHOLDER_THEME.height}px;max-width:${EMBED_PLACEHOLDER_THEME.maxWidth}px;width:calc(100% - ${EMBED_PLACEHOLDER_THEME.horizontalPadding.narrow * 2}px)`;
   const responsiveStyle = document.createElement('style');
   responsiveStyle.textContent = `@container ${root.style.containerName} (width > ${EMBED_PLACEHOLDER_THEME.horizontalPadding.breakpoint}px){.happier-embed-placeholder-composer{width:calc(100% - ${EMBED_PLACEHOLDER_THEME.horizontalPadding.wide * 2}px)!important}}`;
-  placeholder.append(responsiveStyle, skeleton);
+  const failure = document.createElement('p');
+  failure.hidden = true;
+  failure.textContent = BOOTSTRAP_ERROR_MESSAGE;
+  failure.style.cssText = 'position:absolute;inset:0;display:none;align-items:center;justify-content:center;margin:0;padding:24px;text-align:center';
+  placeholder.append(responsiveStyle, skeleton, failure);
   root.append(frame, placeholder);
   container.append(root);
+  function showLoading() {
+    if (!placeholder.isConnected) return;
+    placeholder.setAttribute('role', 'status');
+    placeholder.setAttribute('aria-label', `Loading ${frame.title}`);
+    failure.removeAttribute('role');
+    skeleton.hidden = false;
+    failure.hidden = true;
+    failure.style.display = 'none';
+  }
+  function surfaceBootstrapError(code: EmbedError) {
+    if (placeholder.isConnected) {
+      placeholder.removeAttribute('role');
+      placeholder.removeAttribute('aria-label');
+      skeleton.hidden = true;
+      failure.hidden = false;
+      failure.style.display = 'flex';
+      failure.setAttribute('role', 'alert');
+      frame.style.opacity = '0';
+    }
+    if (code !== 'frame_unreachable' && currentId !== null) {
+      options.onStateChange?.({ sessionId: currentId, phase: 'error', error: code });
+    }
+    options.onError?.(code);
+  }
   function applyPlaceholderStyle() {
     const style = presentation.style;
     const dark = style?.mode === 'dark' || (style?.mode !== 'light' && realm?.matchMedia?.('(prefers-color-scheme: dark)').matches);
@@ -87,7 +130,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
     skeleton.style.borderRadius = `${EMBED_PLACEHOLDER_THEME.radiusScales[style?.radius ?? 'soft'][style?.parts?.composer?.radius ?? EMBED_PLACEHOLDER_THEME.composerRadiusStep]}px`;
   }
   applyPlaceholderStyle();
-  const timeout = realm.setTimeout(() => { if (!disposed) options.onError?.('frame_unreachable'); }, READY_TIMEOUT_MS);
+  const timeout = realm.setTimeout(() => { if (!disposed) surfaceBootstrapError('frame_unreachable'); }, READY_TIMEOUT_MS);
   function send(payload: unknown) {
     port?.postMessage(EmbedHostToFrameEnvelopeV1Schema.parse({ version: 1, identity, sequence: sequence++, direction: 'hostToFrame', payload }));
   }
@@ -102,8 +145,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
       port?.postMessage(EmbedCredentialResultEnvelopeV1Schema.parse({ version: 1, identity, sequence: sequence++, requestSequence, kind: 'result', payload: credential }));
     } catch (error) {
       if (disposed || latestRequest !== ticket || port !== requestPort) return;
-      const typed = EmbedErrorCodeV1Schema.safeParse(error && typeof error === 'object' ? Reflect.get(error, 'code') : error);
-      const code = typed.success ? typed.data : 'credential_unavailable';
+      const code = readEmbedErrorCode(error);
       options.onError?.(code);
       port?.postMessage(EmbedCredentialErrorEnvelopeV1Schema.parse({ version: 1, identity, sequence: sequence++, requestSequence, kind: 'error', payload: { code } }));
     }
@@ -140,6 +182,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
     const parsed = EmbedReadyV1Schema.safeParse(event.data);
     if (!parsed.success || !wireIdentitiesEqual(parsed.data.identity, identity)) return;
     realm!.clearTimeout(timeout);
+    showLoading();
     latestRequest = null;
     if (port) { port.onmessage = null; port.close(); }
     port = null;
@@ -172,8 +215,7 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
         if (port === channel.port1) port = null;
       }
       if (!disposed && latestRequest === ticket) {
-        const typed = EmbedErrorCodeV1Schema.safeParse(error && typeof error === 'object' ? Reflect.get(error, 'code') : error);
-        options.onError?.(typed.success ? typed.data : 'credential_unavailable');
+        surfaceBootstrapError(readEmbedErrorCode(error));
       }
     }
   }
@@ -210,7 +252,9 @@ export function mountHappierSession(container: HTMLElement, options: EmbedOption
       presentation = { ...presentation, ...update };
       if (titleChanged) {
         frame.title = update.title || 'Chat';
-        placeholder.setAttribute('aria-label', `Loading ${frame.title}`);
+        if (placeholder.getAttribute('role') === 'status') {
+          placeholder.setAttribute('aria-label', `Loading ${frame.title}`);
+        }
       }
       if (styleChanged) applyPlaceholderStyle();
       if (uiChanged || styleChanged) send({
