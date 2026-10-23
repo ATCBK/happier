@@ -1,4 +1,5 @@
 import type { HomeGovernanceEligibilityV1 } from '@happier-dev/protocol/home/governance';
+import { snapshotReferenceSelectionKey } from '@/sync/domains/scope/snapshotReferenceSelectionKey';
 
 import {
     isAuthoritativeScopedSnapshotRefusal,
@@ -25,14 +26,12 @@ export type HomeGovernanceEligibilitySnapshot = Readonly<{
 
 const snapshots = new Map<string, HomeGovernanceEligibilitySnapshot>();
 const listeners = new Set<() => void>();
-let version = 0;
 
 function keyOf(scope: ServerAccountScope): string {
     return serverAccountScopeKeySuffix(scope);
 }
 
 function notify(): void {
-    version += 1;
     for (const listener of [...listeners]) {
         try {
             listener();
@@ -47,8 +46,9 @@ function write(scope: ServerAccountScope, snapshot: HomeGovernanceEligibilitySna
     notify();
 }
 
-export function getHomeGovernanceEligibilitySnapshotsVersion(): number {
-    return version;
+/** Only the requested exact Home/Account snapshots contribute to React selection identity. */
+export function getHomeGovernanceEligibilitySnapshotsSelectionKey(scopes: readonly ServerAccountScope[]): string {
+    return snapshotReferenceSelectionKey(scopes.map(getHomeGovernanceEligibilitySnapshot));
 }
 
 export function subscribeHomeGovernanceEligibilitySnapshots(listener: () => void): () => void {
@@ -147,5 +147,4 @@ export function clearHomeGovernanceEligibilitySnapshotsForServer(serverIdRaw: st
 export function resetHomeGovernanceEligibilitySnapshotsForTests(): void {
     snapshots.clear();
     listeners.clear();
-    version = 0;
 }

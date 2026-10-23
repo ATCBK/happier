@@ -10,7 +10,7 @@ import { observeHomeGovernance, refreshHomeGovernanceSnapshot } from '@/sync/eng
 import { retryServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import {
     getHomeGovernanceSnapshot,
-    getHomeGovernanceSnapshotsVersion,
+    getHomeGovernanceSnapshotsSelectionKey,
     subscribeHomeGovernanceSnapshots,
 } from '@/sync/store/home/governance/homeGovernanceSnapshots';
 
@@ -92,10 +92,16 @@ export function useHomeAdministrationSettingsAdmission(
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [boundScopesIdentity]);
 
-    const version = React.useSyncExternalStore(
+    const getSelectionKey = React.useCallback(
+        () => getHomeGovernanceSnapshotsSelectionKey(boundScopesKey),
+        // Only the exact bound scopes select governance snapshots.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [boundScopesIdentity],
+    );
+    const selectionKey = React.useSyncExternalStore(
         subscribeHomeGovernanceSnapshots,
-        getHomeGovernanceSnapshotsVersion,
-        getHomeGovernanceSnapshotsVersion,
+        getSelectionKey,
+        getSelectionKey,
     );
 
     const scopesRef = React.useRef(scopes);
@@ -122,10 +128,10 @@ export function useHomeAdministrationSettingsAdmission(
             };
         }
         return resolveHomeAdministrationSettingsAdmission({ serverIds, observationsByServerId });
-        // `version` is the store's change signal; the keys carry the requested
+        // `selectionKey` is the exact snapshots' change signal; the keys carry the requested
         // Home set and every credential resolution behind it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [serverIdsKey, scopesKey, version]);
+    }, [serverIdsKey, scopesKey, selectionKey]);
 
     return React.useMemo(() => ({ ...admission, retry }), [admission, retry]);
 }

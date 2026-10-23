@@ -1,4 +1,5 @@
 import type { HomeGovernanceProjectionV1 } from '@happier-dev/protocol/home/governance';
+import { snapshotReferenceSelectionKey } from '@/sync/domains/scope/snapshotReferenceSelectionKey';
 
 import {
     serverAccountScopeKeySuffix,
@@ -49,10 +50,8 @@ export type HomeGovernanceSnapshot = Readonly<{
 
 const snapshots = new Map<string, HomeGovernanceSnapshot>();
 const listeners = new Set<() => void>();
-let version = 0;
 
 function notify(): void {
-    version += 1;
     for (const listener of [...listeners]) {
         try {
             listener();
@@ -63,14 +62,11 @@ function notify(): void {
 }
 
 /**
- * A value that changes exactly when some Home's rows change.
- *
- * A surface reading several Homes at once subscribes to this rather than to one
- * scope, so it can derive across the whole set without keeping a second copy of
- * the store or re-deriving on every unrelated render.
+ * A selection token that changes only when one of the requested exact
+ * Home/Account snapshots changes, including its removal.
  */
-export function getHomeGovernanceSnapshotsVersion(): number {
-    return version;
+export function getHomeGovernanceSnapshotsSelectionKey(scopes: readonly ServerAccountScope[]): string {
+    return snapshotReferenceSelectionKey(scopes.map(getHomeGovernanceSnapshot));
 }
 
 function keyOf(scope: ServerAccountScope): string {
@@ -202,5 +198,4 @@ export function clearHomeGovernanceSnapshotsForServer(serverIdRaw: string): void
 export function resetHomeGovernanceSnapshotsForTests(): void {
     snapshots.clear();
     listeners.clear();
-    version = 0;
 }

@@ -10,7 +10,7 @@ import {
 } from '@/sync/engine/home/governance/homeGovernanceEligibilityEngine';
 import {
     getHomeGovernanceEligibilitySnapshot,
-    getHomeGovernanceEligibilitySnapshotsVersion,
+    getHomeGovernanceEligibilitySnapshotsSelectionKey,
     subscribeHomeGovernanceEligibilitySnapshots,
     type HomeGovernanceEligibilitySnapshot,
 } from '@/sync/store/home/governance/homeGovernanceEligibilitySnapshots';
@@ -32,10 +32,16 @@ export function useHomeGovernanceEligibilitySnapshots(
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [scopesKey]);
 
-    const version = React.useSyncExternalStore(
+    const getSelectionKey = React.useCallback(
+        () => getHomeGovernanceEligibilitySnapshotsSelectionKey(scopes),
+        // The serialized scopes carry this selection's exact identity.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [scopesKey],
+    );
+    const selectionKey = React.useSyncExternalStore(
         subscribeHomeGovernanceEligibilitySnapshots,
-        getHomeGovernanceEligibilitySnapshotsVersion,
-        getHomeGovernanceEligibilitySnapshotsVersion,
+        getSelectionKey,
+        getSelectionKey,
     );
 
     const snapshotsByServerId = React.useMemo(() => {
@@ -45,9 +51,9 @@ export function useHomeGovernanceEligibilitySnapshots(
             if (snapshot) out.set(scope.serverId, snapshot);
         }
         return out;
-        // `version` invalidates the projection when the store publishes.
+        // Only changed snapshots in this selection invalidate the projection.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scopesKey, version]);
+    }, [scopesKey, selectionKey]);
 
     const refresh = React.useCallback(() => {
         for (const scope of scopes) void refreshHomeGovernanceEligibility(scope);
