@@ -9,6 +9,8 @@ import { SidebarFooterPopoverButton, type SidebarFooterPopoverContentProps, type
 import { SidebarMachinesPopoverContent } from '../sidebarFooter/SidebarMachinesPopoverContent';
 import { RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX, RAIL_POPOVER_WIDE_WIDTH_PX } from '../sidebarFooter/sidebarFooterLayout';
 import { AppRailBadge, AppRailMenuCount } from './AppRailBadge';
+import { AppRailIcon } from './AppRailIcon';
+import { AppRailSlot } from './AppRailSlot';
 import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
 import { buildMachinesRailSeen, forgetRecoveredMachinesRailReasons, useMachinesRailSignal } from './useMachinesRailSignal';
 
@@ -50,28 +52,29 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
     const renderMachines = React.useCallback((content: SidebarFooterPopoverContentProps) => (
         <SidebarMachinesPopoverContent {...content} guardSeenAt={previousGuardSeenAtRef.current} />
     ), []);
+    const renderIcon = React.useCallback((open: boolean) => <AppRailIcon name="desktop" active={open || props.selected === true} />, [props.selected]);
     const signal = rail.signal;
     const menuTrigger: SidebarFooterPopoverTrigger | undefined = props.renderTrigger ? state => props.renderTrigger?.({ ...state,
         right: signal?.kind === 'count' ? <AppRailMenuCount tone={signal.tone} value={signal.value} /> : undefined,
     }) : undefined;
-    return (
-        <>
-            <SidebarFooterPopoverButton
-                testID="app-rail-machines"
-                iconName="desktop"
-                label={label}
-                placement="right"
-                buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
-                iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
-                popoverWidthPx={RAIL_POPOVER_WIDE_WIDTH_PX}
-                popoverMaxHeightPx={RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX}
-                renderContent={renderMachines}
-                renderTrigger={menuTrigger}
-                selected={props.selected}
-                hoverPreview
-                onOpenIntent={recordSeen}
-            />
-            {signal && !props.renderTrigger ? <AppRailBadge testID="app-rail-machines-badge" signal={signal} /> : null}
-        </>
+    const button = (
+        <SidebarFooterPopoverButton
+            testID="app-rail-machines"
+            iconName="desktop"
+            renderIcon={renderIcon}
+            label={label}
+            placement="right"
+            buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
+            iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
+            popoverWidthPx={RAIL_POPOVER_WIDE_WIDTH_PX}
+            popoverMaxHeightPx={RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX}
+            renderContent={renderMachines}
+            renderTrigger={menuTrigger}
+            selected={props.selected}
+            hoverPreview
+            onOpenIntent={recordSeen}
+        />
     );
+    if (props.renderTrigger) return button;
+    return <AppRailSlot badge={signal ? <AppRailBadge testID="app-rail-machines-badge" signal={signal} /> : null}>{button}</AppRailSlot>;
 });

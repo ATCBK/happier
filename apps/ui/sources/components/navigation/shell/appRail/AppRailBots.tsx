@@ -27,13 +27,11 @@ import {
 } from '@/components/sessions/bots/railPinFlight';
 import { BotsPopoverContent } from '@/components/sessions/bots/BotsPopoverContent';
 import { useOptionalBotsRosterRuntime } from '@/components/sessions/bots/BotsRosterRuntime';
-import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Avatar } from '@/components/ui/avatar/Avatar';
-import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
@@ -48,12 +46,11 @@ import {
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
-import type {
-  SidebarFooterPopoverContentProps,
-  SidebarFooterPopoverTrigger,
-} from '../sidebarFooter/SidebarFooterPopoverButton';
+import type { SidebarFooterPopoverContentProps } from '../sidebarFooter/SidebarFooterPopoverButton';
 import { SidebarFooterPopoverButton } from '../sidebarFooter/SidebarFooterPopoverButton';
 import { AppRailBadge } from './AppRailBadge';
+import { AppRailIcon } from './AppRailIcon';
+import { AppRailSlot } from './AppRailSlot';
 import {
   APP_RAIL_ICON_GLYPH_SIZE_PX,
   APP_RAIL_ITEM_SIZE_PX,
@@ -126,12 +123,8 @@ const renderRoster = (content: SidebarFooterPopoverContentProps) => (
  * command palette or the phone launcher through the Bots runtime. Its dot signals contextual attention.
  */
 export const AppRailBots = React.memo(function AppRailBots(
-  props: Readonly<{
-    entry: AppRailEntry;
-    renderTrigger?: SidebarFooterPopoverTrigger;
-  }>,
+  props: Readonly<{ entry: AppRailEntry }>,
 ) {
-  const { theme } = useUnistyles();
   const runtime = useOptionalBotsRosterRuntime();
   const needsYou = useBotsSummary().needsYou;
   const label =
@@ -139,7 +132,16 @@ export const AppRailBots = React.memo(function AppRailBots(
       ? `${props.entry.title}, ${t('bots.roster.needsYou', { count: needsYou })}`
       : props.entry.title;
   return (
-    <>
+    <AppRailSlot
+      badge={
+        needsYou > 0 ? (
+          <AppRailBadge
+            testID={`app-rail:${props.entry.id}-badge`}
+            signal={{ kind: 'dot', tone: 'attention' }}
+          />
+        ) : null
+      }
+    >
       {/* An accepted promotion nudges the one place Bots live, once (plan 60: "where-did-it-go nudge"). */}
       <BotMarkerFeedback kind="nudge">
       <SidebarFooterPopoverButton
@@ -152,27 +154,11 @@ export const AppRailBots = React.memo(function AppRailBots(
         iconSizePx={APP_RAIL_ICON_GLYPH_SIZE_PX}
         popoverWidthPx={ROSTER_WIDTH_PX}
         renderContent={renderRoster}
-        renderTrigger={props.renderTrigger}
         registerOpener={runtime?.registerAnchoredOpener}
-        renderIcon={(open) => (
-          <Icon
-            name={props.entry.icon}
-            size={APP_RAIL_ICON_GLYPH_SIZE_PX}
-            weight={open ? 'fill' : 'regular'}
-            color={
-              open ? theme.colors.text.primary : theme.colors.text.secondary
-            }
-          />
-        )}
+        renderIcon={(open) => <AppRailIcon name={props.entry.icon} active={open} />}
       />
       </BotMarkerFeedback>
-      {needsYou > 0 && !props.renderTrigger ? (
-        <AppRailBadge
-          testID={`app-rail:${props.entry.id}-badge`}
-          signal={{ kind: 'dot', tone: 'attention' }}
-        />
-      ) : null}
-    </>
+    </AppRailSlot>
   );
 });
 
@@ -249,7 +235,6 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
   props: Readonly<{
     bot: AppRailBotEntry;
     animateEntry: boolean;
-    slotStyle: object;
     previousBotSessionId?: string;
     nextBotSessionId?: string;
   }>,
@@ -291,7 +276,12 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
     : ZoomOut.duration(motionTokens.overlay.popover.exitMs);
   return (
     <Animated.View entering={entering} exiting={exiting} ref={reorder.ref} style={landing.style}>
-      <WorkspaceDestinationRow style={props.slotStyle} href={href} existingMenu dragSource={false}>
+      <AppRailSlot href={href} existingMenu dragSource={false} badge={activity === 'needsYou' ? (
+          <AppRailBadge
+            testID={`app-rail:${bot.id}-badge`}
+            signal={{ kind: 'dot', tone: 'attention' }}
+          />
+        ) : null}>
         {actions => <>
         <DropdownMenu
           testID={`app-rail:${bot.id}.order-menu`}
@@ -364,14 +354,8 @@ export const AppRailBotPin = React.memo(function AppRailBotPin(
           }}
         />}
         />
-        {activity === 'needsYou' ? (
-          <AppRailBadge
-            testID={`app-rail:${bot.id}-badge`}
-            signal={{ kind: 'dot', tone: 'attention' }}
-          />
-        ) : null}
         </>}
-      </WorkspaceDestinationRow>
+      </AppRailSlot>
     </Animated.View>
   );
 });

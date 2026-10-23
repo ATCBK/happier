@@ -9,7 +9,7 @@ import { WorkspaceDestinationRow } from '@/components/appShell/workspace/Workspa
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { Icon } from '@/components/ui/icons/Icon';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 import { SelectableRow } from '@/components/ui/lists/SelectableRow';
@@ -41,6 +41,8 @@ import {
     APP_RAIL_WIDTH_PX,
 } from './appRailMetrics';
 import { AppRailBadge, AppRailMenuCount, resolveAppRailBadgeTone } from './AppRailBadge';
+import { AppRailIcon } from './AppRailIcon';
+import { AppRailSlot } from './AppRailSlot';
 import { useConnectedAccountsNeedingSignInCount } from './useConnectedAccountsNeedingSignInCount';
 import { AppRailPeek } from './AppRailPeek';
 import {
@@ -66,23 +68,8 @@ type AppRailTopItem =
     | WithTopGroup<AppRailPlacementItem>
     | Readonly<{ kind: 'botPin'; id: string; group: 'bots'; bot: AppRailBotEntry }>;
 
+const renderUsageIcon = (open: boolean) => <AppRailIcon name="speedometer" active={open} />;
 const renderUsage = (content: SidebarFooterPopoverContentProps) => <SidebarUsagePopoverContent {...content} />;
-
-/**
- * The one rail glyph: every icon on the rail is this size in the same box, filled and primary when
- * its destination is open. Popover buttons on the rail take the same size (`APP_RAIL_ICON_GLYPH_SIZE_PX`).
- */
-const AppRailIcon = React.memo(function AppRailIcon(props: Readonly<{ name: IconName; active?: boolean }>) {
-    const { theme } = useUnistyles();
-    return (
-        <Icon
-            name={props.name}
-            size={APP_RAIL_ICON_GLYPH_SIZE_PX}
-            weight={props.active ? 'fill' : 'regular'}
-            color={props.active ? theme.colors.text.primary : theme.colors.text.secondary}
-        />
-    );
-});
 
 /**
  * The app's rail (lab `xrail-R1`): every destination as an icon, the open one filled. The app's own
@@ -191,7 +178,7 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
                 {shownTop.map((item, index) => <React.Fragment key={item.id}>
                     {index > 0 && shownTop[index - 1]?.group !== item.group ? <View style={styles.separator} /> : null}
                     {item.kind === 'botPin'
-                        ? <AppRailBotPin bot={item.bot} slotStyle={styles.itemSlot}
+                        ? <AppRailBotPin bot={item.bot}
                             previousBotSessionId={botNeighbors.get(item.id)?.previous}
                             nextBotSessionId={botNeighbors.get(item.id)?.next}
                             animateEntry={seenBotIds !== null && !seenBotIds.has(item.id)} />
@@ -213,7 +200,7 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
             <View testID="app-rail-bottom" style={styles.group}>
                 {shownBottom.map(item => item.kind === 'destination'
                     ? <AppRailItem key={item.id} entry={item.entry} active={activeId === item.id} onOpen={open} onCustomize={props.onCustomize} />
-                    : <View key={item.id} style={styles.itemSlot}>{renderFooter(item)}</View>)}
+                    : <React.Fragment key={item.id}>{renderFooter(item)}</React.Fragment>)}
             </View>
         </View>
     );
@@ -234,7 +221,7 @@ const AppRailItem = React.memo(function AppRailItem(props: Readonly<{
     // A plugin destination's static badge ("Beta") has no room for text on the rail: it marks the icon.
     const pluginBadge = entry.kind === 'plugin' ? entry.badge ?? null : null;
     if (entry.activation === 'botsRoster' && !unavailable) {
-        return <View style={styles.itemSlot}><AppRailBots entry={entry} /></View>;
+        return <AppRailBots entry={entry} />;
     }
     // Lab `inbox-I2`: the Inbox answers from beside the rail; the page is one "Open Inbox" away, and the
     // icon of the Inbox already on screen simply stays on it.
@@ -258,20 +245,21 @@ const AppRailItem = React.memo(function AppRailItem(props: Readonly<{
             onLongPress={props.onCustomize}
         />
     );
+    const badge = entry.kind === 'builtin' && entry.signal === 'inboxCount'
+        ? <AppRailInboxBadge testID={`app-rail:${entry.id}-badge`} />
+        : pluginBadge ? (
+            <AppRailBadge
+                testID={`app-rail:${entry.id}-badge`}
+                signal={{ kind: 'dot', tone: resolveAppRailBadgeTone({ source: 'plugin', tone: pluginBadge.tone }) }}
+            />
+        ) : null;
     return (
-        <WorkspaceDestinationRow style={styles.itemSlot}
+        <AppRailSlot badge={badge}
             href={!unavailable && entry.activation === 'navigate' ? entry.routePath : null}>
             {column
                 ? <AppRailPeek testID={`app-rail-peek:${entry.id}`} destinationId={entry.id}>{button}</AppRailPeek>
                 : button(false)}
-            {entry.kind === 'builtin' && entry.signal === 'inboxCount' ? <AppRailInboxBadge testID={`app-rail:${entry.id}-badge`} /> : null}
-            {pluginBadge ? (
-                <AppRailBadge
-                    testID={`app-rail:${entry.id}-badge`}
-                    signal={{ kind: 'dot', tone: resolveAppRailBadgeTone({ source: 'plugin', tone: pluginBadge.tone }) }}
-                />
-            ) : null}
-        </WorkspaceDestinationRow>
+        </AppRailSlot>
     );
 });
 
@@ -295,7 +283,7 @@ const AppRailInbox = React.memo(function AppRailInbox(props: Readonly<{
     ), [openPage]);
     const renderIcon = React.useCallback((open: boolean) => <AppRailIcon name={entry.icon} active={open} />, [entry.icon]);
     return (
-        <WorkspaceDestinationRow style={styles.itemSlot} href={entry.routePath}>
+        <AppRailSlot href={entry.routePath} badge={<AppRailInboxBadge testID={`app-rail:${entry.id}-badge`} />}>
             <SidebarFooterPopoverButton
                 testID={`app-rail:${entry.id}`}
                 iconName={entry.icon}
@@ -308,8 +296,7 @@ const AppRailInbox = React.memo(function AppRailInbox(props: Readonly<{
                 renderContent={renderContent}
                 renderIcon={renderIcon}
             />
-            <AppRailInboxBadge testID={`app-rail:${entry.id}-badge`} />
-        </WorkspaceDestinationRow>
+        </AppRailSlot>
     );
 });
 
@@ -374,7 +361,7 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
         disabled: entry.kind === 'destination' && entry.entry.availability !== 'available',
     }))];
     return (
-        <View style={styles.itemSlot}>
+        <AppRailSlot>
             {botHomeIds.map(serverId => <AppRailBotOverflowActions key={serverId} serverId={serverId}
                 bots={props.bots ?? []} neighbors={props.botNeighbors} registerAction={registerFooterAction} />)}
             <DropdownMenu
@@ -425,7 +412,7 @@ const AppRailMore = React.memo(function AppRailMore(props: Readonly<{
                     />
                 )}
             />
-        </View>
+        </AppRailSlot>
     );
 });
 
@@ -483,8 +470,11 @@ const AppRailFooterItem = React.memo(function AppRailFooterItem(props: Readonly<
     if (props.item.id === 'app-rail-usage') return <AppRailUsage renderTrigger={props.renderTrigger} />;
     if (props.item.id === 'app-rail-machines') return <AppRailMachines renderTrigger={props.renderTrigger} selected={props.activeId === 'machines'} />;
     if (props.item.id === 'app-rail-updates') return <AppRailUpdates renderTrigger={props.renderTrigger} />;
-    if (props.item.id === 'app-rail-account') return <AppRailAccount renderTrigger={props.renderTrigger
-        ? state => props.renderTrigger?.({ onPress: state.activate, open: state.open }) : undefined} />;
+    if (props.item.id === 'app-rail-account') {
+        const account = <AppRailAccount renderTrigger={props.renderTrigger
+            ? state => props.renderTrigger?.({ onPress: state.activate, open: state.open }) : undefined} />;
+        return props.renderTrigger ? account : <AppRailSlot>{account}</AppRailSlot>;
+    }
     return null;
 });
 
@@ -502,12 +492,13 @@ const AppRailUsage = React.memo(function AppRailUsage(props: Readonly<{ renderTr
         const result = runGuardedNavigation(() => router.push(SETTINGS_ROUTES.usage as never));
         if (result !== true) fireAndForget(result, { tag: 'AppRail.usage' });
     }, [router]);
-    return (
-            <WorkspaceDestinationRow href={SETTINGS_ROUTES.usage}>
+    const control = (
+        <>
                 {quotaMetersAvailable ? (
                     <SidebarFooterPopoverButton
                         testID="app-rail-usage"
                         iconName="speedometer"
+                        renderIcon={renderUsageIcon}
                         label={t('settings.usage')}
                         placement="right"
                         buttonSizePx={APP_RAIL_ITEM_SIZE_PX}
@@ -530,15 +521,21 @@ const AppRailUsage = React.memo(function AppRailUsage(props: Readonly<{ renderTr
                         onPress={openUsage}
                     />
                 )}
-                {signInCount > 0 && !props.renderTrigger ? (
-                    <AppRailBadge
-                        testID="app-rail-usage-badge"
-                        signal={{ kind: 'count', value: signInCount, tone: resolveAppRailBadgeTone({ source: 'signIn' }) }}
-                    />
-                ) : null}
-            </WorkspaceDestinationRow>
+        </>
+    );
+    if (props.renderTrigger) return <WorkspaceDestinationRow href={SETTINGS_ROUTES.usage}>{control}</WorkspaceDestinationRow>;
+    return (
+        <AppRailSlot href={SETTINGS_ROUTES.usage} badge={signInCount > 0 ? (
+            <AppRailBadge
+                testID="app-rail-usage-badge"
+                signal={{ kind: 'count', value: signInCount, tone: resolveAppRailBadgeTone({ source: 'signIn' }) }}
+            />
+        ) : null}>
+            {control}
+        </AppRailSlot>
     );
 });
+
 
 const AppRailUpdates = React.memo(function AppRailUpdates(props: Readonly<{ renderTrigger?: SidebarFooterPopoverTrigger }>) {
     const updatesSummary = useSharedUpdatesSummary();
@@ -548,27 +545,32 @@ const AppRailUpdates = React.memo(function AppRailUpdates(props: Readonly<{ rend
             ? <AppRailMenuCount tone={resolveAppRailBadgeTone({ source: 'updates', failed: updatesCopy.warning })} value={updatesCopy.count} />
             : undefined,
     }) : undefined;
-    return <>
-                    <UpdatesPopoverButton
-                        summary={updatesSummary}
-                        variant="footer"
-                        buttonSize={APP_RAIL_ITEM_SIZE_PX}
-                        markSize={APP_RAIL_ICON_GLYPH_SIZE_PX}
-                        hostDrawsCount
-                        testID="app-rail-updates"
-                        renderTrigger={menuTrigger}
-                    />
-                    {updatesCopy?.count && !props.renderTrigger ? (
-                        <AppRailBadge
-                            testID="app-rail-updates-badge"
-                            signal={{
-                                kind: 'count',
-                                value: updatesCopy.count,
-                                tone: resolveAppRailBadgeTone({ source: 'updates', failed: updatesCopy.warning }),
-                            }}
-                        />
-                    ) : null}
-    </>;
+    const button = (
+        <UpdatesPopoverButton
+            summary={updatesSummary}
+            variant="footer"
+            buttonSize={APP_RAIL_ITEM_SIZE_PX}
+            markSize={APP_RAIL_ICON_GLYPH_SIZE_PX}
+            hostDrawsCount
+            testID="app-rail-updates"
+            renderTrigger={menuTrigger}
+        />
+    );
+    if (props.renderTrigger) return button;
+    return (
+        <AppRailSlot badge={updatesCopy?.count ? (
+            <AppRailBadge
+                testID="app-rail-updates-badge"
+                signal={{
+                    kind: 'count',
+                    value: updatesCopy.count,
+                    tone: resolveAppRailBadgeTone({ source: 'updates', failed: updatesCopy.warning }),
+                }}
+            />
+        ) : null}>
+            {button}
+        </AppRailSlot>
+    );
 });
 
 const RAIL_PADDING_TOP_PX = 4;
@@ -596,12 +598,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
         alignItems: 'center',
         flexShrink: 0,
-    },
-    itemSlot: {
-        width: APP_RAIL_WIDTH_PX,
-        height: APP_RAIL_ITEM_SLOT_PX,
-        alignItems: 'center',
-        justifyContent: 'center',
     },
     separator: {
         width: 24,

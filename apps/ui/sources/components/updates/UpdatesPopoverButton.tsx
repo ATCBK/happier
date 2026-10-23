@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { useAppRailGlyphInk } from '@/components/navigation/shell/appRail/AppRailIcon';
 import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
 import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
@@ -117,6 +118,7 @@ export const UpdatesPopoverButton = React.memo(function UpdatesPopoverButton(pro
     const router = useRouter();
     const anchorRef = React.useRef<View>(null);
     const [open, setOpen] = React.useState(false);
+    const railInk = useAppRailGlyphInk(open);
     const markRef = React.useRef<View>(null);
     const [hovered, setHovered] = React.useState(false);
     const [focused, setFocused] = React.useState(false);
@@ -142,7 +144,7 @@ export const UpdatesPopoverButton = React.memo(function UpdatesPopoverButton(pro
     const opensUpward = props.variant === 'footer';
     const markColor = copy?.warning
         ? theme.colors.state.warning.foreground
-        : props.variant === 'footer' ? theme.colors.text.secondary : theme.colors.state.info.foreground;
+        : props.variant === 'footer' ? railInk.color : theme.colors.state.info.foreground;
     const trigger = props.variant !== 'header' ? (
         <Pressable
             ref={markRef}
@@ -163,7 +165,7 @@ export const UpdatesPopoverButton = React.memo(function UpdatesPopoverButton(pro
                 opensUpward && (hovered || open) ? styles.footerButtonActive : null,
             ]}
         >
-            <View style={styles.railGlyph}>
+            <View style={[styles.railGlyph, props.variant === 'footer' && !copy?.warning ? railInk.style : null]}>
                 {mark(props.markSize ?? ICON_SIZE.sm, markColor)}
                 {copy?.count && !props.hostDrawsCount ? (
                     <TabBadge variant="count" tone={copy.warning ? 'attention' : 'neutral'} value={copy.count} style={styles.railBadge} />

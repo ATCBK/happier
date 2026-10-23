@@ -1,19 +1,20 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
 import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
 import { AppRailSurface } from '@/components/navigation/shell/appRail/AppRail';
 import { AppRailBadge } from '@/components/navigation/shell/appRail/AppRailBadge';
+import { AppRailIcon } from '@/components/navigation/shell/appRail/AppRailIcon';
+import { AppRailSlot } from '@/components/navigation/shell/appRail/AppRailSlot';
 import { buildAppRailEntries, buildAppRailPlacementItems, type AppRailPlacementItem } from '@/components/navigation/shell/appRail/appRailModel';
 import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SIZE_PX, APP_SHELL_TITLE_STRIP_HEIGHT_PX } from '@/components/navigation/shell/appRail/appRailMetrics';
 import type { SidebarFooterPopoverTrigger } from '@/components/navigation/shell/sidebarFooter/SidebarFooterPopoverButton';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon } from '@/components/ui/icons/Icon';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { NavigationPlacementCustomizerView } from '@/components/ui/navigation/NavigationPlacementCustomizer';
@@ -57,15 +58,15 @@ export function RailPlacementSpecimen(props: Readonly<{ frame?: string | null }>
 }
 
 function FixtureFooter(props: Readonly<{ item: AppRailPlacementItem; renderTrigger?: SidebarFooterPopoverTrigger; onPress: () => void }>) {
-    const { theme } = useUnistyles();
     if (props.renderTrigger) return props.renderTrigger({ onPress: props.onPress, open: false });
-    return <>
-        <IconButton testID={props.item.id} variant="plain" size={APP_RAIL_ITEM_SIZE_PX} accessibilityLabel={props.item.title}
-            onPress={props.onPress} tooltip={props.item.title} tooltipPlacement="right"
-            icon={props.item.id === 'app-rail-account' ? <Avatar id="rail-fixture-person" size={28} />
-                : <Icon name={props.item.icon} size={APP_RAIL_ICON_GLYPH_SIZE_PX} color={theme.colors.text.secondary} />} />
-        {props.item.id === 'app-rail-updates' ? <AppRailBadge testID="app-rail-updates-badge" signal={{ kind: 'count', value: 1, tone: 'accent' }} /> : null}
-    </>;
+    return (
+        <AppRailSlot badge={props.item.id === 'app-rail-updates' ? <AppRailBadge testID="app-rail-updates-badge" signal={{ kind: 'count', value: 1, tone: 'accent' }} /> : null}>
+            <IconButton testID={props.item.id} variant="plain" size={APP_RAIL_ITEM_SIZE_PX} accessibilityLabel={props.item.title}
+                onPress={props.onPress} tooltip={props.item.title} tooltipPlacement="right"
+                icon={props.item.id === 'app-rail-account' ? <Avatar id="rail-fixture-person" size={28} />
+                    : <AppRailIcon name={props.item.icon} />} />
+        </AppRailSlot>
+    );
 }
 
 const styles = StyleSheet.create({ root: { flex: 1, minHeight: 0 }, titleStrip: { height: APP_SHELL_TITLE_STRIP_HEIGHT_PX } });
