@@ -25,6 +25,8 @@ export type HomeAccountChangeEvent = Readonly<{
     entityRevisions?: Readonly<Record<string, number>>;
     /** The focused change applier has already published these exact Run summaries to the shared store. */
     workflowRunsMaterialized?: true;
+    /** The focused applier has already fenced material and owns its awaited refresh. */
+    savedSecretResourcesRefreshStarted?: true;
     /** Present when the publisher knows the changed domains; omitted wakes remain conservative. */
     changeKinds?: readonly ChangeEntry['kind'][];
     /**
@@ -47,6 +49,7 @@ export type HomeAccountChangeEvent = Readonly<{
 type HomeAccountChangeDetails = Readonly<{
     entityRevisions?: Readonly<Record<string, number>>;
     workflowRunsMaterialized?: true;
+    savedSecretResourcesRefreshStarted?: true;
     source?: 'connected' | 'catch-up-pending';
     changeKinds?: readonly ChangeEntry['kind'][];
     sessionListQueryAffects?: boolean | 'structural';
@@ -147,6 +150,7 @@ export function publishHomeAccountChange(
         ...(entityIds ? { entityIds: Object.freeze([...new Set(entityIds)]) } : {}),
         ...(details?.entityRevisions ? { entityRevisions: Object.freeze({ ...details.entityRevisions }) } : {}),
         ...(details?.workflowRunsMaterialized ? { workflowRunsMaterialized: true as const } : {}),
+        ...(details?.savedSecretResourcesRefreshStarted ? { savedSecretResourcesRefreshStarted: true as const } : {}),
         ...(details?.changeKinds ? { changeKinds: Object.freeze([...new Set(details.changeKinds)]) } : {}),
         ...(details?.sessionListQueryAffects !== undefined
             ? { sessionListQueryAffects: details.sessionListQueryAffects }

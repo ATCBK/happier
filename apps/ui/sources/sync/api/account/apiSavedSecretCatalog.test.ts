@@ -156,7 +156,8 @@ describe('SavedSecret catalog captured request boundary', () => {
                 publishHomeAccountChange(scope.serverId, [`approval-artifact-${index}`], { changeKinds: ['artifact'] });
                 await new Promise<void>(resolve => setImmediate(resolve));
             }
-            expect(readCounts().map((count, index) => count - idleReads[index]!)).toEqual([0, 0, 0]);
+            const idleWakeReads = readCounts().map((count, index) => count - idleReads[index]!);
+            expect(idleWakeReads).toEqual([0, 0, 0]);
             expect(getSavedSecretCatalogSnapshot(scope)).toBe(before);
             const resourceChanges = planSyncActionsFromChanges([{ cursor: 2, kind: 'savedSecretResource', entityId: 'current', changedAt: 2 }]);
             const beforeResourceReads = readCounts();
@@ -173,6 +174,7 @@ describe('SavedSecret catalog captured request boundary', () => {
             // History normalization still owns its fresh currentness decision;
             // absent legacy categories do not require separate admissions.
             expect(readCounts()[0]! - beforeResourceReads[0]!).toBe(1);
+            const directChangeReads = readCounts().map((count, index) => count - beforeResourceReads[index]!);
             // The focused change applier also awaits materialization before it
             // checkpoints. Its Home publication is not a second read demand.
             const focusedReads = readCounts();
@@ -182,14 +184,15 @@ describe('SavedSecret catalog captured request boundary', () => {
                 planned: focusedChanges, credentials: connection.credentials,
                 isSessionMessagesLoaded: unexpectedDomainWork,
                 invalidate: { savedSecretResources: () => invalidateSavedSecretCatalogProjection(scope) },
-                publishAccountChanges: (changes, materialization) => publishHomeAccountChange(scope.serverId,
-                    changes.map(change => change.entityId), {
+                publishAccountChanges: (changes, materialization) => {
+                    expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable' });
+                    publishHomeAccountChange(scope.serverId, changes.map(change => change.entityId), {
                         changeKinds: changes.map(change => change.kind),
                         profileCatalogAffects: plannedChangesAffectProfileCatalog(focusedChanges),
-                        ...(materialization && 'savedSecretResourcesRefreshStarted' in materialization
-                            && materialization.savedSecretResourcesRefreshStarted === true
+                        ...(materialization?.savedSecretResourcesRefreshStarted
                             ? { savedSecretResourcesRefreshStarted: true as const } : {}),
-                    }),
+                    });
+                },
                 invalidateMessagesForSession: unexpectedDomainWork,
                 invalidateScmStatusForSession: unexpectedDomainWork,
                 applyTodoSocketUpdates: unexpectedDomainWork,

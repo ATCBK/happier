@@ -65,6 +65,7 @@ export async function applyPlannedChangeActions(params: {
         sessionFolderAssignments?: (sessionIds: string[]) => Promise<void>;
         todos?: () => Promise<void>;
         pets?: () => Promise<void>;
+        /** Withdraw pre-change material synchronously, then await the owned refresh. */
         savedSecretResources?: () => Promise<void>;
     };
     /** One batched read for the page's Runs; a read per Run multiplies Account traffic by the Run count. */
@@ -78,7 +79,10 @@ export async function applyPlannedChangeActions(params: {
      * Account-change applier hands the canonical page to those owners before
      * checkpointing; this callback creates no second durable cursor.
      */
-    publishAccountChanges?: (changes: readonly ApiChangeEntry[], options?: Readonly<{ workflowRunsMaterialized: true }>) => void;
+    publishAccountChanges?: (changes: readonly ApiChangeEntry[], options?: Readonly<{
+        workflowRunsMaterialized?: true;
+        savedSecretResourcesRefreshStarted?: true;
+    }>) => void;
     invalidateMessagesForSession: (sessionId: string) => Promise<void>;
     repairSessionTranscriptRevision?: (repair: PlannedChangeActions['sessionTranscriptRepairs'][number]) => Promise<void>;
     invalidateScmStatusForSession: (sessionId: string) => void;
@@ -91,6 +95,21 @@ export async function applyPlannedChangeActions(params: {
 }): Promise<PlannedChangesApplyResult> {
     const { planned } = params;
 
+    // Fence pre-change material through its canonical loader before publishing
+    // the same change. Its awaited task, not the notification, owns this demand.
+    let savedSecretResourcesInvalidationFailed = false;
+    let savedSecretResourcesRefresh: Promise<void> | undefined;
+    if (planned.invalidate.savedSecretResources) {
+        try {
+            if (!params.invalidate.savedSecretResources) savedSecretResourcesInvalidationFailed = true;
+            else savedSecretResourcesRefresh = params.invalidate.savedSecretResources().catch(() => {
+                savedSecretResourcesInvalidationFailed = true;
+            });
+        } catch {
+            savedSecretResourcesInvalidationFailed = true;
+        }
+    }
+
     // Registering Data's wakeup before any awaited work preserves the
     // subscribe-then-initial-query race contract without giving UI a second
     // AccountChange broker or a collection query engine.
@@ -100,13 +119,19 @@ export async function applyPlannedChangeActions(params: {
     const isWorkflowRunChange = (change: ApiChangeEntry) => change.kind === 'account' && workflowRunEntities.has(change.entityId);
     const workflowRunChanges = planned.changes.filter(isWorkflowRunChange);
     const earlyChanges = workflowRunChanges.length === 0 ? planned.changes : planned.changes.filter(change => !isWorkflowRunChange(change));
-    if (earlyChanges.length > 0) params.publishAccountChanges?.(earlyChanges);
+    if (earlyChanges.length > 0) {
+        if (savedSecretResourcesRefresh) params.publishAccountChanges?.(earlyChanges, { savedSecretResourcesRefreshStarted: true });
+        else params.publishAccountChanges?.(earlyChanges);
+    }
 
     const concurrencyLimit = typeof params.concurrencyLimit === 'number' && params.concurrencyLimit > 0
         ? Math.trunc(params.concurrencyLimit)
         : 2;
 
     const tasks: Array<() => Promise<void>> = [];
+    // Keep the started refresh in the same worker budget as the other tasks.
+    const startedSavedSecretResourcesRefresh = savedSecretResourcesRefresh;
+    if (startedSavedSecretResourcesRefresh) tasks.push(() => startedSavedSecretResourcesRefresh);
     const completedWorkflowRunIds = new Set<string>();
     const failedWorkflowRunIds = new Set<string>();
     if (planned.workflowRunIdsToRefresh.length > 0) {
@@ -153,7 +178,6 @@ export async function applyPlannedChangeActions(params: {
     let sessionFolderAssignmentsInvalidationFailed = false;
     let sessionOrganizationRefreshFailed = false;
     let petsInvalidationFailed = false;
-    let savedSecretResourcesInvalidationFailed = false;
     let sessionsInvalidationDone: Promise<boolean> | null = null;
     let resolveSessionsInvalidationDone: ((succeeded: boolean) => void) | null = null;
     const sessionRowRefreshIds = planned.invalidate.sessions ? [] : planned.sessionRowRefreshIds;
@@ -196,19 +220,6 @@ export async function applyPlannedChangeActions(params: {
                 await params.invalidate.pets();
             } catch {
                 petsInvalidationFailed = true;
-            }
-        });
-    }
-    if (planned.invalidate.savedSecretResources) {
-        tasks.push(async () => {
-            try {
-                if (!params.invalidate.savedSecretResources) {
-                    savedSecretResourcesInvalidationFailed = true;
-                    return;
-                }
-                await params.invalidate.savedSecretResources();
-            } catch {
-                savedSecretResourcesInvalidationFailed = true;
             }
         });
     }

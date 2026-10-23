@@ -124,10 +124,14 @@ beforeAll(loadSyncSingletonForTests);
 beforeEach(() => { resetSavedSecretCatalogEngineForTests(); resetSavedSecretCatalogSnapshotsForTests(); resetServerFeaturesClientForTests(); });
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 afterEach(async () => { await standardCleanup(); clearActiveUnsavedChangesGuard(); await connection?.dispose(); connection = null; resetTeamActionClientForTests(); });
+let accountFixtureSequence = 0;
 
 /** Only HTTP, credentials and Socket transport are substituted; Account/Action/Settings/crypto owners stay real. */
 async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: boolean; teams?: boolean; home?: string;
     raw?: Record<string, unknown>; captureSourceTrace?: boolean; historySnapshot?: Record<string, unknown> } = {}) {
+    // Each fixture replaces its HTTP database with version 7. Do not rewind
+    // one physical Home under evidence retained by the real history owner.
+    const home = options.home ?? `_fixture_${++accountFixtureSequence}`;
     const accountId = 'secret-owner';
     const credentials = mode === 'plain'
         ? { token: createAccountTokenForTests(accountId, { currentAccount: true }) }
@@ -164,6 +168,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         voicePresent: boolean }[] = [];
     const censusReads: string[] = [];
     const catalogReadPaths: string[] = [];
+    const historyReadPaths: string[] = [];
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: mode });
     let materialReadStatus = 200;
     let beforeMaterialRead: (() => void | Promise<void>) | undefined;
@@ -185,8 +190,8 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         if (!material) throw new Error('Expected genuine E2EE Settings material');
         return { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings', material, payload: raw, randomBytes: tweetnacl.randomBytes }) };
     };
-    connection = await restoreServerAccountForTest({ serverUrl: `https://saved-secret-operations-${mode}${options.home ?? ''}.test`,
-        serverIdentityId: `srv_secret_operations_${mode}${options.home ?? ''}`, accountId, credentials,
+    connection = await restoreServerAccountForTest({ serverUrl: `https://saved-secret-operations-${mode}${home}.test`,
+        serverIdentityId: `srv_secret_operations_${mode}${home}`, accountId, credentials,
         request: async (rawUrl, init) => {
             const path = new URL(String(rawUrl)).pathname;
             if (path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness') observeTrustRead?.(path);
@@ -261,14 +266,18 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
                 return effect(path, undefined);
             }
             if (path === '/v2/account/settings/history') {
+                historyReadPaths.push(path);
                 await beforeHistoryRead?.();
                 return Response.json(AccountSettingsV2HistoryListResponseSchema.parse({ snapshots: historyContent ? [{ version: 4,
                     createdAt: '2026-01-01T00:00:00.000Z', contentKind: historyContent.t,
                     byteLength: JSON.stringify(historyContent).length }] : [] }));
             }
-            if (path === '/v2/account/settings/history/4') return Response.json(AccountSettingsV2HistoryDetailResponseSchema.parse({
+            if (path === '/v2/account/settings/history/4') {
+                historyReadPaths.push(path);
+                return Response.json(AccountSettingsV2HistoryDetailResponseSchema.parse({
                 version: 4, createdAt: '2026-01-01T00:00:00.000Z', content: historyContent,
-            }));
+                }));
+            }
             if (path === '/v2/account/settings/history/4/mutate' && init?.method === 'POST') {
                 const mutation = AccountSettingsV2HistoryMutationRequestSchema.parse(JSON.parse(String(init.body)));
                 writes.push({ path, body: mutation });
@@ -308,7 +317,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         resources.set(resourceId, row);
         return row;
     }
-    return { scope, writes, settingsWriteStacks, sourceReads, censusReads, catalogReadPaths, get artifacts() { return artifacts.list(); }, rows, catalogRows, resources, materialRow,
+    return { scope, writes, settingsWriteStacks, sourceReads, censusReads, catalogReadPaths, historyReadPaths, get artifacts() { return artifacts.list(); }, rows, catalogRows, resources, materialRow,
         get raw() { return raw; }, set raw(value: Record<string, unknown>) { raw = value; },
         get settingsVersion() { return settingsVersion; }, set settingsVersion(value: number) { settingsVersion = value; },
         get referenceGuardRevision() { return referenceGuardRevision; }, set referenceGuardRevision(value: number) { referenceGuardRevision = value; },
@@ -326,6 +335,17 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
 }
 
 describe('Saved Secret operations through their real Account and Action owners', () => {
+    it.each([{}, { secrets: [] }])('does not turn a current material refresh with no legacy candidates into history maintenance (%j)', async raw => {
+        const account = await openAccount('plain', { raw, historySnapshot: { preferredLanguage: 'de' } });
+        const baselineHistory = account.historyReadPaths.length;
+        const baselineCatalogs = account.catalogReadPaths.length;
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
+        expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({ status: 'ready', legacyImport: { status: 'complete' } });
+        expect(account.historyReadPaths.slice(baselineHistory)).toEqual([]);
+        expect(account.catalogReadPaths.slice(baselineCatalogs)).toEqual([]);
+        expect(account.writes).toEqual([]);
+    });
+
     it.each(['stable', 'before-import', 'during-history'] as const)('pinned importer returns only its own acknowledged source frontier (%s)', async drift => {
         const secret = { id: 'pinned-source', name: 'Original key', kind: 'token' as const, createdAt: 1, updatedAt: 2,
             encryptedValue: { _isSecretValue: true as const, value: 'original-value' } };
@@ -1198,6 +1218,8 @@ describe('Saved Secret operations through their real Account and Action owners',
                 expect(await readSavedSecretReferenceInContext(context, `happier:shared-secret:v1:${draft.id}`))
                     .toEqual({ ok: true, value: 'borrowed-private-key', revision: 1 });
                 // A disposed context loses its credential watch even though a GET can still succeed.
+                // Rewriting the same Account credential is not revocation;
+                // actual credential removal must still retire the borrower.
                 const deviceStorage = installLocalStorageMock();
                 try {
                     const activeScopeFence = captureActiveServerAccountScopeCurrentness();
@@ -1206,6 +1228,9 @@ describe('Saved Secret operations through their real Account and Action owners',
                     expect(await TokenStorage.setCredentialsForServerUrl(context.endpointUrl,
                         { serverId: context.serverId }, context.credentials)).toBe(true);
                     expect(activeScopeFence.isCurrent()).toBe(true);
+                    expect(context.accountLifetime.isCurrent()).toBe(true);
+                    expect(await TokenStorage.removeCredentialsForServerUrl(context.endpointUrl,
+                        { serverId: context.serverId })).toBe(true);
                     expect(context.accountLifetime.isCurrent()).toBe(false);
                     await expect(context.request('/v2/account/settings', { method: 'GET' }, { retry: 'none' }))
                         .rejects.toMatchObject({ code: 'action_account_scope_changed' });
@@ -2527,12 +2552,14 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(getSavedSecretCatalogSnapshot(account.scope)?.status).toBe('ready');
     });
 
-    it.each(['plain', 'e2ee'] as const)('Settings Secrets adopts a created %s row while legacy history never settles', async mode => {
+    it.each(['plain', 'e2ee'] as const)('Settings Secrets adopts a created %s row while explicit legacy history never settles', async mode => {
         const account = await openAccount(mode);
         let releaseHistory!: () => void;
         const pendingHistory = new Promise<void>(resolve => { releaseHistory = resolve; });
         let historyStarted = false;
         account.setBeforeHistoryRead(async () => { historyStarted = true; await pendingHistory; });
+        const maintenance = withProfileAccount(account.scope, undefined, context =>
+            importLegacySavedSecretsInContext(context, mode, account.scope));
         account.setEffect(async (path, body) => {
             if (path.endsWith('/envelope-census')) return Response.json({ resourceId: [...account.resources.keys()][0],
                 revision: 1, recipients: [], nextCursor: null });
@@ -2569,6 +2596,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             releaseHistory();
             await act(async () => {
                 await submission;
+                await maintenance;
                 await refreshSavedSecretCatalog(account.scope).catch(() => undefined);
             });
         }

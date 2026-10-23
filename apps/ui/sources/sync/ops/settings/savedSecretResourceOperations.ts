@@ -1376,6 +1376,7 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
     scope: ServerAccountScope,
     approval?: SavedSecretPrivateCreationApprovalOptions,
     sourceExpectation?: Readonly<{ mode: 'plain' | 'e2ee'; raw: Readonly<Record<string, unknown>>; version: number }>,
+    historyIntent: 'maintenance' | 'current-read' = 'maintenance',
 ): Promise<SavedSecretLegacyImportResult> {
     const transfers: AccountSettingsHistorySavedSecretTransferV1[] = [];
     const verifiedReferences: SavedSecretVerifiedImportReference[] = [];
@@ -1446,6 +1447,13 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
         if (!matchesSourceFrontier(initial)) return { status: 'pending', reason: 'changed' };
         const source = readSavedSecretTransferSourceV1(initial.source.raw);
         if (!source.complete) pending = { status: 'pending', reason: 'source-uncharacterized' };
+        // A material refresh discovers current legacy candidates; it is not a
+        // request to recover independently retained history. Explicit migration
+        // callers keep that maintenance, including after the source was removed.
+        if (historyIntent === 'current-read' && source.complete && source.secrets.length === 0
+            && !source.inferenceCredential && !source.legacyChatCredential && !source.legacyVoiceCredentials?.length) {
+            return { status: 'complete' };
+        }
         for (const secret of source.secrets) {
             if (source.legacyVoiceCredentials?.some(credential => credential.source.kind === 'personal-saved-secret'
                 && credential.source.secretId === secret.id)) continue;

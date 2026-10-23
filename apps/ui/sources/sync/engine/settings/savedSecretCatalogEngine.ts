@@ -81,7 +81,7 @@ const loader = createScopedSnapshotLoader<Target>({
                     const { importLegacySavedSecretsInContext } = await import('@/sync/ops/settings/savedSecretResourceOperations');
                     let legacyImport: SavedSecretLegacyImportResult;
                     try {
-                        legacyImport = await importLegacySavedSecretsInContext(captured, mode, scope);
+                        legacyImport = await importLegacySavedSecretsInContext(captured, mode, scope, undefined, undefined, 'current-read');
                     } catch {
                         // Pending approval/import cannot withdraw valid foreground material.
                         legacyImport = { status: 'pending', reason: 'source-unavailable' };
@@ -119,7 +119,8 @@ const loader = createScopedSnapshotLoader<Target>({
     // Resources and legacy Settings own this material. Artifact receipts also
     // wake Profile bodies, but do not change Saved Secrets or their source.
     // Coarse secondary wakes retain revalidation when no exact domains exist.
-    matchesWake: event => !isArtifactOnlyHomeAccountChange(event) && event.profileCatalogAffects !== false,
+    matchesWake: event => event.savedSecretResourcesRefreshStarted !== true
+        && !isArtifactOnlyHomeAccountChange(event) && event.profileCatalogAffects !== false,
 });
 
 export function observeSavedSecretCatalog(scope: ServerAccountScope): () => void {
