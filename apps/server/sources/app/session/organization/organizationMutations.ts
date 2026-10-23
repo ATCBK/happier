@@ -660,38 +660,17 @@ export async function upsertSessionOrganizationFolder(params: Readonly<{
     return await inTx(async (tx) => await upsertSessionOrganizationFolderInTx(tx, params), { isolationLevel: "ReadCommitted" });
 }
 
-function collectDeletedFolderIds(params: Readonly<{
-    rootFolderId: string;
-    folders: ReadonlyArray<Readonly<{ id: string; folderKey: string; parentKey: string | null }>>;
-}>): string[] {
-    const rootFolder = params.folders.find((folder) => folder.id === params.rootFolderId);
-    if (!rootFolder) return [];
-    const deletedIds = new Set<string>([rootFolder.id]);
-    const deletedKeys = new Set<string>([rootFolder.folderKey]);
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const folder of params.folders) {
-            if (!deletedIds.has(folder.id) && folder.parentKey && deletedKeys.has(folder.parentKey)) {
-                deletedIds.add(folder.id);
-                deletedKeys.add(folder.folderKey);
-                changed = true;
-            }
-        }
-    }
-    return [...deletedIds];
-}
-
+/** Archive one folder, moving its direct children and own assignments to its parent. */
 export async function deleteSessionOrganizationFolder(params: Readonly<{
     accountId: string;
     request: DeleteSessionOrganizationFolderRequest;
 }>) {
     return await inTx(async (tx) => {
-        // Exclude admitted births before reading the tree and its assignments.
+        // Exclude admitted births before reading the folder and its assignments.
         // Birth placement can then use current reads without certifying cursor writes.
         await acquireSessionOrganizationMutationAdmissionInTx(tx, params.accountId);
         const folders = await tx.sessionOrganizationFolder.findMany({
-            where: { accountId: params.accountId, archivedAt: null },
+            where: { accountId: params.accountId, id: params.request.folderId, archivedAt: null },
             select: { id: true, folderKey: true, parentKey: true },
         });
         const folder = folders.find((candidate) => candidate.id === params.request.folderId) ?? null;
@@ -703,32 +682,43 @@ export async function deleteSessionOrganizationFolder(params: Readonly<{
             };
         }
 
-        const deletedFolderIds = collectDeletedFolderIds({
-            rootFolderId: params.request.folderId,
-            folders,
+        const relatedFolders = await tx.sessionOrganizationFolder.findMany({
+            where: { accountId: params.accountId, archivedAt: null, OR: [
+                { parentHash: hashSessionOrganizationKey(folder.folderKey) },
+                ...(folder.parentKey === null ? [] : [{ folderHash: hashSessionOrganizationKey(folder.parentKey) }]),
+            ] },
+            select: { id: true, folderKey: true, parentKey: true },
         });
+        const parent = folder.parentKey === null ? null
+            : relatedFolders.find((candidate) => candidate.folderKey === folder.parentKey) ?? null;
+        const children = relatedFolders.filter((candidate) => candidate.parentKey === folder.folderKey);
+        const deletedFolderIds = [folder.id];
         const archivedAt = new Date();
         await tx.sessionOrganizationFolder.updateMany({
-            where: { accountId: params.accountId, id: { in: deletedFolderIds } },
+            where: { accountId: params.accountId, id: folder.id },
             data: { archivedAt },
         });
+        if (children.length > 0) {
+            await tx.sessionOrganizationFolder.updateMany({
+                where: { accountId: params.accountId, archivedAt: null, parentHash: hashSessionOrganizationKey(folder.folderKey) },
+                data: { parentKey: parent?.folderKey ?? null, parentHash: parent ? hashSessionOrganizationKey(parent.folderKey) : null },
+            });
+        }
 
-        const assignmentTargetFolderId = folder.parentKey
-            ? (folders.find((candidate) => candidate.folderKey === folder.parentKey)?.id ?? null)
-            : null;
+        const assignmentTargetFolderId = parent?.id ?? null;
         const writeResult = assignmentTargetFolderId === null
             ? await tx.sessionFolderAssignment.deleteMany({
-                where: { accountId: params.accountId, folderId: { in: deletedFolderIds } },
+                where: { accountId: params.accountId, folderId: folder.id },
             })
             : await tx.sessionFolderAssignment.updateMany({
-                where: { accountId: params.accountId, folderId: { in: deletedFolderIds } },
+                where: { accountId: params.accountId, folderId: folder.id },
                 data: { folderId: assignmentTargetFolderId },
             });
 
         await markSessionOrganizationChanged(tx, {
             accountId: params.accountId,
             scope: "folders",
-            folderIds: deletedFolderIds,
+            folderIds: [folder.id, ...children.map((child) => child.id)],
         });
         if (writeResult.count > 0) {
             await markBulkSessionFolderAssignmentsChanged(tx, {

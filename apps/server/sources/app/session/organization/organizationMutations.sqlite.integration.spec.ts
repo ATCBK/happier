@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+    DeleteSessionOrganizationFolderResponseSchema,
     ReorderSessionOrganizationResponseSchema,
     SessionOrganizationSnapshotResponseSchema,
     SetSessionPinResponseSchema,
@@ -17,8 +18,11 @@ import { eventRouter } from "@/app/events/connectionEventRouter";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
+import { observePrismaReads } from "@/testkit/observePrismaReads";
+import type { Tx } from "@/storage/inTx";
 
 import { setSessionTagAssignments } from "./organizationMutations";
+import { hashSessionOrganizationKey } from "./hashKeys";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -40,6 +44,90 @@ describe("session organization mutations on SQLite", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it.each([false, true])("removes only the named folder through HTTP, preserving descendants (nested=%s)", async (nested) => {
+        const account = await db.account.create({ data: { publicKey: randomUUID() } });
+        const createFolder = async (key: string, parentKey: string | null) => await db.sessionOrganizationFolder.create({
+            data: { accountId: account.id, folderKey: key, folderHash: hashSessionOrganizationKey(key),
+                parentKey, parentHash: parentKey === null ? null : hashSessionOrganizationKey(parentKey), sortKey: key },
+        });
+        const parent = nested ? await createFolder("parent", null) : null;
+        const removed = await createFolder("removed", parent?.folderKey ?? null);
+        const child = await createFolder("child", removed.folderKey);
+        const grandchild = await createFolder("grandchild", child.folderKey);
+        const neighbor = await createFolder("neighbor", null);
+        await db.sessionOrganizationFolder.createMany({ data: Array.from({ length: 100 }, (_, index) => {
+            const folderKey = `unrelated-${index}`;
+            return { accountId: account.id, folderKey, folderHash: hashSessionOrganizationKey(folderKey) };
+        }) });
+        const foldersBefore = [child, grandchild, neighbor];
+        const sessions = await Promise.all([removed, child, grandchild, neighbor].map(async (folder) => {
+            const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}", agentState: null } });
+            await db.sessionFolderAssignment.create({ data: { accountId: account.id, sessionId: session.id, folderId: folder.id } });
+            return session;
+        }));
+        const app = createAuthenticatedTestApp();
+        registerSessionOrganizationRoutes(app);
+        await app.ready();
+        const headers = { "x-test-user-id": account.id };
+        const url = `/v2/session-organization/folders/${removed.id}`;
+        const readFolderIds: string[] = [];
+        const originalTransaction = db.$transaction;
+        // Observe actual SQLite reads without replacing query results or domain logic.
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, thisArg, args) {
+                const operation: unknown = args[0];
+                if (typeof operation !== "function") return Reflect.apply(target, thisArg, args);
+                return Reflect.apply(target, thisArg, [async (tx: Tx) => {
+                    const observed = observePrismaReads(tx, ["sessionOrganizationFolder"]);
+                    try { return await Reflect.apply(operation, undefined, [observed.tx]); }
+                    finally { readFolderIds.push(...observed.rows.flatMap(row => row.ids)); }
+                }, ...args.slice(1)]);
+            },
+        });
+        try {
+            const response = await app.inject({ method: "DELETE", url, headers,
+                payload: { folderId: removed.id, assignmentBehavior: "moveAssignmentsToParent" } });
+            expect(response.statusCode).toBe(200);
+            expect(readFolderIds.sort()).toEqual([removed.id, child.id, ...(parent ? [parent.id] : [])].sort());
+            expect(DeleteSessionOrganizationFolderResponseSchema.parse(response.json())).toEqual({
+                deletedFolderIds: [removed.id], assignmentTargetFolderId: parent?.id ?? null, affectedAssignmentCount: 1,
+            });
+            const folderChange = await db.accountChange.findUniqueOrThrow({ where: {
+                accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "session-organization" },
+            } });
+            const folderHint = SessionOrganizationChangeHintSchema.parse(folderChange.hint);
+            expect(folderHint.folderIds?.slice().sort()).toEqual([removed.id, child.id].sort());
+            await expect(db.sessionOrganizationFolder.findUniqueOrThrow({ where: { id: removed.id } }))
+                .resolves.toMatchObject({ archivedAt: expect.any(Date) });
+            for (const folder of foldersBefore) {
+                const retained = await db.sessionOrganizationFolder.findUniqueOrThrow({ where: { id: folder.id } });
+                expect(retained).toMatchObject({ folderKey: folder.folderKey, sortKey: folder.sortKey, archivedAt: null,
+                    parentKey: folder.id === child.id ? parent?.folderKey ?? null : folder.parentKey,
+                    parentHash: folder.id === child.id ? parent?.folderHash ?? null : folder.parentHash });
+            }
+            const assignments = await db.sessionFolderAssignment.findMany({ where: { accountId: account.id },
+                select: { sessionId: true, folderId: true }, orderBy: { sessionId: "asc" } });
+            expect(assignments).toEqual([
+                ...(parent ? [{ sessionId: sessions[0]!.id, folderId: parent.id }] : []),
+                ...[child, grandchild, neighbor].map((folder, index) => ({ sessionId: sessions[index + 1]!.id, folderId: folder.id })),
+            ].sort((left, right) => left.sessionId.localeCompare(right.sessionId)));
+            expect(await db.session.count({ where: { accountId: account.id } })).toBe(4);
+            const checkpoint = await db.sessionOrganizationCheckpoint.findUnique({ where: { accountId: account.id } });
+            // The retired opt-in cannot block Sections, including an idempotent repeat.
+            harness.resetEnv({ HAPPIER_FEATURE_SESSIONS_FOLDERS__ENABLED: "0" });
+            const repeated = await app.inject({ method: "DELETE", url, headers,
+                payload: { folderId: removed.id, assignmentBehavior: "moveAssignmentsToParent" } });
+            expect(repeated.statusCode).toBe(200);
+            expect(DeleteSessionOrganizationFolderResponseSchema.parse(repeated.json())).toEqual({
+                deletedFolderIds: [], assignmentTargetFolderId: null, affectedAssignmentCount: 0,
+            });
+            await expect(db.sessionOrganizationCheckpoint.findUnique({ where: { accountId: account.id } })).resolves.toEqual(checkpoint);
+        } finally {
+            db.$transaction = originalTransaction;
+            await app.close();
+        }
     });
 
     it("keeps independent pin memberships and shared order through authenticated HTTP and SQLite", async () => {

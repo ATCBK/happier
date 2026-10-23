@@ -958,10 +958,11 @@ describe("session organization routes", () => {
         expect(txSessionOrganizationFolderUpsert).not.toHaveBeenCalled();
     });
 
-    it("archives a deleted folder subtree and moves affected assignments to the deleted folder parent", async () => {
-        txSessionOrganizationFolderFindMany.mockResolvedValue([
-            { id: "parent-id", folderKey: "parent-key", parentKey: null },
+    it("archives one folder and reparents direct children plus its own assignments", async () => {
+        txSessionOrganizationFolderFindMany.mockResolvedValueOnce([
             { id: "folder-a-id", folderKey: "folder-a-key", parentKey: "parent-key" },
+        ]).mockResolvedValueOnce([
+            { id: "parent-id", folderKey: "parent-key", parentKey: null },
             { id: "child-a-id", folderKey: "child-a-key", parentKey: "folder-a-key" },
         ]);
         txSessionOrganizationFolderUpdateMany.mockResolvedValue({ count: 2 });
@@ -974,16 +975,16 @@ describe("session organization routes", () => {
         });
 
         expect(response).toEqual({
-            deletedFolderIds: ["folder-a-id", "child-a-id"],
+            deletedFolderIds: ["folder-a-id"],
             assignmentTargetFolderId: "parent-id",
             affectedAssignmentCount: 3,
         });
         expect(txSessionOrganizationFolderUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
-            where: { accountId: "u1", id: { in: ["folder-a-id", "child-a-id"] } },
+            where: { accountId: "u1", id: "folder-a-id" },
             data: expect.objectContaining({ archivedAt: expect.any(Date) }),
         }));
         expect(txSessionFolderAssignmentUpdateMany).toHaveBeenCalledWith({
-            where: { accountId: "u1", folderId: { in: ["folder-a-id", "child-a-id"] } },
+            where: { accountId: "u1", folderId: "folder-a-id" },
             data: { folderId: "parent-id" },
         });
         expect(markAccountChanged).toHaveBeenCalledWith(expect.anything(), {
@@ -994,7 +995,7 @@ describe("session organization routes", () => {
                 sessionFolderAssignments: true,
                 sessionOrganization: true,
                 scope: "folderAssignments",
-                folderIds: ["folder-a-id", "child-a-id"],
+                folderIds: ["folder-a-id"],
                 toFolderId: "parent-id",
             },
         });
@@ -1005,7 +1006,7 @@ describe("session organization routes", () => {
             hint: {
                 sessionOrganization: true,
                 scope: "folderAssignments",
-                folderIds: ["folder-a-id", "child-a-id"],
+                folderIds: ["folder-a-id"],
                 scopeKeys: ["parent-id"],
             },
         });
