@@ -45,7 +45,7 @@ import { Typography } from '@/constants/Typography';
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, hasDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
@@ -406,6 +406,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
             normalizedToolName,
         }));
     }, [messageId, normalizedToolName, props.approvalRequests, sessionId, toolForRendering]);
+    const declinedApprovalShown = hasDeclinedApprovalAtCall(matchingApprovalRequests);
     const approvalLocation = React.useMemo(
         () => buildApprovalToolCallLocation({ messageId }),
         [messageId],
@@ -549,6 +550,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                         interaction={interaction}
                         detailLevel={renderBodyDetailLevel}
                         setHeaderActions={setHeaderActions}
+                        declinedApprovalShown={declinedApprovalShown}
                     />
                 </View>
             </TranscriptCollapsible>
@@ -597,6 +599,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                     artifact={request.artifact}
                     approval={request.approval}
                     location={approvalLocation}
+                    toolOutput={declinedApprovalShown ? readToolOutputText(toolForRendering) : null}
                     sessionId={sessionId ?? request.approval.origin?.sessionId ?? ''}
                     metadata={props.metadata}
                     canApprovePermissions={interaction.canApprovePermissions && sourceInteraction.canApprovePermissions && transcriptSource.actions !== null}

@@ -40,6 +40,8 @@ import { useResourceProposalCheck } from '@/components/approvals/resourceProposa
 import { CapabilityEnableApproval } from '@/components/sessions/capabilities/CapabilityEnableApproval';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { ToolOutcomeStatus } from '../presentation/ToolOutcomeStatus';
+import { formatApprovalStatusLabel } from '@/components/approvals/approvalStatusLabel';
 
 
 type ApprovalPromptCardArtifact = Pick<DecryptedArtifact, 'id' | 'header'>;
@@ -67,6 +69,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     canApprove?: boolean;
     disabledReason?: TranscriptPermissionDisabledReason;
     chrome?: 'card' | 'inline';
+    /** A declined request's tool row defers its output here: it stays reachable in Technical details. */
+    toolOutput?: string | null;
 }>) {
     const { theme } = useUnistyles();
     const transcriptSource = useSessionTranscriptSource();
@@ -88,6 +92,9 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
         () => executionFailure ? presentApprovalFailureOutcome(props.approval, executionFailure) : null,
         [executionFailure, props.approval],
     );
+    // A declined request keeps its review at its originating call: what was asked, and that the person said no.
+    const declined = (props.approval.status === 'rejected' || props.approval.status === 'canceled') && executionFailure === null;
+    const toolOutput = declined ? props.toolOutput?.trim() || undefined : undefined;
     const { dismiss: dismissFailure } = useFailedApprovalDismissal();
     const artifactId = props.artifact.id;
     const onDismissFailure = React.useCallback(() => dismissFailure(artifactId), [artifactId, dismissFailure]);
@@ -227,7 +234,10 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                     {failureOutcome && props.approval.status !== 'open' ? <ApprovalDecisionFooter isDeciding={false} onDismiss={onDismissFailure} /> : null}
                 </View>
             ) : null}
-            footer={props.approval.status !== 'open' ? undefined : (
+            footer={props.approval.status !== 'open' ? (declined ? (
+                <ToolOutcomeStatus testID="approval-prompt-declined" label={formatApprovalStatusLabel(props.approval.status)}
+                    glyph="minus-circle" tone="quiet" />
+            ) : undefined) : (
                 <ApprovalDecisionFooter
                     approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommandDecisions?.approve ?? proposalLabels?.approve}
                     rejectLabel={projectCommandDecisions?.reject ?? proposalLabels?.reject}
@@ -247,7 +257,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
                     <Text style={styles.previewText}>{failureOutcome.reason}</Text>
                 </View>
             ) : null}
-            {previewSummary && previewSummary !== cardSubtitle?.trim() && !(failureOutcome && repeatsActionName(previewSummary)) ? (
+            {previewSummary && previewSummary !== cardSubtitle?.trim() && !sameWords(previewSummary, cardTitle)
+                && !(failureOutcome && repeatsActionName(previewSummary)) ? (
                 <Text style={styles.previewText}>{previewSummary}</Text>
             ) : null}
             {computerAction ? (
@@ -266,10 +277,12 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
             ) : promptDocUpdate ? (
                 <PromptDocApprovalDiff request={promptDocUpdate} serverId={transcriptSource.serverId ?? null}
                     sessionId={props.sessionId} testID="approval-prompt-prompt-doc-diff" />
-            ) : actionFields && (actionFields.rows.length > 0 || failureOutcome) ? (
+            ) : actionFields && (actionFields.rows.length > 0 || failureOutcome || toolOutput) ? (
                 <ActionApprovalFieldsCard presentation={actionFields} serverId={approvalHome.serverId}
                     failureMessage={failureOutcome?.message ?? undefined} failureCode={failureOutcome?.code ?? undefined}
-                    collapsed={failureOutcome !== null || (chrome === 'inline' && phone)} />
+                    outputText={toolOutput}
+                    // Only a prompt waiting on a decision keeps its arguments behind Details so the decision stays in view.
+                    collapsed={failureOutcome !== null || (chrome === 'inline' && phone && props.approval.status === 'open')} />
             ) : null}
             {/* A specialized body replaces the generic fields card, which is the one place the card shows the
                 failure's code; the page keeps it through the same disclosure. */}

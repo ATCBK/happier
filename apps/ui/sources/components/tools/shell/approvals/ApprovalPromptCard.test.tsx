@@ -264,12 +264,14 @@ describe('ApprovalPromptCard', () => {
 
     async function renderCard(approval: ApprovalRequest, options: Readonly<{
         serverId?: string; header?: boolean; chrome?: 'inline'; location?: { kind: 'top'; messageId: string; seq: number };
+        toolOutput?: string;
     }> = {}) {
         const serverId = options.serverId ?? homeId;
         await seedApproval(approval, serverId);
         return renderWithSessionTranscriptSource(<ApprovalPromptCard
             artifact={approvalArtifact(options.header === false ? undefined : serverId)}
             approval={approval} sessionId="session-1" canApprove chrome={options.chrome} location={options.location}
+            toolOutput={options.toolOutput}
         />, createApprovalTestSource());
     }
 
@@ -292,6 +294,44 @@ describe('ApprovalPromptCard', () => {
         expect(screen.findByTestId('approval-prompt-card')).toBeTruthy();
         expect(screen.getTextContent()).toContain('List sessions before continuing');
         expect(screen.getTextContent()).toContain('Agent wants to inspect active sessions');
+    });
+
+    function declinedSignIn(status: 'rejected' | 'canceled'): ApprovalRequest {
+        return ApprovalRequestSchema.parse({
+            v: 1, status, createdAtMs: 1, updatedAtMs: 2,
+            createdBy: { surface: 'agent', sessionId: 'session-1' }, requestedSurface: 'agent',
+            actionId: 'mcp.servers.signIn.start',
+            actionArgs: { serverId: 'server-1', client: { clientId: 'design-reference-public' } },
+            summary: 'Sign in to MCP server.', preview: { summary: 'Sign in to MCP server.' },
+            ...(status === 'rejected' ? { decision: { kind: 'reject', decidedAtMs: 2 } } : {}),
+        });
+    }
+
+    it.each(['rejected', 'canceled'] as const)('reads a %s request as what was asked and that it was declined, with no decision to make', async (status) => {
+        const approval = declinedSignIn(status);
+        expect(TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS.some(presents => presents(approval.origin ? approval : { ...approval, origin: { kind: 'transcript_tool_call', sessionId: 'session-1', toolCallId: 'call-1', toolName: 'x' } } as ApprovalRequest))).toBe(true);
+        const screen = await renderCard(approval, { chrome: 'inline' });
+        expect(screen.findByTestId('approval-prompt-approve')).toBeNull();
+        expect(screen.findByTestId('approval-prompt-reject')).toBeNull();
+        expect(screen.findByTestId('approval-prompt-declined')).toBeTruthy();
+        const text = screen.getTextContent();
+        // Its real disposition, and the request's own review fields.
+        expect(text).toContain(`approvals.status.${status}`);
+        expect(text).toContain('design-reference-public');
+        // The title says the action once; the preview that only repeats it is not a second line.
+        expect(text.match(/Sign in to MCP server/g)).toHaveLength(1);
+    });
+
+    it('keeps a declined call\'s raw output reachable behind Technical details, never beside the review', async () => {
+        const output = '{"status":"failed","code":"approval_rejected"}';
+        const screen = await renderCard(declinedSignIn('rejected'), { chrome: 'inline', toolOutput: output });
+        expect(screen.getTextContent()).not.toContain('approval_rejected');
+        const node = screen.findAllByTestId('approvals.technical-details').find(candidate => typeof candidate.props.onExpandedChange === 'function');
+        await act(async () => { node?.props.onExpandedChange(true); });
+        expect(screen.getTextContent()).toContain('approval_rejected');
+        // An open request has no declined output to keep.
+        const open = await renderCard({ ...declinedSignIn('rejected'), status: 'open', decision: undefined } as ApprovalRequest, { chrome: 'inline', toolOutput: output });
+        expect(open.getTextContent()).not.toContain('approval_rejected');
     });
 
     function failedWriteFile(): ApprovalRequest {

@@ -20,7 +20,7 @@ export type ToolActionFailurePresentation = Readonly<{
 /** The Action vocabulary's policy, permission and authority denials: the call was not allowed, it did not break. */
 const REFUSAL_CODES: ReadonlySet<string> = new Set([
     'unsupported_action', 'permission_denied', 'credential_scope_denied', 'action_disabled', 'present_user_required',
-    'approval_rejected', 'subtree_denied', 'policy_denied_field', 'target_declined', 'denied', 'workspace_write_denied',
+    'approval_rejected', 'approval_canceled', 'subtree_denied', 'policy_denied_field', 'target_declined', 'denied', 'workspace_write_denied',
     'run_access_denied', 'review_comment_permission_denied',
     'codex_tool_restriction_unsupported_auth',
 ]);

@@ -42,6 +42,8 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     failureCode?: string;
     /** The executor's own words for that failure, kept in the same disclosure ahead of its code. */
     failureMessage?: string;
+    /** The call's raw output, kept in the same disclosure when its row defers to this card (a declined request). */
+    outputText?: string;
     /** Card only: the arguments start behind their "Details" line (a phone's inline prompt keeps its decision in view). */
     collapsed?: boolean;
     /**
@@ -62,8 +64,9 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
         () => [...collectApprovalTechnicalLines(allRows),
             ...(props.failureMessage ? [{ key: 'failure-message', label: t('detailPages.approval.failureTitle'), value: props.failureMessage }] : []),
             ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : []),
+            ...(props.outputText ? [{ key: 'tool-output', label: t('toolView.output'), value: props.outputText }] : []),
             ...(props.homeIdentity ? [{ key: 'home-identity', label: t('common.home'), value: props.homeIdentity }] : [])],
-        [allRows, props.failureCode, props.failureMessage, props.homeIdentity],
+        [allRows, props.failureCode, props.failureMessage, props.homeIdentity, props.outputText],
     );
     if (allRows.length === 0 && technical.length === 0) return null;
     const serverId = props.serverId ?? null;

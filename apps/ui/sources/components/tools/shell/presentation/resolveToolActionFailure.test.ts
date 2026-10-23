@@ -25,6 +25,10 @@ describe('resolveToolActionFailure', () => {
             code: 'codex_tool_restriction_unsupported_auth', summary: expect.any(String) });
         expect(resolveToolActionFailure(tool)?.summary).not.toContain('codex_tool_restriction_unsupported_auth');
     });
+    it.each(['approval_rejected', 'approval_canceled'])('presents a declined approval (%s) as refused: the person said no, nothing failed', (code) => {
+        const tool: ToolCall = { ...actionCall('mcp.servers.signIn.start', { errorCode: code, error: code }), state: 'error' };
+        expect(resolveToolActionFailure(tool)).toMatchObject({ outcome: 'refused', code });
+    });
     it('presents a policy refusal as refused, with the cause in words and the typed code kept', () => {
         const tool = actionCall('session.stop', {
             errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' },

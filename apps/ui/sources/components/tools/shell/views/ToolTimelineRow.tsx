@@ -51,7 +51,7 @@ import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOut
 import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
 import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
+import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, hasDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
 import {
@@ -405,11 +405,8 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
             />
         ) : null;
 
-    const approvalCards = React.useMemo(() => {
-        const approvalRequests = props.approvalRequests ?? [];
-        if (approvalRequests.length === 0) return null;
-        const location = buildApprovalToolCallLocation({ messageId: props.messageId });
-        const matchingRequests = approvalRequests.filter((request) =>
+    const matchingApprovalRequests = React.useMemo(
+        () => (props.approvalRequests ?? []).filter((request) =>
             doesApprovalMatchToolCall({
                 request,
                 sessionId: props.sessionId,
@@ -417,15 +414,22 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
                 tool: toolForRendering,
                 normalizedToolName,
             }),
-        );
-        if (matchingRequests.length === 0) return null;
-        return matchingRequests.map((request) => (
+        ),
+        [normalizedToolName, props.approvalRequests, props.messageId, props.sessionId, toolForRendering],
+    );
+    const declinedApprovalShown = hasDeclinedApprovalAtCall(matchingApprovalRequests);
+    const approvalCards = React.useMemo(() => {
+        if (matchingApprovalRequests.length === 0) return null;
+        const location = buildApprovalToolCallLocation({ messageId: props.messageId });
+        const toolOutput = declinedApprovalShown ? readToolOutputText(toolForRendering) : null;
+        return matchingApprovalRequests.map((request) => (
             <ApprovalPromptCard
                 key={request.artifact.id}
                 chrome="inline"
                 artifact={request.artifact}
                 approval={request.approval}
                 location={location}
+                toolOutput={toolOutput}
                 sessionId={props.sessionId!}
                 metadata={props.metadata}
                 canApprovePermissions={interaction.canApprovePermissions && sourceInteraction.canApprovePermissions && transcriptSource.actions !== null}
@@ -433,14 +437,16 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
             />
         ));
     }, [
-        normalizedToolName,
-        props.approvalRequests,
+        declinedApprovalShown,
+        matchingApprovalRequests,
         interaction.canApprovePermissions,
         interaction.permissionDisabledReason,
         props.messageId,
         props.metadata,
         props.sessionId,
+        sourceInteraction.canApprovePermissions,
         toolForRendering,
+        transcriptSource.actions,
     ]);
 
     // An agent's finite Project command or its wait reads its live operation (plan 21 §8); other rows subscribe to nothing.
@@ -509,6 +515,7 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
                             interaction={interaction}
                             detailLevel={renderBodyDetailLevel}
                             setHeaderActions={setHeaderActions}
+                            declinedApprovalShown={declinedApprovalShown}
                         />
                     </View>
                 </TranscriptCollapsible>

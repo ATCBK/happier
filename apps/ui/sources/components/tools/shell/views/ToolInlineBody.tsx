@@ -27,6 +27,8 @@ import {
     getAgentCore,
     } from '@/agents/catalog/catalog';
 import { t } from '@/text';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { isSubAgentRunErrorResult, resolveToolInlineErrorDisplay } from '@/components/tools/shell/presentation/resolveToolInlineErrorDisplay';
 import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
 import { useHistoricalTranscriptAgentId } from '@/components/sessions/transcript/attribution/SessionTranscriptAgentAttributionContext';
@@ -120,6 +122,8 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
     findBodyBlockId?: string;
     detailLevel: 'summary' | 'full';
     executionRun?: ExecutionRunPromptResponseTarget;
+    /** The row shows a declined request's card for this call: that card says what was asked and that the person said no. */
+    declinedApprovalShown?: boolean;
     sectionSpacing?: 'default' | 'compact';
     setHeaderActions: (node: React.ReactNode | null) => void;
 }) {
@@ -184,6 +188,9 @@ export const ToolInlineBody = React.memo(function ToolInlineBody(props: {
             </TextSelectabilityScope>
         );
     }
+
+    // The call ended because the person declined it: the card above says so once, with this output in its Technical details.
+    if (props.declinedApprovalShown && isActionApprovalDeclinedErrorCode(resolveToolActionFailure(tool)?.code)) return null;
 
     // A host confirmation is also materialized as a transcript tool row. Its
     // request is deduplicated there, so that row must retain the decision card.

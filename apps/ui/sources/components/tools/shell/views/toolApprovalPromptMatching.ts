@@ -1,4 +1,5 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
+import { readHappierActionToolPayload } from '@happier-dev/protocol/actions/happierActionToolResult';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 
@@ -38,9 +39,34 @@ export function doesApprovalMatchToolCall(params: Readonly<{
     if (origin.toolCallId) {
         return typeof params.tool.id === 'string' && origin.toolCallId === params.tool.id;
     }
-    if (origin.toolName !== params.tool.name && origin.toolName !== params.normalizedToolName) return false;
-    const originInput = stableSerialize(origin.toolInput);
-    return originInput == null || originInput === stableSerialize(params.tool.input);
+    if (!origin.toolName || (origin.toolName !== params.tool.name
+        && `mcp__happier__${origin.toolName}` !== params.tool.name
+        && origin.toolName !== params.normalizedToolName)) return false;
+    // Clients without native correlation can only match the exact reviewed
+    // input. Reuse the stored Action operands; never persist another raw input
+    // copy or fall back to a tool name alone (notably action_execute).
+    const expectedInput = origin.toolInput ?? (origin.toolName === 'action_execute'
+        ? { actionId: params.request.approval.actionId, input: params.request.approval.actionArgs }
+        : params.request.approval.actionArgs);
+    const originInput = stableSerialize(expectedInput);
+    return originInput !== null && originInput === stableSerialize(readHappierActionToolPayload(params.tool.input));
+}
+
+/** A declined request (rejected or canceled) at this call: its card says what was asked and that the person said no. */
+export function hasDeclinedApprovalAtCall(requests: readonly OpenApprovalArtifactForSession[]): boolean {
+    return requests.some(({ approval }) => approval.status === 'rejected' || approval.status === 'canceled');
+}
+
+/** The call's raw output as text, for the Technical details of the declined card that replaces it in the row. */
+export function readToolOutputText(tool: ToolCall): string | null {
+    const result = tool.result;
+    if (result === undefined || result === null) return null;
+    if (typeof result === 'string') return result.trim() || null;
+    try {
+        return JSON.stringify(result, null, 2) ?? null;
+    } catch {
+        return null;
+    }
 }
 
 export function buildApprovalToolCallLocation(params: Readonly<{

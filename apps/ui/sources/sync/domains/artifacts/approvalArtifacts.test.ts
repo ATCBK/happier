@@ -21,6 +21,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { describeApprovalRequestFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { COMPOSER_SETTLED_APPROVAL_PRESENTATIONS, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 import { doesApprovalMatchToolCall } from '@/components/tools/shell/views/toolApprovalPromptMatching';
+import type { ToolCall } from '@happier-dev/session-core/messages';
 
 function artifact(
     id: string,
@@ -477,6 +478,28 @@ describe('collectOpenApprovalSessionReferences', () => {
 });
 
 describe('listTranscriptApprovalArtifactsForSession', () => {
+    it('matches an uncorrelated MCP approval only by its exact tool and input, never just its name', () => {
+        const approval = ApprovalRequestV2Schema.parse({ ...durableApprovalBody('s1'),
+            origin: { kind: 'transcript_tool_call', sessionId: 's1', toolName: 'action_execute', mcpRequestId: '2' } });
+        const request = { artifact: artifact('uncorrelated', buildApprovalRequestArtifactHeaderV1(approval), approval), approval };
+        const tool = { id: 'provider-call', name: 'mcp__happier__action_execute',
+            input: { actionId: 'session.title.set', input: { title: 'Current title', sessionId: 's1' } },
+            state: 'completed', createdAt: 1, startedAt: 1, completedAt: 2, description: null } as const;
+        const match = (candidate: ToolCall) => doesApprovalMatchToolCall({
+            request, tool: candidate, sessionId: 's1', messageId: 'message-1', normalizedToolName: 'MCP' });
+        expect(match(tool)).toBe(true);
+        expect(match({ ...tool, input: { actionId: 'session.title.set', input: { sessionId: 's1', title: 'Another title' } } })).toBe(false);
+        expect(match({ ...tool, input: { actionId: 'session.title.set' } })).toBe(false);
+        expect(match({ ...tool, name: 'mcp__foreign__action_execute' })).toBe(false);
+        expect(match({ ...tool, input: { actionId: 'skills.delete', input: approval.actionArgs } })).toBe(false);
+        expect(doesApprovalMatchToolCall({ request, tool, sessionId: 'other-session', messageId: 'message-1', normalizedToolName: 'MCP' })).toBe(false);
+        const direct = { ...request, approval: { ...approval, origin: { ...approval.origin!, toolName: 'session_title_set' } } };
+        expect(doesApprovalMatchToolCall({ request: direct, tool: { ...tool, name: 'session_title_set', input: approval.actionArgs },
+            sessionId: 's1', messageId: 'message-1', normalizedToolName: 'session_title_set' })).toBe(true);
+        expect(doesApprovalMatchToolCall({ request: direct, tool: { ...tool, name: 'session_title_set', input: {} },
+            sessionId: 's1', messageId: 'message-1', normalizedToolName: 'session_title_set' })).toBe(false);
+    });
+
     const settled = (status: 'rejected' | 'executed') => ApprovalRequestV2Schema.parse({
         ...durableApprovalBody('s1'), status, updatedAtMs: 2,
         decision: { kind: status === 'rejected' ? 'reject' : 'approve', decidedAtMs: 2 },
