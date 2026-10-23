@@ -1,4 +1,4 @@
-import { DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1, DiscussionListQueryV1Schema, type DiscussionDetailsResponseV1, type DiscussionListResponseV1, type DiscussionMessagesResponseV1 } from '@happier-dev/protocol/discussions/api';
+import { DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1, DiscussionListQueryV1Schema, isDiscussionMessagesSelectionValidV1, type DiscussionDetailsResponseV1, type DiscussionListResponseV1, type DiscussionMessagesResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '@happier-dev/protocol/discussions/replyTargets';
 import type { DiscussionSummaryV1, DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
 import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, validateDiscussionDocContentSource, type DiscussionDocSource } from './docPassages';
@@ -151,17 +151,32 @@ export async function projectReadableMessagesInTx(tx: Tx, input: Reader & Readon
     }) });
 }
 
-/** Internal exact read on the supplied transaction; no second codec or transaction. */
+type ExactDiscussionMessageSelection = Readonly<{ messageId: string; localId?: never } | { localId: string; messageId?: never }>;
+
+/** The same exact-row query and disclosure admission serve internal and public reads. */
+async function readSelectedDiscussionMessageInTx(tx: Tx, input: Reader & ExactDiscussionMessageSelection & Readonly<{
+    discussionId: string; throughSeq?: number; context: DiscussionContext;
+}>): Promise<DiscussionResult<DiscussionMessageV1 | null>> {
+    const row = await tx.discussionMessage.findFirst({ where: {
+        discussionId: input.discussionId,
+        ...(input.messageId !== undefined ? { id: input.messageId } : { localId: input.localId, authorAccountId: input.actorAccountId }),
+        ...(input.throughSeq === undefined ? {} : { seq: { lte: input.throughSeq } }),
+    }, select: DISCUSSION_MESSAGE_SELECT });
+    if (!row) return discussionSuccess(null);
+    const projected = await projectReadableMessagesInTx(tx, { ...input, rows: [row] });
+    return projected.ok ? discussionSuccess(projected.value.messages[0]!) : projected;
+}
+
+/** Internal exact read retains its typed absence result and supplied transaction. */
 export async function readDiscussionMessageInTx(tx: Tx, input: Reader & Readonly<{
     discussionId: string; messageId: string;
 }>): Promise<DiscussionResult<DiscussionMessageV1>> {
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
         accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure('discussion_not_found');
-    const row = await tx.discussionMessage.findFirst({ where: { discussionId: input.discussionId, id: input.messageId }, select: DISCUSSION_MESSAGE_SELECT });
-    if (!row) return discussionFailure('discussion_not_found');
-    const projected = await projectReadableMessagesInTx(tx, { ...input, context, rows: [row] });
-    return projected.ok ? discussionSuccess(projected.value.messages[0]!) : projected;
+    const selected = await readSelectedDiscussionMessageInTx(tx, { ...input, context });
+    if (!selected.ok) return selected;
+    return selected.value === null ? discussionFailure('discussion_not_found') : discussionSuccess(selected.value);
 }
 
 /** Candidate grants narrow before paging; current admission still decides every returned row. */
@@ -240,16 +255,27 @@ export async function getDiscussion(input: Reader & Readonly<{ discussionId: str
     });
 }
 
-/** Ordered, cursor-neutral reads apply the requested sequence ceiling before paging. */
+/** Exact and ordered cursor-neutral reads apply the sequence ceiling before disclosure. */
 export async function readDiscussionMessages(input: Reader & Readonly<{
     discussionId: string; beforeSeq?: number; afterSeq?: number; throughSeq?: number; limit?: number;
+    messageId?: string; localId?: string;
 }>): Promise<DiscussionResult<DiscussionMessagesResponseV1>> {
-    if (input.beforeSeq !== undefined && input.afterSeq !== undefined) return discussionFailure('discussion_invalid_content');
+    if (!isDiscussionMessagesSelectionValidV1(input)) return discussionFailure('discussion_invalid_content');
     return inReadSnapshot(async tx => {
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         const discussion = await readDiscussionRowInTx(tx, input);
         if (!discussion) return discussionFailure('discussion_not_found');
+        const selection = input.messageId !== undefined ? { messageId: input.messageId }
+            : input.localId !== undefined ? { localId: input.localId } : null;
+        if (selection) {
+            const selected = await readSelectedDiscussionMessageInTx(tx, { ...selection, context,
+                actorAccountId: input.actorAccountId, authentication: input.authentication, discussionId: discussion.id,
+                ...(input.throughSeq === undefined ? {} : { throughSeq: input.throughSeq }) });
+            if (!selected.ok) return selected;
+            return discussionSuccess({ messages: selected.value ? [selected.value] : [], hasMoreOlder: false,
+                messageSeq: input.throughSeq === undefined ? discussion.messageSeq : Math.min(discussion.messageSeq, input.throughSeq) });
+        }
         const ascending = input.afterSeq !== undefined;
         const take = pageSize(input.limit);
         const messages: DiscussionMessageV1[] = [];

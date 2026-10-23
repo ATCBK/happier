@@ -25,19 +25,24 @@ export const DiscussionListQueryV1Schema = lazyZodSchema(() => z.strictObject({
   'Doc preparation lists active Discussions only')));
 export type DiscussionListQueryV1 = z.infer<typeof DiscussionListQueryV1Schema>;
 
+/** Exact selectors narrow a read; they cannot also select a history page. */
+export function isDiscussionMessagesSelectionValidV1(value: Readonly<{
+  messageId?: string; localId?: string; beforeSeq?: number; afterSeq?: number; limit?: number;
+}>): boolean {
+  if (value.beforeSeq !== undefined && value.afterSeq !== undefined) return false;
+  if (value.messageId !== undefined && value.localId !== undefined) return false;
+  return value.messageId === undefined && value.localId === undefined
+    || value.beforeSeq === undefined && value.afterSeq === undefined && value.limit === undefined;
+}
+
 export const DiscussionMessagesQueryV1Schema = lazyZodSchema(() => z.strictObject({
+  messageId: z.optional(DiscussionIdSchema),
+  /** Correlation is private to messages authored by the authenticated reader. */
+  localId: z.optional(DiscussionLocalIdSchema),
   beforeSeq: z.optional(z.coerce.number().check(z.int(), z.minimum(1))),
   afterSeq: z.optional(z.coerce.number().check(z.int(), z.minimum(0))),
   limit: z.optional(PageLimitSchema),
   throughSeq: z.optional(z.coerce.number().check(z.int(), z.minimum(0))),
-}).check(z.superRefine((value, context) => {
-  if (value.beforeSeq !== undefined && value.afterSeq !== undefined) {
-    context.addIssue({
-      code: 'custom',
-      path: ['afterSeq'],
-      message: 'beforeSeq and afterSeq are mutually exclusive',
-    });
-  }
-})));
+}).check(z.refine(isDiscussionMessagesSelectionValidV1, 'Exact message selection and history paging are mutually exclusive')));
 export type DiscussionMessagesQueryV1 = z.infer<typeof DiscussionMessagesQueryV1Schema>;
 

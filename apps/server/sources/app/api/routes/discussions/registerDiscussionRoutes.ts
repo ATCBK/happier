@@ -306,6 +306,8 @@ export function registerDiscussionRoutes(app: Fastify) {
         const result = await readDiscussionMessages({
             actorAccountId: request.userId,
             discussionId: request.params.discussionId,
+            ...(request.query.messageId === undefined ? {} : { messageId: request.query.messageId }),
+            ...(request.query.localId === undefined ? {} : { localId: request.query.localId }),
             ...(request.query.beforeSeq === undefined ? {} : { beforeSeq: request.query.beforeSeq }),
             ...(request.query.afterSeq === undefined ? {} : { afterSeq: request.query.afterSeq }),
             ...(request.query.throughSeq === undefined ? {} : { throughSeq: request.query.throughSeq }),

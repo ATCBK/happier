@@ -7,11 +7,32 @@ import * as discussionFamily from './discussionActionFamily.js';
 import { bindHomeDomainHttpRequestV1 } from './homeDomainHttpBinding.js';
 import { buildDiscussionMutationRequestBodyV1 } from '../discussions/api.js';
 import { DiscussionAccessGrantRemoveRequestV1Schema } from '../discussions/access.js';
+import { DiscussionMessagesQueryV1Schema } from '../discussions/query.js';
 import { DiscussionOpenedMessageV1Schema } from '../discussions/actions.js';
 import { DiscussionMessageV1Schema } from '../discussions/models.js';
 import { createDiscussionMessageRefV1, DiscussionMessageRefV1Schema } from '../discussions/messageRefs.js';
 
 describe('Home Discussion Action identity', () => {
+  it('selects one committed message by ID or private local ID without paging operands', () => {
+    for (const selection of [{ messageId: 'message-1' }, { localId: 'private-1' }]) {
+      const input = { discussionId: 'thread', ...selection, throughSeq: 7 };
+      const bound = bindDiscussionActionHttpRequestV1('discussion.read', input);
+      const url = new URL(bound.path, 'https://captured-home.test');
+      expect(url.pathname).toBe('/v1/discussions/thread/messages');
+      expect(DiscussionMessagesQueryV1Schema.parse(Object.fromEntries(url.searchParams)))
+        .toEqual({ ...selection, throughSeq: 7 });
+      for (const paging of [{ beforeSeq: 8 }, { afterSeq: 0 }, { limit: 1 }]) {
+        expect(getActionSpec('discussion.read').inputSchema.safeParse({ ...input, ...paging }).success).toBe(false);
+        expect(DiscussionMessagesQueryV1Schema.safeParse({ ...selection, ...paging }).success).toBe(false);
+      }
+    }
+    const conflicting = { messageId: 'message-1', localId: 'private-1' };
+    expect(getActionSpec('discussion.read').inputSchema.safeParse({ discussionId: 'thread', ...conflicting }).success).toBe(false);
+    expect(DiscussionMessagesQueryV1Schema.safeParse(conflicting).success).toBe(false);
+    expect(DiscussionMessagesQueryV1Schema.safeParse({ messageId: '' }).success).toBe(false);
+    expect(DiscussionMessagesQueryV1Schema.safeParse({ localId: '' }).success).toBe(false);
+  });
+
   it('retains Doc preparation scope only on the active list', () => {
     const scope = { anchorDocArtifactId: 'doc-1' };
     expect(getActionSpec('discussion.list').inputSchema.safeParse({ ...scope, state: 'active' }).success).toBe(true);

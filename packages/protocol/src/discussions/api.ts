@@ -42,6 +42,7 @@ export {
   DISCUSSION_MAX_PAGE_SIZE_V1,
   DiscussionListQueryV1Schema,
   DiscussionMessagesQueryV1Schema,
+  isDiscussionMessagesSelectionValidV1,
 } from './query.js';
 export type {
   DiscussionListQueryV1,

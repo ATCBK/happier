@@ -12,6 +12,7 @@ export type { DiscussionCandidatesListInputV1, DiscussionCandidatesListResultV1,
 import {
   DISCUSSION_MAX_PAGE_SIZE_V1,
   DiscussionListQueryV1Schema,
+  isDiscussionMessagesSelectionValidV1,
 } from './query.js';
 import {
   DISCUSSION_ACTION_IDS_V1,
@@ -98,19 +99,13 @@ export type DiscussionPassInputV1 = z.infer<typeof DiscussionPassInputV1Schema>;
 
 export const DiscussionReadInputV1Schema = lazyZodSchema(() => z.strictObject({
   discussionId: DiscussionIdSchema,
+  messageId: z.optional(DiscussionIdSchema),
+  localId: z.optional(DiscussionLocalIdSchema),
   beforeSeq: z.optional(z.number().check(z.int(), z.minimum(1))),
   afterSeq: z.optional(SequenceSchema),
   throughSeq: z.optional(SequenceSchema),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(DISCUSSION_MAX_PAGE_SIZE_V1))),
-}).check(z.superRefine((value, context) => {
-  if (value.beforeSeq !== undefined && value.afterSeq !== undefined) {
-    context.addIssue({
-      code: 'custom',
-      path: ['afterSeq'],
-      message: 'beforeSeq and afterSeq are mutually exclusive',
-    });
-  }
-})));
+}).check(z.refine(isDiscussionMessagesSelectionValidV1, 'Exact message selection and history paging are mutually exclusive')));
 export type DiscussionReadInputV1 = z.infer<typeof DiscussionReadInputV1Schema>;
 
 const DiscussionSessionParticipantTargetV1Schema = lazyZodSchema(() => z.strictObject({

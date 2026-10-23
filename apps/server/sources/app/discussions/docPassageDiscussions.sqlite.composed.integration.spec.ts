@@ -117,6 +117,20 @@ describe('Doc passage Discussions through the canonical writer and client codec 
                 content: request.firstMessage.content, replyTarget: request.firstMessage.replyTarget });
             expect(JSON.stringify(list.json())).not.toContain('PRIVATE_LATER_CONTENT');
             expect(JSON.stringify(list.json())).not.toContain('PRIVATE_OTHER_DOC');
+            const exactUrl = `/v1/discussions/${first.discussion.id}/messages?messageId=${encodeURIComponent(first.firstMessage.id)}`;
+            const exact = await app.inject({ method: 'GET', url: `${exactUrl}&throughSeq=1` });
+            expect(exact.statusCode).toBe(200);
+            expect(DiscussionMessagesResponseV1Schema.parse(exact.json())).toMatchObject({
+                messages: [{ id: first.firstMessage.id, seq: 1 }], hasMoreOlder: false, messageSeq: 1,
+            });
+            const beforeExact = await app.inject({ method: 'GET', url: `${exactUrl}&throughSeq=0` });
+            expect(beforeExact.statusCode).toBe(200);
+            expect(beforeExact.json()).toEqual({ messages: [], hasMoreOlder: false, messageSeq: 0 });
+            const privateExact = await app.inject({ method: 'GET',
+                url: `/v1/discussions/${first.discussion.id}/messages?localId=${encodeURIComponent(request.firstMessage.localId)}` });
+            expect(privateExact.statusCode).toBe(200);
+            expect(DiscussionMessagesResponseV1Schema.parse(privateExact.json()).messages).toEqual([]);
+            expect((await app.inject({ method: 'GET', url: `${exactUrl}&limit=1` })).statusCode).toBe(400);
             const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
             const destination = await db.session.create({ data: { accountId: reader.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
             await db.sessionShare.create({ data: { sessionId: destination.id, sharedByUserId: reader.id, sharedWithUserId: outsider.id, accessLevel: 'edit' } });
@@ -141,6 +155,9 @@ describe('Doc passage Discussions through the canonical writer and client codec 
                 expect(row.latestMessage).not.toHaveProperty('content');
             }
             expect(JSON.stringify(unavailable.json())).not.toContain('again');
+            const withheldExact = await app.inject({ method: 'GET', url: exactUrl });
+            expect(withheldExact.statusCode).toBe(409);
+            expect(withheldExact.json()).toEqual({ error: 'discussion_content_unavailable' });
             await db.discussionMessage.delete({ where: { id: first.firstMessage.id } });
             const corrupt = await app.inject({ method: 'GET', url: `/v1/discussions?${scope}` });
             expect(corrupt.statusCode).toBe(400);
