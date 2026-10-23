@@ -272,7 +272,6 @@ it.each([8, 500])('keeps unaffected prompt content quiet for one keystroke in a 
     const edited = promptCosts.get('workflow-editor-wait-cost-0')!.read();
     const unaffected = [...promptCosts].filter(([id]) => id !== 'workflow-editor-wait-cost-0')
         .reduce((sum, [, counter]) => sum + counter.read().renders, 0);
-    console.info('Workflow editor key cost', { items: count, edited: edited.renders, unaffected });
     expect(edited.renders).toBeGreaterThan(0);
     expect(unaffected).toBe(0);
 });
