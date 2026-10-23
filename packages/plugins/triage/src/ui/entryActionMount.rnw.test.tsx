@@ -930,7 +930,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Orchestrate this');
+        await pressMenuItem(shell, 'Orchestrate this');
         expect(harness.startRequests).toEqual([]);
         expect(draftsOpened).toBe(0);
         const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Orchestration prompt"]');
@@ -962,7 +962,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Orchestrate this');
+        await pressMenuItem(shell, 'Orchestrate this');
         await pressAction(shell, 'Cancel');
         expect(harness.startRequests).toEqual([]);
         expect(draftsOpened).toBe(0);
@@ -978,7 +978,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Orchestrate this');
+        await pressMenuItem(shell, 'Orchestrate this');
         await pressAction(shell, 'Start orchestration');
         const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Orchestration prompt"]');
         expect(field?.disabled).toBe(true);
@@ -1006,7 +1006,9 @@ describe('the entry action controls on the mounted detail header', () => {
         // that something cannot start beside a Fix that can.
         await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'More actions' })); });
-        await expect(shell.getByRole('button', { name: 'Review' })).resolves.toBeDefined();
+        // A row of the shared menu, disabled, its reason as the row's own subtitle (part of its accessible name).
+        const review = (await shell.getAllByRole('menuitem')).find((row) => row.name?.startsWith('Review') === true);
+        expect(review?.state?.disabled).toBe(true);
         await expect(shell.getByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeDefined();
     }, 60_000);
 
@@ -1316,7 +1318,8 @@ describe('the entry action controls on the mounted detail header', () => {
         // The blocked arm is the one whose DECLARED mode is `pull_request`,
         // independent of its label or target arm.
         await pressAction(shell, 'More actions');
-        const blocked = await shell.findByRole('button', { name: 'Repair pull request' });
+        // A disabled row of the shared menu; its reason is the row's subtitle, so it starts the accessible name.
+        const blocked = (await shell.getAllByRole('menuitem')).find((row) => row.name?.startsWith('Repair pull request') === true)!;
 
         // This fixture admits no preparation operation, so this action would
         // resolve the workspace refusal every time. It is refused BEFORE the
@@ -1327,7 +1330,8 @@ describe('the entry action controls on the mounted detail header', () => {
         await expect(shell.press(blocked)).rejects.toThrow();
 
         expect(harness.startRequests).toEqual([]);
-        await expect(shell.getByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeDefined();
+        // Every blocked row behind More (this one and the seeded Review) carries the reason as its own subtitle.
+        expect(document.body.textContent).toContain(PREPARATION_UNSUPPORTED_COPY);
     }, 60_000);
 
     it('creates nothing when the reader later closes seeded New Session authoring', async () => {
