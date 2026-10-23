@@ -66,6 +66,17 @@ export function createManagedConnectionSupervisor(
     config.onStateChange?.(state);
   }
 
+  function publishConnecting(attempt: number, initial = false): void {
+    publish({
+      ...state,
+      phase: 'connecting',
+      reason: initial ? 'initial_connect' : state.reason,
+      attempt,
+      nextRetryAt: null,
+      lastErrorMessage: null,
+    });
+  }
+
   function clearRetryTimer(): void {
     if (!retryTimer) return;
     clearTimeout(retryTimer);
@@ -92,6 +103,9 @@ export function createManagedConnectionSupervisor(
       await cleanupTransport();
     }
     if (isStopped) return;
+
+    // Starts use attempt zero; retries already publish before their readiness probe.
+    if (params.attempt === 0) publishConnecting(params.attempt, params.initial);
 
     if (params.initial && config.probeBeforeInitialConnect) {
       const probe = await config.probeReadiness().catch((error): ReadinessProbeResult => ({
@@ -197,15 +211,6 @@ export function createManagedConnectionSupervisor(
       }),
     ];
 
-    publish({
-      ...state,
-      phase: 'connecting',
-      reason: params.initial ? 'initial_connect' : state.reason,
-      attempt: params.attempt,
-      nextRetryAt: null,
-      lastErrorMessage: null,
-    });
-
     try {
       await transport.connect();
       if (transport.isConnected()) {
@@ -273,6 +278,7 @@ export function createManagedConnectionSupervisor(
   async function runProbeAndReconnect(attempt: number): Promise<void> {
     if (isStopped) return;
     const localGeneration = generation;
+    publishConnecting(attempt);
     const probe = await config.probeReadiness().catch((error): ReadinessProbeResult => ({
       status: 'server_unreachable',
       errorMessage: error instanceof Error ? error.message : String(error),

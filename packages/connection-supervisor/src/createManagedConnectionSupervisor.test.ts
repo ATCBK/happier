@@ -87,12 +87,14 @@ describe('createManagedConnectionSupervisor', () => {
     const harness = createTransportHarness();
     const probeDeferred = createDeferred<ReadinessProbeResult>();
     const probeReadiness = vi.fn(() => probeDeferred.promise);
+    const phases: string[] = [];
 
     const supervisor = createManagedConnectionSupervisor({
       ...DEFAULT_MANAGED_CONNECTION_POLICY,
       createTransport: () => harness.transport,
       probeReadiness,
       probeBeforeInitialConnect: true,
+      onStateChange: (state) => phases.push(state.phase),
       initialFastRetryDelayMs: 1,
       backoffMinMs: 5,
       backoffMaxMs: 5,
@@ -102,6 +104,7 @@ describe('createManagedConnectionSupervisor', () => {
     const p1 = supervisor.start();
     const p2 = supervisor.start();
 
+    expect(supervisor.getState()).toMatchObject({ phase: 'connecting', nextRetryAt: null });
     expect(probeReadiness).toHaveBeenCalledTimes(1);
     expect(harness.transport.connect).toHaveBeenCalledTimes(0);
 
@@ -109,6 +112,36 @@ describe('createManagedConnectionSupervisor', () => {
     await Promise.all([p1, p2]);
 
     expect(harness.transport.connect).toHaveBeenCalledTimes(1);
+    expect(phases).toEqual(['connecting', 'online']);
+  });
+
+  it('reports retry probes as connecting and clears progress when stopped during a probe', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createTransportHarness();
+      const probe = createDeferred<ReadinessProbeResult>();
+      const supervisor = createManagedConnectionSupervisor({
+        ...DEFAULT_MANAGED_CONNECTION_POLICY,
+        createTransport: () => harness.transport,
+        probeReadiness: () => probe.promise,
+        initialFastRetryDelayMs: 250,
+      });
+      await supervisor.start();
+      harness.emitDisconnect();
+      await flushAsyncCleanup();
+      expect(supervisor.getState()).toMatchObject({ phase: 'offline', nextRetryAt: expect.any(Number) });
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(supervisor.getState()).toMatchObject({ phase: 'connecting', nextRetryAt: null });
+
+      await supervisor.stop();
+      probe.resolve({ status: 'ready' });
+      await flushAsyncCleanup();
+      expect(supervisor.getState().phase).toBe('shutting_down');
+      expect(harness.transport.isConnected()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('can probe before the initial transport connect', async () => {
