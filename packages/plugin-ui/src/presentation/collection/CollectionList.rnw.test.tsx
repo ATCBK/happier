@@ -105,6 +105,38 @@ describe('HappierCollectionList (list presentation)', () => {
     mount.unmount();
   });
 
+  it('folds its rows from the label, or opens what it stands for while a separate control folds', async () => {
+    const calls: string[] = [];
+    const glyphHost: HappierCollectionListHost = { ...host, useGroupGlyphColor: () => '#000' };
+    const press = (container: HTMLElement, testID: string) => {
+      const target = container.querySelector(`[data-testid="${testID}"]`) as HTMLElement | null;
+      expect(target).not.toBeNull();
+      act(() => { target!.click(); });
+    };
+    const mount = mountThroughReactNativeWeb(
+      <HappierCollectionListGroupLabel host={glyphHost} testID="group" title="happier" count={3} countPlacement="title"
+        disclosure={{ expanded: true, onToggle: () => calls.push('toggle') }} rollup={<Text testID="rollup">3/5</Text>} />,
+    );
+    // Expanded: the rollup is redundant with the rows below, so it is not drawn.
+    expect(mount.container.querySelector('[data-testid="rollup"]')).toBeNull();
+    expect(mount.container.querySelector('[data-testid="group:open"]')?.getAttribute('aria-expanded')).toBe('true');
+    press(mount.container, 'group:open');
+    expect(calls).toEqual(['toggle']);
+    expect(mount.container.querySelector('[data-testid="group:fold"]')).toBeNull();
+
+    await mount.render(
+      <HappierCollectionListGroupLabel host={glyphHost} testID="group" title="Needs you" count={4}
+        disclosure={{ expanded: false, onToggle: () => calls.push('toggle'), onOpen: () => calls.push('open') }}
+        rollup={<Text testID="rollup">4</Text>} />,
+    );
+    expect(mount.container.querySelector('[data-testid="rollup"]')).not.toBeNull();
+    press(mount.container, 'group:open');
+    press(mount.container, 'group:fold');
+    expect(calls).toEqual(['toggle', 'open', 'toggle']);
+    expect(mount.container.querySelector('[data-testid="group:fold"]')?.getAttribute('aria-expanded')).toBe('false');
+    mount.unmount();
+  });
+
   it('titles the draft row from the typed name, falling back to the placeholder', () => {
     const titles = createHappierCollectionDraftTitleStore();
     function DraftRow() {

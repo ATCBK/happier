@@ -1,9 +1,12 @@
-import { createContext, memo, useContext, type ComponentType, type ReactElement, type ReactNode } from 'react';
+import { createContext, memo, useContext, useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
 import { Platform, View, type ViewStyle } from 'react-native';
 
 import { useHappierPageSection } from '../layout/PageSection.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_MENU_ROW_METRICS } from '../interaction/Menu.js';
+import { HappierPressable } from '../interaction/Pressable.js';
+import { hasHappierPrecisePointer } from '../interaction/precisePointer.js';
+import { HappierDisclosureChevron } from './DisclosureChevron.js';
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierPageTextStep } from '../layout/pageText.js';
 import { resolveHappierTypeScale, type HappierTypeEmphasis, type HappierTypeRole } from '../text/typeScale.js';
@@ -31,6 +34,7 @@ export type HappierCollectionListHost = Readonly<{
     role: HappierCollectionListTextRole;
     numberOfLines?: number;
     accessibilityRole?: 'header';
+    testID?: string;
     children: ReactNode;
   }>>;
   /** Scrolls the rows (the host's grouped list surface). */
@@ -45,6 +49,11 @@ export type HappierCollectionListHost = Readonly<{
   }>>;
   /** The list's own ground (theme-bound). */
   surfaceStyle: HappierStyleProp;
+  /**
+   * The quiet ink of a group label's own glyphs (its disclosure chevron), read while rendering so it
+   * follows the host's theme. A host without one draws no chevron and keeps the label's press.
+   */
+  useGroupGlyphColor?: () => string;
 }>;
 
 export type HappierCollectionListSearch = Readonly<{
@@ -127,11 +136,18 @@ export const HAPPIER_COLLECTION_LIST_METRICS = Object.freeze({
   headerPaddingTop: 12,
   /** Header → search field, and the field → the first row. */
   headerGap: 4,
+  /**
+   * Groups part by space alone (lab `clspace`, s24): each group reads as one paragraph, its label tight to
+   * its first row. The label's own row is the space it needs above its rows.
+   */
+  groupGap: 24,
+  /** A group label's row: its glyph, title, count, disclosure and hover actions on one line (lab `.ls-h`). */
+  groupLabelHeight: 28,
   /** A group label sits this far below what precedes it and this far above its first row. */
-  groupLabelPaddingTop: 14,
-  groupLabelPaddingBottom: 6,
+  groupLabelPaddingTop: 24,
+  groupLabelPaddingBottom: 0,
   /** A label directly under the header needs less air. */
-  groupLabelFirstPaddingTop: 8,
+  groupLabelFirstPaddingTop: 4,
   /** The box an identity mark sits in, so names align whatever the mark's shape. */
   markSize: 28,
   troubleDotSize: 6,
@@ -298,11 +314,14 @@ const groupLabelRowStyle: ViewStyle = {
 };
 const groupLabelStyle: ViewStyle = {
   ...groupLabelRowStyle,
-  paddingHorizontal: M.contentInset,
-  paddingTop: M.groupLabelPaddingTop,
+  minHeight: M.groupLabelHeight,
+  marginTop: M.groupLabelPaddingTop,
+  paddingLeft: M.contentInset,
+  // Hover actions end on the gutter, so their glyphs sit on the rows' trailing text edge.
+  paddingRight: M.rowInset,
   paddingBottom: M.groupLabelPaddingBottom,
 };
-const groupLabelFirstStyle: ViewStyle = { paddingTop: M.groupLabelFirstPaddingTop };
+const groupLabelFirstStyle: ViewStyle = { marginTop: M.groupLabelFirstPaddingTop };
 const groupLabelMenuStyle: ViewStyle = {
   ...groupLabelRowStyle,
   paddingHorizontal: HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
@@ -311,6 +330,13 @@ const groupLabelMenuStyle: ViewStyle = {
 };
 const groupLabelLeadStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 };
 const groupLabelMarkStyle: ViewStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
+// The disclosure's lead: glyph, title, count and chevron are one press target that hugs its content.
+const groupLabelDisclosureStyle: ViewStyle = { ...groupLabelLeadStyle, gap: 4, alignSelf: 'stretch' };
+const groupLabelDisclosureMarkStyle: ViewStyle = { ...groupLabelMarkStyle, marginRight: 4 };
+const groupLabelSpacerStyle: ViewStyle = { flex: 1, minWidth: 8 };
+const groupLabelActionsStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 2 };
+const groupLabelActionsHiddenStyle: ViewStyle = { opacity: 0 };
+const groupLabelChevronStyle: ViewStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
 const markStyle: ViewStyle = {
   width: HAPPIER_COLLECTION_LIST_METRICS.markSize,
   height: HAPPIER_COLLECTION_LIST_METRICS.markSize,
@@ -390,32 +416,129 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
    * menu's row rhythm above it (the same edge `Menu` group labels use), not on the column's content inset.
    */
   presentation?: 'list' | 'menu';
+  /**
+   * A disclosure (lab `clgroups`): the label folds its rows. Its glyph, title and count are one press target
+   * and the chevron after them turns with the state. Collapsed groups keep the same gap below them.
+   */
+  disclosure?: Readonly<{
+    expanded: boolean;
+    onToggle: () => void;
+    /**
+     * Opens what the group stands for (Needs you → the Inbox) instead of folding it; the chevron becomes the
+     * group's own fold control beside it, a separate target with its own name.
+     */
+    onOpen?: () => void;
+    openAccessibilityLabel?: string;
+    toggleAccessibilityLabel?: string;
+    reducedMotion?: boolean;
+    /** Assistive operations on the group itself (move it up or down), from the domain that owns them. */
+    accessibilityActions?: readonly Readonly<{ name: string; label?: string }>[];
+    onAccessibilityAction?: (event: Readonly<{ nativeEvent: Readonly<{ actionName: string }> }>) => void;
+    disabled?: boolean;
+  }>;
+  /** A nested group's indent, added to the content inset. */
+  indentPx?: number;
+  /** What the folded rows hold (their strongest state, how many need the person): shown only while collapsed. */
+  rollup?: ReactNode;
+  /** The group's own operations (New session here, ⋯): revealed while the pointer rests on it, always on touch. */
+  actions?: ReactNode;
+  /** Keeps the actions showing after the pointer leaves (one of their menus is open). */
+  actionsHeld?: boolean;
+  /** A quiet fact after the title on the label's line (the machine a group's rows run on). */
+  detail?: string;
+  /**
+   * Where the count sits without a trailing state: `end` (the default) is a settings column's end column;
+   * `title` keeps it beside the title ("Drafts 3"), as a navigation column's groups and every disclosure do.
+   */
+  countPlacement?: 'title' | 'end';
+  countTestID?: string;
+  testID?: string;
 }>): ReactElement {
   const { Text } = props.host;
   // Inside a page section's sheet the label heads a group of the sheet's rows
   // (`HappierPageSheetGroup`): the sub-heading step, on the rows' inset.
   const pageSection = useHappierPageSection();
+  const glyphColor = props.host.useGroupGlyphColor?.();
+  const [hovered, setHovered] = useState(false);
+  const containerStyle = pageSection
+    ? [groupLabelRowStyle, {
+        paddingLeft: pageSection.rowInsetPx,
+        paddingRight: pageSection.rowInsetPx,
+        paddingTop: 0,
+        paddingBottom: HAPPIER_PAGE_METRICS.groupHeadingGapPx,
+      }]
+    : props.presentation === 'menu'
+      ? groupLabelMenuStyle
+      : [groupLabelStyle, props.first ? groupLabelFirstStyle : null,
+          props.indentPx ? { paddingLeft: M.contentInset + props.indentPx } : null];
+  const disclosure = pageSection || props.presentation === 'menu' ? undefined : props.disclosure;
+  if (disclosure) {
+    const chevron = glyphColor === undefined ? null : (
+      <HappierDisclosureChevron expanded={disclosure.expanded} color={glyphColor} size={12}
+        {...(disclosure.reducedMotion === undefined ? {} : { reducedMotion: disclosure.reducedMotion })} />
+    );
+    const opens = disclosure.onOpen !== undefined;
+    // Under a precise pointer the actions come with it; on touch nothing hovers, so they stay.
+    const actionsShown = !hasHappierPrecisePointer() || hovered || props.actionsHeld === true;
+    // Siblings, never nested: the lead, the fold control and each action are their own targets.
+    return (
+      <View
+        style={containerStyle}
+        accessibilityRole="header"
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+        {...(props.testID === undefined ? {} : { testID: props.testID })}
+      >
+        <HappierPressable
+          accessibilityRole="button"
+          accessibilityLabel={opens ? disclosure.openAccessibilityLabel ?? props.title : props.title}
+          {...(opens ? {} : { expanded: disclosure.expanded })}
+          onPress={opens ? disclosure.onOpen! : disclosure.onToggle}
+          {...(disclosure.accessibilityActions ? { accessibilityActions: disclosure.accessibilityActions } : {})}
+          {...(disclosure.onAccessibilityAction ? { onAccessibilityAction: disclosure.onAccessibilityAction } : {})}
+          {...(disclosure.disabled ? { disabled: true } : {})}
+          style={groupLabelDisclosureStyle}
+          {...(props.testID === undefined ? {} : { testID: `${props.testID}:open` })}
+        >
+          {props.mark !== undefined ? <View style={groupLabelDisclosureMarkStyle}>{props.mark}</View> : null}
+          <Text role="groupTitle" numberOfLines={1}>{props.title}</Text>
+          {props.detail ? <Text role="groupCount" numberOfLines={1}>{props.detail}</Text> : null}
+          {props.count !== undefined ? <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text> : null}
+          {opens ? null : chevron}
+        </HappierPressable>
+        {opens && chevron ? (
+          <HappierPressable
+            accessibilityRole="button"
+            accessibilityLabel={disclosure.toggleAccessibilityLabel ?? props.title}
+            expanded={disclosure.expanded}
+            onPress={disclosure.onToggle}
+            hitSlop={6}
+            style={groupLabelChevronStyle}
+            {...(props.testID === undefined ? {} : { testID: `${props.testID}:fold` })}
+          >
+            {chevron}
+          </HappierPressable>
+        ) : null}
+        <View style={groupLabelSpacerStyle} />
+        {disclosure.expanded ? null : props.rollup ?? null}
+        {props.actions ? <View style={[groupLabelActionsStyle, actionsShown ? null : groupLabelActionsHiddenStyle]}>{props.actions}</View> : null}
+        {props.trailing ?? null}
+      </View>
+    );
+  }
   return (
     <View
-      style={pageSection
-        ? [groupLabelRowStyle, {
-            paddingLeft: pageSection.rowInsetPx,
-            paddingRight: pageSection.rowInsetPx,
-            paddingTop: 0,
-            paddingBottom: HAPPIER_PAGE_METRICS.groupHeadingGapPx,
-          }]
-        : props.presentation === 'menu'
-          ? groupLabelMenuStyle
-          : [groupLabelStyle, props.first ? groupLabelFirstStyle : null]}
+      style={containerStyle}
       accessibilityRole="header"
+      {...(props.testID === undefined ? {} : { testID: props.testID })}
     >
       <View style={groupLabelLeadStyle}>
         {props.mark !== undefined ? <View style={groupLabelMarkStyle}>{props.mark}</View> : null}
         <Text role={pageSection ? 'groupHeading' : 'groupTitle'} numberOfLines={1}>{props.title}</Text>
         {/* With a trailing state the count stays with its title ("Skills 6 … Loaded when used"); alone it is the end column. */}
-        {props.count !== undefined && props.trailing != null ? <Text role="groupCount">{props.count}</Text> : null}
+        {props.count !== undefined && (props.trailing != null || props.countPlacement === 'title') ? <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text> : null}
       </View>
-      {props.count !== undefined && props.trailing == null ? <Text role="groupCount">{props.count}</Text> : null}
+      {props.count !== undefined && props.trailing == null && props.countPlacement !== 'title' ? <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text> : null}
       {props.trailing ?? null}
     </View>
   );
