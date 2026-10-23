@@ -93,7 +93,19 @@ describe('local conversation voice adapter', () => {
       React.createElement(MainAppTabStateProvider, { children: React.createElement(AppPaneProvider, { children:
         React.createElement(CurrentUiContextProvider, { children: React.createElement(PluginSurfaceFocusEligibilityProvider,
           { active: true, currentUiContextActive: true, children: React.createElement(Publication) }) }) }) }) });
+    const responder = sessionRpcWithServerScope.getMockImplementation();
+    if (!responder) throw new Error('Missing local Voice Socket RPC boundary');
     const screen = await renderScreen(tree);
+    const prewarmEntered = createDeferred<void>();
+    const prewarmReply = createDeferred<void>();
+    sessionRpcWithServerScope.mockImplementation(async request => {
+      if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+        || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+        prewarmEntered.resolve();
+        await prewarmReply.promise;
+      }
+      return responder(request);
+    });
     try {
       const currentUiContext = mountedPort.current;
       if (!currentUiContext) throw new Error('Actual mounted Current UI port unavailable');
@@ -105,8 +117,14 @@ describe('local conversation voice adapter', () => {
       registerVoiceAdapters([adapter]);
       await React.act(async () => {
         await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+        await prewarmEntered.promise;
         const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
-        await vi.waitFor(() => expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'Actual Agent prewarm').toBe(true));
+        // Join prewarm while its daemon reply is held, so initialization must
+        // settle through the real metadata/policy owners before the UI turn.
+        const agentReady = voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+        prewarmReply.resolve();
+        await agentReady;
+        expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'Actual Agent prewarm').toBe(true);
         await send('Read the current screen', 'provider-ui-turn');
       });
       expect(admittedProviderText()).toContain('CURRENT UI CONTEXT');
@@ -114,6 +132,7 @@ describe('local conversation voice adapter', () => {
       expect(admittedProviderText()).toContain(`"screen":${JSON.stringify(currentUi?.navigation.screen)}`);
       expect(admittedProviderText()).not.toContain('PRIVATE_UI_LABEL_SENTINEL');
     } finally {
+      prewarmReply.resolve();
       await screen.unmount();
     }
   });
@@ -175,6 +194,15 @@ describe('local conversation voice adapter', () => {
     const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
     const attention = { serverId: null, available: false, phase: 'idle' as const, runIds: [], refreshFailed: false,
       knownAt: null, hasMore: false, loadingMore: false, loadMoreFailed: false, retry: async () => {}, loadMore: async () => {} };
+    const briefAdmitted = createDeferred<void>();
+    const responder = sessionRpcWithServerScope.getMockImplementation();
+    if (!responder) throw new Error('Missing local Voice Socket RPC boundary');
+    sessionRpcWithServerScope.mockImplementation(async request => {
+      const reply = await responder(request);
+      if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START
+        || request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) briefAdmitted.resolve();
+      return reply;
+    });
     await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
     await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
     setVoiceSessionSnapshot(adapter.getSnapshot());
@@ -186,7 +214,8 @@ describe('local conversation voice adapter', () => {
         workGroups: [], automationAttentionItems: [], workflowAttention: attention, automationAttention: attention,
         isLoading: false, showCaughtUp: true,
       })).toBe(true);
-      await vi.waitFor(() => expect(admittedProviderText()).toContain('INBOX BRIEF'));
+      await briefAdmitted.promise;
+      expect(admittedProviderText()).toContain('INBOX BRIEF');
       expect(admittedProviderText()).toContain('Approvals are tap-only');
     } finally {
       await adapter.stop({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
@@ -215,25 +244,24 @@ describe('local conversation voice adapter', () => {
     await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
     const read = createDeferred<ReturnType<typeof ExecutionRunTurnStreamReadResponseSchema.parse>>();
     const fallback = sessionRpcWithServerScope.getMockImplementation();
-    let reading = false;
+    const reading = createDeferred<void>();
     sessionRpcWithServerScope.mockImplementation(async request => {
       if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
-        reading = true;
+        reading.resolve();
         return read.promise;
       }
       if (!fallback) throw new Error('Missing daemon transport responder');
       return fallback(request);
     });
     const turn = send('A pending reply', 'interrupt-held-turn');
-    await vi.waitFor(() => expect(reading).toBe(true));
-    let interrupted = false;
-    const interruption = adapter.interrupt({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }).then(() => { interrupted = true; });
+    await reading.promise;
+    const interruption = adapter.interrupt({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
     try {
       // Cancelling a reply retains the connection, including while the exact
       // daemon stream acknowledgement has not settled.
       expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
         status: 'connected', mode: 'idle', canStop: true });
-      await vi.waitFor(() => expect(interrupted).toBe(true));
+      await interruption;
       expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
         status: 'connected', mode: 'idle', canStop: true });
       expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running');

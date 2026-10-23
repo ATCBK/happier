@@ -220,6 +220,7 @@ beforeEach(() => {
   createVoiceConversationRuntimeMachine().reset();
 });
 afterEach(async () => {
+  vi.useRealTimers();
   for (const unsubscribe of machineSubscriptions.splice(0)) unsubscribe();
   for (const cleanup of ownedRuntimeCleanups.splice(0)) await cleanup();
   createVoiceConversationRuntimeMachine().reset();
@@ -1837,7 +1838,11 @@ describe('VoiceConversationController', () => {
       expect(exhaustionPublications).toBe(1);
       expect(firstContext.close).toHaveBeenCalledTimes(1);
 
+      // Fresh admission includes real async preparation; only reconnect
+      // backoff belongs to this test's fake clock.
+      vi.useRealTimers();
       await conversation.adapter.start({ sessionId: '', requestedTargetSessionAddress: null });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const secondContext = conversation.context;
       const secondConnection = conversation.getConnection();
       expect(secondContext).not.toBe(firstContext);

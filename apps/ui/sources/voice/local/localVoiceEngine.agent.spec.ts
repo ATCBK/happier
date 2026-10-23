@@ -5,7 +5,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { createDeferred, createSessionFixture, renderScreen } from '@/dev/testkit';
 
 import {
     emitSpeechRecEvent,
@@ -75,6 +75,17 @@ function configureSessionRpcObservers() {
     return incumbent(request);
   });
 }
+
+function holdNextAgentStartAtDaemon() {
+    const reached = createDeferred<void>();
+    const reply = createDeferred<unknown>();
+    ensureAgentRpc.mockImplementationOnce(() => {
+        reached.resolve();
+        return reply.promise;
+    });
+    return { reached: reached.promise, reply };
+}
+
 function createTurnReadReply(reply: { assistantText: string; actions?: readonly VoiceAssistantAction[] }) {
   return ExecutionRunTurnStreamReadResponseSchema.parse({ streamId: 'stream-1',
     events: [{ t: 'done', assistantText: reply.assistantText,
@@ -284,15 +295,28 @@ describe('local voice engine agent behavior', () => {
             },
         });
 
-        ensureAgentRpc.mockResolvedValue(ExecutionRunEnsureOrStartResponseSchema.parse({
+        const unsupported = ExecutionRunEnsureOrStartResponseSchema.parse({
             ok: false, error: 'unsupported', errorCode: 'VOICE_AGENT_UNSUPPORTED',
-        }));
+        });
+        ensureAgentRpc.mockResolvedValue(unsupported);
+        const prewarm = holdNextAgentStartAtDaemon();
 
         localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
         const beforeCapture = await readLocalVoiceMachinePrerequisites();
-        await toggleLocalVoiceTurn('s1');
+        try {
+            await toggleLocalVoiceTurn('s1');
+            await prewarm.reached;
+            // Join the real initializer while its daemon reply is held. The
+            // next user turn must retry a settled failure, not share prewarm.
+            const settlement = expect(voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID))
+                .rejects.toMatchObject({ rpcErrorCode: 'VOICE_AGENT_UNSUPPORTED' });
+            prewarm.reply.resolve(unsupported);
+            await settlement;
+        } finally {
+            prewarm.reply.resolve(unsupported);
+        }
         const afterCapture = await readLocalVoiceMachinePrerequisites();
         await expect(toggleLocalVoiceTurn('s1')).rejects.toMatchObject({ code: 'VOICE_AGENT_UNSUPPORTED' });
 
@@ -807,16 +831,22 @@ describe('local voice engine agent behavior', () => {
         });
 
         const consoleErrorSpy = vi.spyOn(console, 'error');
-        ensureAgentRpc.mockRejectedValueOnce(
-            Object.assign(new Error('RPC method not available'), {
-                rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
-            }),
-        );
+        const prewarm = holdNextAgentStartAtDaemon();
+        const unavailable = Object.assign(new Error('RPC method not available'), {
+            rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+        });
 
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
-        await toggleLocalVoiceTurn('s1');
-
-        await flushMicrotasks(4000);
+        try {
+            await toggleLocalVoiceTurn('s1');
+            await prewarm.reached;
+            const settlement = expect(voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID))
+                .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+            prewarm.reply.reject(unavailable);
+            await settlement;
+        } finally {
+            prewarm.reply.resolve(undefined);
+        }
 
         expect(ensureAgentRpc).toHaveBeenCalledTimes(1);
         expect(consoleErrorSpy.mock.calls.filter(([tag]) =>

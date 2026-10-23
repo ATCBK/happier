@@ -1941,6 +1941,14 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       browser.peer.channel.open();
       await starting;
 
+      const cancellationSent = createDeferredVoid();
+      const send = browser.peer.channel.send.bind(browser.peer.channel);
+      vi.spyOn(browser.peer.channel, 'send').mockImplementation(value => {
+        send(value);
+        if ((JSON.parse(value) as Readonly<{ type?: unknown }>).type === 'response.cancel') {
+          cancellationSent.resolve();
+        }
+      });
       browser.peer.channel.message(JSON.stringify({
         type: 'output_audio_buffer.started',
         event_id: 'interrupted-audio-started',
@@ -1973,11 +1981,12 @@ describe('realtime_openai source-composed WebRTC gate', () => {
         usage: { type: 'duration', seconds: 1 },
       }));
 
-      await vi.waitFor(() => expect(
+      await cancellationSent.promise;
+      expect(
         browser.peer.channel.sent.some((value) => (
           (JSON.parse(value) as Readonly<{ type?: unknown }>).type === 'response.cancel'
         )),
-      ).toBe(true));
+      ).toBe(true);
       expect(readStoredSessionMessages(
         storage.getState(),
         OPENAI_HISTORY_SESSION_ID,
