@@ -7,6 +7,7 @@ import { ScmComparisonSchema, ScmComparisonSourceSchema, type ScmComparison } fr
 import { ReviewLaunchFailureSchema } from '../reviews/reviewLaunchFailure.js';
 import { ReviewPublicationEvidenceSchema } from '../reviews/reviewPublicationEvidence.js';
 import { ExecutionRunTransportErrorCodeSchema } from '../execution/runs/runPrimitives.js';
+import { AGENT_START_REFUSAL_CODES_V1 } from '../account/settings/admitAgentStartV1.js';
 export * from './comparison.js';
 export * from './reviewedMarks.js';
 
@@ -249,6 +250,7 @@ export type ScmDiffSummaryModelOutput = z.infer<typeof ScmDiffSummaryModelOutput
 
 export const ScmDiffSummaryFailureReasonCodeSchema = lazyZodSchema(() => z.union([
   ExecutionRunTransportErrorCodeSchema,
+  z.enum(AGENT_START_REFUSAL_CODES_V1),
   z.enum(['generation_cancelled', 'RPC_CLIENT_NOT_AVAILABLE', 'DIFF_UNAVAILABLE', 'MODEL_UNAVAILABLE', 'SUMMARY_FAILED',
     'action_failed', 'approval_required']),
 ]));

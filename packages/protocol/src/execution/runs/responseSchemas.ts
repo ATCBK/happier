@@ -46,6 +46,7 @@ import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
 import { SessionRuntimeIssueV1Schema } from '../../sessions/control/runtimeIssueV1.js';
 import { ActionInputIssueSchema } from '../../actions/executor/actionInputValidation.js';
+import { ActionErrorClassV1Schema, type ActionErrorClassV1 } from '../../actions/actionErrorClassV1.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -70,6 +71,7 @@ export type ExecutionRunStartRunCreation = z.infer<typeof ExecutionRunStartRunCr
 const ExecutionRunStartFailureEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   runCreation: ExecutionRunStartRunCreationSchema,
+  errorClass: z.optional(ActionErrorClassV1Schema),
 }));
 
 /**
@@ -97,7 +99,12 @@ export function readExecutionRunStartRunCreation(details: unknown): ExecutionRun
 export function withExecutionRunStartFailureDetails(
   details: unknown,
   runCreation: ExecutionRunStartRunCreation,
+  errorClass?: ActionErrorClassV1,
 ): ExecutionRunStartFailureDetailsV1 {
+  const evidence = details && typeof details === 'object' && 'executionRunStart' in details
+    ? details.executionRunStart : undefined;
+  const parsedClass = ActionErrorClassV1Schema.safeParse(errorClass ?? (
+    evidence && typeof evidence === 'object' && 'errorClass' in evidence ? evidence.errorClass : undefined));
   const updateRequired = details && typeof details === 'object' && !Array.isArray(details)
     ? OperationUpdateRequiredV1Schema.safeParse(
         (details as Readonly<Record<string, unknown>>).updateRequired,
@@ -108,7 +115,7 @@ export function withExecutionRunStartFailureDetails(
   const issues = z.array(ActionInputIssueSchema).safeParse(details && typeof details === 'object'
     && 'issues' in details ? details.issues : undefined);
   return {
-    executionRunStart: { v: 1, runCreation },
+    executionRunStart: { v: 1, runCreation, ...(parsedClass.success ? { errorClass: parsedClass.data } : {}) },
     ...(updateRequired?.success ? { updateRequired: updateRequired.data } : {}),
     ...(childChoice.success ? { childChoice: childChoice.data } : {}),
     ...(issues.success ? { issues: issues.data } : {}),

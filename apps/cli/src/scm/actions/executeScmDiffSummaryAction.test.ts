@@ -702,6 +702,7 @@ describe('executeScmDiffSummaryAction', () => {
 
     it.each([
         ['preflight refusal', 'execution_run_protocol_unsupported'],
+        ['preflight target refusal', 'target_unavailable'],
         ['preflight exception', 'action_failed'],
         ['preparation exception', 'action_failed'],
         ['deferred approval', 'approval_required'],
@@ -720,7 +721,9 @@ describe('executeScmDiffSummaryAction', () => {
             approvalsCreate: async () => ({ artifactId: 'nested-start-approval' }),
             executionRunCheckProtocolV2: async () => {
                 if (outcome === 'preflight exception') throw new TypeError('Private preflight content');
-                return outcome === 'preflight refusal'
+                return outcome === 'preflight target refusal'
+                    ? { ok: false, errorCode: 'target_unavailable', error: 'Target is unavailable' }
+                    : outcome === 'preflight refusal'
                     ? { ok: false, errorCode: 'execution_run_protocol_unsupported', error: 'Protocol is unavailable' }
                     : { ok: true, exactMachineId: 'machine' };
             },
@@ -748,7 +751,9 @@ describe('executeScmDiffSummaryAction', () => {
         const logs = observation.mock.calls.filter(([label]) => label === '[scm.diffSummary] nested Start');
         expect(logs).toHaveLength(1);
         expect(logs[0]?.[1]).toMatchObject({ resultId: output.resultId, actionEntered: true,
-            outerRequestId: 'outer-generation-request', runCreation: 'noRunCreated', errorCode: reasonCode,
+            outerRequestId: 'outer-generation-request', runCreation: 'noRunCreated',
+            errorCode: outcome === 'preflight target refusal' ? 'target_unavailable' : reasonCode,
+            errorClass: outcome === 'preflight exception' || outcome === 'preparation exception' ? 'TypeError' : null,
             outcomeClass: outcome === 'deferred approval' ? 'deferredApproval' : 'refused' });
         expect(JSON.stringify(logs)).not.toContain('Private preflight content');
         expect(JSON.stringify(logs)).not.toContain('Private preparation content');
@@ -781,6 +786,7 @@ describe('executeScmDiffSummaryAction', () => {
             expect(logs).toHaveLength(1);
             expect(logs[0]?.[1]).toMatchObject({ resultId: output.resultId,
                 outerRequestId: 'outer-dispatched-request', actionEntered: true,
+                errorClass: outcome === 'lost transport reply' ? 'Error' : null,
                 runCreation: outcome === 'success' ? 'runCreated' : 'outcomeUnknown' });
             expect(JSON.stringify(logs)).not.toContain('Private transport content');
             expect(start).toHaveBeenCalledTimes(1);

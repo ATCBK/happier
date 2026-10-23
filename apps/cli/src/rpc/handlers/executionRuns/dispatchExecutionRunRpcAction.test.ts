@@ -1044,7 +1044,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
       ok: false,
       errorCode: 'execution_run_failed',
       error: 'settings unavailable',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'Error' } },
     });
     expect(preStart).not.toHaveBeenCalled();
 
@@ -1061,11 +1061,11 @@ describe('createExecutionRunRpcActionExecutor', () => {
       ok: false,
       errorCode: 'execution_run_failed',
       error: 'manager disconnected',
-      details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } },
+      details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown', errorClass: 'Error' } },
     });
 
     const providerStart = vi.fn(async () => {
-      throw Object.assign(new Error('Saved Secret selection changed'), {
+      throw Object.assign(new TypeError('Saved Secret selection changed'), {
         code: 'provider_binding_changed',
         details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
       });
@@ -1079,7 +1079,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
       ok: false,
       errorCode: 'provider_binding_changed',
       error: 'Saved Secret selection changed',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'TypeError' } },
     });
 
     // A preparation failure with no typed code of its own keeps its own reason beside
@@ -1096,7 +1096,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
       ok: false,
       errorCode: 'execution_run_profile_preparation_failed',
       error: 'Account settings could not be read',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'Error' } },
     });
   });
 

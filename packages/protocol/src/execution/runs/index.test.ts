@@ -450,6 +450,20 @@ describe('executionRuns protocol', () => {
       .toEqual({ executionRunStart: { v: 1, runCreation: 'noRunCreated' } });
   });
 
+  it('preserves a closed Start exception class through failure projection without accepting private names', () => {
+    const details = { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'TypeError' } };
+    expect(ExecutionRunStartFailureDetailsV1Schema.parse(details)).toEqual(details);
+    expect(withExecutionRunStartFailureDetails(details, 'outcomeUnknown')).toEqual({
+      executionRunStart: { v: 1, runCreation: 'outcomeUnknown', errorClass: 'TypeError' },
+    });
+    expect(readExecutionRunStartRunCreation(details)).toBe('noRunCreated');
+    const privateDetails = { executionRunStart: { v: 1, runCreation: 'noRunCreated', errorClass: 'Private rejected content' } };
+    expect(ExecutionRunStartFailureDetailsV1Schema.safeParse(privateDetails).success).toBe(false);
+    expect(withExecutionRunStartFailureDetails(privateDetails, 'noRunCreated')).toEqual({
+      executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+    });
+  });
+
   it('exposes one strict detached start request projection for durable callers', () => {
     const request = {
       intent: 'task',

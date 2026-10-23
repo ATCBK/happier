@@ -5,6 +5,7 @@ import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdent
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES } from '../rpc/errors.js';
+import { ActionErrorClassV1Schema, type ActionErrorClassV1 } from './actionErrorClassV1.js';
 
 /** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
 export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({
@@ -57,8 +58,6 @@ export const ClientActionRpcFailureCodeV1Schema = lazyZodSchema(() => z.enum([
   ...Object.values(RPC_ERROR_CODES), MACHINE_RPC_TIMEOUT_ERROR_CODE,
   'machine_socket_unavailable', 'machine_rpc_result_decrypt_failed', 'cancelled',
 ]));
-const clientErrorClass = z.string().check(z.refine(value =>
-  readUnexpectedActionErrorDiagnosticV1({ name: value }).errorClass === value));
 const clientHttpStatus = z.nullable(z.number().check(z.int(), z.minimum(100), z.maximum(599)));
 const clientErrorCode = z.string().check(z.refine(value =>
   readUnexpectedActionErrorDiagnosticV1({ name: 'Error', code: value }).errorCode === value
@@ -67,8 +66,8 @@ const clientErrorCode = z.string().check(z.refine(value =>
 export const ClientActionFailureDetailsV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ reason: z.enum(['client_rpc_transport_failure', 'client_rpc_invalid_response']),
     errorCode: z.nullable(ClientActionRpcFailureCodeV1Schema),
-    errorClass: z.optional(clientErrorClass), httpStatus: z.optional(clientHttpStatus) }),
-  z.strictObject({ reason: z.literal('client_execution_exception'), errorClass: clientErrorClass,
+    errorClass: z.optional(ActionErrorClassV1Schema), httpStatus: z.optional(clientHttpStatus) }),
+  z.strictObject({ reason: z.literal('client_execution_exception'), errorClass: ActionErrorClassV1Schema,
     errorCode: z.nullable(clientErrorCode), httpStatus: clientHttpStatus }),
   z.strictObject({ reason: z.literal('client_account_scope_changed') }),
 ]));
@@ -116,12 +115,12 @@ export function projectUnexpectedActionFailureV1(admissionCommitted: boolean | n
 
 /** Code-only diagnostic shared by the existing Home and daemon log owners. */
 export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<{
-  errorClass: string;
+  errorClass: ActionErrorClassV1;
   errorCode: string | null;
   httpStatus: number | null;
   stackFrames: readonly Readonly<{ file: string; line: number; column: number }>[];
 }> {
-  let errorClass = 'UnknownThrownValue';
+  let errorClass: ActionErrorClassV1 = 'UnknownThrownValue';
   let errorCode: string | null = null;
   let httpStatus: number | null = null;
   const stackFrames: Array<{ file: string; line: number; column: number }> = [];
@@ -130,11 +129,8 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
       : error instanceof SyntaxError ? 'SyntaxError' : error instanceof Error ? 'Error' : 'UnknownThrownValue';
     if (error && typeof error === 'object') {
       const name = 'name' in error ? error.name : undefined;
-      if (typeof name === 'string' && ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
-        'AxiosError', 'HttpStatusError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
-        'PrismaClientValidationError', 'PrismaClientInitializationError', 'TransactionConflictExhaustedError',
-        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError',
-        'JsonRpcApplicationError'].includes(name)) errorClass = name;
+      const parsedClass = ActionErrorClassV1Schema.safeParse(name);
+      if (parsedClass.success) errorClass = parsedClass.data;
       const code = 'code' in error ? error.code : undefined;
       // Only known platform/database/Session codes; arbitrary fields may be private content.
       if (typeof code === 'string' && (/^P\d{4}$/u.test(code) || [

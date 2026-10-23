@@ -1,4 +1,5 @@
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { ExecutionRunEnsureOrStartRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunActionRequestSchema, ExecutionRunSendRequestSchema } from '@happier-dev/protocol/execution/runs/index';
@@ -337,11 +338,13 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     const classifyFailure = (
       failure: ExecutionRunRpcFailure,
       runCreation: 'noRunCreated' | 'outcomeUnknown',
+      error?: unknown,
     ): ExecutionRunRpcFailure => ({
       ...failure,
-      details: withExecutionRunStartFailureDetails(failure.details, runCreation),
+      details: withExecutionRunStartFailureDetails(failure.details, runCreation,
+        error === undefined ? undefined : readUnexpectedActionErrorDiagnosticV1(error).errorClass),
     });
-    const beforeStart = (failure: ExecutionRunRpcFailure) => classifyFailure(failure, 'noRunCreated');
+    const beforeStart = (failure: ExecutionRunRpcFailure, error?: unknown) => classifyFailure(failure, 'noRunCreated', error);
 
     if (!isAuthoritativeScope(sessionId)) return beforeStart(executionRunScopeMismatch());
     const disabled = ensureEnabled();
@@ -429,7 +432,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     try {
       accountSettings = await params.context.resolveAccountSettings?.() ?? null;
     } catch (error) {
-      return beforeStart(executionRunSetupFailure(error));
+      return beforeStart(executionRunSetupFailure(error), error);
     }
 
     try {
@@ -480,7 +483,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
             ok: false,
             error: error instanceof Error ? error.message : 'Team visibility grant failed',
             errorCode: 'execution_run_team_session_binding_rejected',
-          });
+          }, error);
         }
         if (!granted.ok) return beforeStart(granted);
       }
@@ -555,9 +558,11 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
       });
       return { ok: true, ...started };
     } catch (error) {
-      const rawDetails = error && typeof error === 'object'
+      const errorDetails = error && typeof error === 'object'
         ? (error as { details?: unknown }).details
         : undefined;
+      const rawDetails = withExecutionRunStartFailureDetails(errorDetails,
+        readExecutionRunStartRunCreation(errorDetails), readUnexpectedActionErrorDiagnosticV1(error).errorClass);
       const runCreation = readExecutionRunStartRunCreation(rawDetails);
       const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
       if (typeof code === 'string' && (AGENT_START_REFUSAL_CODES_V1 as readonly string[]).includes(code)) {
@@ -1056,7 +1061,8 @@ export function createExecutionRunRpcActionExecutor(
         if (!isAgentStartActionV1(actionId)) throw error;
         return {
           ...executionRunSetupFailure(error),
-          details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+          details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated',
+            readUnexpectedActionErrorDiagnosticV1(error).errorClass),
         };
       }
       if (await deps.isActionEnabled?.(actionId, context ?? {}) === false) return await executor.execute(actionId, input, context);

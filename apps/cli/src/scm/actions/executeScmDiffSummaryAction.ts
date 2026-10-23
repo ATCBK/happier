@@ -1,5 +1,5 @@
 import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
-import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunStartResponseSchema, ExecutionRunStartFailureDetailsV1Schema, readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { randomUUID } from 'node:crypto';
 import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryFailureReasonCodeSchema, buildScmDiffSummaryCacheKey, SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION } from '@happier-dev/protocol/scm/diffSummary';
 import { ActionApprovalRequestCreatedResultSchema, readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -186,10 +186,14 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 result = { ok: false, errorCode: code.success ? code.data : 'action_failed', error: 'Execution Run Start failed',
                     details: withExecutionRunStartFailureDetails(details, readExecutionRunStartRunCreation(details)) };
             }
+            if (!result.ok && errorClass === null) {
+                const details = ExecutionRunStartFailureDetailsV1Schema.safeParse(result.details);
+                errorClass = details.success ? details.data.executionRunStart.errorClass ?? null : null;
+            }
             const code = !result.ok ? ScmDiffSummaryFailureReasonCodeSchema.safeParse(result.errorCode) : null;
             logger.infoFile('[scm.diffSummary] nested Start', { resultId: saved.resultId,
                 outerRequestId: params.actionRequestId ?? null, actionEntered: true, outcomeClass,
-                errorCode: code?.success ? code.data : result.ok ? null : 'action_failed', errorClass,
+                errorCode: code?.success ? code.data : null, errorClass,
                 runCreation: outcomeClass === 'started' ? 'runCreated'
                     : result.ok ? 'outcomeUnknown' : readExecutionRunStartRunCreation(result.details) });
             return result;
