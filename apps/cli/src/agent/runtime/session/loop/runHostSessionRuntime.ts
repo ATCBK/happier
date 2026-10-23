@@ -2631,7 +2631,8 @@ export async function runHostSessionRuntime(
     config.pluginRuntimeRegistryLease?.registry.contributes,
   );
   const receivesUserMcpServers = agentReceivesUserMcpServersV1(agentToolsDelivery);
-  const mcpToolControl = (config.pluginRuntimeRegistryLease?.registry.contributes ?? readAgentCatalogSnapshot()).catalogEntriesById[policyAgentId]?.mcpToolControl;
+  const agentToolCapabilities = (config.pluginRuntimeRegistryLease?.registry.contributes ?? readAgentCatalogSnapshot()).catalogEntriesById[policyAgentId];
+  const mcpToolControl = agentToolCapabilities?.mcpToolControl;
   const mcpAccountLifetimeToken = sessionOpenContext.lifetimeToken;
   const mcpAccountScopeKey = sessionOpenContext.scopeKey;
   const resolveMcpAccountSettingsSnapshot: NonNullable<HostSessionRuntimeFactoryParams['resolveAccountSettingsSnapshot']> = async input => {
@@ -2775,6 +2776,7 @@ export async function runHostSessionRuntime(
       agentId: policyAgentId,
       agentAcceptsUserMcp: receivesUserMcpServers,
       mcpToolControl,
+      mcpToolCallIdMetaKey: agentToolCapabilities?.mcpToolCallIdMetaKey,
       mcpPermissionHandler: permissionHandler,
       includeHappierMcpServer: agentToolsDelivery === 'native_mcp',
       sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,

@@ -97,6 +97,7 @@ function buildSessionAgentApprovalOrigin(params: Readonly<{
     sessionId: string;
     toolName: string;
     extra: unknown;
+    toolCallId?: string;
 }>): ApprovalRequestOriginV1 | null {
     if (params.surface !== 'agent') return null;
     const rawRequestId = (params.extra as { requestId?: unknown } | null | undefined)?.requestId;
@@ -104,15 +105,10 @@ function buildSessionAgentApprovalOrigin(params: Readonly<{
         typeof rawRequestId === 'string' || typeof rawRequestId === 'number'
             ? String(rawRequestId).trim()
             : '';
-    const metadata = (params.extra as { _meta?: Record<string, unknown> } | null | undefined)?._meta;
-    // Codex sends the native call id (not its response itemId); Claude sends
-    // the tool_use id. The stdio bridge preserves both metadata fields.
-    const rawToolCallId = metadata?.callId ?? metadata?.['claudecode/toolUseId'];
-    const toolCallId = typeof rawToolCallId === 'string' ? rawToolCallId.trim() : '';
     return {
         kind: 'transcript_tool_call',
         sessionId: params.sessionId,
-        ...(toolCallId ? { toolCallId } : {}),
+        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
         ...(requestId ? { mcpRequestId: requestId } : {}),
         toolName: params.toolName,
     };
@@ -298,6 +294,7 @@ export function registerHappierMcpBuiltInTools(
         sessionId: string;
         workingDirectory?: string | null;
         sessionMachineId?: string | null;
+        mcpToolCallIdMetaKey?: string;
         surface: BuiltInHappierToolsSurface;
         actionsSettings?: ActionsSettingsV1 | null;
         getActionsSettings?: (() => ActionsSettingsV1 | null) | null;
@@ -334,11 +331,14 @@ export function registerHappierMcpBuiltInTools(
                 const stopProgressKeepalive = startMcpToolProgressKeepalive(extra);
                 try {
                     const sessionId = params.resolveSessionId ? params.resolveSessionId(args) : params.sessionId;
+                    const metadata = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta;
+                    const nativeId = params.mcpToolCallIdMetaKey ? metadata?.[params.mcpToolCallIdMetaKey] : undefined;
                     const approvalOrigin = buildSessionAgentApprovalOrigin({
                         surface: params.surface,
                         sessionId,
                         toolName: tool.name,
                         extra,
+                        toolCallId: typeof nativeId === 'string' ? nativeId.trim() || undefined : undefined,
                     });
                     // JSON-RPC ids correlate a connection and can restart at zero,
                     // including when a new client reaches this same live server.

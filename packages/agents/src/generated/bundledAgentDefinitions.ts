@@ -491,6 +491,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolCallIdMetaKey": "claudecode/toolUseId",
       "mcpToolControl": {
         "approval": "host",
         "off": "hidden"
@@ -1483,6 +1484,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolCallIdMetaKey": "callId",
       "mcpToolControl": {
         "approval": "host",
         "off": "hidden"

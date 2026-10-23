@@ -154,6 +154,7 @@ export type AgentToolsConfig = Readonly<{
     support: AgentToolsSupportLevel;
     mcpToolControl?: Readonly<{ off: 'hidden' | 'blocked'; approval: 'native' | 'host' }>;
     mcpToolLoading?: 'every_turn' | 'on_demand';
+    mcpToolCallIdMetaKey?: string;
 }>;
 
 export type AgentCoreRuntimeControlSurface = Readonly<{

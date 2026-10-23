@@ -738,11 +738,11 @@ describe('registerHappierMcpBuiltInTools', () => {
   });
 
   it.each([
-    { label: 'Codex 0.162.1', meta: { callId: 'exec-transcript-call', itemId: 'fc-response-item' }, toolCallId: 'exec-transcript-call' },
-    { label: 'Claude Code 2.1.304', meta: { 'claudecode/toolUseId': 'toolu-transcript-call' }, toolCallId: 'toolu-transcript-call' },
-    { label: 'uncorrelated client', meta: { progressToken: 1 }, toolCallId: undefined },
-    { label: 'malformed correlation', meta: { callId: 2, 'claudecode/toolUseId': '' }, toolCallId: undefined },
-  ])('derives honest approval origin metadata for $label', async ({ meta, toolCallId }) => {
+    { label: 'Codex 0.162.1', key: 'callId', meta: { callId: 'exec-transcript-call', itemId: 'fc-response-item' }, toolCallId: 'exec-transcript-call' },
+    { label: 'Claude Code 2.1.304', key: 'claudecode/toolUseId', meta: { 'claudecode/toolUseId': 'toolu-transcript-call' }, toolCallId: 'toolu-transcript-call' },
+    { label: 'uncorrelated client', key: undefined, meta: { progressToken: 1 }, toolCallId: undefined },
+    { label: 'malformed correlation', key: 'callId', meta: { callId: 2, 'claudecode/toolUseId': '' }, toolCallId: undefined },
+  ])('derives honest approval origin metadata for $label', async ({ key, meta, toolCallId }) => {
     const handlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
     const executeActionByToolName = vi.fn(async () => ({ ok: true as const, result: { sessions: [] } }));
     const actionsSettings = ActionsSettingsV1Schema.parse({
@@ -762,6 +762,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       },
     }, {
       sessionId: 'sess-1',
+      mcpToolCallIdMetaKey: key,
       surface: 'agent',
       actionsSettings,
       deps: {

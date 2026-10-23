@@ -186,6 +186,7 @@ type RunnerMcpServersParams = Readonly<{
   agentId?: string | null;
   agentAcceptsUserMcp?: boolean;
   mcpToolControl?: PluginAgentToolsCapabilityV2['mcpToolControl'];
+  mcpToolCallIdMetaKey?: PluginAgentToolsCapabilityV2['mcpToolCallIdMetaKey'];
   sessionMetadata?: Readonly<Record<string, unknown>> | null;
   env?: ProcessEnvInput;
   tmpDir?: string | null;
@@ -407,6 +408,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   const builtIn = params.includeHappierMcpServer === false
     ? { happierMcpServer: { stop: () => undefined }, mcpServers: emptyMcpServers }
     : await createHappierMcpBridge(scopedSession, {
+    mcpToolCallIdMetaKey: params.mcpToolCallIdMetaKey,
     commandMode: params.commandMode,
     sessionCredentials: params.credentials,
     credentials: accountCredentials,

@@ -7,17 +7,31 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { normalizeToolCallV2 } from '@/agent/tools/normalization';
+import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
+import { PLUGIN_MANIFEST as CODEX_MANIFEST } from '@happier-dev/plugins-codex/manifest';
+import { PLUGIN_MANIFEST as CLAUDE_MANIFEST } from '@happier-dev/plugins-claude/manifest';
+import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
 import { registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
-import { doesApprovalMatchToolCall } from '../../../../ui/sources/components/tools/shell/views/toolApprovalPromptMatching';
+import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests } from '../../../../ui/sources/components/tools/shell/views/toolApprovalPromptMatching';
 import { listTranscriptApprovalArtifactsForSession } from '../../../../ui/sources/sync/domains/artifacts/approvalArtifacts';
 import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '../../../../ui/sources/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 
 describe('MCP approval origin to stored transcript review', () => {
   it.each([
-    { label: 'Codex 0.162.1', meta: { callId: 'exec-owned-call', itemId: 'fc-distinct-item' }, correlated: true },
-    { label: 'Claude Code 2.1.304', meta: { 'claudecode/toolUseId': 'exec-owned-call' }, correlated: true },
-    { label: 'client without native correlation', meta: { progressToken: 1 }, correlated: false },
-  ])('keeps the $label pending and declined review at its native call', async ({ meta, correlated }) => {
+    { label: 'Codex 0.162.1', definition: CODEX_MANIFEST.contributes.agents[0]!, meta: { callId: 'exec-owned-call', itemId: 'fc-distinct-item' }, correlated: true },
+    { label: 'Claude Code 2.1.304', definition: CLAUDE_MANIFEST.contributes.agents[0]!, meta: { 'claudecode/toolUseId': 'exec-owned-call' }, correlated: true },
+    { label: 'Codex with absent metadata', definition: CODEX_MANIFEST.contributes.agents[0]!, meta: undefined, correlated: false },
+    { label: 'Claude with absent metadata', definition: CLAUDE_MANIFEST.contributes.agents[0]!, meta: undefined, correlated: false },
+    { label: 'contribution without a key', definition: { ...CODEX_MANIFEST.contributes.agents[0]!, capabilities: {
+      ...CODEX_MANIFEST.contributes.agents[0]!.capabilities, tools: { delivery: 'native_mcp' as const },
+    } }, meta: { callId: 'must-not-infer-codex', 'claudecode/toolUseId': 'must-not-infer-claude' }, correlated: false },
+    { label: 'external contribution', definition: { ...CODEX_MANIFEST.contributes.agents[0]!, id: 'external', capabilities: {
+      ...CODEX_MANIFEST.contributes.agents[0]!.capabilities, tools: { delivery: 'native_mcp' as const, mcpToolCallIdMetaKey: 'acme.example/nativeCall' },
+    } }, meta: { 'acme.example/nativeCall': 'exec-owned-call', callId: 'foreign-field' }, correlated: true },
+  ])('keeps the $label pending and declined review at its native call', async ({ definition, meta, correlated }) => {
+    const admitted = PluginAgentContributionV2Schema.parse(definition);
+    const entry = createManifestAgentCatalogEntry({ agentId: admitted.id, pluginId: 'fixture.agent', definition: admitted,
+      cli: admitted.cli ?? null, provenance: 'external' });
     let stored: string | undefined;
     const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
       'session.title.set': { approvalRequiredSurfaces: ['agent'] },
@@ -37,19 +51,22 @@ describe('MCP approval origin to stored transcript review', () => {
     } });
     const server = new McpServer({ name: 'happier', version: '1' });
     registerHappierMcpBuiltInTools(server, { sessionId: 'session-owned', sessionMachineId: 'machine-owned', surface: 'agent', actionsSettings,
+      mcpToolCallIdMetaKey: entry?.mcpToolCallIdMetaKey,
       deps: { ...bridge, changeTitle: async () => { throw new Error('Unexpected title transport'); },
         resolveActionOptions: args => bridge.resolveActionOptions(args, 'session-owned') } });
     const client = new Client({ name: 'native-correlation', version: '1' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     try {
       await server.connect(serverTransport); await client.connect(clientTransport);
-      await client.callTool({ name: 'action_execute', arguments: { actionId: 'session.title.set', input: { sessionId: 'session-owned', title: 'Owned title' } }, _meta: meta });
+      // Metadata-less clients may omit the exact Session supplied by the binding owner.
+      const rawInput = { actionId: 'session.title.set', input: { ...(meta ? { sessionId: 'session-owned' } : {}), title: 'Owned title' } };
+      await client.callTool({ name: 'action_execute', arguments: rawInput, _meta: meta });
       expect(stored).toBeDefined();
       const open = ApprovalRequestV2Schema.parse(JSON.parse(stored!));
       expect(open.origin).toMatchObject({ toolName: 'action_execute', mcpRequestId: expect.any(String) });
       expect(open.origin?.toolCallId).toBe(correlated ? 'exec-owned-call' : undefined);
       expect(open.origin?.mcpRequestId).not.toBe('exec-owned-call');
-      const rawInput = { actionId: 'session.title.set', input: { sessionId: 'session-owned', title: 'Owned title' } };
+      expect(open.actionArgs).toEqual({ sessionId: 'session-owned', title: 'Owned title' });
       const normalized = normalizeToolCallV2({ protocol: 'codex', provider: 'codex', toolName: 'mcp__happier__action_execute', rawInput, callId: 'exec-owned-call' });
       const tool = { id: 'exec-owned-call', name: normalized.canonicalToolName, input: normalized.input,
         state: 'completed', createdAt: 1, startedAt: 1, completedAt: 2, description: null } as const;
@@ -63,6 +80,8 @@ describe('MCP approval origin to stored transcript review', () => {
         expect(selected).toHaveLength(1);
         const match = (id: string) => doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'session-owned', messageId: 'message-owned', tool: { ...tool, id }, normalizedToolName: 'MCP' });
         expect(match('exec-owned-call')).toBe(true);
+        expect(selectMatchingToolApprovalRequests({ requests: selected, sessionId: 'session-owned', messageId: 'message-owned', tool, normalizedToolName: 'MCP' })).toEqual(selected);
+        expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'other-session', messageId: 'message-owned', tool, normalizedToolName: 'MCP' })).toBe(false);
         if (correlated) {
           expect(match('exec-other-call')).toBe(false);
           expect(match(open.origin!.mcpRequestId!)).toBe(false);
@@ -71,6 +90,22 @@ describe('MCP approval origin to stored transcript review', () => {
           rawInput: { ...rawInput, input: { ...rawInput.input, title: 'Another title' } }, callId: 'exec-other-call' });
         expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'session-owned', messageId: 'message-owned',
           tool: { ...tool, id: 'exec-other-call', input: otherInput.input }, normalizedToolName: 'MCP' })).toBe(false);
+        if (correlated) {
+          expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'session-owned', messageId: 'message-owned',
+            tool: { ...tool, input: otherInput.input }, normalizedToolName: 'MCP' })).toBe(true);
+        }
+        if (!correlated) {
+          const wrongSessionInput = normalizeToolCallV2({ protocol: 'codex', provider: 'codex', toolName: 'mcp__happier__action_execute',
+            rawInput: { ...rawInput, input: { ...rawInput.input, sessionId: 'other-session' } }, callId: 'exec-owned-call' });
+          expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'session-owned', messageId: 'message-owned',
+            tool: { ...tool, input: wrongSessionInput.input }, normalizedToolName: 'MCP' })).toBe(false);
+          expect(selectMatchingToolApprovalRequests({ requests: selected, sessionId: 'session-owned', messageId: 'message-owned',
+            tool: { ...tool, input: wrongSessionInput.input }, normalizedToolName: 'MCP' })).toEqual([]);
+          const wrongActionInput = normalizeToolCallV2({ protocol: 'codex', provider: 'codex', toolName: 'mcp__happier__action_execute',
+            rawInput: { ...rawInput, actionId: 'session.message.send' }, callId: 'exec-owned-call' });
+          expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 'session-owned', messageId: 'message-owned',
+            tool: { ...tool, input: wrongActionInput.input }, normalizedToolName: 'MCP' })).toBe(false);
+        }
       }
     } finally { await client.close(); await server.close(); }
   });

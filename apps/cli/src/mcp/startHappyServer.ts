@@ -112,6 +112,7 @@ export type HappyMcpSessionClient = {
 };
 
 type HappySessionToolRuntimeOptions = Readonly<{
+    mcpToolCallIdMetaKey?: string;
     sessionCredentials?: StoredCredentials | null;
     credentials?: StoredCredentials | null;
     isCredentialCurrent?: () => boolean | Promise<boolean>;
@@ -224,6 +225,7 @@ export function registerHappierSessionAgentToolRpc(
                 return { ok: false as const, errorCode: error.code, error: error.message };
             }
             const runtime = createHappierMcpServer(client, {
+                mcpToolCallIdMetaKey: opts?.mcpToolCallIdMetaKey,
                 sessionCredentials: opts?.sessionCredentials ?? opts?.credentials ?? null,
                 credentials: opts?.credentials ?? null,
                 isCredentialCurrent: opts?.isCredentialCurrent,
@@ -373,6 +375,7 @@ export async function startHappyServer(
         // In newer MCP SDK versions, stateless transports are single-use; reusing
         // one transport across requests can surface as client-side "Error POSTing to endpoint".
         const { mcp } = createHappierMcpServer(client, {
+            mcpToolCallIdMetaKey: opts?.mcpToolCallIdMetaKey,
             sessionCredentials: opts?.sessionCredentials ?? opts?.credentials ?? null,
             credentials: opts?.credentials ?? null,
             isCredentialCurrent: opts?.isCredentialCurrent,

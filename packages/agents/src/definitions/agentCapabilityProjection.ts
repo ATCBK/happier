@@ -44,6 +44,7 @@ export type AgentDefinitionCapabilityFacts = Readonly<{
     delivery?: string;
     mcpToolControl?: Readonly<{ off: string; approval: string }>;
     mcpToolLoading?: string;
+    mcpToolCallIdMetaKey?: string;
   }> | null;
   structuredOutput?: Readonly<{ formats: readonly string[] }>;
 }>;
@@ -155,7 +156,9 @@ function projectToolsCapability(
   const mcpToolControl: PluginAgentToolsCapabilityV2['mcpToolControl'] = control && (control.off === 'hidden' || control.off === 'blocked') && (control.approval === 'native' || control.approval === 'host')
     ? { off: control.off, approval: control.approval } as const : undefined;
   const mcpToolLoading = facts.tools?.mcpToolLoading;
+  const mcpToolCallIdMetaKey = facts.tools?.mcpToolCallIdMetaKey;
   return { delivery, ...(mcpToolControl ? { mcpToolControl } : {}),
+    ...(mcpToolCallIdMetaKey ? { mcpToolCallIdMetaKey } : {}),
     ...(mcpToolLoading === 'every_turn' || mcpToolLoading === 'on_demand' ? { mcpToolLoading } : {}) };
 }
 

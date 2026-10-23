@@ -444,6 +444,8 @@ export const PluginAgentToolsCapabilityV2Schema = lazyZodSchema(() => z.strictOb
   delivery: PluginAgentToolsDeliveryV2Schema,
   mcpToolControl: z.optional(z.strictObject({ off: z.enum(['hidden', 'blocked']), approval: z.enum(['native', 'host']) })),
   mcpToolLoading: z.optional(z.enum(['every_turn', 'on_demand'])),
+  /** Native transcript call id in MCP request _meta; absent means no native correlation. */
+  mcpToolCallIdMetaKey: z.optional(z.string().check(z.minLength(1))),
 }));
 export type PluginAgentToolsCapabilityV2 = z.infer<typeof PluginAgentToolsCapabilityV2Schema>;
 

@@ -143,6 +143,7 @@ async function writeMcpSessionStateFieldMetadata(params: Readonly<{
 export function createHappierMcpServer(
   client: HappyMcpSessionClient,
   opts?: Readonly<{
+    mcpToolCallIdMetaKey?: string;
     /** Session transport authentication; does not grant Account-wide Action authority. */
     sessionCredentials?: StoredCredentials | null;
     /** Account-scoped Action authority. Existing callers default this from credentials. */
@@ -690,6 +691,7 @@ export function createHappierMcpServer(
     isActionEnabled: actionToolBridge.isActionEnabled,
   };
   const { toolNames } = registerHappierMcpBuiltInTools(mcp, {
+    mcpToolCallIdMetaKey: opts?.mcpToolCallIdMetaKey,
     sessionId: client.sessionId,
     workingDirectory: sessionLocation?.path,
     sessionMachineId: sessionLocation?.machineId ?? null,

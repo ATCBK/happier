@@ -73,6 +73,7 @@ export async function createHappierMcpBridge(
   session: HappyMcpSessionClient,
   opts: {
     commandMode?: 'direct-script' | 'current-process'
+    mcpToolCallIdMetaKey?: string
     sessionCredentials?: StoredCredentials | null
     credentials?: StoredCredentials | null
     isCredentialCurrent?: () => boolean | Promise<boolean>
@@ -100,6 +101,7 @@ export async function createHappierMcpBridgeWithOptions(
   session: HappyMcpSessionClient,
   opts: {
     commandMode?: 'direct-script' | 'current-process'
+    mcpToolCallIdMetaKey?: string
     sessionCredentials?: StoredCredentials | null
     credentials?: StoredCredentials | null
     isCredentialCurrent?: () => boolean | Promise<boolean>
@@ -122,6 +124,7 @@ export async function createHappierMcpBridgeWithOptions(
 }> {
   const { startHappyServer } = await import('@/mcp/startHappyServer')
   const happierMcpServer = await startHappyServer(session, {
+    mcpToolCallIdMetaKey: opts.mcpToolCallIdMetaKey,
     sessionCredentials: opts.sessionCredentials ?? opts.credentials ?? null,
     credentials: opts.credentials ?? null,
     isCredentialCurrent: opts.isCredentialCurrent,

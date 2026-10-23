@@ -541,7 +541,9 @@ export function registerSessionClientRuntimeHandlers(
                         machineId: sessionMachineId,
                     }),
                 });
+                const agentToolCapabilities = readAgentCatalogSnapshot().catalogEntriesById[request.agentId];
                 const resolved = await resolveRunnerMcpServers({
+                    mcpToolCallIdMetaKey: agentToolCapabilities?.mcpToolCallIdMetaKey,
                     session: parentMcpSession,
                     credentials,
                     accountCredentials: ownerCredentials,
