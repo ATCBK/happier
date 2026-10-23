@@ -10,11 +10,10 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { t } from '@/text';
 import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { buildSessionListReachabilityRenderableKey, useProjectSessions, useSessionListRowRenderablesForItems, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { useProjectSessions, useSessionListRowRenderablesForItems, useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
 import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
-import { normalizeWorkspaceRootPath } from '@/sync/domains/workspaces/workspaceScope';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { projectReviewEvidenceSessions, type ProjectReviewEvidenceSession } from './projectReviewEvidenceSessions';
 
 /** Only the mounted review demands the canonical, separately admitted Project roster. */
 function ProjectReviewSurface(props: WorkspaceScmReviewDetailsViewProps) {
@@ -24,13 +23,12 @@ function ProjectReviewSurface(props: WorkspaceScmReviewDetailsViewProps) {
         [checkout?.serverId, checkout?.projectKey, checkout?.id]);
     const roster = useProjectSessions(project);
     const rows = useSessionListRowRenderablesForItems(roster.items);
-    const evidenceSessions = React.useMemo(() => roster.items.flatMap(item => {
-        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
-        const row = key ? rows.get(key) : null;
-        if (!row?.metadata || row.metadata.machineId !== props.machineId
-            || normalizeWorkspaceRootPath(row.metadata.path) !== normalizeWorkspaceRootPath(props.rootPath)) return [];
-        return [{ sessionId: item.sessionId, label: getSessionName(row, item.serverId), latestTurnId: row.latestTurnId }];
-    }), [roster.items, rows, props.machineId, props.rootPath]);
+    const publishedEvidence = React.useRef<readonly ProjectReviewEvidenceSession[] | undefined>(undefined);
+    const evidenceSessions = React.useMemo(() => {
+        const next = projectReviewEvidenceSessions(roster.items, rows, props, publishedEvidence.current);
+        publishedEvidence.current = next;
+        return next;
+    }, [roster.items, rows, props.machineId, props.rootPath]);
     return <WorkspaceScmReviewDetailsView {...props} evidenceSessions={evidenceSessions} />;
 }
 
