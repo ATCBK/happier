@@ -64,6 +64,7 @@ export async function createSessionListQuerySourceHarness() {
     const rowIds = new Map<string, string[]>();
     const gates = new Map<string, Promise<void>>();
     const releases = new Map<string, () => void>();
+    const failures = new Map<string, 'all' | 'nextPage'>();
     const accountIds = new Map<string, string>();
     const serverIds: string[] = [];
     const urls = ['https://query-source-a.test', 'https://query-source-b.test', 'https://query-source-c.test'];
@@ -118,6 +119,8 @@ export async function createSessionListQuerySourceHarness() {
             signal?.addEventListener('abort', () => { aborts.count += 1; }, { once: true });
             queryRequests.push({ serverId, cursor, signal, aborts });
             events.push({ kind: 'query', serverId });
+            const failure = failures.get(serverId);
+            if (failure === 'all' || (failure === 'nextPage' && cursor)) return { body: {}, status: 503, respondAfter: gates.get(serverId) };
             const currentAccountId = accountIds.get(serverId)!;
             return { body: page(cursor ? [`${currentAccountId}-page-2`] : rowIds.get(serverId) ?? [`${currentAccountId}-row`],
                 cursor ? null : `cursor:${currentAccountId}`), respondAfter: gates.get(serverId) };
@@ -172,6 +175,11 @@ export async function createSessionListQuerySourceHarness() {
         setRows(serverId: string, sessionIds: string[]) { rowIds.set(serverId, sessionIds); },
         holdQueries(serverId: string) {
             gates.set(serverId, new Promise(resolve => { releases.set(serverId, resolve); }));
+        },
+        /** Answer the strict query with HTTP 503 (every page, or only pages after the first) until `null`. */
+        failQueries(serverId: string, failing: 'all' | 'nextPage' | null) {
+            if (failing === null) failures.delete(serverId);
+            else failures.set(serverId, failing);
         },
         releaseQueries(serverId: string) {
             gates.delete(serverId);
