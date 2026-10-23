@@ -10,8 +10,11 @@ import { readThemeProfilePathValue } from '@/theme/profiles/themeProfilePathAcce
 import { getThemeProfileTokenDefinition } from '@/theme/profiles/themeProfileTokenRegistry';
 import type { ThemeProfileMode, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
 
+import { shadowLevelStyle } from '@/shadowElevation';
+
 import {
     PLUGIN_UI_THEME_COLOR_TOKEN_IDS,
+    projectPluginUiHostPalette,
     projectPluginUiTheme,
     usePluginUiHostPalette,
     readPluginUiHostTypography,
@@ -182,6 +185,22 @@ describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
         for (const [snapshot, role] of [['title', 'heading'], ['label', 'label'], ['body', 'body'], ['caption', 'micro']] as const) {
             expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].fontSize, `${role} size`).toBe(typography[snapshot].fontSize);
             expect(PLUGIN_UI_HOST_TYPOGRAPHY[role].lineHeight, `${role} line height`).toBe(typography[snapshot].lineHeight);
+        }
+    });
+    it('gives core and plugin page sheets the one W3 card: card fill, its own lip and grounding, and the card finish', () => {
+        for (const mode of ['light', 'dark'] as const) {
+            const theme = themeFor(null, mode);
+            const palette = projectPluginUiHostPalette(theme);
+            expect(palette.sheet).toBe(theme.colors.edge.cardFill);
+            expect(palette.rowDivider).toBe(theme.colors.border.subtle);
+            expect(palette.sheetEdge).toEqual({
+                side: mode === 'light' ? 'bottom' : 'top',
+                color: theme.colors.edge.surface,
+                lift: shadowLevelStyle(theme.colors.shadowCard),
+            });
+            const finish = projectPluginUiTheme(theme).surfaceFinish;
+            expect(finish?.card?.colors).toEqual([...theme.colors.edge.cardFinishGradient!.colors]);
+            expect(finish?.floating?.colors).toEqual([...theme.colors.edge.finishGradient!.colors]);
         }
     });
 });

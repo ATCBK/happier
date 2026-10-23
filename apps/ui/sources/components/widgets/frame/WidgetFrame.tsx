@@ -21,8 +21,7 @@ import {
     type HappierDisclosureMotionDriver,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { resolveThemeSurfaceChromeStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
-import { resolveThemeRaisedEdge, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { resolveThemeCardChromeStyle, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { renderThemeMaterialSurface } from '@/components/ui/glass/GlassSurface';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
@@ -40,7 +39,6 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { MiddleEllipsisText } from '@/components/ui/text/MiddleEllipsisText';
@@ -577,15 +575,11 @@ function WidgetFrameBodyView(props: Readonly<{ testID: string; body: WidgetFrame
 
 const stylesheet = StyleSheet.create((theme) => {
     return {
-        // The card is the app's surface card: base surface, hairline with its raised edge and the first
-        // elevation step.
+        // The card is the app's in-flow card: the card fill, hairline, lip and grounding every grouped and
+        // page sheet shares (W3 on light).
         card: {
             backgroundColor: theme.colors.edge.cardFill,
-            ...resolveThemeSurfaceChromeStyle({
-                borderColor: theme.colors.border.default,
-                edge: resolveThemeRaisedEdge(theme, 'default'),
-                shadowStyle: shadowLevelStyle(theme.colors.shadowLevels[1]),
-            }),
+            ...resolveThemeCardChromeStyle(theme),
         },
         title: {
             ...Typography.default('semiBold'),

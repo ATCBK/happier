@@ -11,7 +11,7 @@ import type { TextStyle } from 'react-native';
 
 import { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT } from '@happier-dev/plugin-ui/presentation';
 import { getMonoFont, Typography } from '@/constants/Typography';
-import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { resolveThemeCardEdge, resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { Theme } from '@/theme';
@@ -285,8 +285,10 @@ export function projectPluginUiHostPalette(theme: Pick<Theme, 'colors' | 'dark'>
     const colors = theme.colors;
     const palette: HappierUiPalette = Object.freeze({
         page: colors.surface.base,
-        sheet: colors.surface.sectionTint,
+        // A page sheet is the app's in-flow card (W3 on light): its fill, and its lip and grounding below.
+        sheet: colors.edge.cardFill,
         sheetBorder: colors.border.default,
+        sheetEdge: resolveThemeCardEdge(theme) ?? undefined,
         rowDivider: colors.border.subtle,
         groupDivider: colors.border.faint,
         controlBorder: colors.border.strong,

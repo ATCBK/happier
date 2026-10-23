@@ -6,9 +6,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import { StatusPill } from '@/components/ui/status/StatusPill';
-import { resolveThemeSurfaceChromeStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
-import { resolveThemeRaisedEdge } from '@/components/ui/surfaces/themeRaisedEdge';
-import { shadowLevelStyle } from '@/shadowElevation';
+import { resolveThemeCardChromeStyle } from '@/components/ui/surfaces/themeRaisedEdge';
 import { t } from '@/text';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 import type { ThemeProfileMode, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
@@ -18,11 +16,7 @@ export const ThemeProfilePreviewPane = React.memo(function ThemeProfilePreviewPa
     mode: ThemeProfileMode;
 }>) {
     const previewTheme = React.useMemo(() => resolveThemeProfile({ mode: props.mode, profile: props.profile }), [props.mode, props.profile]);
-    const previewCardChromeStyle = React.useMemo(() => resolveThemeSurfaceChromeStyle({
-        borderColor: previewTheme.colors.border.surface,
-        edge: resolveThemeRaisedEdge(previewTheme, 'surface'),
-        shadowStyle: shadowLevelStyle(previewTheme.colors.shadowLevels[1]),
-    }), [previewTheme]);
+    const previewCardChromeStyle = React.useMemo(() => resolveThemeCardChromeStyle(previewTheme), [previewTheme]);
     const styles = stylesheet;
     return (
         <View
@@ -35,7 +29,7 @@ export const ThemeProfilePreviewPane = React.memo(function ThemeProfilePreviewPa
             <View style={[
                 styles.previewCard,
                 {
-                    backgroundColor: previewTheme.colors.surface.base,
+                    backgroundColor: previewTheme.colors.edge.cardFill,
                     ...previewCardChromeStyle,
                 },
             ]}>

@@ -400,7 +400,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
  */
 function DashboardAreaEdge(props: Readonly<{ active: boolean; children: React.ReactNode }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const section = React.useMemo(() => ({ rowDividerColor: theme.colors.border.default, rowInsetPx: 0 }), [theme.colors.border.default]);
+    const section = React.useMemo(() => ({ rowDividerColor: theme.colors.border.subtle, rowInsetPx: 0 }), [theme.colors.border.subtle]);
     return props.active
         ? <HappierPageSectionContext.Provider value={section}>{props.children}</HappierPageSectionContext.Provider>
         : <>{props.children}</>;

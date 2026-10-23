@@ -4,8 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { shadowLevelStyle } from '@/shadowElevation';
-import { resolveThemeSurfaceChromeStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
-import { resolveThemeRaisedEdge } from '@/components/ui/surfaces/themeRaisedEdge';
+import { resolveThemeCardChromeStyle } from '@/components/ui/surfaces/themeRaisedEdge';
 
 import { useMotionPreferences } from './motion/useMotionPreferences';
 
@@ -61,15 +60,11 @@ export const InstrumentCard = React.memo(function InstrumentCard(props: Instrume
                 ...shadowLevelStyle(theme.colors.shadowLevels[2]),
             };
         }
-        // TILE: the EXACT canonical grouped-surface chrome shared with `ItemGroup`.
+        // TILE: the EXACT canonical in-flow card shared with `ItemGroup` (fill, hairline, lip, grounding).
         return {
-            backgroundColor: theme.colors.surface.base,
+            backgroundColor: theme.colors.edge.cardFill,
             borderRadius,
-            ...resolveThemeSurfaceChromeStyle({
-                borderColor: theme.colors.border.surface,
-                edge: resolveThemeRaisedEdge(theme, 'surface'),
-                shadowStyle: shadowLevelStyle(theme.colors.shadowLevels[1]),
-            }),
+            ...resolveThemeCardChromeStyle(theme),
         };
     }, [
         borderRadius,
@@ -79,6 +74,7 @@ export const InstrumentCard = React.memo(function InstrumentCard(props: Instrume
         theme.colors.edge,
         theme.dark,
         theme.colors.shadowLevels,
+        theme.colors.shadowCard,
         theme.colors.surface.base,
     ]);
 

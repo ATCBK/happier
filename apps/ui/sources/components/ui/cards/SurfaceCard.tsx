@@ -3,9 +3,7 @@ import { type StyleProp, type ViewStyle } from 'react-native';
 import { HAPPIER_PAGE_METRICS, HappierSurface, type HappierMaterialSurfaceRender, type HappierSurfaceProps } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { shadowLevelStyle } from '@/shadowElevation';
-import { resolveThemeSurfaceChromeStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
-import { resolveThemeRaisedEdge, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { resolveThemeCardChromeStyle, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -61,11 +59,7 @@ const styles = StyleSheet.create((theme) => {
             minWidth: 0,
             borderRadius: SURFACE_CARD_RADIUS_PX,
             backgroundColor: theme.colors.edge.cardFill,
-            ...resolveThemeSurfaceChromeStyle({
-                borderColor: theme.colors.border.surface,
-                edge: resolveThemeRaisedEdge(theme, 'surface'),
-                shadowStyle: shadowLevelStyle(theme.colors.shadowLevels[1]),
-            }),
+            ...resolveThemeCardChromeStyle(theme),
         },
         toneMuted: {
             backgroundColor: theme.colors.surface.inset,
@@ -79,18 +73,10 @@ const styles = StyleSheet.create((theme) => {
             shadowOpacity: 0,
             elevation: 0,
         },
-        // On a configuration page a card is a small sheet: the same section tint and hairline as the
-        // page's sections, never a shadowed card floating on paper.
+        // On a configuration page a card is a small sheet: the same W3 card as the page's sections, on
+        // the sheet radius.
         cardPage: {
-            backgroundColor: theme.colors.surface.sectionTint,
             borderRadius: PAGE_LIST_METRICS.sheetRadiusPx,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: theme.colors.border.default,
-            borderTopWidth: StyleSheet.hairlineWidth,
-            borderTopColor: theme.colors.border.default,
-            boxShadow: 'none',
-            shadowOpacity: 0,
-            elevation: 0,
         },
         paddingSm: {
             paddingHorizontal: SURFACE_CARD_PADDING_PX.sm.horizontal,

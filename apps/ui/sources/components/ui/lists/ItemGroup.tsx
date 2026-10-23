@@ -7,7 +7,6 @@ import {
     Platform,
     type LayoutChangeEvent,
 } from 'react-native';
-import { shadowLevelStyle } from '@/shadowElevation';
 import { Typography } from '@/constants/Typography';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -20,8 +19,7 @@ import {
 import { ItemGroupRowPositionProvider } from './ItemGroupRowPosition';
 import { countSelectableItems } from './ItemGroup.selectableCount';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
-import { resolveThemeSurfaceChromeStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
-import { resolveThemeRaisedEdge, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { resolveThemeCardChromeStyle, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { GlassSurface, renderThemeMaterialSurface } from '@/components/ui/glass/GlassSurface';
 import { projectPluginUiHostPalette } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { ItemGroupColumns } from './ItemGroupColumns';
@@ -130,16 +128,13 @@ export interface ItemGroupProps {
 }
 
 const stylesheet = StyleSheet.create((theme) => {
-    const surfaceChromeStyle = resolveThemeSurfaceChromeStyle({
-        borderColor: theme.colors.border.surface,
-        edge: resolveThemeRaisedEdge(theme, 'surface'),
-        shadowStyle: shadowLevelStyle(theme.colors.shadowLevels[1]),
-    });
+    // The one in-flow card (W3 on light): its hairline, lip and grounding.
+    const surfaceChromeStyle = resolveThemeCardChromeStyle(theme);
 
     // ONE card-chrome definition, shared by the single shared card and by each
     // standalone card in the multi-column layout, so the two can never drift.
     const cardChrome = {
-        // A card: one step of the dark surface ladder above the page (the page itself on light).
+        // A card: one step of the dark surface ladder above the page (the page under a breath of ink on light).
         backgroundColor: theme.colors.edge.cardFill,
         borderRadius: GROUPED_SURFACE_RADIUS_PX,
         ...surfaceChromeStyle,
@@ -360,12 +355,8 @@ const ItemGroupPageSheetBody = React.memo(function ItemGroupPageSheetBody(props:
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { virtualizedSegment } = props;
-    const colors = React.useMemo(() => ({
-        ...projectPluginUiHostPalette(theme),
-        // Core Settings already drew border.default row hairlines. Preserve their appearance while
-        // handing drawing authority to the shared sheet, rather than changing the public palette.
-        rowDivider: theme.colors.border.default,
-    }), [theme]);
+    // The same palette plugin pages draw with: one card, one row seam, no core-only override.
+    const colors = React.useMemo(() => projectPluginUiHostPalette(theme), [theme]);
     return (
         <View
             accessibilityRole={Platform.OS === 'web' ? undefined : props.accessibilityRole}
@@ -381,6 +372,8 @@ const ItemGroupPageSheetBody = React.memo(function ItemGroupPageSheetBody(props:
                 style={[
                     styles.pageSheet,
                     props.clipContent ? styles.contentContainerInnerClipped : undefined,
+                    // A virtualized section's chunks read as one sheet: no grounding between them.
+                    virtualizedSegment ? styles.virtualizedSurfaceSegment : undefined,
                     virtualizedSegment?.first === false ? styles.virtualizedSurfaceContinuesBefore : undefined,
                     virtualizedSegment?.last === false ? styles.virtualizedSurfaceContinuesAfter : undefined,
                     props.containerStyle,

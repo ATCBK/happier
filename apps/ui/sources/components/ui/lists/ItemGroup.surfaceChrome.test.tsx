@@ -72,6 +72,12 @@ describe('ItemGroup surface chrome', () => {
         expect(style.borderBottomColor).toBeDefined();
         expect(style.borderBottomColor).not.toBe(style.borderColor);
         expect(hasShadow(style)).toBe(true);
+        // W3: the card's own lip and grounding, never a control's level-1 step.
+        const { lightTheme } = await import('@/theme');
+        expect(style.borderBottomColor).toBe(lightTheme.colors.edge.surface);
+        expect(style.boxShadow).toBe(lightTheme.colors.shadowCard.boxShadow);
+        const paints = screen.findAllByType('View' as never).map((node) => flattenStyle(node.props.style));
+        expect(paints.some((paint) => paint.backgroundColor === lightTheme.colors.edge.cardFill)).toBe(true);
     });
 
     it('clips only the inner rounded surface when embedded content paints to the card edges', async () => {

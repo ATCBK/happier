@@ -63,6 +63,7 @@ import {
     resolveHappierItemBehavior,
     resolveHappierPageRowFieldMaxWidth,
     HappierDivider,
+    happierPageRowDividerInset,
     isHappierPageRowNarrow,
     resolveHappierPageRowDetailLayout,
     isHappierPageRowAccessoryStacked,
@@ -1298,16 +1299,24 @@ export const Item = React.memo<ItemProps>((props) => {
         );
     }, [accessibilityExpanded, chevronSize, showAccessory, theme.colors.text.secondary]);
 
-    // A sheet row's hairline is the sheet's: its divider colour, full width. A page row outside a sheet
-    // (a bare or columned section) draws the same page hairline in the page divider colour.
+    // A sheet row's hairline is the sheet's: its divider colour, from the row's text to its trailing inset
+    // (`happierPageRowDividerInset`). A page row outside a sheet (a bare or columned section) draws the same
+    // page hairline in the page divider colour.
     const flatDividerColor = pageSheet?.rowDividerColor ?? (isPageRow ? theme.colors.border.subtle : null);
+    const hasLeading = icon != null || leftElement != null;
+    const flatDividerInset = flatDividerColor === null ? null : happierPageRowDividerInset({
+        rowInsetPx: pageRowInsetPx ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+        leadingPx: isPageRow
+            ? (reservesLeadingColumn || hasLeading ? (iconBoxSize ?? PAGE_LIST_METRICS.rowLeadingColumnPx) + PAGE_LIST_METRICS.rowLeadingGapPx : 0)
+            : (hasLeading ? (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight : 0),
+    });
     const dividerNode = sharedItemBehavior.dividerVisible ? (
         <HappierDivider
             color={flatDividerColor ?? theme.colors.border.default}
             style={[
                 styles.divider,
                 flatDividerColor !== null ? styles.pageDivider : null,
-                flatDividerColor !== null ? { marginLeft: 0 } : {
+                flatDividerInset ?? {
                     marginLeft: (isAndroid || isWeb)
                         ? 0
                         : (dividerInset + (icon || leftElement ? (16 + (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight) : 16))

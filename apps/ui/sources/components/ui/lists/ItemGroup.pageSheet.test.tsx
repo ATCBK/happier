@@ -77,7 +77,7 @@ async function loadModules() {
 }
 
 describe('ItemGroup page sections render through the shared page sheet', () => {
-    it('preserves Settings sheet colours and reads its explanation before the real rows', async () => {
+    it('draws a Settings section as the W3 card, with subtle row seams, and reads its explanation before the real rows', async () => {
         const { ItemGroup, Item, ListPresentationProvider, presentation } = await loadModules();
         const { useUnistyles } = await import('react-native-unistyles');
         const { theme } = useUnistyles();
@@ -90,13 +90,17 @@ describe('ItemGroup page sections render through the shared page sheet', () => {
             </ListPresentationProvider>,
         );
         const sheet = screen.findAllByType(presentation.HappierPageSheet as never)[0]!;
-        // The refactor preserves the existing host sheet and hairline roles; no literal style values.
+        // One card treatment (P7-R1): the card fill, the card's own lip and grounding; seams in the divider ink.
         expect(sheet.props.colors).toMatchObject({
-            sheet: theme.colors.surface.sectionTint,
+            sheet: theme.colors.edge.cardFill,
             sheetBorder: theme.colors.border.default,
-            rowDivider: theme.colors.border.default,
+            rowDivider: theme.colors.border.subtle,
         });
-        expect(rowDividers(screen, ['row-a', 'row-b'])).toEqual([theme.colors.border.default, null]);
+        const paints = sheet.findAll((node) => typeof node.type === 'string').map((node) => flattenTestStyle(node.props.style));
+        expect(paints.some((style) => style.backgroundColor === theme.colors.edge.cardFill)).toBe(true);
+        expect(paints.some((style) => style.borderBottomColor === theme.colors.edge.surface
+            && style.boxShadow === theme.colors.shadowCard.boxShadow)).toBe(true);
+        expect(rowDividers(screen, ['row-a', 'row-b'])).toEqual([theme.colors.border.subtle, null]);
         const text = screen.getTextContent();
         expect(text.indexOf('Appearance')).toBeLessThan(text.indexOf('How the app looks.'));
         expect(text.indexOf('How the app looks.')).toBeLessThan(text.indexOf('Theme'));
@@ -226,6 +230,65 @@ describe('ItemGroup page sections render through the shared page sheet', () => {
         expect(sheetSeparators(sheet)).toHaveLength(1);
         const dividers = rowDividers(screen, ['row-a', 'row-b', 'row-c']);
         expect(dividers.map((color) => color !== null)).toEqual([true, false, false]);
+    });
+});
+
+/** Where each row's hairline runs, as logical insets from the sheet's start and end edges. */
+function rowSeams(screen: Screen, rowTestIds: readonly string[]): Array<{ start: unknown; end: unknown } | null> {
+    return rowTestIds.map((testID) => {
+        const row = screen.findAllByTestId(testID).find((node) => typeof node.type === 'string');
+        if (!row) throw new Error(`Missing row ${testID}`);
+        const separator = row.findAll((node) => typeof node.type === 'string' && node.props.role === 'separator')[0];
+        if (!separator) return null;
+        const style = flattenTestStyle(separator.props.style);
+        return { start: style.marginStart, end: style.marginEnd };
+    });
+}
+
+describe('Page row seams start at the text and stop at the trailing inset (P7-R2)', () => {
+    it('insets every seam of a section that reserves the leading column at its titles, mixed icon and plain rows alike', async () => {
+        const { ItemGroup, Item, ListPresentationProvider } = await loadModules();
+        const { PAGE_LIST_METRICS } = await import('./pageListMetrics');
+        const glyph = React.createElement('View');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <ItemGroup title="Team">
+                    <Item testID="row-a" title="Members" icon={glyph} />
+                    <Item testID="row-b" title="Groups" />
+                    <Item testID="row-c" title="Invitations" icon={glyph} />
+                </ItemGroup>
+                <ItemGroup title="Team settings">
+                    <Item testID="row-d" title="Team name" />
+                    <Item testID="row-e" title="Let members invite people" />
+                </ItemGroup>
+            </ListPresentationProvider>,
+        );
+        const inset = PAGE_LIST_METRICS.rowPaddingHorizontalPx;
+        const text = inset + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx;
+        expect(rowSeams(screen, ['row-a', 'row-b', 'row-c'])).toEqual([{ start: text, end: inset }, { start: text, end: inset }, null]);
+        expect(rowSeams(screen, ['row-d', 'row-e'])).toEqual([{ start: inset, end: inset }, null]);
+    });
+
+    it('lays an index section flat on the page: no card fill, lip or grounding, the same text-inset seams', async () => {
+        const { ItemGroup, Item, ListPresentationProvider } = await loadModules();
+        const { useUnistyles } = await import('react-native-unistyles');
+        const { theme } = useUnistyles();
+        const { PAGE_LIST_METRICS } = await import('./pageListMetrics');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <ItemGroup title="Machines" surface="none">
+                    <Item testID="row-a" title="Studio" />
+                    <Item testID="row-b" title="Build box" />
+                </ItemGroup>
+            </ListPresentationProvider>,
+        );
+        const paints = screen.findAllByType('View' as never).map((node) => flattenTestStyle(node.props.style));
+        expect(paints.some((style) => style.backgroundColor === theme.colors.edge.cardFill)).toBe(false);
+        expect(paints.some((style) => style.borderBottomColor === theme.colors.edge.surface)).toBe(false);
+        expect(paints.some((style) => style.boxShadow === theme.colors.shadowCard.boxShadow)).toBe(false);
+        const inset = PAGE_LIST_METRICS.rowPaddingHorizontalPx;
+        expect(rowSeams(screen, ['row-a'])).toEqual([{ start: inset, end: inset }]);
+        expect(rowDividers(screen, ['row-a'])).toEqual([theme.colors.border.subtle]);
     });
 });
 

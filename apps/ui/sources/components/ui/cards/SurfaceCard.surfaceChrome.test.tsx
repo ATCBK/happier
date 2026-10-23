@@ -70,8 +70,7 @@ describe('SurfaceCard surface chrome', () => {
         expect(hasShadow(style)).toBe(true);
     });
 
-    it('sits on a configuration page as a sheet rather than a floating shadowed card', async () => {
-        shared.themeOverride = { parts: { card: { finish: 'flat' } } };
+    it('sits on a configuration page as the same W3 card as the page sections, on the sheet radius', async () => {
         const { SurfaceCard } = await import('./SurfaceCard');
         const { ListPresentationProvider } = await import('@/components/ui/lists/listPresentation');
         const { PAGE_LIST_METRICS } = await import('@/components/ui/lists/pageListMetrics');
@@ -80,15 +79,19 @@ describe('SurfaceCard surface chrome', () => {
                 <SurfaceCard testID="card">{React.createElement('View')}</SurfaceCard>
             </ListPresentationProvider>,
         );
-        const { lightTheme } = await import('@/theme');
+        // The theme the card resolved with (the mocked Unistyles theme), not a second import of it.
+        const { useUnistyles } = await import('react-native-unistyles');
+        const lightTheme = useUnistyles().theme;
         const cardStyle = screen.findAllByType('View' as never)
             .map((node) => flattenStyle(node.props.style))
-            .find((style) => style.minWidth === 0 && style.width === '100%');
+            .find((style) => style.minWidth === 0 && style.width === '100%') ?? {};
 
-        const paints = screen.findAllByType('View' as never).map(node => flattenStyle(node.props.style));
-        expect(paints.some(style => typeof style.backgroundColor === 'string' && style.backgroundColor.includes(lightTheme.colors.surface.sectionTint))).toBe(true);
-        expect(cardStyle?.borderColor).toBe(lightTheme.colors.border.default);
-        expect(cardStyle?.borderRadius).toBe(PAGE_LIST_METRICS.sheetRadiusPx);
-        expect(hasShadow(cardStyle ?? {}) && cardStyle?.shadowOpacity !== 0).toBe(false);
+        // The material owner paints the fill on its own layer beneath the content.
+        const paints = screen.findAllByType('View' as never).map((node) => flattenStyle(node.props.style));
+        expect(paints.some((style) => style.backgroundColor === lightTheme.colors.edge.cardFill)).toBe(true);
+        expect(cardStyle.borderColor).toBe(lightTheme.colors.border.surface);
+        expect(cardStyle.borderBottomColor).toBe(lightTheme.colors.edge.surface);
+        expect(cardStyle.boxShadow).toBe(lightTheme.colors.shadowCard.boxShadow);
+        expect(cardStyle.borderRadius).toBe(PAGE_LIST_METRICS.sheetRadiusPx);
     });
 });
