@@ -548,7 +548,11 @@ async function rewritePromotedTypeScriptSourceMap({
         `TypeScript emitted a non-string source-map source at ${relative(packageDir, compilerMapPath)}`,
       );
     }
-    const sourcePath = resolve(dirname(compilerMapPath), sourceRoot, source);
+    // TypeScript emits a file URL when no relative path exists, as for a
+    // Windows temp outDir on a different drive than the package.
+    const sourcePath = /^file:/i.test(source)
+      ? fileURLToPath(source)
+      : resolve(dirname(compilerMapPath), sourceRoot, source);
     let sourceRealPath;
     try {
       sourceRealPath = await realpath(sourcePath);

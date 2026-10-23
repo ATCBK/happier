@@ -1,3 +1,0 @@
-# patch-package copies patch line endings into node_modules; a CRLF checkout on
-# Windows breaks the multi-line patch markers verified by tools/postinstall.mjs.
-patches/*.patch text eol=lf

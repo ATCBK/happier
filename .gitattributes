@@ -1,0 +1,3 @@
+# pnpm copies patch line endings into node_modules; a CRLF checkout on Windows
+# leaves mixed-EOL patched files that the UI postinstall preflight rejects.
+patches/*.patch text eol=lf

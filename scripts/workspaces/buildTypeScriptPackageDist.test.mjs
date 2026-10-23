@@ -711,6 +711,19 @@ test('buildTypeScriptPackageDist rejects escaping source maps without replacing 
   assert.deepEqual(JSON.parse(promotedJsMap).sources, ['../src/index.ts']);
   assert.deepEqual(JSON.parse(promotedDtsMap).sources, ['../src/index.ts']);
 
+  // TypeScript emits a file URL source when no relative path exists, such as a
+  // Windows temp outDir on another drive than the package.
+  sourceMapSource = () => pathToFileURL(sourcePath).href;
+  await buildTypeScriptPackageDist({
+    packageDir,
+    args: ['-p', 'tsconfig.json'],
+    stdio: 'ignore',
+    resolveTypeScriptCliInvocationImpl: () => ({ command: 'tsc', argsPrefix: [] }),
+    runCommandImpl: runFakeCompiler,
+  });
+  assert.equal(await readFile(join(packageDir, 'dist', 'index.js.map'), 'utf-8'), promotedJsMap);
+  assert.equal(await readFile(join(packageDir, 'dist', 'index.d.ts.map'), 'utf-8'), promotedDtsMap);
+
   const lastGreenDist = {
     js: promotedJs,
     dts: promotedDts,
@@ -725,6 +738,10 @@ test('buildTypeScriptPackageDist rejects escaping source maps without replacing 
     {
       label: 'absolute',
       source: () => outsideSourcePath,
+    },
+    {
+      label: 'file URL',
+      source: () => pathToFileURL(outsideSourcePath).href,
     },
     {
       label: 'in-package symlink',

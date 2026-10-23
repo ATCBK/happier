@@ -3,8 +3,10 @@ import { spawnSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { readPnpmPatches } from './pnpmPatches.mjs';
 import {
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
   REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_MARKERS,
@@ -54,4 +56,18 @@ test('UI postinstall verifies installed artifacts without patch-package and find
   });
   assert.equal(ancestorResult.status, 1, ancestorResult.stderr);
   assert.ok(ancestorResult.stderr.includes(sentrySource), ancestorResult.stderr);
+});
+
+test('pnpm patches check out with LF endings so Windows installs apply them byte-for-byte', t => {
+  // pnpm copies patch line endings into node_modules; a CRLF checkout leaves
+  // mixed-EOL patched files that the installed-artifact preflight rejects.
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const inWorkTree = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });
+  if (inWorkTree.status !== 0) return t.skip('requires a Git work tree to resolve .gitattributes');
+  const patchFiles = readPnpmPatches(repoRoot).map(({ patchFile }) => relative(repoRoot, patchFile).replaceAll('\\', '/'));
+  assert.ok(patchFiles.length > 0);
+  const result = spawnSync('git', ['-C', repoRoot, 'check-attr', 'eol', '--', ...patchFiles], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const unpinned = result.stdout.trim().split('\n').filter(line => !line.endsWith(': eol: lf'));
+  assert.deepEqual(unpinned, []);
 });
