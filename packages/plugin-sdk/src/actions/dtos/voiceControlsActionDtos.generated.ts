@@ -86,6 +86,8 @@ export type VoiceControlsActionInputById = {
     readonly "ui.voice_global.open_conversation": {
         expectedAttempt: string;
     };
+    readonly "ui.voice_global.setup.microphone.permission.request": Record<string, never>;
+    readonly "ui.voice_global.setup.system_settings.open": Record<string, never>;
     readonly "ui.voice_global.dictation.start": {
         commandId: string;
     };
@@ -1652,6 +1654,188 @@ export type VoiceControlsActionResultById = {
         };
     };
     readonly "ui.voice_global.open_conversation": {
+        status: 'completed';
+        voice: {
+            attemptId: string | null;
+            adapterId: string | null;
+            sessionId: string | null;
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
+            mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
+            target: {
+                kind: 'global';
+            } | {
+                kind: 'session';
+                sessionAddress: {
+                    serverId: string;
+                    sessionId: string;
+                } | null;
+            } | {
+                kind: 'default';
+            };
+            conversationSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            targetSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            canStart: boolean;
+            canStop: boolean;
+            canMute: boolean;
+            canCommitInput: boolean;
+            canHoldToTalk: boolean;
+            muted: boolean;
+            canDismissFailedAttempt: boolean;
+            canDismissEnded: boolean;
+            recoveryAction: string | null;
+            availability: 'ready' | 'recoverable' | 'setup' | 'unavailable';
+            inUseVoice: {
+                providerContributionId: string;
+                settingFieldPath: string;
+                value: VoiceProviderSettingsJsonValueV1;
+                displayName: string;
+            } | null;
+        };
+    } | {
+        status: 'unavailable';
+        code: string;
+        voice: {
+            attemptId: string | null;
+            adapterId: string | null;
+            sessionId: string | null;
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
+            mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
+            target: {
+                kind: 'global';
+            } | {
+                kind: 'session';
+                sessionAddress: {
+                    serverId: string;
+                    sessionId: string;
+                } | null;
+            } | {
+                kind: 'default';
+            };
+            conversationSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            targetSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            canStart: boolean;
+            canStop: boolean;
+            canMute: boolean;
+            canCommitInput: boolean;
+            canHoldToTalk: boolean;
+            muted: boolean;
+            canDismissFailedAttempt: boolean;
+            canDismissEnded: boolean;
+            recoveryAction: string | null;
+            availability: 'ready' | 'recoverable' | 'setup' | 'unavailable';
+            inUseVoice: {
+                providerContributionId: string;
+                settingFieldPath: string;
+                value: VoiceProviderSettingsJsonValueV1;
+                displayName: string;
+            } | null;
+        };
+    };
+    readonly "ui.voice_global.setup.microphone.permission.request": {
+        status: 'completed';
+        permission: 'granted';
+        voice: {
+            attemptId: string | null;
+            adapterId: string | null;
+            sessionId: string | null;
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
+            mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
+            target: {
+                kind: 'global';
+            } | {
+                kind: 'session';
+                sessionAddress: {
+                    serverId: string;
+                    sessionId: string;
+                } | null;
+            } | {
+                kind: 'default';
+            };
+            conversationSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            targetSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            canStart: boolean;
+            canStop: boolean;
+            canMute: boolean;
+            canCommitInput: boolean;
+            canHoldToTalk: boolean;
+            muted: boolean;
+            canDismissFailedAttempt: boolean;
+            canDismissEnded: boolean;
+            recoveryAction: string | null;
+            availability: 'ready' | 'recoverable' | 'setup' | 'unavailable';
+            inUseVoice: {
+                providerContributionId: string;
+                settingFieldPath: string;
+                value: VoiceProviderSettingsJsonValueV1;
+                displayName: string;
+            } | null;
+        };
+    } | {
+        status: 'unavailable';
+        code: string;
+        permission: 'unknown' | 'unavailable' | 'denied';
+        voice: {
+            attemptId: string | null;
+            adapterId: string | null;
+            sessionId: string | null;
+            status: 'disconnected' | 'connecting' | 'connected' | 'error';
+            mode: 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking';
+            target: {
+                kind: 'global';
+            } | {
+                kind: 'session';
+                sessionAddress: {
+                    serverId: string;
+                    sessionId: string;
+                } | null;
+            } | {
+                kind: 'default';
+            };
+            conversationSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            targetSessionAddress: {
+                serverId: string;
+                sessionId: string;
+            } | null;
+            canStart: boolean;
+            canStop: boolean;
+            canMute: boolean;
+            canCommitInput: boolean;
+            canHoldToTalk: boolean;
+            muted: boolean;
+            canDismissFailedAttempt: boolean;
+            canDismissEnded: boolean;
+            recoveryAction: string | null;
+            availability: 'ready' | 'recoverable' | 'setup' | 'unavailable';
+            inUseVoice: {
+                providerContributionId: string;
+                settingFieldPath: string;
+                value: VoiceProviderSettingsJsonValueV1;
+                displayName: string;
+            } | null;
+        };
+    };
+    readonly "ui.voice_global.setup.system_settings.open": {
         status: 'completed';
         voice: {
             attemptId: string | null;

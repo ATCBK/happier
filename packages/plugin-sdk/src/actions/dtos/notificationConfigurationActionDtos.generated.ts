@@ -50,6 +50,7 @@ export type NotificationConfigurationActionInputById = {
             requestIncludeMessageText?: boolean | undefined;
         };
     };
+    readonly "notifications.sounds.preview": Record<string, never>;
     readonly "notifications.desktop.permission.read": Record<string, never>;
     readonly "notifications.desktop.permission.request": Record<string, never>;
     readonly "notifications.push.tokens.list": Record<string, never>;
@@ -57,7 +58,9 @@ export type NotificationConfigurationActionInputById = {
         tokenId: string;
     };
     readonly "notifications.push.permission.read": Record<string, never>;
-    readonly "notifications.push.permission.request": Record<string, never>;
+    readonly "notifications.push.permission.request": {
+        purpose?: 'local_notifications' | undefined;
+    };
     readonly "notifications.push.register": Record<string, never>;
 };
 export type NotificationConfigurationActionResultById = {
@@ -93,6 +96,9 @@ export type NotificationConfigurationActionResultById = {
     };
     readonly "notifications.expoPush.update": {
         channelId: string;
+    };
+    readonly "notifications.sounds.preview": {
+        notificationId: string;
     };
     readonly "notifications.desktop.permission.read": {
         status: 'granted' | 'notGranted';

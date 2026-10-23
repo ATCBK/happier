@@ -1093,6 +1093,8 @@ export type MachineStorageActionResultById = {
             happierBytes: number;
             pileBytes: number;
             trashBytes: number;
+            pileFreesBytes?: number | undefined;
+            trashFreesBytes?: number | undefined;
             availableIncludingPurgeableBytes?: number | undefined;
             canGoBytes?: number | undefined;
         }[];
@@ -1284,6 +1286,8 @@ export type MachineStorageActionResultById = {
             happierBytes: number;
             pileBytes: number;
             trashBytes: number;
+            pileFreesBytes?: number | undefined;
+            trashFreesBytes?: number | undefined;
             availableIncludingPurgeableBytes?: number | undefined;
             canGoBytes?: number | undefined;
         }[];

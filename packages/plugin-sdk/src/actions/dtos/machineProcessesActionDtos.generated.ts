@@ -192,6 +192,10 @@ export type MachineProcessesActionResultById = {
                 principalName?: string | undefined;
             }[];
             canStartAgain?: boolean | undefined;
+            root?: {
+                ref: string;
+                level: 'proven' | 'likely';
+            } | undefined;
             requester?: {
                 accountId: string;
                 displayName: string;
