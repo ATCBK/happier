@@ -20,6 +20,8 @@ export async function createNativePasswordFirstKeyStepUp(params: Readonly<{
     }
     if (!await verifyPlainAccountPasswordCredentialV1(candidate.parsed.credential, params.password)) return null;
     return await inTx(async tx => {
+        // Credential and Home authentication-policy writers take conflicting
+        // exclusive Account admission; reread the exact lifetime after waiting.
         await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "content");
         const current = await findNativePasswordAccount(candidate.normalizedEmail, tx);
         if (!current || current.account.id !== params.accountId || current.account.status !== "active"
@@ -36,5 +38,5 @@ export async function createNativePasswordFirstKeyStepUp(params: Readonly<{
                 proofHash: createHash("sha256").update(proof, "utf8").digest("hex"), requestDigest: params.requestDigest }),
         } });
         return { provider: "email_password", pending, proof };
-    }, { isolationLevel: "Serializable" /* Native credential proof and current Home login policy must agree when issuing first-key evidence. */ });
+    });
 }

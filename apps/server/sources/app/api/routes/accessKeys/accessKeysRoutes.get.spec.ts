@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, inTxPostgresControlStatementMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 
 const dbMocks = createDbMocks({
@@ -9,10 +9,12 @@ const dbMocks = createDbMocks({
     machine: ["findFirst", "findUnique"],
 } as const);
 
-const transactions = createDbTransactionMock(() => dbMocks.db);
+const transactions = createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...dbMocks.db }));
 installDbModuleMock({ db: transactions.wrapDb(dbMocks.db) });
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
+
+const { accessKeysRoutes } = await import("./accessKeysRoutes");
 
 describe("accessKeysRoutes GET /v1/access-keys/:sessionId/:machineId", () => {
     beforeEach(() => {
@@ -34,7 +36,6 @@ describe("accessKeysRoutes GET /v1/access-keys/:sessionId/:machineId", () => {
             updatedAt: new Date(2000),
         });
 
-        const { accessKeysRoutes } = await import("./accessKeysRoutes");
         const route = createRouteTestBuilder({
             method: "GET",
             path: "/v1/access-keys/:sessionId/:machineId",
@@ -74,7 +75,6 @@ describe("accessKeysRoutes GET /v1/access-keys/:sessionId/:machineId", () => {
             replacedByMachineId: "m2",
         });
 
-        const { accessKeysRoutes } = await import("./accessKeysRoutes");
         const route = createRouteTestBuilder({
             method: "GET",
             path: "/v1/access-keys/:sessionId/:machineId",

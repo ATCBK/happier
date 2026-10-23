@@ -29,7 +29,7 @@ import {
     prepareSameServiceHomeEntry,
 } from "@/app/accountDirectory/accountDirectoryService";
 import { accountDirectoryAuthErrorHandler } from "@/app/accountDirectory/accountDirectoryErrors";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { provisionFreshAccountInTx } from "@/app/auth/provisionFreshAccountInTx";
 import {
     isEffectiveHomeAuthMethodActionEnabled,
@@ -691,7 +691,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
             }
         }
         const token = freshInvitationToken ?? (purpose.tokenKind === "account"
-            ? await inTx(async (tx) => {
+            ? await inReadSnapshot(async (tx) => {
                 if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                     env: requestHomeEnv,
                     methodId: "key_challenge",
@@ -706,7 +706,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                     authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
                     authenticationEvidence: [{ kind: "home_method", methodId: "key_challenge" }],
                 });
-            }, { isolationLevel: "Serializable" /* Credential proof and current Home login policy must describe one token-admission snapshot. */ })
+            })
             : !freshAccount && sameServiceBootstrapPreparation?.status === "ready"
                     ? await inTx(async (tx) => {
                         await ensureSameServiceHomeEntryInTx(tx, {
@@ -718,7 +718,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                             authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
                             authenticationEvidence: [{ kind: "home_method", methodId: "key_challenge" }],
                         });
-                    }, { isolationLevel: "Serializable" /* Same-service descriptor revision and preferred-Home admission are part of directory login. */ })
+                    })
                 : await auth.createToken(
                     user.id,
                     undefined,

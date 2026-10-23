@@ -9,7 +9,7 @@ import {
     isAccountIdentityEligibleForGenericPresentation,
     resolveAuthMethodIdForAccountIdentityProvider,
 } from "@/app/auth/methods/registry";
-import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
+import { captureHomeAuthenticationAvailabilityInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { listProviderDescriptorsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import {
@@ -68,12 +68,14 @@ export async function buildLinkedIdentityManagementProjectionInTx(
         orderBy: { teamId: "asc" },
     });
     const teamPresentations = new Map(memberships.map(({ team }) => [team.id, { id: team.id, name: team.name }]));
-    const [managed, descriptors, effectiveHome, connectionLists] = await Promise.all([
+    const [managed, homeAvailability, connectionLists] = await Promise.all([
         readIdentityProviderInstancePresentationsByIdsInTx(tx, { ids: identities.map(({ provider }) => provider) }),
-        listProviderDescriptorsInTx(tx, input.env),
-        resolveEffectiveHomeAuthMethodsInTx(tx, { env: input.env }),
+        captureHomeAuthenticationAvailabilityInTx(tx, { env: input.env }),
         Promise.all(memberships.map(({ team }) => listTeamIdentityConnectionsInTx(tx, { teamId: team.id }))),
     ]);
+    const effectiveHome = homeAvailability.effectiveHome;
+    const descriptors = effectiveHome.status === "ready" ? homeAvailability.providerDescriptors
+        : await listProviderDescriptorsInTx(tx, input.env);
     const descriptorById = new Map(descriptors.map((entry) => [normalizeProviderId(entry.reference.id), entry]));
     const effectiveDecisions = effectiveHome.status === "ready" ? effectiveHome.decisions : null;
     const authMethodIdByIdentityProvider = new Map(allIdentities.map(({ provider }) => [
@@ -119,6 +121,7 @@ export async function buildLinkedIdentityManagementProjectionInTx(
                 env: input.env,
                 teamId: team.id,
                 policy: team.authenticationPolicy,
+                homeAvailability,
                 accountFacts: {
                     usableHomeMethodIds: [...currentAuthenticationMethodIds],
                     usableTeamConnectionIds: usableConnectionIdsWithout(connections, null),
@@ -149,6 +152,7 @@ export async function buildLinkedIdentityManagementProjectionInTx(
                 env: input.env,
                 teamId: team.id,
                 policy: team.authenticationPolicy,
+                homeAvailability,
                 accountFacts: {
                     usableHomeMethodIds: [...postRemovalAuthenticationMethodIds],
                     usableTeamConnectionIds: usableConnectionIdsWithout(connections, identity.provider),

@@ -12,11 +12,13 @@ import {
     createPasswordMutationChallengeSigningInputV1,
     encodePasswordCredentialFieldV1,
     normalizeVerifiedEmail,
+    type AccountPasswordCredentialV1,
     type E2eeAccountPasswordCredentialV1,
     type PasswordCredentialMutationV1,
 } from "@happier-dev/protocol";
 import {
     consumePasswordMutationKeyChallengeInTx,
+    decodeVerifiedNativePasswordEvidenceV1,
     issuePasswordMutationKeyChallengeV1,
 } from "@/app/auth/keyChallengeV2";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
@@ -31,6 +33,7 @@ import { registerAccountSecurityRoutes } from "./registerAccountSecurityRoutes";
 import { db, initDbMysql, initDbPostgres, shutdownDbClient } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createEnvPatcher } from "@/testkit/env";
+import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 
 type NativeContractProvider = "postgres" | "mysql";
 
@@ -122,7 +125,7 @@ describe("native password public-owner provider contract", () => {
     const createdTeamIds = new Set<string>();
     const issuedProofKeys = new Set<string>();
     let connected = false;
-    const env = createEnvPatcher(["HANDY_MASTER_SECRET"]);
+    const env = createEnvPatcher(["HANDY_MASTER_SECRET", "HAPPIER_DB_TX_MAX_RETRIES"]);
 
     beforeAll(async () => {
         if (!databaseUrl) return;
@@ -135,7 +138,7 @@ describe("native password public-owner provider contract", () => {
         process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = "optional";
         process.env.AUTH_REQUIRED_LOGIN_PROVIDERS = "";
         process.env.HAPPIER_PUBLIC_SERVER_URL = "https://home.example.test";
-        process.env.HAPPIER_SERVER_IDENTITY_ID = `native-auth-${provider}-contract`;
+        process.env.HAPPIER_SERVER_IDENTITY_ID = `srv_native-auth-${provider}-contract`;
         env.set("HANDY_MASTER_SECRET", process.env.HANDY_MASTER_SECRET ?? "native-password-lifecycle-db-contract");
         if (provider === "mysql") await initDbMysql();
         else initDbPostgres();
@@ -253,6 +256,18 @@ describe("native password public-owner provider contract", () => {
             expect(await db.repeatKey.findUnique({
                 where: { key: createNativeAuthOneTimeOperationKeyV1("verify_native_email", collisionProof.rawBearer) },
             })).not.toBeNull();
+            const directoryEnv = createEnvPatcher(["HAPPIER_AUTH_SIGN_IN_SERVICE_MODE", "HAPPIER_CANONICAL_SERVER_URL"]);
+            directoryEnv.setMany({ HAPPIER_AUTH_SIGN_IN_SERVICE_MODE: "self", HAPPIER_CANONICAL_SERVER_URL: "https://home.example.test" });
+            try {
+                const directoryLogin = await app.inject({ method: "POST", url: "/v1/auth/email/login",
+                    payload: { v: 1, email: changedEmail, password, credentialTarget: "account_directory" } });
+                expect(directoryLogin.statusCode, directoryLogin.body).toBe(200);
+                expect(await auth.verifyToken(directoryLogin.json<{ token: string }>().token))
+                    .toMatchObject({ userId: provisionedBody.accountId, authTokenKind: "account_directory" });
+                expect(await db.accountHomeDirectoryEntry.findUnique({ where: { accountId_homeServerIdentityId: {
+                    accountId: provisionedBody.accountId, homeServerIdentityId: process.env.HAPPIER_SERVER_IDENTITY_ID!,
+                } } })).not.toBeNull();
+            } finally { directoryEnv.restore(); }
         } finally {
             await app.close();
         }
@@ -277,8 +292,8 @@ describe("native password public-owner provider contract", () => {
         if (!challenge) throw new Error("challenge issuance unavailable");
         const proof = {
             challengeId: challenge.challengeId,
-            publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-            signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+            publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+            signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                 createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey,
             ))),
         };
@@ -296,6 +311,122 @@ describe("native password public-owner provider contract", () => {
         expect(await db.keyChallengeV2.findUnique({ where: { id: challenge.challengeId } }))
             .toMatchObject({ consumedAt: expect.any(Date) });
         expect(await consume()).toBe(false);
+    }, 120_000);
+
+    (provider === "postgres" ? providerIt : it.skip).each(["password", "email", "directory-login", "first-key-step-up", "unlock"] as const)("completes %s after a concurrent Account cursor advance without consuming conflict retries", async change => {
+        const password = `initial password ${randomUUID()}`;
+        const newPassword = `replacement password ${randomUUID()}`;
+        const signing = change === "unlock" ? tweetnacl.sign.keyPair() : null;
+        if (signing) await getOrCreateServerIdentityId(process.env);
+        const account = await db.account.create({ data: { encryptionMode: signing ? "e2ee" : "plain",
+            ...(signing ? { publicKey: privacyKit.encodeHex(new Uint8Array(signing.publicKey)) } : {}) } });
+        createdAccountIds.add(account.id);
+        const identity = await db.accountIdentity.create({ data: { accountId: account.id, provider: "email",
+            providerUserId: `${randomUUID()}@password-contention.example.test`, profile: {} } });
+        const authKey = new Uint8Array(32).fill(7);
+        const field = (length: number) => encodePasswordCredentialFieldV1(new Uint8Array(length).fill(7));
+        const credential: AccountPasswordCredentialV1 = signing ? {
+            v: 1, kind: "e2ee_password_envelope", authVerifier: { v: 1, hash: await hashPasswordMaterial(authKey) },
+            envelope: { v: 1, accountSigningPublicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+                kdf: { algorithm: "argon2id13", salt: field(16), opsLimit: 3, memLimitBytes: 67108864, outputBytes: 32 },
+                cipher: { algorithm: "aes256gcm", nonce: field(12), ciphertext: field(48) } },
+        } : { v: 1, kind: "plain_password_hash", hash: await hashPasswordMaterial(new TextEncoder().encode(password)) };
+        await db.accountPasswordCredential.create({ data: { accountId: account.id, credential } });
+        const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
+        const changedEmail = `${randomUUID()}@changed-contention.example.test`;
+        const verification = change === "email" ? await inTx(tx => issueNativeAuthOneTimeOperationInTx(tx, {
+            v: 1, purpose: "verify_native_email", normalizedEmail: changedEmail,
+            consumer: { kind: "sign_in_email_change", accountId: account.id,
+                nativeIdentityId: identity.id, expectedNativeIdentity: identity.providerUserId },
+        })) : null;
+        if (verification) issuedProofKeys.add(createNativeAuthOneTimeOperationKeyV1("verify_native_email", verification.rawBearer));
+        const directoryEnv = createEnvPatcher(["HAPPIER_AUTH_SIGN_IN_SERVICE_MODE", "HAPPIER_CANONICAL_SERVER_URL"]);
+        if (change === "directory-login") directoryEnv.setMany({
+            HAPPIER_AUTH_SIGN_IN_SERVICE_MODE: "self", HAPPIER_CANONICAL_SERVER_URL: "https://home.example.test",
+        });
+        const app = createApp();
+        await app.ready();
+        let release!: () => void;
+        let locked!: () => void;
+        const held = new Promise<void>(resolve => { locked = resolve; });
+        const released = new Promise<void>(resolve => { release = resolve; });
+        let peerPid = 0;
+        let issuedChallengeId: string | undefined;
+        const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        env.set("HAPPIER_DB_TX_MAX_RETRIES", "0");
+        const writing = inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
+            await tx.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+            const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+            peerPid = pid;
+            locked();
+            await released;
+        });
+        await held;
+        const changing = app.inject({ method: "POST", url: change === "password" ? "/v1/account/password/change"
+            : change === "email" ? "/v1/account/email/change" : change === "directory-login" ? "/v1/auth/email/login"
+                : change === "unlock" ? "/v1/auth/email/unlock" : "/v1/auth/email/step-up",
+            headers: { authorization: `Bearer ${token}` },
+            payload: change === "unlock" ? { v: 1, email: identity.providerUserId, authKey: encodePasswordCredentialFieldV1(authKey) }
+                : change === "first-key-step-up" ? { v: 1, password, purpose: "account_encryption_first_key", requestDigest: `aemrb1_${"A".repeat(43)}` }
+                : change === "directory-login" ? { v: 1, email: identity.providerUserId, password, credentialTarget: "account_directory" }
+                : verification ? { v: 1, verificationToken: verification.rawBearer }
+                : { v: 1, kind: "plain", expectedCredentialRevision: 1, currentPassword: password, newPassword },
+        }).then(response => response);
+        try {
+            await expect.poll(async () => {
+                const [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                        AND ${peerPid} = ANY(pg_blocking_pids(pid))) AS blocked
+                `;
+                return blocked;
+            }).toBe(true);
+            release();
+            await writing;
+            const response = await changing;
+            expect(response.statusCode, response.body).toBe(200);
+            expect(await db.accountPasswordCredential.findUniqueOrThrow({ where: { accountId: account.id }, select: { revision: true } }))
+                .toEqual({ revision: change === "password" ? 2 : 1 });
+            if (verification) {
+                expect(await db.accountIdentity.findUniqueOrThrow({ where: { accountId_provider: { accountId: account.id, provider: "email" } } }))
+                    .toMatchObject({ providerUserId: changedEmail });
+                expect(await db.repeatKey.findUnique({ where: { key: createNativeAuthOneTimeOperationKeyV1("verify_native_email", verification.rawBearer) } }))
+                    .toBeNull();
+            }
+            const currentAccount = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+            if (change === "directory-login") {
+                expect(currentAccount.seq).toBe(1);
+                expect(await auth.verifyToken(response.json<{ token: string }>().token))
+                    .toMatchObject({ userId: account.id, authTokenKind: "account_directory" });
+                expect(await db.accountHomeDirectoryEntry.count({ where: { accountId: account.id } })).toBe(1);
+            } else if (change === "unlock") {
+                expect(currentAccount.seq).toBe(1);
+                const body = response.json<{ expectedAccountId: string; envelope: unknown; challenge: { challengeId: string } }>();
+                issuedChallengeId = body.challenge.challengeId;
+                expect(body.expectedAccountId).toBe(account.id);
+                if (credential.kind !== "e2ee_password_envelope") throw new Error("Unlock fixture must be E2EE");
+                expect(body.envelope).toEqual(credential.envelope);
+                const challenge = await db.keyChallengeV2.findUniqueOrThrow({ where: { id: issuedChallengeId } });
+                expect(decodeVerifiedNativePasswordEvidenceV1(challenge.verifiedNativeMethodId))
+                    .toEqual({ nativeIdentityId: identity.id, credentialRevision: 1 });
+            } else if (change === "first-key-step-up") {
+                expect(currentAccount.seq).toBe(1);
+                const proof = response.json<{ externalAuthProof: { pending: string } }>().externalAuthProof;
+                issuedProofKeys.add(proof.pending);
+                const pending = await db.repeatKey.findUniqueOrThrow({ where: { key: proof.pending } });
+                expect(JSON.parse(pending.value)).toMatchObject({ userId: account.id,
+                    nativeIdentityId: identity.id, credentialRevision: 1, purpose: "account_encryption_first_key" });
+            } else expect(currentAccount.seq).toBeGreaterThan(1);
+        } finally {
+            release();
+            await writing;
+            await changing;
+            if (issuedChallengeId) await db.keyChallengeV2.deleteMany({ where: { id: issuedChallengeId } });
+            if (previousRetries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
+            directoryEnv.restore();
+            await app.close();
+        }
     }, 120_000);
 
     providerIt("commits exactly one of two distinct valid password-mutation proofs over one credential revision", async () => {
@@ -352,8 +483,8 @@ describe("native password public-owner provider contract", () => {
                     targetCredential,
                     proof: {
                         challengeId: challenge.challengeId,
-                        publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)),
-                        signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                        publicKey: encodePasswordCredentialFieldV1(new Uint8Array(signing.publicKey)),
+                        signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                             createPasswordMutationChallengeSigningInputV1(challenge), signing.secretKey,
                         ))),
                     },

@@ -14,7 +14,7 @@ import type { AuthMethodActionId, EffectiveAuthMethodAction } from "@/app/auth/m
 import { resolveAllowedAccountProvisionModes, resolveRecommendedAccountProvisionMode } from "@/app/auth/methods/accountProvisionModes";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { resolveEffectiveHomeSignInServicePolicy } from "@/app/auth/methods/signInServicePolicy";
-import { listProviderDescriptorsInTx, resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
+import { listProviderDescriptorsInTx, resolveOAuthRuntimeByIdInTx, type ProviderDescriptorResolution } from "@/app/auth/providers/identityProviderCatalog";
 import { resolveAccountDirectoryFeature } from "@/app/features/accountDirectoryFeature";
 import { readHomeGovernancePolicyInTx, resolveTeamProviderKindPolicy } from "@/app/home/governance/governancePolicy";
 import { applyHomeAuthenticationPolicyToEnv } from "@/app/home/governance/homeAuthenticationPolicyEnv";
@@ -34,6 +34,12 @@ export type HomeAuthMethodAdmissionContext =
     | TeamOAuthAdmissionSource
     | Readonly<{ kind: "team_invitation" }>;
 
+/** One operation's policy-composed catalog, reused for before/after comparisons. */
+export type HomeAuthenticationAvailabilityCapture = Readonly<{
+    effectiveHome: EffectiveHomeAuthMethodsResult;
+    providerDescriptors: readonly ProviderDescriptorResolution[];
+}>;
+
 function normalizeId(value: string): string {
     return value.trim().toLowerCase();
 }
@@ -51,8 +57,10 @@ async function resolveEffectiveHomeAuthMethodsForPolicyInTx(
         emailDeliveryReady?: boolean;
         admission?: Readonly<{ kind: "team_invitation" | "team_provisioned_identity" | "team_jit_identity" }>;
     }>,
-): Promise<EffectiveHomeAuthMethodsResult> {
-    if (input.homeAuthenticationPolicy.status === "unreadable") return { status: "unavailable" };
+): Promise<HomeAuthenticationAvailabilityCapture> {
+    if (input.homeAuthenticationPolicy.status === "unreadable") {
+        return { effectiveHome: { status: "unavailable" }, providerDescriptors: [] };
+    }
 
     // The Home policy decides in both directions where the deployment left a key unset (§3.4).
     const env = applyHomeAuthenticationPolicyToEnv(input.env, input.homeAuthenticationPolicy);
@@ -68,7 +76,8 @@ async function resolveEffectiveHomeAuthMethodsForPolicyInTx(
     const allowedProvisionModes = resolveAllowedAccountProvisionModes(env);
     const recommendedProvisionMode = resolveRecommendedAccountProvisionMode(env);
     const providerActions = createProviderAuthMethodActionTable(env);
-    const managedDecisions = (await listProviderDescriptorsInTx(tx, env))
+    const providerDescriptors = await listProviderDescriptorsInTx(tx, env);
+    const managedDecisions = providerDescriptors
         .flatMap(({ descriptor: details, reference, providerKind }) => {
             if (reference.source !== "managed" || existingIds.has(reference.id)) return [];
             const decision = applyHomePolicyToAuthMethodDecision({
@@ -106,10 +115,27 @@ async function resolveEffectiveHomeAuthMethodsForPolicyInTx(
         ...managedDecisions,
     ].sort((a, b) => a.id.localeCompare(b.id));
     return {
-        status: "ready",
-        decisions: Object.freeze([...coreDecisions, ...providerDecisions]),
-        signInService,
+        effectiveHome: {
+            status: "ready",
+            decisions: Object.freeze([...coreDecisions, ...providerDecisions]),
+            signInService,
+        },
+        providerDescriptors,
     };
+}
+
+export async function captureHomeAuthenticationAvailabilityInTx(
+    tx: Tx,
+    input: Parameters<typeof resolveEffectiveHomeAuthMethodsInTx>[1],
+): Promise<HomeAuthenticationAvailabilityCapture> {
+    const authentication = input.homeAuthenticationPolicyOverride
+        ?? (await readHomeGovernancePolicyInTx(tx)).authentication;
+    return await resolveEffectiveHomeAuthMethodsForPolicyInTx(tx, {
+        env: input.env,
+        ...(input.emailDeliveryReady === undefined ? {} : { emailDeliveryReady: input.emailDeliveryReady }),
+        ...(input.admission === undefined ? {} : { admission: input.admission }),
+        homeAuthenticationPolicy: authentication,
+    });
 }
 
 /** Resolves the persisted Home policy through the same effective owner. */
@@ -123,14 +149,7 @@ export async function resolveEffectiveHomeAuthMethodsInTx(
         homeAuthenticationPolicyOverride?: HomeAuthenticationPolicyReadV1;
     }>,
 ): Promise<EffectiveHomeAuthMethodsResult> {
-    const authentication = input.homeAuthenticationPolicyOverride
-        ?? (await readHomeGovernancePolicyInTx(tx)).authentication;
-    return await resolveEffectiveHomeAuthMethodsForPolicyInTx(tx, {
-        env: input.env,
-        ...(input.emailDeliveryReady === undefined ? {} : { emailDeliveryReady: input.emailDeliveryReady }),
-        ...(input.admission === undefined ? {} : { admission: input.admission }),
-        homeAuthenticationPolicy: authentication,
-    });
+    return (await captureHomeAuthenticationAvailabilityInTx(tx, input)).effectiveHome;
 }
 
 export async function resolveEffectiveHomeAuthMethods(

@@ -1,6 +1,6 @@
 import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
 import { normalizeTeamAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema, type TeamAcceptedAuthenticationV1 } from '@happier-dev/protocol/auth/entry';
-import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
+import { resolveEffectiveHomeAuthMethodsInTx, type HomeAuthenticationAvailabilityCapture } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
 import { listProviderDescriptorsInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { readIdentityProviderInstancePresentationsByIdsInTx } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
@@ -164,6 +164,8 @@ export async function resolveTeamAuthenticationPolicyInTx(
         teamId: string;
         policy: unknown;
         accountFacts?: TeamAuthenticationPolicyAccountFacts;
+        /** Share one Home availability capture across current/after-removal comparisons. */
+        homeAvailability?: HomeAuthenticationAvailabilityCapture;
         /** A server-validated invitation may activate Home provisioning choices. */
         admission?: Readonly<{ kind: "team_invitation" }>;
         emailDeliveryReady?: boolean;
@@ -186,7 +188,7 @@ export async function resolveTeamAuthenticationPolicyInTx(
     const acceptedConnectionIds = structural.choices.flatMap((choice) =>
         choice.reference.kind === "team_connection" ? [choice.reference.connectionId] : []);
     const [effectiveHome, connectionReads, homeDescriptors, teamDescriptors, instances] = await Promise.all([
-        resolveEffectiveHomeAuthMethodsInTx(tx, {
+        input.homeAvailability?.effectiveHome ?? resolveEffectiveHomeAuthMethodsInTx(tx, {
             env: input.env,
             ...(input.admission ? { admission: input.admission } : {}),
             ...(input.emailDeliveryReady === undefined
@@ -197,7 +199,7 @@ export async function resolveTeamAuthenticationPolicyInTx(
             id,
             teamId: input.teamId,
         }))),
-        listProviderDescriptorsInTx(tx, input.env),
+        input.homeAvailability?.providerDescriptors ?? listProviderDescriptorsInTx(tx, input.env),
         listProviderDescriptorsInTx(tx, input.env, { kind: "team", teamId: input.teamId }),
         readIdentityProviderInstancePresentationsByIdsInTx(tx, { ids: acceptedHomeMethodIds }),
     ]);

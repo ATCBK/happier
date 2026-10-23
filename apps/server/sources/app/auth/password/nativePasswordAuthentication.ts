@@ -75,7 +75,8 @@ export async function loginWithNativePlainPassword(params: Readonly<{
     }
     try {
         return await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id, "content");
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id,
+                sameServicePreparation?.status === "ready" ? "exclusive" : "content");
             const current = await findNativePasswordAccount(candidate.normalizedEmail, tx);
             if (!current || current.account.id !== candidate.account.id || current.parsed.mode !== "plain"
                 || current.nativeIdentityId !== candidate.nativeIdentityId || current.revision !== candidate.revision) {
@@ -96,7 +97,12 @@ export async function loginWithNativePlainPassword(params: Readonly<{
                 authenticationEvidence: [{ kind: "home_method", methodId: "email_password" }],
             });
             return { ok: true, token } as const;
-        }, { isolationLevel: "Serializable" /* Policy admission and directory descriptor/preference writes share the credential snapshot. */ });
+        }, {
+            // Directory writers reread the credential, Home policy and directory
+            // under exclusive Account admission. Token-only snapshot selection
+            // is unchanged here.
+            isolationLevel: sameServicePreparation?.status === "ready" ? "ReadCommitted" : "Serializable",
+        });
     } catch (error) {
         if (error instanceof InactiveAccountError) return { ok: false, statusCode: 403, error: "account-disabled" } as const;
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
@@ -160,7 +166,7 @@ export async function unlockNativeE2eePassword(params: Readonly<{
                 expectedAccountId: current.account.id,
                 challenge,
             } as const;
-        }, { isolationLevel: "Serializable" /* Native credential, Home policy and the issued password-evidence challenge share one snapshot. */ });
+        });
         if (!result.ok) return result;
         return result;
     } catch (error) {

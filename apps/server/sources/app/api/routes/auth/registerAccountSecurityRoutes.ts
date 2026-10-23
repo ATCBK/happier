@@ -395,6 +395,9 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
         const email = snapshot.AccountIdentity[0]?.providerUserId ?? null;
         const passwordMutation = mutation({ action: body.kind === "e2ee" ? body.action : "change", accountId: request.userId, revision: body.expectedCredentialRevision, email, credential: prepared.credential });
         const outcome = await inTx(async (tx) => {
+            // Account Security writers share this exclusive admission. Re-read
+            // the identity lifetime and revision after waiting, before consuming
+            // a keyed proof or installing the revision-checked replacement.
             await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "exclusive");
             const current = await tx.account.findUnique({ where: { id: request.userId }, select: { status: true, encryptionMode: true, publicKey: true, AccountIdentity: { where: { provider: "email" }, select: { id: true, providerUserId: true } }, AccountPasswordCredential: { select: { revision: true, credential: true } } } });
             if (!current || current.status !== "active" || current.encryptionMode !== body.kind || current.AccountIdentity[0]?.providerUserId !== email || current.AccountIdentity[0]?.id !== snapshot.AccountIdentity[0]?.id || current.AccountPasswordCredential?.revision !== body.expectedCredentialRevision) return "conflict" as const;
@@ -409,7 +412,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             if (changed.count !== 1) throw new CredentialMutationConflict();
             await markAccountChanged(tx, { accountId: request.userId, kind: "account", entityId: "self" });
             return "ok" as const;
-        }, { isolationLevel: "Serializable" /* Last-login and last-Home-owner checks span identities, password credentials and provider policy. */ }).catch((error) => {
+        }).catch((error) => {
             if (error instanceof CredentialMutationConflict) return "conflict" as const;
             throw error;
         });
@@ -515,7 +518,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             await upsertVerifiedMailboxEvidenceInTx(tx, { accountId: request.userId, email: verifiedEmail });
             await markAccountChanged(tx, { accountId: request.userId, kind: "account", entityId: "self" });
             return operation.normalizedEmail;
-        }, { isolationLevel: "Serializable" /* Native identity replacement participates in provider-removal and login-viability admission. */ }).catch((error) => {
+        }).catch((error) => {
             if (error instanceof ProviderAlreadyLinkedError
                 || error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError
                 || isPrismaUniqueConstraintError(error)) return "conflict" as const;

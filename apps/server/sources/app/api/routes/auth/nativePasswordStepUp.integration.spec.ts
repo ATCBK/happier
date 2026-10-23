@@ -9,6 +9,7 @@ import { consumeAccountEncryptionFirstKeyExternalAuthProofInTx } from "@/app/aut
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { auth } from "@/app/auth/auth";
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 
 describe("native current-password first-key authority", () => {
     let harness: LightSqliteHarness;
@@ -39,7 +40,9 @@ describe("native current-password first-key authority", () => {
             expect(externalAuthProof.provider).toBe("email_password");
             const automationToken = await auth.createToken(account.id, { session: "native-password-step-up-automation" }, { kind: "terminal", authority: "account_automation",
                 authenticationEvidence: [{ kind: "home_method", methodId: "email_password" }] });
-            expect((await app.inject({ method: "POST", url: "/v1/auth/email/step-up", headers: { authorization: `Bearer ${automationToken}` },
+            expect((await app.inject({ method: "POST", url: "/v1/auth/email/step-up", headers: {
+                authorization: `Bearer ${automationToken}`, [AUTHORITY_CEILING_HEADER_V1]: "account_automation",
+            },
                 payload: { v: 1, password, purpose: "account_encryption_first_key", requestDigest } })).statusCode).toBe(403);
             const persisted = await db.repeatKey.findUniqueOrThrow({ where: { key: externalAuthProof.pending } });
             expect(persisted.value).not.toContain(password);

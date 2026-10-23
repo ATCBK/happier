@@ -333,6 +333,11 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
 
         if (isAccountDirectory && alreadyLinked) {
             const token = await inTx(async (tx) => {
+                await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                    accountIds: [alreadyLinked.accountId], provider: parsedValue.securityBinding?.provider,
+                    connection: parsedValue.securityBinding?.connection,
+                    admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                });
                 await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                 const consumed = await consumeValidOAuthPendingInTx(
                     tx,

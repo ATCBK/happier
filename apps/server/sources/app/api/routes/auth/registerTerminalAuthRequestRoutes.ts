@@ -11,7 +11,7 @@ import {
     PresentUserRequiredResponseSchema,
     requirePresentUser,
 } from "@/app/api/utils/requirePresentUser";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { evaluateProvisioningResponsePolicy } from "./provisioningResponsePolicy";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { recordAuthEnrollmentOutcome } from "@/app/monitoring/metrics/authMetrics";
@@ -199,7 +199,7 @@ export function registerTerminalAuthRequestRoutes(
                 return reply.send({ state: "authorized" as const });
             }
             const serverIdentityId = await getOrCreateServerIdentityId(process.env);
-            const tokenResult = await inTx(async (tx) => {
+            const tokenResult = await inReadSnapshot(async (tx) => {
                 const resolved = await resolveApprovedTerminalEvidenceInTx(tx, {
                     accountId: answer.responseAccountId!,
                     approvalTokenEpoch: answer.approvalTokenEpoch,
@@ -213,7 +213,7 @@ export function registerTerminalAuthRequestRoutes(
                     authority: "account_automation",
                     ...(resolved.evidence.length > 0 ? { authenticationEvidence: resolved.evidence } : {}),
                 }) } as const;
-            }, { isolationLevel: "Serializable" /* Approved authentication evidence and the token epoch must come from the same Account snapshot. */ });
+            });
             if (tokenResult.status === "evidence_unavailable") {
                 return reply.code(409).send({ error: "credential_authentication_evidence_unavailable" as const });
             }
@@ -364,7 +364,7 @@ export function registerTerminalAuthRequestRoutes(
         // Resolve every fallible part of the response before publishing the one-shot
         // claim. A failed identity lookup or token mint must leave the request retryable.
         const serverIdentityId = await getOrCreateServerIdentityId(process.env);
-        const tokenResult = await inTx(async (tx) => {
+        const tokenResult = await inReadSnapshot(async (tx) => {
             const resolved = await resolveApprovedTerminalEvidenceInTx(tx, {
                 accountId: authRequest.responseAccountId!,
                 approvalTokenEpoch: authRequest.approvalTokenEpoch,
@@ -378,7 +378,7 @@ export function registerTerminalAuthRequestRoutes(
                 authority: "account_automation",
                 ...(resolved.evidence.length > 0 ? { authenticationEvidence: resolved.evidence } : {}),
             }) } as const;
-        }, { isolationLevel: "Serializable" /* Approved authentication evidence and the token epoch must come from the same Account snapshot. */ });
+        });
         if (tokenResult.status === "evidence_unavailable") {
             return reply.code(409).send({ error: "credential_authentication_evidence_unavailable" as const });
         }

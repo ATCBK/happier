@@ -1,7 +1,7 @@
 import { Fastify } from "../../types";
 import { z } from "zod/mini";
 import { log } from "@/utils/logging/log";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import {
     createSessionMachineAccessKeyInTx,
     readSessionMachineAccessKeyInTx,
@@ -41,10 +41,10 @@ export function accessKeysRoutes(app: Fastify) {
         const binding = { accountId: userId, machineId, sessionId };
 
         try {
-            const resolved = await inTx(async tx => {
+            const resolved = await inReadSnapshot(async tx => {
                 if (await readSessionMachineBindingStateInTx(tx, binding) !== "available") return { available: false as const, accessKey: null };
                 return { available: true as const, accessKey: await readSessionMachineAccessKeyInTx(tx, binding) };
-            }, { isolationLevel: "Serializable" /* Binding availability and its disclosed key must share one admission snapshot. */ });
+            });
             if (!resolved.available) {
                 return reply.code(404).send({ error: 'Session or machine not found' });
             }

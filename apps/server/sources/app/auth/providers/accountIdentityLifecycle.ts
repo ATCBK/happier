@@ -256,12 +256,15 @@ export type IdentityRefresh = Pick<Prisma.AccountIdentityUncheckedUpdateInput,
 
 export async function refreshIdentity(input: { accountId: string; provider: string; identityId: string; data: IdentityRefresh }): Promise<void> {
     await inTx(async (tx) => {
+        // Identity replacement/removal uses the same exclusive Account fence.
+        // ReadCommitted observes its committed lifetime after waiting; the exact
+        // identity id prevents a delayed refresh from updating a replacement.
         await acquireAccountSessionOwnerMetadataFencesInTx(tx, [input.accountId], "exclusive");
         const { count } = await tx.accountIdentity.updateMany({
             where: { id: input.identityId, accountId: input.accountId, provider: input.provider }, data: input.data,
         });
         if (count) await publishIdentityChange(tx, input.accountId);
-    }, { isolationLevel: "Serializable" /* Eligibility changes participate in the same final-login viability family as identity removal. */ });
+    });
 }
 
 export async function setIdentityVisibilityInTx(tx: Tx, input: { accountId: string; provider: string; showOnProfile: boolean }): Promise<boolean> {

@@ -39,6 +39,7 @@ import {
     TeamInvitationFreshAccountAdmissionAbort,
 } from "@/app/teams/invitations/freshAccountAdmission";
 import { isTeamMembershipAdmissionEnabled } from "@/app/teams/memberships/membershipService";
+import { acquireTeamMutationAccountAdmissionInTx } from "@/app/teams/memberships/sessionAccessEffects";
 import { linkIdentityInTx, ProviderAlreadyLinkedError } from "@/app/auth/providers/accountIdentityLifecycle";
 import { registerNativeAuthEmailOperationRoutes } from "./registerNativeAuthEmailPreviewRoutes";
 import type { AuthEmailDelivery } from "@/app/auth/email/authEmailDelivery";
@@ -249,10 +250,18 @@ export function registerNativeEmailPasswordRoutes(app: Fastify, params: Readonly
                 || body.admission.emailVerificationToken !== undefined) {
                 if (!operation || !("normalizedEmail" in operation) || operation.normalizedEmail !== normalized.normalizedEmail) return null;
             }
+            const accountId = randomUUID();
+            // Invitation acceptance publishes to the existing Team audience as
+            // well as the prospective Account. Admit that complete cohort before
+            // provisioning or consuming any proof; nested owners reuse it.
+            const recheckInvitationAudience = teamId === null ? null
+                : await acquireTeamMutationAccountAdmissionInTx(tx, {
+                    teamId, accountIds: [accountId], affectedAccountIds: [accountId],
+                    membershipChange: { kind: "teamMembership", teamId }, intent: "exclusive",
+                });
             if (e2eeAdmission && !await consumeLoginKeyChallengeV2(tx, e2eeAdmission.challengeId)) {
                 abortFreshAccountProvision("key_challenge_not_current");
             }
-            const accountId = randomUUID();
             const account = await provisionFreshAccountInTx(tx, {
                 insertSemantics: { kind: "must_create", accountId },
                 publicKey: e2eeAdmission?.publicKeyHex ?? null,
@@ -261,6 +270,7 @@ export function registerNativeEmailPasswordRoutes(app: Fastify, params: Readonly
                 verifiedMailbox: normalized,
                 ...(sameServicePreparation ? { directoryPreparation: sameServicePreparation } : {}),
             });
+            await recheckInvitationAudience?.();
             await linkIdentityInTx(tx, {
                 accountId: account.id,
                 provider: "email",

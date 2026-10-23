@@ -306,8 +306,17 @@ export async function listProviderDescriptorsInTx(
 
     if (!resolveConfiguredPublicServerUrl(env)) return Object.freeze(deployment);
     const home = await readHomeGovernancePolicyInTx(tx);
+    const homeInstances = context.kind === "home"
+        ? await listIdentityProviderInstancesInTx(tx, { owner: context, enabled: true }) : [];
+    const githubMetadata = await resolveManagedGitHubIdentityProviderRuntimeMetadataBatchInTx(tx, {
+        inputs: homeInstances.flatMap((resolved) => resolved.status === "ready"
+            && resolved.instance.kind === "github_app_identity"
+            && !snapshot.references.has(normalizeProviderId(resolved.instance.id))
+            ? [{ key: resolved.instance.id, env, context, provider: resolved.instance,
+                connectionId: null, connectionRevision: null }] : []),
+    });
     const managed = context.kind === "home"
-        ? (await Promise.all((await listIdentityProviderInstancesInTx(tx, { owner: context, enabled: true }))
+        ? (await Promise.all(homeInstances
             .map(async (resolved): Promise<ProviderDescriptorResolution | null> => {
                 if (resolved.status !== "ready") return null;
                 const instance = resolved.instance;
@@ -343,13 +352,7 @@ export async function listProviderDescriptorsInTx(
                     };
                 }
                 if (instance.kind === "github_app_identity") {
-                    const metadata = await resolveManagedGitHubIdentityProviderRuntimeMetadataInTx(tx, {
-                        env,
-                        context,
-                        provider: instance,
-                        connectionId: null,
-                        connectionRevision: null,
-                    });
+                    const metadata = githubMetadata.get(instance.id);
                     if (!metadata) return null;
                     return {
                         descriptor: resolveManagedGitHubAuthProviderFeatures({

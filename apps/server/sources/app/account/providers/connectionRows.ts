@@ -50,7 +50,10 @@ export async function readProviderConnectionsRowInTx(tx: Tx, input: Readonly<{ a
 export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderConnectionsRowMutationV1 & Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
 }>, options?: Readonly<{ ownSecretReferencesOnly?: boolean }>) {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
+  // Own-only RC capture must exclude deletion's negative reference census until
+  // this catalog publishes. Shared arms retain their caller's SSI transaction.
+  const intent = options?.ownSecretReferencesOnly && input.referencedSavedSecretIds.length > 0 ? 'exclusive' : 'content';
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, intent);
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   if (input.content !== null) {
