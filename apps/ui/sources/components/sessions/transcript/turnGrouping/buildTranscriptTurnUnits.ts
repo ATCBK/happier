@@ -54,6 +54,7 @@ export type TranscriptToolGroupUnitItem =
     }
     | {
         kind: 'tool-group-footer';
+        hasVisibleTools: boolean;
         id: string; // `${groupId}#footer`
         groupId: string;
         toolMessageIds: string[];
@@ -182,6 +183,7 @@ function appendToolGroupUnits(params: Readonly<{
     // The footer separates the group from the next message and closes card backgrounds.
     params.output.push({
         kind: 'tool-group-footer',
+        hasVisibleTools: visibleToolMessageIds.length > 0,
         id: `${params.groupId}#footer`,
         groupId: params.groupId,
         toolMessageIds,

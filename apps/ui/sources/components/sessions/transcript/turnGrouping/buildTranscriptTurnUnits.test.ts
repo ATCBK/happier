@@ -434,6 +434,7 @@ describe('buildTranscriptTurnUnits', () => {
             },
             {
                 kind: 'tool-group-footer',
+                hasVisibleTools: true,
                 id: `${groupId}#footer`,
                 groupId,
                 toolMessageIds: ['t1', 't2', 't3'],
@@ -480,7 +481,7 @@ describe('buildTranscriptTurnUnits', () => {
         });
         expect(result[1]).toMatchObject({ kind: 'tool-group-tool', toolMessageId: 't3', expanded: false, createdAt: 3, seq: 3 });
         expect(result[2]).toMatchObject({ kind: 'tool-group-tool', toolMessageId: 't4', expanded: false, createdAt: 4, seq: 4 });
-        expect(result[4]).toMatchObject({ kind: 'tool-group-footer', expanded: false });
+        expect(result[4]).toMatchObject({ kind: 'tool-group-footer', expanded: false, hasVisibleTools: true });
     });
 
     it('emits a header-only group (header and its footer cap, no rows or reveal) when collapsedPreviewCount <= 0 and truncates fractional counts', () => {
@@ -504,6 +505,7 @@ describe('buildTranscriptTurnUnits', () => {
         });
         expect(noTail.map((item) => item.kind)).toEqual(['tool-group-header', 'tool-group-footer']);
         expect(noTail[0]).toMatchObject({ hiddenCount: 3 });
+        expect(noTail[1]).toMatchObject({ hasVisibleTools: false });
 
         const negative = buildTranscriptTurnUnits({
             items,

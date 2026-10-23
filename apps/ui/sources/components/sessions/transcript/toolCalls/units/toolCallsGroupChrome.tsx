@@ -54,10 +54,13 @@ export function resolveToolCallMessageForSession(
 export function resolveToolCallsGroupUnitContainerStyle(
     variant: ToolCallsGroupChromeVariant,
     position: ToolCallsGroupUnitPosition,
+    hasVisibleTools = false,
 ): StyleProp<ViewStyle> {
     const pieces: StyleProp<ViewStyle>[] = [unitStyles.container];
     if (position === 'footer') {
-        pieces.push(variant === 'feed' ? unitStyles.containerPlainFeedFooterMargin : unitStyles.containerFooterMargin);
+        pieces.push(variant === 'feed'
+            ? (hasVisibleTools ? unitStyles.containerFeedBodyFooterMargin : unitStyles.containerPlainFeedFooterMargin)
+            : unitStyles.containerFooterMargin);
     }
     if (variant === 'cards') {
         pieces.push(unitStyles.unitCards);
@@ -84,6 +87,7 @@ export function resolveToolCallsGroupUnitContainerStyle(
 export function ToolCallsGroupUnitRowFrame(props: Readonly<{
     variant: ToolCallsGroupChromeVariant;
     position: ToolCallsGroupUnitPosition;
+    hasVisibleTools?: boolean;
     unitTestID: string;
     children: React.ReactNode;
 }>) {
@@ -94,7 +98,7 @@ export function ToolCallsGroupUnitRowFrame(props: Readonly<{
             <View style={[unitStyles.centeredContent, centeredContentMaxWidthStyle]}>
                 <View
                     testID={props.unitTestID}
-                    style={resolveToolCallsGroupUnitContainerStyle(props.variant, props.position)}
+                    style={resolveToolCallsGroupUnitContainerStyle(props.variant, props.position, props.hasVisibleTools)}
                 >
                     {props.children}
                 </View>
@@ -308,6 +312,9 @@ const unitStyles = StyleSheet.create((theme) => ({
     },
     containerPlainFeedFooterMargin: {
         marginBottom: theme.space.s8,
+    },
+    containerFeedBodyFooterMargin: {
+        marginBottom: theme.space.s16,
     },
     containerFooterMargin: {
         marginBottom: 22,

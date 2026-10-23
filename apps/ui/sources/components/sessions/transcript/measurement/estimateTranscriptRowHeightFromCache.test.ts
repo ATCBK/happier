@@ -268,6 +268,14 @@ describe('P · a tool row is sized by the chrome it actually paints', () => {
 
     const MEASURED_FEED_TOOL_ROW_PX = 28;
 
+    it('reserves the normal message gap after visible tools, including collapsed previews', () => {
+        for (const expanded of [false, true]) {
+            const footer = { ...toolUnitItem('tool-group-footer', expanded), hasVisibleTools: true };
+            expect(estimateFor(footer, 'feed')).toBe(22);
+        }
+    });
+
+
     it('keeps the feed variants on their measured single-line caps', () => {
         expect(estimateFor(toolUnitItem('tool-group-tool', false), 'feed')).toBe(MEASURED_FEED_TOOL_ROW_PX);
         expect(estimateFor(toolUnitItem('tool-group-tool', false), 'feed_background')).toBe(MEASURED_FEED_TOOL_ROW_PX);

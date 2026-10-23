@@ -260,7 +260,7 @@ function estimateWrappedLineCount(text: string): number {
  * (paddings, gaps, font sizes, gutter widths) is byte-identical. That is derived, not re-measured
  * here; any future divergence in those shells has to re-derive these caps.
  *
- * Plain feed footers reserve only the compact 8px message gap.
+ * Plain feed footers reserve 8px for header-only groups and the 16px message gap plus 6px body padding after visible tools.
  * Background footers retain their rounded card cap.
  *
  * `cards` is deliberately NOT a key here: a tool GROUP cannot exist in that mode. Grouping is
@@ -579,7 +579,9 @@ export function estimateTranscriptRowHeightFromContent(params: Readonly<{
     if (item.kind === 'tool-group-tool') return unitRowHeights?.tool;
     if (item.kind === 'tool-group-expand') return unitRowHeights?.expand;
     if (item.kind === 'tool-group-header') return unitRowHeights?.header;
-    if (item.kind === 'tool-group-footer') return unitRowHeights?.footer;
+    if (item.kind === 'tool-group-footer') {
+        return toolCallsGroupChromeVariant === 'feed' && item.hasVisibleTools ? 22 : unitRowHeights?.footer;
+    }
     if (
         item.kind === 'pending-user-action'
         || item.kind === 'external-session-operation'
