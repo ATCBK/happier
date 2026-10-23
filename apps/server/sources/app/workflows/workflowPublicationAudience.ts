@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import type { Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import { readAutomationSessionReviewProjectionIdsInTx } from "@/app/automations/sessionReviewProjectionInvalidation";
 import { automationRunCauseSelect } from "@/app/automations/automationPersistenceSelect";
@@ -37,9 +38,14 @@ export interface WorkflowPublicationAudience {
 
 async function readAutomationPublicationAudienceInTx(tx: Tx, automationIds: readonly string[]): Promise<WorkflowPublicationAudience> {
     if (automationIds.length === 0) return { accountIds: [], sessionIds: [] };
-    const automations = await tx.automation.findMany({ where: { id: { in: [...automationIds] } }, select: {
-        accountId: true, scopeSessionId: true, assignments: { where: { enabled: true }, select: { machineId: true } },
-    } });
+    const automations: { accountId: string; scopeSessionId: string | null; assignments: { machineId: string }[] }[] = [];
+    // The enabled-assignment predicate and portable Prisma offset share the ID budget.
+    for (const ids of portableQueryChunks({ values: [...new Set(automationIds)], bindingsPerValue: 1, fixedBindings: 2 })) {
+        const rows = await tx.automation.findMany({ where: { id: { in: [...ids] } }, select: {
+            accountId: true, scopeSessionId: true, assignments: { where: { enabled: true }, select: { machineId: true } },
+        } });
+        automations.push(...rows);
+    }
     const sessionIds = [...new Set([
         ...automations.flatMap(automation => automation.scopeSessionId ? [automation.scopeSessionId] : []),
         ...await readAutomationSessionReviewProjectionIdsInTx(tx, automationIds),
@@ -56,11 +62,16 @@ async function readAutomationPublicationAudienceInTx(tx: Tx, automationIds: read
 /** Session fact writers collect lifecycle admission's review/wake audience before locking their source. */
 export async function getSessionLifecycleAutomationPublicationAudienceInTx(tx: Tx, sourceSessionIds: readonly string[]): Promise<WorkflowPublicationAudience> {
     if (sourceSessionIds.length === 0) return { accountIds: [], sessionIds: [] };
-    const triggers = await tx.automationTrigger.findMany({ where: {
-        kind: "sessionLifecycle", sourceSessionId: { in: [...sourceSessionIds] }, enabled: true, deletedAt: null,
-        automation: { enabled: true, deletedAt: null },
-    }, distinct: ["automationId"], select: { automationId: true } });
-    return readAutomationPublicationAudienceInTx(tx, triggers.map(trigger => trigger.automationId));
+    const automationIds = new Set<string>();
+    // Kind, both enabled predicates and the portable Prisma offset are fixed bindings.
+    for (const ids of portableQueryChunks({ values: [...new Set(sourceSessionIds)], bindingsPerValue: 1, fixedBindings: 4 })) {
+        const triggers = await tx.automationTrigger.findMany({ where: {
+            kind: "sessionLifecycle", sourceSessionId: { in: [...ids] }, enabled: true, deletedAt: null,
+            automation: { enabled: true, deletedAt: null },
+        }, distinct: ["automationId"], select: { automationId: true } });
+        for (const trigger of triggers) automationIds.add(trigger.automationId);
+    }
+    return readAutomationPublicationAudienceInTx(tx, [...automationIds]);
 }
 
 /** Pure census of the immediate source, watcher, review and managed-wake composition; never acquires locks. */

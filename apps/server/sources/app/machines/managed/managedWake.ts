@@ -19,6 +19,7 @@ import { isCurrentSessionInputMachineTargetInTx, readCurrentCommittedSessionInpu
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { emitAutomationRunUpdatedToMachineOnly } from '@/app/automations/automationChangePublisher';
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
+import { portableQueryChunks } from '@/storage/portableQueryChunks';
 import { markAccountChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { readWorkflowRunOriginWakeCandidatesInTx } from '@/app/workflows/workflowRunAttention';
 import { ManagedMachineError, projectManagedMachine, requireManagedControllerInTx, sameManagedInput, type StoredManagedMachine } from './managedRows';
@@ -250,9 +251,12 @@ export async function readManagedWakePublicationAccountIdsInTx(tx: Tx, input: Re
     sessionIds: readonly string[];
 }>): Promise<string[]> {
     const targets = new Map(input.machineTargets.map(target => [JSON.stringify(target), target]));
-    const sessions = input.sessionIds.length > 0 ? await tx.session.findMany({
-        where: { id: { in: [...input.sessionIds] } }, select: { id: true, accountId: true },
-    }) : [];
+    const sessions: { id: string; accountId: string }[] = [];
+    for (const ids of portableQueryChunks({ values: [...new Set(input.sessionIds)], bindingsPerValue: 1, fixedBindings: 1 })) {
+        sessions.push(...await tx.session.findMany({
+            where: { id: { in: [...ids] } }, select: { id: true, accountId: true },
+        }));
+    }
     for (const session of sessions) {
         const placement = await readSessionContextWakePlacementInTx(tx, { accountId: session.accountId, sessionId: session.id });
         if (placement) {
@@ -263,11 +267,14 @@ export async function readManagedWakePublicationAccountIdsInTx(tx: Tx, input: Re
     // Enrollment admits only a guest owned by its custodian. Taking that existing
     // authority also prevents an enrollment committed during acquisition from
     // introducing a previously absent custodian into the later publication.
-    const machines = targets.size > 0 ? await tx.machine.findMany({
-        where: { id: { in: [...new Set([...targets.values()].map(target => target.machineId))] } },
-        select: { accountId: true },
-    }) : [];
-    const accountIds = new Set(machines.map(machine => machine.accountId));
+    const accountIds = new Set<string>();
+    const machineIds = [...new Set([...targets.values()].map(target => target.machineId))];
+    for (const ids of portableQueryChunks({ values: machineIds, bindingsPerValue: 1, fixedBindings: 1 })) {
+        const machines = await tx.machine.findMany({
+            where: { id: { in: [...ids] } }, select: { accountId: true },
+        });
+        for (const machine of machines) accountIds.add(machine.accountId);
+    }
     for (const target of targets.values()) {
         const current = await readManagedWakeTargetBindingInTx(tx, { actorAccountId: target.accountId, machineId: target.machineId });
         if (current?.controllerRole !== 'manage') continue;
