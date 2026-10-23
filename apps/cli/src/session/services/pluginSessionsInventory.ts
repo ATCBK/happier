@@ -524,7 +524,14 @@ export function createPluginSessionsInventory(
         },
       }),
     });
+    const settleObservedDecision = permissions?.settleObservedDecision?.bind(permissions);
     const guardedPermissions: SessionHandle['permissions'] = Object.freeze({
+      ...(settleObservedDecision ? {
+        async settleObservedDecision(request: Parameters<NonNullable<SessionHandle['permissions']['settleObservedDecision']>>[0]) {
+          await assertSessionAccess(sessionId, 'control');
+          return await settleObservedDecision(request);
+        },
+      } : {}),
       async requestDecision(
         ...args: Parameters<SessionHandle['permissions']['requestDecision']>
       ) {

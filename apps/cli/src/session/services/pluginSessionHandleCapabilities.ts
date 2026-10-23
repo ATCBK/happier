@@ -10,6 +10,9 @@ import type {
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { randomUUID } from 'node:crypto';
 
+import { z } from 'zod/mini';
+import { StructuredQuestionAnswersV1Schema } from '@happier-dev/protocol';
+
 import type { StoredCredentials } from '@/persistence';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { createSessionHandleAuthService } from '@/plugins/runtime/context/session/services/auth';
@@ -27,7 +30,7 @@ import { isAgentStructuredQuestionToolName } from '@/agent/permissions/requestKi
 
 export type PluginSessionLiveCapabilities = Readonly<{
   scopeId: symbol;
-  permissionHandler?: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
+  permissionHandler?: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'> & Partial<Pick<ProviderEnforcedPermissionHandler, 'settleObservedDecision'>>;
   interactions?: InteractionsService;
   readPermissionMode: () => string;
   media?: SessionMediaService;
@@ -82,6 +85,14 @@ function unavailableMediaService(): SessionMediaService {
     },
   });
 }
+
+// Authority-bearing mutation input is closed; answers retain their canonical validator.
+const observedDecisionSchema = z.strictObject({
+  requestId: z.string(),
+  source: z.string(),
+  decision: z.enum(['approved', 'denied', 'abort']),
+  answers: z.optional(StructuredQuestionAnswersV1Schema),
+});
 
 function permissionUnavailable(code: string): never {
   throw new PluginError({ code, message: 'Session permission scope is unavailable' });
@@ -197,6 +208,21 @@ export function createPluginSessionHandleCapabilitiesFactory(
     } satisfies SessionAuthService);
 
     const permissions = Object.freeze({
+      async settleObservedDecision(request) {
+        const live = readLive();
+        if (!live?.permissionHandler || !isLiveCurrent(live)) {
+          return permissionUnavailable('plugin_session_permission_scope_unavailable');
+        }
+        if (!live.permissionHandler.settleObservedDecision) {
+          return permissionUnavailable('plugin_session_permission_settlement_unavailable');
+        }
+        const observed = observedDecisionSchema.parse(request);
+        const settled = await live.permissionHandler.settleObservedDecision({ ...observed, owner });
+        if (!isSameLive(live) || !isLiveCurrent(live)) {
+          return permissionUnavailable('plugin_session_permission_scope_retired');
+        }
+        return settled;
+      },
       async requestDecision(request, options) {
         const live = readLive();
         if (!live?.permissionHandler || !isLiveCurrent(live)) {
