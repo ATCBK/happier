@@ -27,6 +27,7 @@ import { readArtifactWorkspaceSourceSessionId } from './artifactWorkspaceSource'
 import { storage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { readMachineInventoryRowReadiness } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { documentFileName, saveWorkflowDocument } from '@/sync/domains/workflows/workflowDocumentFile';
 
 /** Artifact-backed Actions use the captured Account transport and canonical sync codecs. */
 export function createUiArtifactAction(account: LazyActionAccountContext, options?: Readonly<{
@@ -119,6 +120,15 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
             signal?.throwIfAborted();
             const savedBy = artifactSavedByFromActionContextV1({ ...context, runtimeAccountId: account.accountId });
             switch (actionId) {
+                case 'artifact.export': {
+                    const args = ArtifactActionInputSchemasV1[actionId].parse(input);
+                    if (!('portable' in args)) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:artifact.export' };
+                    const portable = args.portable;
+                    const name = portable.kind === 'role' ? portable.document.name : portable.document.profile.name;
+                    const fileName = documentFileName(name, portable.kind);
+                    await saveWorkflowDocument({ fileName, json: JSON.stringify(portable.document, null, 2) });
+                    return { exported: true, fileName };
+                }
                 case 'doc.edit.accept':
                 case 'doc.edit.decline': {
                     const acceptInput = actionId === 'doc.edit.accept' ? DocEditAcceptHostInputV1Schema.parse(input) : undefined;

@@ -5184,7 +5184,7 @@ function projectPublicLinkCreationObservation(value: unknown): unknown {
 const ARTIFACT_ACTION_COPY = {
   'artifact.create': ['Create document', 'Save a new document to your account.'],
   'artifact.get': ['Read document', 'Open one document and read what is in it.'],
-  'artifact.export': ['Export document file', 'Save a binary document into the invoking session’s workspace. Existing files are preserved unless overwrite is approved.'],
+  'artifact.export': ['Export document file', 'Save a binary document into the invoking session’s workspace, or save/share a portable Role or Profile document on the answering client. Existing workspace files are preserved unless overwrite is approved.'],
   'artifact.list': ['List documents', 'See the documents saved in your account.'],
   'artifact.update': ['Update document', 'Save a new version of a document. Earlier versions are kept.'],
   'artifact.delete': ['Delete document', 'Remove a document from your account. People it was shared with lose it too.'],
@@ -5205,6 +5205,10 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
   const voice = id !== 'artifact.export';
   return {
     id, approval: { result: 'required' },
+    ...(id === 'artifact.export' ? { approvalPolicy: {
+      uiConfirmation: 'direct' as const,
+      uiConfirmationForInput: (input: unknown) => !Object.hasOwn(readRecord(input), 'portable'),
+    }, executionPlacementForInput: (input: unknown) => Object.hasOwn(readRecord(input), 'portable') ? 'client' as const : 'machine' as const } : {}),
     ...(id === 'artifact.public_link.audit' ? { approvalPolicy: { agentDefault: 'egress' as const } } : {}),
     // Opening the share sheet reads the document's links; a present-user read is not confirmed.
     ...(id === 'artifact.public_link.list' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
@@ -5222,12 +5226,13 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
         return header.kind !== USAGE_NOTICE_ARTIFACT_KIND_V1 && header.kind !== ACCOUNT_NOTICE_ARTIFACT_KIND_V1;
       },
     } } : {}),
-    title: ARTIFACT_ACTION_COPY[id][0], description: 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
+    title: ARTIFACT_ACTION_COPY[id][0], description: id === 'artifact.export' ? ARTIFACT_ACTION_COPY[id][1]
+      : 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
     placements: [], bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_'),
       ...(voice ? { voiceClientToolName: id.replaceAll('.', '_') } : {}) },
-    surfaces: { ui: id !== 'artifact.export', cli: true, rpc: true, agent: true, mcp: true,
+    surfaces: { ui: true, cli: true, rpc: true, agent: true, mcp: true,
       voice },
     inputSchema: ArtifactActionInputSchemasV1[id], outputSchema: ArtifactActionOutputSchemasV1[id],
     ...(['artifact.public_link.create', 'artifact.create', 'artifact.update', 'artifact.publish_from_file', 'artifact.get', 'artifact.revisions.restore'].includes(id)

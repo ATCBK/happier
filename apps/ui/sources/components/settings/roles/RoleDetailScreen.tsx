@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { RoleArtifactV1Schema } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { resolveRoleRunsAsKindV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode,
   type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -51,10 +50,9 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Modal } from '@/modal';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
-import {
-  documentFileName,
-  saveWorkflowDocument,
-} from '@/sync/domains/workflows/workflowDocumentFile';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { t } from '@/text';
@@ -108,18 +106,20 @@ function leave(
  * "Send a copy instead": the role as its portable `role.v1` document — the same body its Artifact
  * holds — handed to the platform's file save or share sheet. No grant is made.
  */
-async function sendRoleCopy(role: ResolvedRoleV1): Promise<void> {
+async function sendRoleCopy(role: ResolvedRoleV1, scope: ServerAccountScope): Promise<void> {
   const artifact = resolvedRoleToArtifact(role);
   try {
-    const document = RoleArtifactV1Schema.parse(artifact);
-    await saveWorkflowDocument({
-      fileName: documentFileName(document.name, 'role'),
-      json: JSON.stringify(document, null, 2),
-    });
+    const result = await executePortableExport('artifact.export', { portable: { kind: 'role', document: artifact } },
+      { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId });
+    if (!result.ok && isActionApprovalDeclinedErrorCode(result.errorCode)) return;
+    if (result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return;
+    if (!result.ok) throw new Error(result.error);
   } catch {
     Modal.alert(t('roles.settings.sendCopyFailed'));
   }
 }
+
+const executePortableExport = createFrontDoorActionExecute();
 
 async function reportFailure(
   result: ActionExecuteResult,
@@ -239,7 +239,9 @@ const RoleDetail = React.memo(function RoleDetail(
   // header's visible action (lab `settings-R`); the rare operations stay in ⋯.
   const share = React.useMemo(
     () => (entry.source === 'user' || entry.source === 'shared') && entry.roleId
-      ? () =>
+      ? () => {
+          const scope = getActiveServerAccountScope();
+          if (!scope) return;
           showDocumentShareSheet({
             kind: 'role.v1',
             artifactId: entry.roleId,
@@ -250,9 +252,10 @@ const RoleDetail = React.memo(function RoleDetail(
             ),
             linkPath: roleRoute(entry.roleId),
             onSendCopy: () => {
-              void sendRoleCopy(role);
+              void sendRoleCopy(role, scope);
             },
-          })
+          });
+        }
       : null,
     [engine.label, entry.roleId, entry.source, role],
   );

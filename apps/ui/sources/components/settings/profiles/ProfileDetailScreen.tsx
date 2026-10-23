@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet } from 'react-native-unistyles';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { LaunchProfileArtifactReferenceV1Schema, readLaunchProfileArtifactV1 } from '@happier-dev/protocol/launchProfiles/launchProfileArtifactV1';
 import { isLaunchProfileV2, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
 import type { ProfileLegacyCloneSourceV1, ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -26,7 +26,7 @@ import { Modal } from '@/modal';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import { hasRequiredSecret } from '@/sync/domains/profiles/profileSecrets';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { getProfileCatalogSnapshot } from '@/sync/store/settings/profileCatalogSnapshot';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -35,7 +35,6 @@ import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { randomUUID } from '@/platform/randomUUID';
 // The same store the profile readers hydrate published documents from.
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { documentFileName, saveWorkflowDocument } from '@/sync/domains/workflows/workflowDocumentFile';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
@@ -103,17 +102,22 @@ async function publishLaunchProfileForShare(
  * Artifact holds it (read through the canonical reader), handed to the platform's file save or share
  * sheet. No grant is made and no secret value is in it.
  */
-async function sendLaunchProfileCopy(artifactId: string): Promise<void> {
+async function sendLaunchProfileCopy(artifactId: string, scope: Readonly<{ serverId: string; accountId: string }> | null): Promise<void> {
+    if (!scope || !areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) return;
     const artifact = getStorage().getState().artifacts[artifactId];
     const content = artifact?.isDecrypted && artifact.header && typeof artifact.body === 'string'
         ? readLaunchProfileArtifactV1({ artifactId, header: artifact.header, body: artifact.body })
         : null;
     try {
         if (!content) throw new Error('launch_profile_document_unavailable');
-        await saveWorkflowDocument({
-            fileName: documentFileName(content.profile.name, 'launch-profile'),
-            json: JSON.stringify(content, null, 2),
+        executeAction ??= createFrontDoorActionExecute();
+        const result = await executeAction('artifact.export', { portable: { kind: 'launch-profile', document: content } }, {
+            surface: 'ui', authority: 'present_user',
+            serverId: scope.serverId, expectedAccountId: scope.accountId,
         });
+        if (!result.ok && isActionApprovalDeclinedErrorCode(result.errorCode)) return;
+        if (result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return;
+        if (!result.ok) throw new Error(result.error);
     } catch {
         Modal.alert(t('roles.settings.sendCopyFailed'));
     }
@@ -375,7 +379,7 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
             name: profile.name,
             subtitle: profileSummary,
             linkPath: profileRoute(profile.id),
-            onSendCopy: () => { void sendLaunchProfileCopy(artifactId); },
+            onSendCopy: () => { void sendLaunchProfileCopy(artifactId, accountScope); },
         });
     }, [accountScope, discardEditorDraft, profile, profileSummary, router, saveEditor]);
 
