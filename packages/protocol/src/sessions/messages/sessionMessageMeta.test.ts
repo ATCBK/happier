@@ -16,13 +16,16 @@ describe('sessionMessages meta', () => {
   });
 
   it('retains predecessor Claude execution choices without retaining arbitrary metadata', () => {
-    // ../0.2 HEAD 639a32ec0e832dedb35d5a5809c36717c568225f (clean):
+    // ../0.2 HEAD b28b36b761d8aebaa738f3ceddbfaf7a53ac52d4 plus inspected Claude settings changes:
     // buildClaudeRemoteOutgoingMessageMetaExtras writes this family, and
-    // applyClaudeRemoteMetaState reads it to choose SDK, sources and thinking.
+    // applyClaudeRemoteMetaState reads it to choose SDK, sources and thinking;
+    // the moving producer also carries independent unified-terminal response locations.
     const reader = createStoredReadSchema(protocol.SessionMessageMetaSchema);
     const metadata = {
       source: 'ui',
       claudeRemoteAgentSdkEnabled: false,
+      claudeUnifiedTerminalQuestionResponseLocation: 'app_only',
+      claudeUnifiedTerminalPermissionResponseLocation: 'terminal_only',
       claudeRemoteSettingSourcesV2: ['project'],
       claudeRemoteSettingSources: 'project',
       claudeRemoteMaxThinkingTokens: 4096,

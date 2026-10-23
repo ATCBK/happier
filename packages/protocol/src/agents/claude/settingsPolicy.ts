@@ -76,3 +76,28 @@ export function normalizeClaudeRemoteAdvancedOptionsJson(raw: unknown): string {
   const normalized = JSON.stringify(parsed);
   return normalized.length <= MAX_CLAUDE_REMOTE_ADVANCED_OPTIONS_JSON_CHARS ? normalized : '';
 }
+
+export const CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS = ['app_and_terminal', 'app_only', 'terminal_only'] as const;
+export type ClaudeUnifiedTerminalResponseLocation = (typeof CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS)[number];
+
+export function resolveClaudeUnifiedTerminalResponseLocations(settings: Readonly<Record<string, unknown>>): Readonly<{
+  question: ClaudeUnifiedTerminalResponseLocation;
+  permission: ClaudeUnifiedTerminalResponseLocation;
+}> {
+  const fallback = settings.claudeLocalPermissionBridgeEnabled === false ? 'terminal_only' : 'app_and_terminal';
+  return {
+    question: normalizeEnum(settings.claudeUnifiedTerminalQuestionResponseLocation, CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS) ?? fallback,
+    permission: normalizeEnum(settings.claudeUnifiedTerminalPermissionResponseLocation, CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS) ?? fallback,
+  };
+}
+
+/** Retained 0.2 flat Account settings must be translated before plugin declaration defaults. */
+export function backfillClaudeUnifiedTerminalResponseLocations(settings: Record<string, unknown>): Record<string, unknown> {
+  if (settings.claudeLocalPermissionBridgeEnabled !== false) return settings;
+  const locations = resolveClaudeUnifiedTerminalResponseLocations(settings);
+  return {
+    ...settings,
+    claudeUnifiedTerminalQuestionResponseLocation: locations.question,
+    claudeUnifiedTerminalPermissionResponseLocation: locations.permission,
+  };
+}

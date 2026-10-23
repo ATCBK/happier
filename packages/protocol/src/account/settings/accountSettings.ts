@@ -1,3 +1,4 @@
+import { backfillClaudeUnifiedTerminalResponseLocations } from '../../agents/claude/settingsPolicy.js';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { normalizeScmBackendQualifiedId } from '../../scm/backendIdentity.js';
 import * as z from 'zod/mini';
@@ -1408,7 +1409,9 @@ export type AccountSettingsDefaults = typeof ACCOUNT_SETTING_ARTIFACTS.defaults;
 export const AccountSettingsSchema = lazyZodSchema(() => classicZ.pipe(z.transform((raw): unknown => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw))
         return {};
-    const effective = backfillLegacyTargetKeyedAccountSettings(raw as Record<string, unknown>);
+    const effective = backfillClaudeUnifiedTerminalResponseLocations(
+        backfillLegacyTargetKeyedAccountSettings(raw as Record<string, unknown>),
+    );
     // Effective readers no longer own these values. Raw persisted baselines must
     // retain them until the destination-first reserved-row importer commits.
     for (const key of Object.keys(effective)) {

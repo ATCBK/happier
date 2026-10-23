@@ -2015,3 +2015,22 @@ it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
   expect(z.toJSONSchema(read,{target,io,unrepresentable:'any'})).toHaveProperty(['properties','favoriteModelSelectionsV1','anyOf',1,'maxItems'],256);
  }
 });
+
+
+describe('retained Claude unified terminal response locations', () => {
+  it('preserves a disabled predecessor bridge before declaration defaults are applied', () => {
+    expect(accountSettingsParse({ claudeLocalPermissionBridgeEnabled: false })).toMatchObject({
+      claudeUnifiedTerminalQuestionResponseLocation: 'terminal_only',
+      claudeUnifiedTerminalPermissionResponseLocation: 'terminal_only',
+    });
+    expect(accountSettingsParse({
+      claudeLocalPermissionBridgeEnabled: false,
+      claudeUnifiedTerminalQuestionResponseLocation: 'app_only',
+      claudeUnifiedTerminalPermissionResponseLocation: 'invalid',
+    })).toMatchObject({
+      claudeUnifiedTerminalQuestionResponseLocation: 'app_only',
+      claudeUnifiedTerminalPermissionResponseLocation: 'terminal_only',
+    });
+    expect(accountSettingsParse({})).not.toHaveProperty('claudeUnifiedTerminalQuestionResponseLocation');
+  });
+});

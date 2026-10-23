@@ -21,3 +21,21 @@ describe('buildClaudePredecessorMessageMeta', () => {
         expect(meta).not.toHaveProperty('claudeUnifiedTerminalWorkspaceTrust');
     });
 });
+
+
+describe('unified terminal response location metadata', () => {
+    it('preserves independent explicit choices and the legacy disabled bridge fallback', () => {
+        expect(buildClaudePredecessorMessageMeta({})).toMatchObject({
+            claudeUnifiedTerminalQuestionResponseLocation: 'app_and_terminal',
+            claudeUnifiedTerminalPermissionResponseLocation: 'app_and_terminal',
+        });
+        expect(buildClaudePredecessorMessageMeta({
+            claudeLocalPermissionBridgeEnabled: false,
+            claudeUnifiedTerminalQuestionResponseLocation: 'app_only',
+            claudeUnifiedTerminalPermissionResponseLocation: 'invalid',
+        })).toMatchObject({
+            claudeUnifiedTerminalQuestionResponseLocation: 'app_only',
+            claudeUnifiedTerminalPermissionResponseLocation: 'terminal_only',
+        });
+    });
+});

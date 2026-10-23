@@ -104,7 +104,23 @@ describe('CLAUDE_AGENT_SETTINGS_CONTRIBUTION', () => {
       'claudeUnifiedTerminalEnabled',
       'claudeUnifiedTerminalHost',
       'claudeUnifiedTerminalResumeChoice',
+      'claudeUnifiedTerminalQuestionResponseLocation',
+      'claudeUnifiedTerminalPermissionResponseLocation',
       'claudeUnifiedTerminalWorkspaceTrust',
     ]);
+  });
+});
+
+
+describe('Claude unified terminal response locations', () => {
+  it('offers independent question and permission choices in the unified terminal section', () => {
+    for (const key of ['claudeUnifiedTerminalQuestionResponseLocation', 'claudeUnifiedTerminalPermissionResponseLocation']) {
+      expect(CLAUDE_AGENT_SETTINGS_CONTRIBUTION.fields.find(field => field.id === key))
+        .toMatchObject({
+          default: 'app_and_terminal',
+          schema: { type: 'string', enum: ['app_and_terminal', 'app_only', 'terminal_only'] },
+          presentation: { control: 'select' },
+        });
+    }
   });
 });

@@ -4,6 +4,7 @@ import {
   CLAUDE_SETTING_SOURCES_V2,
   CLAUDE_REMOTE_DEBUG_CATEGORIES,
   CLAUDE_UNIFIED_TERMINAL_HOSTS,
+  CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS,
   CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
   CLAUDE_UNIFIED_TERMINAL_WORKSPACE_TRUST_POLICIES,
   DEFAULT_CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE,
@@ -12,6 +13,7 @@ import {
   type ClaudeSettingSourceV2,
   type ClaudeRemoteDebugCategory,
   type ClaudeUnifiedTerminalHost,
+  type ClaudeUnifiedTerminalResponseLocation,
   type ClaudeUnifiedTerminalResumeChoice,
   type ClaudeUnifiedTerminalWorkspaceTrustPolicy,
 } from '@happier-dev/plugin-sdk/first-party/claude';
@@ -19,6 +21,7 @@ export {
   CLAUDE_SETTING_SOURCES_V2,
   CLAUDE_REMOTE_DEBUG_CATEGORIES,
   CLAUDE_UNIFIED_TERMINAL_HOSTS,
+  CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS,
   CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
   CLAUDE_UNIFIED_TERMINAL_WORKSPACE_TRUST_POLICIES,
   DEFAULT_CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE,
@@ -27,6 +30,7 @@ export {
   type ClaudeSettingSourceV2,
   type ClaudeRemoteDebugCategory,
   type ClaudeUnifiedTerminalHost,
+  type ClaudeUnifiedTerminalResponseLocation,
   type ClaudeUnifiedTerminalResumeChoice,
   type ClaudeUnifiedTerminalWorkspaceTrustPolicy,
 } from '@happier-dev/plugin-sdk/first-party/claude';
@@ -201,6 +205,38 @@ const CLAUDE_AGENT_SETTINGS_FIELDS = [
     },
   },
   {
+    id: 'claudeUnifiedTerminalQuestionResponseLocation',
+    title: fieldTitle('claudeUnifiedTerminalQuestionResponseLocation', 'Answer questions'),
+    description: fieldDescription('claudeUnifiedTerminalQuestionResponseLocation', 'Choose where to answer questions during unified terminal sessions.'),
+    schema: { type: 'string', enum: [...CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS] },
+    default: 'app_and_terminal',
+    analytics: ENUM_ANALYTICS,
+    presentation: {
+      control: 'select',
+      options: [
+        option('claudeUnifiedTerminalQuestionResponseLocation', 'app_and_terminal', 'App and terminal', 'Respond in the Happier app or Claude Code terminal.'),
+        option('claudeUnifiedTerminalQuestionResponseLocation', 'app_only', 'App prompts', 'Use the existing app request flow. Claude may still accept responses in its terminal.'),
+        option('claudeUnifiedTerminalQuestionResponseLocation', 'terminal_only', 'Terminal only', 'Respond in the Claude Code terminal.'),
+      ],
+    },
+  },
+  {
+    id: 'claudeUnifiedTerminalPermissionResponseLocation',
+    title: fieldTitle('claudeUnifiedTerminalPermissionResponseLocation', 'Approve permission requests'),
+    description: fieldDescription('claudeUnifiedTerminalPermissionResponseLocation', 'Choose where to approve permission requests during unified terminal sessions.'),
+    schema: { type: 'string', enum: [...CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS] },
+    default: 'app_and_terminal',
+    analytics: ENUM_ANALYTICS,
+    presentation: {
+      control: 'select',
+      options: [
+        option('claudeUnifiedTerminalPermissionResponseLocation', 'app_and_terminal', 'App and terminal', 'Respond in the Happier app or Claude Code terminal.'),
+        option('claudeUnifiedTerminalPermissionResponseLocation', 'app_only', 'App prompts', 'Use the existing app request flow. Claude may still accept responses in its terminal.'),
+        option('claudeUnifiedTerminalPermissionResponseLocation', 'terminal_only', 'Terminal only', 'Respond in the Claude Code terminal.'),
+      ],
+    },
+  },
+  {
     id: 'claudeUnifiedTerminalWorkspaceTrust',
     title: fieldTitle('claudeUnifiedTerminalWorkspaceTrust', 'Workspace trust'),
     description: fieldDescription(
@@ -268,7 +304,7 @@ const CLAUDE_AGENT_SETTINGS_FIELDS = [
     title: fieldTitle('claudeLocalPermissionBridgeEnabled', 'Experimental: local permission bridge'),
     description: fieldDescription(
       'claudeLocalPermissionBridgeEnabled',
-      'Forward Claude local-mode permission prompts to Happier so you can approve or deny from the app UI.',
+      'Forward permission prompts from classic local Claude sessions to Happier.',
     ),
     schema: { type: 'boolean', description: 'Enable local Claude permission bridge' },
     default: true,
@@ -526,6 +562,8 @@ export const CLAUDE_AGENT_SETTINGS_CONTRIBUTION = {
           'claudeUnifiedTerminalEnabled',
           'claudeUnifiedTerminalHost',
           'claudeUnifiedTerminalResumeChoice',
+          'claudeUnifiedTerminalQuestionResponseLocation',
+          'claudeUnifiedTerminalPermissionResponseLocation',
           'claudeUnifiedTerminalWorkspaceTrust',
         ],
       },
@@ -541,6 +579,8 @@ type ClaudeSettingsDefaults = {
   claudeUnifiedTerminalEnabled: boolean;
   claudeUnifiedTerminalHost: ClaudeUnifiedTerminalHost;
   claudeUnifiedTerminalResumeChoice: ClaudeUnifiedTerminalResumeChoice;
+  claudeUnifiedTerminalQuestionResponseLocation: ClaudeUnifiedTerminalResponseLocation;
+  claudeUnifiedTerminalPermissionResponseLocation: ClaudeUnifiedTerminalResponseLocation;
   claudeUnifiedTerminalWorkspaceTrust: ClaudeUnifiedTerminalWorkspaceTrustPolicy;
   claudeRemoteSettingSources: 'project' | 'user_project' | 'none';
   claudeRemoteSettingSourcesV2: ClaudeSettingSourceV2[];

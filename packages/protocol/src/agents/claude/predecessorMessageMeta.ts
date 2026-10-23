@@ -3,6 +3,8 @@ import {
     CLAUDE_REMOTE_DEBUG_CATEGORIES,
     CLAUDE_SETTING_SOURCES_V2,
     CLAUDE_UNIFIED_TERMINAL_HOSTS,
+    CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS,
+    resolveClaudeUnifiedTerminalResponseLocations,
     CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
     normalizeClaudeRemoteAdvancedOptionsJson,
     normalizeClaudeUnifiedTerminalHost,
@@ -37,13 +39,15 @@ type ClaudeDebugCategories = readonly (typeof CLAUDE_REMOTE_DEBUG_CATEGORIES)[nu
  * Typed persisted fields emitted by the bridge and Claude UI declaration and consumed by the
  * predecessor Claude CLI. Keep this projection at the Agent compatibility
  * owner; generic Message metadata must not become an arbitrary opaque bag.
- * Refreshed against ../0.2@639a32ec0e832dedb35d5a5809c36717c568225f
- * (inspected clean producer and reader paths, 2026-10-08).
+ * Response-location fields follow ../0.2@b28b36b761d8aebaa738f3ceddbfaf7a53ac52d4
+ * plus its inspected Claude settings worktree changes (2026-10-23).
  */
 export function createClaudePredecessorMessageMetaShape(zod: typeof z) {
     return {
         claudeRemoteAgentSdkEnabled: zod.optional(zod.boolean()),
         claudeUnifiedTerminalEnabled: zod.optional(zod.boolean()),
+        claudeUnifiedTerminalQuestionResponseLocation: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS)),
+        claudeUnifiedTerminalPermissionResponseLocation: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_RESPONSE_LOCATIONS)),
         claudeUnifiedTerminalHost: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_HOSTS)),
         claudeUnifiedTerminalResumeChoice: zod.optional(zod.enum(CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES)),
         claudeRemoteSettingSourcesV2: zod.optional(zod.array(zod.enum(CLAUDE_SETTING_SOURCES_V2))),
@@ -155,11 +159,14 @@ export function buildClaudePredecessorMessageMeta(
     settings: Readonly<Record<string, unknown>>,
     defaults: ClaudePredecessorMessageMetaDefaults,
 ): Readonly<Record<string, string | number | boolean | null | readonly string[]>> {
+    const responseLocations = resolveClaudeUnifiedTerminalResponseLocations(settings);
     const settingSourcesV2 = readClaudeSettingSourcesV2(defaults, settings);
     const legacySettingSources = tryMapSettingSourcesV2ToLegacy(settingSourcesV2);
     return {
         claudeRemoteAgentSdkEnabled: readBoolean(defaults, settings, 'claudeRemoteAgentSdkEnabled'),
         claudeUnifiedTerminalEnabled: readBoolean(defaults, settings, 'claudeUnifiedTerminalEnabled'),
+        claudeUnifiedTerminalQuestionResponseLocation: responseLocations.question,
+        claudeUnifiedTerminalPermissionResponseLocation: responseLocations.permission,
         claudeUnifiedTerminalHost:
             normalizeClaudeUnifiedTerminalHost(readSetting(defaults, settings, 'claudeUnifiedTerminalHost'))
             ?? defaults.claudeUnifiedTerminalHost,
