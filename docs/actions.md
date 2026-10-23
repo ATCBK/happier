@@ -5048,6 +5048,17 @@ schema and forwards them through the captured Account's exact-Machine transport.
 therefore reaches the daemon's existing authority and Machine checks; an unavailable noninteractive
 sudo authorization returns `status: 'failed', code: 'os_authorization_required'`. Workspace opening,
 system-browser opening, annotations and recording attachment retain their answering-client owners.
+
+In 0.3 development, `browser.context.attachToComposer` also accepts
+`{ source: 'activePage', browserSessionId, viewId, navigationGeneration }` to capture
+the exact mounted page reference and attach it to that view's Session composer.
+Inputs without `source` retain the Machine-owned captured-context operation.
+`browser.context.annotation.attachDraft` takes the same view and navigation
+identity and commits its marks through the existing capture, media registration
+and grouped composer owners. Both UI controls and Agent calls enter Action
+admission with the egress approval default. Missing owners, stale navigation and
+cancellation refuse attachment; they do not select another view or composer.
+
 `session.user_action.answer` is conversational
 input: tokens need the Action grant, rather than `approve`. Other automation
 callers outside those host Agent/MCP decision paths still need present-user
