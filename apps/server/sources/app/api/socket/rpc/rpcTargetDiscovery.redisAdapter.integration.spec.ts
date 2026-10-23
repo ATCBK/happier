@@ -2,8 +2,8 @@ import { ClusterAdapter, MessageType, type ClusterMessage } from 'socket.io-adap
 import { io as connect, type Socket as ClientSocket } from 'socket.io-client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getMachineSocketRoom, getUserMachinesSocketRoom } from '@/app/api/socketRooms';
-import { getMachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
+import { getMachineSocketRoom, getSocketRooms, getUserMachinesSocketRoom } from '@/app/api/socketRooms';
+import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { startRedisAdapterRecoveryCluster } from '@/testkit/redisAdapterRecoveryCluster';
 
 import { buildRpcMethodRoom } from './rpcMethodRoom';
@@ -75,6 +75,9 @@ describe('target discovery with an unrelated slow Redis peer', () => {
             const presence = await getMachineDaemonPresenceInventory({ accountId, io });
             expect(presence.state).toBe('partial');
             expect(presence.state !== 'unavailable' && presence.machineIds.has(machineId)).toBe(true);
+            const exact = await getMachineDaemonPresenceInventory({ accountId, io, machineIds: [machineId, 'unanswered'] });
+            expect(classifyMachineDaemonPresence(exact, machineId)).toBe('connected');
+            expect(classifyMachineDaemonPresence(exact, 'unanswered')).toBe('unknown');
         });
     }
 
@@ -90,6 +93,45 @@ describe('target discovery with an unrelated slow Redis peer', () => {
         const { io } = await setup(1, 1);
         expect(await discoverRpcTargets({ io, userId: accountId, method, fetchTimeoutMs: 100 })).toBeNull();
         expect(await getMachineDaemonPresenceInventory({ accountId, io })).toEqual({ state: 'unavailable' });
+        expect(classifyMachineDaemonPresence(await getMachineDaemonPresenceInventory({ accountId, io,
+            machineIds: [machineId] }), machineId)).toBe('unknown');
+    });
+
+    it('transports only selected daemon sockets among more than a thousand unrelated Machines', async () => {
+        const { io, socketId } = await setup(1, null);
+        const node = cluster!.nodes[1]!;
+        node.io.sockets.sockets.get(socketId!)!.data = { userId: accountId, clientType: 'machine-scoped', machineId };
+        await new Promise<void>(resolve => {
+            let joined = 0;
+            const onConnection = async (socket: import('socket.io').Socket) => {
+                const data = { userId: accountId, clientType: 'machine-scoped' as const,
+                    machineId: String(socket.handshake.auth.machineId) };
+                socket.data = data;
+                await socket.join(getSocketRooms(data));
+                if (++joined === 1_001) {
+                    node.io.off('connection', onConnection);
+                    resolve();
+                }
+            };
+            node.io.on('connection', onConnection);
+            for (let index = 0; index < 1_001; index++) {
+                clients.push(connect(`http://127.0.0.1:${node.port}`, { path: '/v1/updates', transports: ['websocket'],
+                    reconnection: false, forceNew: true, auth: { machineId: `unrelated-${index}` } }));
+            }
+        });
+        const transported: string[] = [];
+        const adapter = io.of('/').adapter;
+        const fetch = adapter.fetchSockets.bind(adapter);
+        vi.spyOn(adapter, 'fetchSockets').mockImplementation(async options => {
+            const sockets = await fetch(options);
+            transported.push(...sockets.map(socket => socket.id));
+            return sockets;
+        });
+        const presence = await getMachineDaemonPresenceInventory({ accountId, io, machineIds: [machineId, 'missing'] });
+        expect(transported).toEqual([socketId]);
+        expect(classifyMachineDaemonPresence(presence, machineId)).toBe('connected');
+        expect(classifyMachineDaemonPresence(presence, 'missing')).toBe('disconnected');
+        expect(classifyMachineDaemonPresence(presence, 'unrelated-0')).toBe('unknown');
     });
 
     it('does not use a local candidate to claim global single-client uniqueness', async () => {

@@ -5,6 +5,38 @@ import { getSocketRooms } from "@/app/api/socketRooms";
 import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity } from "./machineDaemonPresence";
 
 describe("exact Machine socket identity and inventory", () => {
+    it('reads only the demanded daemon identities in a large Account', async () => {
+        const sockets = Array.from({ length: 1_002 }, (_, index) => {
+            const data = { userId: 'alice', clientType: 'machine-scoped' as const, machineId: `machine-${index}` };
+            return { data, rooms: getSocketRooms(data) };
+        });
+        const transported: string[] = [];
+        const io = { in: (room: string | string[]) => ({ fetchSockets: async () => {
+            const rooms = Array.isArray(room) ? room : [room];
+            const result = sockets.filter(socket => socket.rooms.some(value => rooms.includes(value)));
+            transported.push(...result.map(socket => socket.data.machineId));
+            return result;
+        } }) };
+        const inventory = await getMachineDaemonPresenceInventory({ accountId: 'alice', io,
+            machineIds: ['machine-0', 'machine-1', 'machine-0'] });
+        expect(transported).toEqual(['machine-0', 'machine-1']);
+        expect(inventory.state !== 'unavailable' && [...inventory.machineIds]).toEqual(['machine-0', 'machine-1']);
+        expect(classifyMachineDaemonPresence(inventory, 'machine-999')).toBe('unknown');
+    });
+
+    it('keeps empty exact demand local and excludes an ephemeral runner from ordinary daemon presence', async () => {
+        const io = { in: () => ({ fetchSockets: async () => [{ data: {
+            userId: 'alice', clientType: 'machine-scoped', machineId: 'runner',
+            ephemeralRunnerAdmission: { kind: 'machine-runtime' },
+        } }] }) };
+        expect(classifyMachineDaemonPresence(await getMachineDaemonPresenceInventory({
+            accountId: 'alice', io, machineIds: ['runner'],
+        }), 'runner')).toBe('disconnected');
+        const empty = await getMachineDaemonPresenceInventory({ accountId: 'alice', machineIds: [],
+            io: { in: () => { throw new Error('Empty demand must not reach the adapter'); } } });
+        expect(classifyMachineDaemonPresence(empty, 'runner')).toBe('unknown');
+    });
+
     it('uses partial presence only for the observed Machine, preserving unknown versus disconnected', () => {
         const partial = { state: 'partial' as const, machineIds: new Set(['machine-a']) };
         expect(classifyMachineDaemonPresence(partial, 'machine-a')).toBe('connected');

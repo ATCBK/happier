@@ -5,12 +5,13 @@ import { z } from 'zod';
 
 const QUERY_EVENT = 'happier:socket-room:query:v1';
 const RESPONSE_PREFIX = 'happier:socket-room:response:';
+const roomSelectionSchema = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
 const querySchema = z.object({
-    room: z.string().min(1),
+    room: roomSelectionSchema,
     responseEvent: z.string().regex(/^happier:socket-room:response:[0-9a-f-]{36}$/),
 }).strict();
 const answerSchema = z.object({
-    room: z.string(),
+    room: roomSelectionSchema,
     sockets: z.array(z.object({ id: z.string().min(1), data: z.record(z.string(), z.unknown()) }).strict()),
 }).strict();
 
@@ -24,7 +25,7 @@ interface SocketRoomOperator {
 }
 
 export interface SocketRoomDiscoveryServer {
-    in(room: string): SocketRoomOperator;
+    in(room: string | string[]): SocketRoomOperator;
 }
 
 export interface SocketRoomSnapshot {
@@ -33,8 +34,10 @@ export interface SocketRoomSnapshot {
     readonly error?: unknown;
 }
 
-export function readLocalSocketRoom(io: Server, room: string): Socket[] {
-    return [...(io.sockets.adapter.rooms.get(room) ?? [])].flatMap(id => {
+export function readLocalSocketRoom(io: Server, room: string | string[]): Socket[] {
+    const ids = typeof room === 'string' ? io.sockets.adapter.rooms.get(room) ?? []
+        : new Set(room.flatMap(selected => [...(io.sockets.adapter.rooms.get(selected) ?? [])]));
+    return [...ids].flatMap(id => {
         const socket = io.sockets.sockets.get(id);
         return socket?.connected ? [socket] : [];
     });
@@ -68,7 +71,7 @@ function remoteCarrier(io: Server, details: z.infer<typeof answerSchema>['socket
  */
 export async function readSocketRoomSnapshot(params: Readonly<{
     io: SocketRoomDiscoveryServer;
-    room: string;
+    room: string | string[];
     timeoutMs?: number;
     acceptPartial?: (sockets: readonly SocketRoomCarrier[]) => Promise<boolean>;
 }>): Promise<SocketRoomSnapshot> {
@@ -100,7 +103,11 @@ export async function readSocketRoomSnapshot(params: Readonly<{
             onAnswer = raw => {
                 if (settled) return;
                 const answer = answerSchema.safeParse(raw);
-                if (!answer.success || answer.data.room !== room) return;
+                if (!answer.success) return;
+                const sameRooms = typeof room === 'string' ? answer.data.room === room
+                    : Array.isArray(answer.data.room) && answer.data.room.length === room.length
+                        && room.every((selected, index) => answer.data.room[index] === selected);
+                if (!sameRooms) return;
                 for (const details of answer.data.sockets) sockets.set(details.id, remoteCarrier(io, details));
                 pending = pending.then(async () => {
                     if (!settled && params.acceptPartial && await params.acceptPartial([...sockets.values()])) {

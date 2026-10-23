@@ -366,6 +366,7 @@ function projectMachinePoolCandidateSnapshot(
     stored: StoredPool,
     presence: MachineDaemonPresenceInventory,
 ): MachinePoolCandidateSnapshot {
+    const queriedMachineIds = presence.state === 'known' ? presence.queriedMachineIds : undefined;
     const availableMachineIds = new Set(stored.members.flatMap((member) => (
         classifyPoolMemberState(member, presence) === "connected" ? [member.machineId] : []
     )));
@@ -378,7 +379,9 @@ function projectMachinePoolCandidateSnapshot(
             enabled: member.enabled,
         }))),
         availableMachineIds,
-        presenceState: presence.state,
+        presenceState: queriedMachineIds
+            && stored.members.some(member => member.enabled && !queriedMachineIds.has(member.machineId))
+            ? 'partial' : presence.state,
     });
 }
 
@@ -430,7 +433,8 @@ export async function getMachinePoolCandidateSnapshot(params: Readonly<{
             }),
         };
     }
-    const inventory = params.presence ?? await inventoryFor(params.accountId, params.io);
+    const inventory = params.presence ?? await getMachineDaemonPresenceInventory({ accountId: params.accountId, io: params.io,
+        machineIds: initial.members.filter(member => member.enabled).map(member => member.machineId) });
     return await readMachinePoolCandidateSnapshot(db, {
         accountId: params.accountId,
         poolId: params.poolId,
