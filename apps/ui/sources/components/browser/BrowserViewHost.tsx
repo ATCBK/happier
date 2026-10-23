@@ -42,6 +42,7 @@ import { SimulatorPreviewTarget } from './adapters/SimulatorPreviewTarget';
 import type {
     BrowserAutomationEngineBridgeConfig,
     BrowserDiagnosticsEngineBridgeConfig,
+    BrowserEndedPreviewRecovery,
     BrowserFrameNavigationCommand,
 } from './frame/types';
 import type { BrowserSurfaceLifecycleState } from './surfaces/browserSurfaceLifecycle';
@@ -300,7 +301,7 @@ function LocalPreviewView(props: Readonly<{
     navigationKey?: string;
     navigationCommand?: BrowserFrameNavigationCommand;
     onLifecycle?: BrowserViewLifecycleEmitter;
-    onClosePage?: () => void;
+    endedPreview?: BrowserEndedPreviewRecovery;
     testID: string;
 }>): React.ReactElement {
     const { view, preview, target, testID } = props;
@@ -341,7 +342,7 @@ function LocalPreviewView(props: Readonly<{
             diagnostics={diagnostics}
             automation={automation}
             onLifecycle={props.onLifecycle}
-            onClosePage={props.onClosePage}
+            endedPreview={props.endedPreview}
         /> : noServerRoute ? <BrowserLocalPreviewElsewhere testID={testID} serviceTitle={title} machineId={target.machineId} />
                 : <BrowserFrameUnavailable testID={testID} reasonCode={resolveBrowserViewUnavailableReasonCode(view)} />}
         <BrowserLocalPreviewPublicLinkControls target={target} serviceTitle={title} serverId={props.serverId} testID={`${testID}-public-link`} />
@@ -380,6 +381,8 @@ export function BrowserViewHost(props: Readonly<{
     onStreamedPageRectChange?: (rect: BrowserStreamedPageRect | null) => void;
     onOpenStreamedPageHere?: () => void;
     onClosePage?: () => void;
+    /** The ended relay preview's recovery, resolved by the shell (see `BrowserEndedPreviewRecovery`). */
+    endedPreview?: BrowserEndedPreviewRecovery;
     onOpenInSystemBrowser?: () => void;
     nowMs?: () => number;
     testID?: string;
@@ -424,7 +427,7 @@ export function BrowserViewHost(props: Readonly<{
             diagnostics={diagnosticsBridge}
             automation={automationBridge}
             onLifecycle={onViewLifecycle}
-            onClosePage={props.onClosePage}
+            endedPreview={props.endedPreview}
         />;
     }
     if (renderKind === 'hostedPlugin' && view.target.kind === 'hostedPluginWeb') {

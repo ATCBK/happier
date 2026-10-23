@@ -211,4 +211,57 @@ describe('browser launchpad suggestions', () => {
         expect(secondPlugin?.lastSeenAt).toBe(firstPlugin?.lastSeenAt);
     });
 
+
+    describe('the running Service an ended preview can open again', () => {
+        const declaration = { workspaceRefId: 'ws_1', selection: { kind: 'manifest', name: 'web' } } as const;
+        const endedDeclared = {
+            kind: 'localServicePreview',
+            targetId: 'preview_old',
+            machineId: 'machine_1',
+            display: { title: 'Web', addressLabel: 'localhost:42512' },
+            serviceTarget: { kind: 'managed_service', managedServiceId: 'instance_old', machineId: 'machine_1', cwd: '/repo', declaration },
+        } satisfies BrowserViewTargetV1;
+        const endedScanned = {
+            kind: 'localServicePreview',
+            targetId: 'preview_scanned_old',
+            sessionId: 'session_1',
+            machineId: 'machine_1',
+            display: { title: 'Lumen', addressLabel: '127.0.0.1:42511' },
+        } satisfies BrowserViewTargetV1;
+        const snapshot = (targets: LocalServiceLauncherSnapshotV1['targets']) => ({
+            v: 1, machineId: 'machine_1', sessionId: 'session_1', updatedAt: 1_000, targets,
+        }) satisfies LocalServiceLauncherSnapshotV1;
+        const declaredRunning: LocalServiceLauncherSnapshotV1['targets'][number] = {
+            id: 'managed:instance_new', source: 'managed_service', machineId: 'machine_1', title: 'web', subtitle: 'localhost:42512',
+            sourceClass: { kind: 'managed_service', managedServiceId: 'instance_new' }, cwd: '/repo', declaration,
+            serviceState: 'running', endpointUrl: 'http://127.0.0.1:42512/', confidence: 'high', state: 'available', actions: ['register_preview'],
+        };
+        const scannedRunning: LocalServiceLauncherSnapshotV1['targets'][number] = {
+            id: 'inventory:entry_new', source: 'inventory_entry', machineId: 'machine_1', sessionId: 'session_1', title: 'node', subtitle: '127.0.0.1:42511',
+            sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'entry_new' }, endpointUrl: 'http://127.0.0.1:42511/',
+            confidence: 'high', state: 'available', actions: ['register_preview'],
+        };
+
+        it('finds the current occurrence of the same declared Service, not another Service on the machine', async () => {
+            const { buildBrowserLaunchpadRows, selectRunningServiceForEndedPreview } = await import('./suggestions');
+            const rows = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([
+                { ...scannedRunning },
+                { ...declaredRunning },
+            ]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(rows, endedDeclared)?.id).toBe('managed:instance_new');
+            const otherDeclaration = { ...declaredRunning, declaration: { ...declaration, selection: { kind: 'manifest', name: 'api' } } } satisfies LocalServiceLauncherSnapshotV1['targets'][number];
+            const without = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([otherDeclaration]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(without, endedDeclared)).toBeNull();
+        });
+
+        it('finds a scanned listener on the same machine and port, and nothing once it stopped', async () => {
+            const { buildBrowserLaunchpadRows, selectRunningServiceForEndedPreview } = await import('./suggestions');
+            const running = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([{ ...scannedRunning }]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(running, endedScanned)?.id).toBe('inventory:entry_new');
+            expect(selectRunningServiceForEndedPreview(running, { ...endedScanned, machineId: 'machine_2' })).toBeNull();
+            expect(selectRunningServiceForEndedPreview(running, { ...endedScanned, display: { title: 'Lumen', addressLabel: '127.0.0.1:42599' } })).toBeNull();
+            const stopped = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([{ ...scannedRunning, state: 'stale' }]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(stopped, endedScanned)).toBeNull();
+        });
+    });
 });

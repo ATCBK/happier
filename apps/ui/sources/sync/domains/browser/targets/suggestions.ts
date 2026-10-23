@@ -1,4 +1,5 @@
 import { BrowserViewTargetV1Schema, type BrowserViewTargetV1 } from '@happier-dev/protocol/browser/target/v1';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import type { LocalServiceLauncherSnapshotV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { resolvePluginBrowserPolicyDecision } from '@/sync/domains/plugins/browser/policy';
@@ -238,6 +239,36 @@ function dedupeRows(rows: readonly BrowserLaunchpadRow[]): readonly BrowserLaunc
         output.push(row);
     }
     return output;
+}
+
+/**
+ * The running Service an ended relay preview belongs to, read from the launchpad's own running rows
+ * (the Services rows), so "Open again" reopens it through the same Services opener and never
+ * guesses. The same preview still listed wins; then the same declared Service (Machine, workspace
+ * and declaration, whichever occurrence is current); then, for a scanned listener with no
+ * declaration, the same Machine and port. Anything else is not the page that ended.
+ */
+export function selectRunningServiceForEndedPreview(
+    rows: readonly BrowserLaunchpadRow[],
+    ended: BrowserViewTargetV1,
+): ServiceRow['target'] | null {
+    if (ended.kind !== 'localServicePreview') return null;
+    const running = rows.flatMap((row) => row.serviceRow?.primaryAction?.kind === 'open'
+        ? [{ row: row.serviceRow, target: row.serviceRow.primaryAction.openTarget }] : []);
+    const samePreview = running.find(({ target }) => target.browserTarget?.kind === 'localServicePreview'
+        && target.browserTarget.targetId === ended.targetId);
+    if (samePreview) return samePreview.target;
+    const declared = ended.serviceTarget;
+    if (declared) {
+        const key = createCanonicalJsonSigningInput(declared.declaration);
+        return running.find(({ target }) => target.machineId === declared.machineId
+            && target.declaration !== undefined && createCanonicalJsonSigningInput(target.declaration) === key
+            && (target.cwd ?? null) === (declared.cwd ?? null))?.target ?? null;
+    }
+    const port = ended.display?.addressLabel?.split('/')[0]?.match(/:(\d+)$/)?.[1];
+    if (!port) return null;
+    return running.find(({ row, target }) => target.machineId === ended.machineId
+        && target.declaration === undefined && row.portLabel === `:${port}`)?.target ?? null;
 }
 
 export function buildBrowserLaunchpadRows(input: Readonly<{

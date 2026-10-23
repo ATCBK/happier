@@ -2,6 +2,7 @@ export {
     formatBrowserDisplayUrl,
     normalizeBrowserAddressInput,
     resolveExternalUrlTargetFromInput,
+    selectBrowserEndedPreviewLastPage,
     selectBrowserViewDisplayHost,
     type BrowserAddressNormalizationOptions,
     type BrowserAddressNormalizationResult,

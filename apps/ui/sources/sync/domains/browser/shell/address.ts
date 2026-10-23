@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/protocol/browser/target/v1';
 
 import type { BrowserControlViewState } from '../control';
+import { withoutPreviewAdmission } from '@/sync/domains/local/services/preview/url';
 
 export type BrowserAddressNormalizationOptions = Readonly<{
     /** A `{query}` template; omitted means the default engine below. */
@@ -179,4 +180,16 @@ export function selectBrowserViewDisplayHost(view: BrowserControlViewState | nul
     if (!currentOrigin && !pendingOrigin) return undefined;
     if (currentOrigin && pendingOrigin && currentOrigin !== pendingOrigin) return undefined;
     return label;
+}
+
+/**
+ * The page an ended relay preview was last on, as its address read (`localhost:5173/dashboard`): the
+ * service's own label for the host, the observed path, never the one-use admission.
+ */
+export function selectBrowserEndedPreviewLastPage(view: BrowserControlViewState | null): string | null {
+    if (!view || view.target.kind !== 'localServicePreview') return null;
+    const host = view.target.display?.addressLabel?.split('/')[0]?.trim();
+    if (!host) return null;
+    const url = view.currentUrl ?? view.pendingUrl;
+    return url ? formatBrowserDisplayUrl(withoutPreviewAdmission(url), { displayHost: host }) || host : host;
 }

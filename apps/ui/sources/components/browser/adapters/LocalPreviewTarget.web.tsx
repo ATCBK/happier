@@ -14,6 +14,7 @@ import type { BrowserSurfaceLifecycleState } from '../surfaces/browserSurfaceLif
 import type {
     BrowserAutomationEngineBridgeConfig,
     BrowserDiagnosticsEngineBridgeConfig,
+    BrowserEndedPreviewRecovery,
     BrowserFrameNavigationCommand,
 } from '../frame/types';
 
@@ -29,8 +30,8 @@ export function LocalPreviewTarget(props: Readonly<{
     navigationCommand?: BrowserFrameNavigationCommand;
     onLoad?: () => void;
     onError?: () => void;
-    /** Closes the page from the ended-preview state. */
-    onClosePage?: () => void;
+    /** What the ended-preview state offers (last page, Open again, Close tab). */
+    endedPreview?: BrowserEndedPreviewRecovery;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
     automation?: BrowserAutomationEngineBridgeConfig;
     /**
@@ -87,7 +88,7 @@ export function LocalPreviewTarget(props: Readonly<{
                     props.onError?.();
                     onLifecycle?.({ kind: 'loadFailed', errorCode: reasonCode, url: props.url });
                 },
-                onClosePage: props.onClosePage,
+                endedPreview: props.endedPreview,
                 diagnostics: props.diagnostics,
                 automation: props.automation,
             }}

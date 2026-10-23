@@ -8,6 +8,7 @@ import { BrowserFrameUnavailable } from '../BrowserFrameUnavailable';
 import type {
     BrowserAutomationEngineBridgeConfig,
     BrowserDiagnosticsEngineBridgeConfig,
+    BrowserEndedPreviewRecovery,
     BrowserFrameMessageReceipt,
     BrowserFrameNavigationCommand,
     BrowserFrameNavigationState,
@@ -101,7 +102,7 @@ type WebIframeEngineProps = Readonly<{
     /** Reported only by a relay preview, whose documents carry the navigation reporter. */
     onNavigationStateChange?: (navigationState: BrowserFrameNavigationState) => void;
     onPreviewRefused?: (reasonCode: BrowserPreviewRefusalReasonCode) => void;
-    onClosePage?: () => void;
+    endedPreview?: BrowserEndedPreviewRecovery;
     revokeOnUnexpectedNavigation?: boolean;
     onUnexpectedNavigation?: () => void;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
@@ -823,7 +824,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
 
     if (previewRefusal) {
         return <BrowserFrameUnavailable testID={props.testID} reasonCode={previewRefusal}
-            {...(previewRefusal === 'preview_ended' && props.onClosePage ? { onClosePage: props.onClosePage } : {})} />;
+            {...(previewRefusal === 'preview_ended' && props.endedPreview ? { endedPreview: props.endedPreview } : {})} />;
     }
 
     return (

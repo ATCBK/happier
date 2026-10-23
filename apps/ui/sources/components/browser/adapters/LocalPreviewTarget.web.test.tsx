@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { proxyLocalServicePreviewHttpRequest } from '@happier-dev/peer-mediation/localServices/preview/httpAdapter';
 
-import { renderScreen } from '@/dev/testkit';
+import { findTestInstanceByTypeContainingText, renderScreen } from '@/dev/testkit';
 
 import { LocalPreviewTarget } from './LocalPreviewTarget.web';
 import { createBrowserAutomationControlService } from '@/sync/domains/browser/automation/controlService';
@@ -127,6 +127,34 @@ describe('LocalPreviewTarget web', () => {
         expect(screen.findAllByType('iframe')).toHaveLength(0);
         expect(screen.findHostByTestId('local-preview-unavailable')).not.toBeNull();
         expect(lifecycle).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'loadFailed', errorCode: 'preview_ended' }));
+        await screen.unmount();
+    });
+
+    it('offers Open again first while its Service runs, names the last page, and keeps Close tab beside it', async () => {
+        vi.stubGlobal('window', new EventTarget());
+        vi.stubGlobal('fetch', vi.fn(async (href: string) => Object.defineProperty(new Response(JSON.stringify({ error: 'preview_not_found', reasonCode: 'preview_not_found' }), { status: 404 }), 'url', { value: href })));
+        const onOpenAgain = vi.fn();
+        const onClose = vi.fn();
+        const identity = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'n' };
+        const render = (endedPreview: React.ComponentProps<typeof LocalPreviewTarget>['endedPreview']) => (
+            <LocalPreviewTarget title="Lumen" url="https://preview.example.test/" testID="local-preview" endedPreview={endedPreview}
+                diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }} />
+        );
+        const screen = await renderScreen(render({ lastPage: 'localhost:5173/dashboard', onOpenAgain, onClose }),
+            { createNodeMock: element => element.type === 'iframe' ? { contentWindow: {} } : null });
+        await act(async () => screen.findByType('iframe').props.onLoad());
+        const card = screen.findHostByTestId('local-preview-unavailable');
+        expect(card).not.toBeNull();
+        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'The last page was localhost:5173/dashboard.')).toBeDefined();
+        await screen.pressByTestIdAsync('local-preview-ended-open-again');
+        expect(onOpenAgain).toHaveBeenCalledTimes(1);
+        expect(screen.findHostByTestId('local-preview-ended-close')).not.toBeNull();
+
+        // Nothing runs it now: no Open again; Close tab is the one action and Services is named.
+        await screen.update(render({ lastPage: 'localhost:5173/dashboard', onClose }));
+        expect(screen.findHostByTestId('local-preview-ended-open-again')).toBeNull();
+        expect(screen.findHostByTestId('local-preview-ended-close')).not.toBeNull();
+        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'Open it again from Services.')).toBeDefined();
         await screen.unmount();
     });
 

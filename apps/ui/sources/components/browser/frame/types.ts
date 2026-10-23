@@ -164,8 +164,8 @@ export type WebIframeEngineConfig = Readonly<{
     onNavigationStateChange?: (navigationState: BrowserFrameNavigationState) => void;
     /** The relay proxy refused the preview's document; the frame shows that state in place of the page. */
     onPreviewRefused?: (reasonCode: BrowserPreviewRefusalReasonCode) => void;
-    /** Closes the page from a terminal frame state (an ended preview). */
-    onClosePage?: () => void;
+    /** What an ended preview offers: its last page, Open again while its Service runs, and Close tab. */
+    endedPreview?: BrowserEndedPreviewRecovery;
     /**
      * An opaque Artifact guest cannot expose its loaded URL to the host. Its
      * first load is the declared entry; every later load retires the frame.
@@ -224,3 +224,18 @@ export type BrowserFrameEngineConfig =
     | BrowserUnavailableEngineConfig
     | BrowserLoadingEngineConfig
     | BrowserErrorEngineConfig;
+
+/**
+ * The recovery an ended relay preview offers in place of the page. The Browser shell resolves it:
+ * the last page as its address reads, the reopen through the Services opener when the same Service
+ * runs now, and closing the tab.
+ */
+export type BrowserEndedPreviewRecovery = Readonly<{
+    lastPage?: string | null;
+    onOpenAgain?: () => void | Promise<unknown>;
+    /** Why the last Open again was refused, in the Services opener's own words. */
+    openAgainFailure?: string | null;
+    /** The scope's own way to its Services surface, when the scope has one. */
+    onOpenServices?: () => void;
+    onClose?: () => void;
+}>;

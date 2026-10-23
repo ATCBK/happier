@@ -4,6 +4,7 @@ export {
 } from './recents';
 export {
     buildBrowserLaunchpadRows,
+    selectRunningServiceForEndedPreview,
     type BrowserLaunchpadRow,
     type BrowserLaunchpadRowSourceKind,
     type BrowserLaunchpadSection,
