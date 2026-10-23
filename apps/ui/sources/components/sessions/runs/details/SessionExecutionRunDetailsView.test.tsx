@@ -641,6 +641,8 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
             const list = screen.findByType(ChainTranscriptList);
             expect(list.props.messages.map((message: Message) => message.kind)).toEqual(['user-text', 'agent-text']);
             expect(list.props.messages[0]).toMatchObject({ kind: 'user-text', localId: 'question-input', text: 'Why keep the selection?' });
+            // On the Run's own page the question reads as the person's message, not a "To: <Run>" card.
+            expect(list.props.messages[0].meta?.happier).toBeUndefined();
         });
     });
 

@@ -31,7 +31,18 @@ export function resolveExecutionRunVisibleMessages(params: Readonly<{
         const recipient = readParticipantRecipientRoutingIdentityV1(message.meta, 'stored');
         return recipient?.kind === 'execution_run' && recipient.runId === params.runId;
     });
-    return questions.length === 0 ? focusedMessages : [...focusedMessages, ...questions].sort(compareTranscriptMessagesOldestFirst);
+    if (questions.length === 0) return focusedMessages;
+    // On the Run's own transcript the question is simply the person's message: its "To: <Run>" envelope only
+    // repeats the page it is on, so the projection drops it and the row reads as an ordinary person message.
+    const asPersonMessages = questions.map(message => withoutParticipantEnvelope(message));
+    return [...focusedMessages, ...asPersonMessages].sort(compareTranscriptMessagesOldestFirst);
+}
+
+function withoutParticipantEnvelope(message: Message): Message {
+    const meta = message.meta;
+    if (!isRecord(meta) || !('happier' in meta)) return message;
+    const { happier: _envelope, ...rest } = meta;
+    return { ...message, meta: rest } as Message;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
