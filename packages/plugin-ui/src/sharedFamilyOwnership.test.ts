@@ -113,6 +113,10 @@ const APPROVED_CATALOG_VOCABULARY = [
   'MemoryDuplicateChoice', 'DocEditProposal',
   // Capabilities A7 (owner-approved 2026-10-22): the capability row anatomy Happier's Skills/MCP/Agents pages use.
   'CapabilityStatusChip', 'CapabilityFacts', 'CapabilityDetailHeader', 'CapabilityBlockingBanner', 'capabilityCollectionAnatomy',
+  // Capabilities A7 ruling 2: Where it's on, engine-agnostic (computed state in, the person's choice out as an intent).
+  'WhereItsOnControl',
+  // Capabilities A7 ruling 1: the Add dialog's body (tabs, catalog list, footer, registry selector); the frame stays the host's.
+  'CapabilityAddBody',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -2231,6 +2235,44 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'The notice carries the status fix handler; the author composes it in a mounted surface.' },
     deletedCoreDuplicates: [{ path: 'components/capabilities/status/capabilityStatusPresentation.ts', symbol: 'SPECS' }],
+  },
+  {
+    publicName: 'WhereItsOnControl',
+    propTypeName: 'WhereItsOnControlProps',
+    family: 'Capability where it is on',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'graduated',
+    publiclyExported: true,
+    sharedModule: 'presentation/capabilities/WhereItsOnControl.tsx',
+    sharedSymbol: 'HappierWhereItsOnControl',
+    pluginOwner: { module: 'components/Capabilities.tsx', symbol: 'WhereItsOnControl' },
+    coreConsumers: ['components/capabilities/where/WhereItsOnControl.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/capabilityKitSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'The control returns the person\'s choice as an intent to the author\'s own handler; no document node carries it.' },
+  },
+  {
+    publicName: 'CapabilityAddBody',
+    propTypeName: 'CapabilityAddBodyProps',
+    family: 'Capability Add body',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'graduated',
+    publiclyExported: true,
+    sharedModule: 'presentation/capabilities/CapabilityAddBody.tsx',
+    sharedSymbol: 'HappierCapabilityAddBody',
+    pluginOwner: { module: 'components/CapabilityAddBody.tsx', symbol: 'CapabilityAddBody' },
+    coreConsumers: ['components/capabilities/add/CapabilityAddModal.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/capabilityKitSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'The body carries the author\'s install handlers and detail renderers; it is a mounted composition.' },
   },
   {
     publicName: 'capabilityCollectionAnatomy',

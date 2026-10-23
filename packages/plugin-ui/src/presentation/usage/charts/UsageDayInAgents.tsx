@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { View } from 'react-native';
 
 import { HappierText } from '../../text/Text.js';
@@ -127,7 +128,7 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const curve = points.length > 1 ? usageSmoothPath(points) : '';
   const px = x(model.peak.atHour), py = cy(model.peak.count);
   const right = px > label + plot * 0.62;
-  const hatch = `usage-day-hatch-${props.testID ?? 'day'}`;
+  const hatch = `usage-day-hatch-${useId().replace(/[^a-zA-Z0-9_-]/gu, '')}`;
   const colour = (id: string | null) => props.agents.find((agent) => agent.id === id)?.color ?? ink.neutral;
   return <View style={{ height }} accessible accessibilityRole="image" accessibilityLabel={props.label}>
     <Svg width={width} height={height}>

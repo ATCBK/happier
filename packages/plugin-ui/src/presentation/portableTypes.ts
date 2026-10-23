@@ -180,6 +180,8 @@ export type HappierPortableStyle = Readonly<{
   transform?: Array<{ translateX: number } | { translateY: number }>;
   userSelect?: 'auto' | 'none' | 'text' | 'contain' | 'all';
   verticalAlign?: 'auto' | 'top' | 'bottom' | 'middle';
+  /** Web only: keep a capability's machine name whole when its consequence sentence wraps. */
+  whiteSpace?: 'nowrap';
   width?: HappierDimension;
   writingDirection?: 'auto' | 'ltr' | 'rtl';
   zIndex?: number;

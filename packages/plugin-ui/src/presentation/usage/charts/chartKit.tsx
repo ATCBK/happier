@@ -69,6 +69,16 @@ export function useUsageChartWidth(fixed?: number): readonly [number | null, (ev
   return [width, onLayout];
 }
 
+/**
+ * The drawing's own size, or — for a host-given width that cannot be measured (the cold server page) — a viewBox at
+ * that width which fills the column and scales down with a narrower one, keeping its proportions.
+ */
+export function usageChartSvgSize(width: number, height: number, scaled: boolean) {
+  return scaled
+    ? { width: '100%', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'xMidYMid meet', style: { maxWidth: width, height: 'auto' as const } }
+    : { width, height };
+}
+
 export const usageChartRound = (value: number) => Math.round(value * 10) / 10;
 
 /** A smooth horizontal-tangent curve through points (the lab's ridgeline/river curve). */

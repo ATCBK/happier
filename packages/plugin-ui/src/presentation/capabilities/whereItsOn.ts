@@ -1,6 +1,6 @@
 /**
  * The reach model the words read, structurally (the rule engine itself — grouping, precedence, writes — stays with
- * Happier's reach owner and reaches this module through `HappierWhereItsOnReach`).
+ * its owner: Happier's reach rules, or a plugin's own state; this module never decides precedence).
  */
 export type HappierReachPlace =
   | Readonly<{ t: 'allMachines' }>
@@ -15,15 +15,11 @@ export type HappierReachRule = Readonly<{
   createdAt: number;
   updatedAt: number;
 }>;
-export type HappierReachRuleDraft = Readonly<{ target: HappierReachPlace; agentId?: string | undefined; enabled: boolean }>;
 export type HappierReachWrite = Readonly<{
   place: HappierReachPlace;
   agentId?: string | undefined;
   state: 'on' | 'off' | 'inherit';
 }>;
-export type HappierReachChange =
-  | Readonly<{ kind: 'write'; write: HappierReachWrite }>
-  | Readonly<{ kind: 'replace'; rules: readonly HappierReachRuleDraft[] }>;
 export type HappierReachGrouped = Readonly<{
   base: 'on' | 'off' | 'none';
   turnedOnIn: readonly HappierReachRule[];
@@ -296,7 +292,7 @@ export function shortHappierWhereItsOn(
 
 /** One rule's row: its title and its effect in words. */
 export function describeHappierReachRule(
-  rule: HappierReachRule,
+  rule: Pick<HappierReachRule, 'target' | 'agentId' | 'enabled'>,
   names: HappierWhereItsOnNames,
   kind: HappierWhereItsOnItemKind,
   labels: HappierWhereItsOnLabels,

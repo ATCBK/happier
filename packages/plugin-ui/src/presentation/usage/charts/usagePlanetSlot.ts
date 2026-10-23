@@ -15,6 +15,8 @@ export type UsagePlanetSpec = Readonly<{
   tail: number;
   /** 0–1: how lit the planet is. */
   rise: number;
+  /** 0–1: how much of the night side shows as a soft terminator shade, so a barely lit planet still reads whole. Absent = none. */
+  night?: number;
   rotate: number;
   style: 'balanced' | 'rich';
   /** One-ink planet (an Agent's identity colour), else the Brand palette. */

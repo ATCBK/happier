@@ -1,14 +1,19 @@
 import { useState } from 'react';
 import {
+  CapabilityAddBody,
   CapabilityBlockingBanner,
   CapabilityDetailHeader,
   CapabilityFacts,
   CapabilityStatusChip,
   Collection,
+  WhereItsOnControl,
   capabilityCollectionAnatomy,
   pickMostBlockingCapabilityStatus,
   useHappierCollection,
+  type CapabilityAddConfig,
   type CapabilityStatus,
+  type WhereItsOnIntent,
+  type WhereItsOnRule,
 } from '@happier-dev/plugin-ui/components';
 
 type Extension = Readonly<{
@@ -24,9 +29,21 @@ type Extension = Readonly<{
  * one extension's header, its blocking notice, and its facts. The author owns the data and the fixes.
  */
 export function CapabilityKitExample(
-  props: Readonly<{ onSignIn?: (id: string) => void }>,
+  props: Readonly<{ onSignIn?: (id: string) => void; onWhere?: (intent: WhereItsOnIntent) => void }>,
 ) {
   const [signedIn, setSignedIn] = useState<readonly string[]>([]);
+  // The plugin owns its rules; the control says the person's choice and the plugin applies it.
+  const [everywhere, setEverywhere] = useState<'on' | 'off'>('on');
+  const [rules, setRules] = useState<readonly WhereItsOnRule[]>([{ place: { t: 'allMachines' }, agentId: 'gemini', on: false }]);
+  const applyWhere = (intent: WhereItsOnIntent) => {
+    props.onWhere?.(intent);
+    if (intent.kind === 'everywhere') setEverywhere(intent.state);
+    else if (intent.kind === 'add' && intent.place.t !== 'workspace') {
+      const place = intent.place;
+      setRules((current) => [...current, { place, ...(intent.agentId ? { agentId: intent.agentId } : {}), on: intent.state === 'on' }]);
+    } else if (intent.kind === 'remove')
+      setRules((current) => current.filter((rule) => !(rule.agentId === intent.agentId && JSON.stringify(rule.place) === JSON.stringify(intent.place))));
+  };
   const signIn = (id: string) => {
     props.onSignIn?.(id);
     setSignedIn((current) => [...current, id]);
@@ -100,6 +117,18 @@ export function CapabilityKitExample(
         trust="text_only"
         cost={{ tokensWhenUsed: 1200 }}
       />
+      <WhereItsOnControl
+        testID="author-capability.where"
+        kind="mcp_server"
+        everywhere={everywhere}
+        rules={rules}
+        places={{
+          agents: [{ id: 'claude', name: 'Claude' }, { id: 'gemini', name: 'Gemini' }],
+          machines: [{ id: 'build-box', name: 'build-box', online: true }],
+        }}
+        availability={[{ machineId: 'build-box', agents: [{ agentId: 'claude', enabled: true }] }]}
+        onIntent={applyWhere}
+      />
       <Collection
       model={model}
       accessibilityLabel="Extensions"
@@ -121,4 +150,54 @@ export function CapabilityKitExample(
     />
     </>
   );
+}
+
+type Listing = Readonly<{ id: string; name: string; summary: string }>;
+
+/**
+ * The same plugin adds extensions from its own page: the shared Add body (tabs, the catalog list with details beside
+ * it, the pinned footer). The page around it and its header are the plugin's.
+ */
+export function CapabilityAddExample(
+  props: Readonly<{ onInstall?: (id: string) => void; onClose?: () => void }>,
+) {
+  const [query, setQuery] = useState('');
+  const listings: readonly Listing[] = [
+    { id: 'linear', name: 'Linear', summary: 'Issues and projects.' },
+    { id: 'figma', name: 'Figma', summary: 'Frames and comments.' },
+  ];
+  const shown = listings.filter((listing) => listing.name.toLowerCase().includes(query.toLowerCase()));
+  const config: CapabilityAddConfig<Listing> = {
+    title: 'Add an extension',
+    modes: [{ key: 'browse', label: 'Browse', icon: 'search', kind: 'catalog' }],
+    catalog: {
+      query,
+      onQueryChange: setQuery,
+      searchPlaceholder: 'Search extensions',
+      items: shown,
+      itemKey: (item) => item.id,
+      anatomy: capabilityCollectionAnatomy<Listing>({
+        title: (item) => item.name,
+        description: (item) => item.summary,
+        facts: () => ({ source: { kind: 'registry', label: 'Extension registry' }, trust: 'text_only' }),
+        accessibilityLabel: (item) => item.name,
+        testID: (item) => `author-add.row.${item.id}`,
+      }),
+      loading: false,
+      empty: null,
+    },
+    renderDetail: (item) => <CapabilityFacts testID={`author-add.detail.${item.id}`} source={{ kind: 'you' }} trust="text_only" />,
+    detailFooter: (item) => ({
+      primary: {
+        label: 'Install',
+        onPress: async () => {
+          props.onInstall?.(item.id);
+          return { itemId: item.id, then: 'stay' };
+        },
+      },
+      afterAdd: {},
+    }),
+    testID: 'author-add',
+  };
+  return <CapabilityAddBody config={config} onClose={() => props.onClose?.()} />;
 }

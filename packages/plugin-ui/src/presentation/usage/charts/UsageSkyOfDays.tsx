@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import { View } from 'react-native';
 import {
   Circle,
@@ -23,6 +23,7 @@ import {
   usageSmoothPath,
   useUsageChartSvgText,
   useUsageChartWidth,
+  usageChartSvgSize,
   type UsageChartAgent,
   type UsageChartBaseProps,
   type UsageChartKeyItem,
@@ -86,7 +87,8 @@ export type UsageSkyLabels = Readonly<{
     quieter: string;
     busier: string;
   }>;
-  caption: string;
+  /** How to read the sky; the faint run lines and the 7-day band are explained only when they are drawn. */
+  caption: (drawn: Readonly<{ runs: boolean; band: boolean }>) => string;
   values: UsageChartValuesLabels &
     Readonly<{
       dateColumn: string;
@@ -109,6 +111,10 @@ export type UsageSkyOfDaysProps = UsageChartBaseProps &
 const LEVEL_OPACITY = [0, 0.5, 0.68, 0.86, 1] as const;
 const COMPACT_BELOW_PX = 520;
 const RUN_MIN_DAYS = 5;
+/** A period this short draws one column per day. */
+const SPARSE_MAX_DAYS = 14;
+/** A day column at least this wide is named under the star. */
+const DAY_LABEL_MIN_PX = 72;
 
 type Star = Readonly<{
   index: number;
@@ -129,17 +135,38 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
+  // Gradient ids are document-global; a page can hold several Skies (wide and phone editions), so each drawing owns its ids.
+  const gradientId = `usage-sky-${useId().replace(/[^a-zA-Z0-9_-]/gu, '')}`;
   const agents = useMemo(
     () => new Map(props.agents.map((agent) => [agent.id, agent])),
     [props.agents],
   );
-  const { model, labels } = props;
+  const { labels } = props;
   const small = width !== null && width < COMPACT_BELOW_PX;
   const height = small ? 168 : 228;
-  const ordinal = model.encoding === 'ordinal';
+  // A host-given width (the cold server page) cannot be measured: the sky draws at it and scales down with a
+  // narrower column through its viewBox instead of overflowing.
+  const scaled = props.width !== undefined;
+  const ordinal = props.model.encoding === 'ordinal';
   const byAgent =
-    model.colourBy === 'leadingAgent' &&
-    model.days.some((day) => day.leader !== undefined && day.leader !== null);
+    props.model.colourBy === 'leadingAgent' &&
+    props.model.days.some((day) => day.leader !== undefined && day.leader !== null);
+  // Coloured by Agent, a lit day whose leader the owner could not name has no known Agent: it is drawn and counted as
+  // one, never left without a mark.
+  const model = useMemo(
+    () =>
+      byAgent
+        ? {
+            ...props.model,
+            days: props.model.days.map((day) =>
+              day.state === 'active' && !day.leader
+                ? { ...day, leader: { kind: 'unknown' } as const }
+                : day,
+            ),
+          }
+        : props.model,
+    [byAgent, props.model],
+  );
   const geometry = useMemo(
     () => (width === null ? null : layoutSky(model, width, height, small)),
     [model, width, height, small],
@@ -302,20 +329,20 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
   return (
     <UsageChartColumn testID={props.testID} onLayout={onLayout}>
       <View
-        style={{ height }}
+        style={scaled && width !== null ? { width: '100%', maxWidth: width, aspectRatio: width / height } : { height }}
         accessible
         accessibilityRole="image"
         accessibilityLabel={props.label}
       >
         {geometry && width !== null ? (
-          <Svg width={width} height={height}>
+          <Svg {...usageChartSvgSize(width, height, scaled)}>
             <Defs>
               {gradientKeys.map((key) => {
                 const color = colourOf(key);
                 return [
                   <RadialGradient
                     key={`c-${key}`}
-                    id={`usage-sky-core-${key}`}
+                    id={`${gradientId}-core-${key}`}
                     cx="38%"
                     cy="34%"
                     r="70%"
@@ -338,7 +365,7 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
                       )}
                     />
                   </RadialGradient>,
-                  <RadialGradient key={`h-${key}`} id={`usage-sky-halo-${key}`}>
+                  <RadialGradient key={`h-${key}`} id={`${gradientId}-halo-${key}`}>
                     <Stop
                       offset="0"
                       stopColor={color}
@@ -432,7 +459,7 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
               ),
             )}
             {geometry.stars.map((star) => {
-              const radius = starRadius(star.level, small);
+              const radius = starRadius(star.level, small, geometry.scale);
               const rare = !ordinal;
               if (byAgent && star.leader?.kind === 'unknown')
                 return (
@@ -485,7 +512,7 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
                     cx={r1(star.x)}
                     cy={r1(star.y)}
                     r={r1(glow)}
-                    fill={`url(#usage-sky-halo-${key})`}
+                    fill={`url(#${gradientId}-halo-${key})`}
                   />
                 ) : null,
                 <Circle
@@ -493,7 +520,7 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
                   cx={r1(star.x)}
                   cy={r1(star.y)}
                   r={r1(radius)}
-                  fill={`url(#usage-sky-core-${key})`}
+                  fill={`url(#${gradientId}-core-${key})`}
                   fillOpacity={LEVEL_OPACITY[star.level]}
                 />,
                 glint ? (
@@ -539,7 +566,9 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
             ])}
             {geometry.months.map((month) =>
               svgText.draw(
-                { x: month.x, y: height - 4, text: labels.month(month.date) },
+                geometry.dayLabels
+                  ? { x: month.x, y: height - 4, anchor: 'middle', text: labels.day(month.date) }
+                  : { x: month.x, y: height - 4, text: labels.month(month.date) },
                 `m${month.date}`,
               ),
             )}
@@ -561,7 +590,7 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
         testID={props.testID ? `${props.testID}-key` : undefined}
       />
       <UsageChartCaption theme={props.theme}>
-        {labels.caption}
+        {labels.caption({ runs: (geometry?.runs.length ?? 0) > 0, band: geometry?.milkyWay != null })}
       </UsageChartCaption>
       <UsageChartValues
         theme={props.theme}
@@ -581,8 +610,8 @@ export function UsageSkyOfDays(props: UsageSkyOfDaysProps) {
   );
 }
 
-function starRadius(level: number, small: boolean): number {
-  return small ? 1 + level * 0.62 : 1.35 + level * 1.02;
+function starRadius(level: number, small: boolean, scale = 1): number {
+  return (small ? 1 + level * 0.62 : 1.35 + level * 1.02) * scale;
 }
 
 /** Deterministic per-day drift inside an ordinal band, so the field breathes without implying an amount. */
@@ -605,7 +634,15 @@ function layoutSky(
   const top = small ? 26 : 38;
   const bottom = height - 20;
   const right = width - (small ? 6 : ordinal ? 64 : 78);
-  const x = (index: number) => 8 + (index / (count - 1)) * (right - 16);
+  // A short period (a day, a week, a fortnight) gives each day its own column with the star at its centre and a larger
+  // star, so a few days read as days rather than marks stranded at the edges of a long field.
+  const sparse = days.length <= SPARSE_MAX_DAYS;
+  const x = (index: number) =>
+    sparse
+      ? 8 + ((index + 0.5) / Math.max(1, days.length)) * (right - 16)
+      : 8 + (index / (count - 1)) * (right - 16);
+  const column = sparse ? (right - 16) / Math.max(1, days.length) : 0;
+  const scale = sparse && !small ? Math.min(1.6, Math.max(1, column / 40)) : 1;
   const values = days.map((day) =>
     day.state === 'active'
       ? ordinal
@@ -655,9 +692,10 @@ function layoutSky(
           { y: y(max, 0), label: max },
         ]
       : [];
-  // The milky way: a soft band through the 7-day average of the stars' heights.
+  // The milky way: a soft band through the 7-day average of the stars' heights. A period no longer than the window
+  // has no average to trace, and fewer than five lit days make no band.
   let milkyWay: string | null = null;
-  if (!small) {
+  if (!small && days.length > 7 && stars.length >= RUN_MIN_DAYS) {
     const average: [number, number][] = [];
     for (let index = 0; index < days.length; index++) {
       const window = positions
@@ -691,8 +729,8 @@ function layoutSky(
           const a = positions[at]!,
             b = positions[at + 1]!;
           const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
-          const ra = starRadius(level(values[at]!), small) + 2.5,
-            rb = starRadius(level(values[at + 1]!), small) + 2.5;
+          const ra = starRadius(level(values[at]!), small, scale) + 2.5,
+            rb = starRadius(level(values[at + 1]!), small, scale) + 2.5;
           if (length <= ra + rb + 1) continue;
           const ux = (b[0] - a[0]) / length,
             uy = (b[1] - a[1]) / length;
@@ -737,16 +775,21 @@ function layoutSky(
     if (model.best) bracket(model.best, 'best');
     if (model.current && model.current.days >= 3) bracket(model.current, 'now');
   }
+  // Each day of a short period is named under its own column when the column fits the name; otherwise months.
+  const dayLabels = sparse && column >= DAY_LABEL_MIN_PX;
   const months = days
     .flatMap((day, index) =>
-      index === 0 || day.date.endsWith('-01')
+      dayLabels || index === 0 || day.date.endsWith('-01')
         ? [{ date: day.date, x: x(index) }]
         : [],
     )
     .filter(
-      (month, index, all) => index === 0 || month.x - all[index - 1]!.x > 36,
+      (month, index, all) =>
+        dayLabels || index === 0 || month.x - all[index - 1]!.x > 36,
     );
   return {
+    dayLabels,
+    scale,
     stars,
     floor,
     guides,

@@ -31,6 +31,8 @@ export type UsagePortraitLabels = Readonly<{
 /** Halo is full at this many turns at once; the label says so ("of 8"). */
 const PORTRAIT_HALO_FULL_AT = 8;
 
+const PORTRAIT_NIGHT_SHADE = 0.5;
+
 export function UsagePlanetPortrait(props: UsageChartBaseProps & Readonly<{ model: UsagePortraitModel; labels: UsagePortraitLabels; renderPlanet?: UsagePlanetSlot }>) {
   const [width, onLayout] = useUsageChartWidth(props.width);
   const ink = resolveUsageChartInk(props.theme, props.paint);
@@ -48,7 +50,8 @@ export function UsagePlanetPortrait(props: UsageChartBaseProps & Readonly<{ mode
   ];
   return <View testID={props.testID} onLayout={onLayout} style={{ flexDirection: phone ? 'column' : 'row', alignItems: phone ? 'stretch' : 'center', gap: 20, minWidth: 0 }}>
     <View accessible accessibilityRole="image" accessibilityLabel={props.label} style={{ width: size, height: size, alignSelf: 'center' }}>
-      {props.renderPlanet?.({ size, radius: size * 0.3, halo, tail, rise, rotate: -0.7, style: 'rich' })}
+      {/* The night side keeps a soft shade: a few active days light a sliver of a whole planet, never a stray fragment. */}
+      {props.renderPlanet?.({ size, radius: size * 0.3, halo, tail, rise, night: PORTRAIT_NIGHT_SHADE, rotate: -0.7, style: 'rich' })}
     </View>
     <View style={{ flex: phone ? undefined : 1, minWidth: 0 }}>
       {rows.map((row, index) => <View key={row.key} style={{ flexDirection: 'row', gap: 16, paddingVertical: 10, borderTopWidth: index === 0 ? 0 : 1, borderColor: ink.grid }}>
@@ -202,12 +205,19 @@ export function UsageRunLength(props: UsageChartBaseProps & Readonly<{ agents: r
   const [width, onLayout] = useUsageChartWidth(props.width);
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
-  const phone = width !== null && width < 460;
   const rows = props.model.rows;
-  const rowHeight = phone ? 40 : 34;
+  const rowHeight = 34;
   const height = rows.length * rowHeight + 24;
-  const label = phone ? 0 : 92, right = phone ? 0 : 150;
   const name = (id: string | null) => agentOf(props.agents, id)?.shortName ?? agentOf(props.agents, id)?.name ?? (id ?? props.labels.unknownAgent);
+  // Names keep a left column and median, p90 and count a right one at every width (the lab's anatomy); a narrow card
+  // trims both columns to what its own labels need, so the distribution never sits under text.
+  const narrow = width !== null && width < 460;
+  // Names are drawn semibold in the body role; the column fits the longest one (up to a third of a narrow card,
+  // a quarter of a wide one) so a long Agent name never runs into the distribution.
+  const textWidth = (value: string, size: number | undefined, factor = 0.56) => value.length * (size ?? 13) * factor;
+  const nameWidth = Math.ceil(Math.max(0, ...rows.map((row) => textWidth(name(row.agentId), svgText.styles.body.fontSize, 0.62))) + 12);
+  const label = width === null ? 92 : narrow ? Math.min(Math.round(width / 3), Math.max(56, nameWidth)) : Math.max(92, Math.min(Math.round(width / 4), nameWidth));
+  const right = narrow ? Math.min(150, Math.max(84, Math.ceil(Math.max(0, ...rows.map((row) => textWidth(props.labels.detail(row.p90Ms, row.samples), svgText.fontSize))) + 10))) : 150;
   const colour = (id: string | null) => agentOf(props.agents, id)?.color ?? ink.neutral;
   const table = rows.map((row) => [agentOf(props.agents, row.agentId)?.name ?? name(row.agentId), props.labels.duration(row.medianMs), props.labels.duration(row.p90Ms),
     props.labels.values.formatCount(row.samples)] as const);
@@ -224,7 +234,7 @@ export function UsageRunLength(props: UsageChartBaseProps & Readonly<{ agents: r
             {svgText.draw({ x: x(ms), y: height - 4, anchor: ms === RUN_MAX_MS ? 'end' : 'middle', text })}
           </G>)}
           {rows.map((row, index) => {
-            const cy = index * rowHeight + rowHeight / 2 + (phone ? 8 : 2);
+            const cy = index * rowHeight + rowHeight / 2 + 2;
             const stacks = new Map<number, number>();
             // Each dot is an equal share of this Agent's closed turns (its quantiles), so a heavy row reads as a distribution
             // rather than a solid block. Every observation counts toward them; none is dropped.
@@ -241,10 +251,9 @@ export function UsageRunLength(props: UsageChartBaseProps & Readonly<{ agents: r
               {dots}
               <Path d={`M${r1(x(row.medianMs))},${cy - 10}V${cy + 10}`} stroke={ink.text} strokeWidth={2} />
               <Path d={`M${r1(x(row.p90Ms))},${cy - 7}V${cy + 7}`} stroke={ink.text} strokeOpacity={0.45} strokeWidth={1.2} />
-              {phone ? svgText.draw({ x: 0, y: cy - 12, tone: 'strong', size: 'body', text: `${name(row.agentId)}  ${props.labels.duration(row.medianMs)} · ${props.labels.detail(row.p90Ms, row.samples)}` })
-                : [svgText.draw({ x: 0, y: cy + 4, tone: 'strong', size: 'body', text: name(row.agentId) }, 'n'),
-                  svgText.draw({ x: width, y: cy - 1, anchor: 'end', tone: 'strong', size: 'body', text: props.labels.duration(row.medianMs) }, 'm'),
-                  svgText.draw({ x: width, y: cy + 12, anchor: 'end', text: props.labels.detail(row.p90Ms, row.samples) }, 'd')]}
+              {svgText.draw({ x: 0, y: cy + 4, tone: 'strong', size: 'body', text: name(row.agentId) }, 'n')}
+              {svgText.draw({ x: width, y: cy - 1, anchor: 'end', tone: 'strong', size: 'body', text: props.labels.duration(row.medianMs) }, 'm')}
+              {svgText.draw({ x: width, y: cy + 12, anchor: 'end', text: props.labels.detail(row.p90Ms, row.samples) }, 'd')}
             </G>;
           })}
         </Svg>;

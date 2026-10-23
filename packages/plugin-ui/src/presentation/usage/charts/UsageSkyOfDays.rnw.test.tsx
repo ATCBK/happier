@@ -12,7 +12,7 @@ const labels: UsageSkyLabels = {
   streakBestOngoing: (days) => `${days}-day streak, still going`, streakBest: (days) => `Best ${days}`, streakNow: (days) => `Now ${days}`,
   streakShort: (days) => `${days}-day streak`,
   key: { tie: 'Tie', notAttributed: 'Not attributed', noActivity: 'No activity', notRecorded: 'Not recorded', quieter: 'Quieter', busier: 'Busier' },
-  caption: 'How to read it',
+  caption: ({ runs, band }) => `How to read it${runs ? ' · runs' : ''}${band ? ' · band' : ''}`,
   values: { show: 'Exact values', hide: 'Hide values', dateColumn: 'Day', valueColumn: 'Busy time', leaderColumn: 'Led by', noActivity: 'No activity',
     notRecorded: 'Not recorded', tie: 'Tie', notAttributed: 'Not attributed' },
 };
@@ -20,6 +20,28 @@ const agents = [{ id: 'claude', name: 'Claude Code', color: '#eb6834' }, { id: '
 const paint = { accent: '#007aff', paper: '#ffffff', dark: false };
 
 describe('Sky of days', () => {
+
+  it('keeps each drawing\'s gradients its own when two Skies share one page (wide and phone editions)', () => {
+    const model: UsageSkyModel = { encoding: 'amount', colourBy: 'leadingAgent', days: [
+      { date: '2026-09-01', state: 'active', value: 90, leader: { kind: 'agent', agentId: 'claude' } },
+      { date: '2026-09-02', state: 'active', value: 40, leader: null },
+    ] };
+    const sky = (testID: string) => <UsageSkyOfDays theme={SURFACE_CONTEXT_THEME_FIXTURE} paint={paint} agents={agents} model={model}
+      labels={labels} label="Sky of days" width={640} testID={testID} />;
+    const mount = mountThroughReactNativeWeb(<>{sky('sky-wide')}{sky('sky-phone')}</>);
+    try {
+      const ids = [...mount.container.querySelectorAll('[id]')].map((node) => node.id).filter((id) => id.startsWith('usage-sky-'));
+      expect(ids.length).toBeGreaterThan(0);
+      expect(new Set(ids).size).toBe(ids.length);
+      // A fill must resolve inside its own drawing: a hidden edition must never own the other's paint.
+      for (const svg of mount.container.querySelectorAll('svg')) {
+        for (const node of svg.querySelectorAll('[fill^="url(#"]')) {
+          const id = node.getAttribute('fill')!.slice(5, -1);
+          expect(svg.querySelector(`[id="${id}"]`)).not.toBeNull();
+        }
+      }
+    } finally { mount.unmount(); }
+  });
   it('says each day exactly, keeps unknown apart from no activity, and names a tie by both Agents', () => {
     const model: UsageSkyModel = { encoding: 'amount', colourBy: 'leadingAgent', days: [
       { date: '2026-09-01', state: 'active', value: 90, leader: { kind: 'agent', agentId: 'claude' } },
@@ -47,6 +69,20 @@ describe('Sky of days', () => {
     } finally { mount.unmount(); }
   });
 
+  it('shows a busy day whose leader the owner could not name as not attributed, not as an unexplained gap', () => {
+    const model: UsageSkyModel = { encoding: 'amount', colourBy: 'leadingAgent', days: [
+      { date: '2026-09-01', state: 'active', value: 90, leader: null },
+      { date: '2026-09-02', state: 'active', value: 40, leader: { kind: 'agent', agentId: 'codex' } },
+    ] };
+    const mount = mountThroughReactNativeWeb(<UsageSkyOfDays theme={SURFACE_CONTEXT_THEME_FIXTURE} paint={paint} agents={agents} model={model}
+      labels={labels} label="Sky of days" width={640} testID="sky" />);
+    try {
+      expect(query(mount.container, 'sky-key')!.textContent).toContain('Not attributed1');
+      act(() => query(mount.container, 'sky-values-toggle')!.click());
+      expect(query(mount.container, 'sky-values')!.textContent).toContain('2026-09-0190 minNot attributed');
+    } finally { mount.unmount(); }
+  });
+
   it('draws an ordinal (public) model as levels only, never an amount', () => {
     const model: UsageSkyModel = { encoding: 'ordinal', colourBy: 'intensity', days: [
       { date: '2026-09-01', state: 'active', level: 4 }, { date: '2026-09-02', state: 'active', level: 1 }, { date: '2026-09-03', state: 'inactive' },
@@ -59,5 +95,21 @@ describe('Sky of days', () => {
       act(() => query(mount.container, 'sky-values-toggle')!.click());
       expect(query(mount.container, 'sky-values')!.textContent).toContain('2026-09-01Busiest');
     } finally { mount.unmount(); }
+  });
+  it('explains the faint run lines and the 7-day band only when the sky draws them', () => {
+    const day = (index: number, lit: boolean) => ({ date: `2026-09-${String(index + 1).padStart(2, '0')}`,
+      ...(lit ? { state: 'active' as const, value: 10 + index } : { state: 'inactive' as const, value: 0 }) });
+    const sparse: UsageSkyModel = { encoding: 'amount', colourBy: 'intensity', days: Array.from({ length: 7 }, (_, index) => day(index, index % 3 === 0)) };
+    const busy: UsageSkyModel = { encoding: 'amount', colourBy: 'intensity', days: Array.from({ length: 30 }, (_, index) => day(index, true)) };
+    const caption = (model: UsageSkyModel) => {
+      const mount = mountThroughReactNativeWeb(<UsageSkyOfDays theme={SURFACE_CONTEXT_THEME_FIXTURE} paint={paint} agents={[]} model={model}
+        labels={labels} label="Sky of days" width={640} testID="sky" />);
+      try { return mount.container.textContent ?? ''; } finally { mount.unmount(); }
+    };
+    const sparseText = caption(sparse);
+    expect(sparseText).toContain('How to read it');
+    expect(sparseText).not.toContain('· runs');
+    expect(sparseText).not.toContain('· band');
+    expect(caption(busy)).toContain('How to read it · runs · band');
   });
 });

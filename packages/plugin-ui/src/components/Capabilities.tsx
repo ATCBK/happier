@@ -1,4 +1,6 @@
-import type { ReactElement, ReactNode } from 'react';
+import * as React from 'react';
+import { createContext, useContext, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { Platform, View } from 'react-native';
 
 import {
   buildHappierCapabilityCollectionAnatomy,
@@ -30,12 +32,40 @@ import {
   type HappierCapabilityStatusFixProps,
   type HappierCapabilityStatusPillProps,
 } from '../presentation/capabilities/CapabilityStatusChip.js';
-import { Button } from './Button.js';
+import {
+  HappierWhereItsOnControl,
+  type HappierWhereItsOnControlLabels,
+  type HappierWhereItsOnHost,
+  type HappierWhereItsOnIntent,
+  type HappierWhereItsOnRuleState,
+} from '../presentation/capabilities/WhereItsOnControl.js';
+import type {
+  HappierReachPlace,
+  HappierWhereItsOnClauseParams,
+  HappierWhereItsOnItemKind,
+  HappierWhereItsOnNames,
+  HappierWhereItsOnProjectionRow,
+} from '../presentation/capabilities/whereItsOn.js';
+import { HappierDisclosure } from '../presentation/collection/Disclosure.js';
+import { HappierDisclosureChevron } from '../presentation/collection/DisclosureChevron.js';
+import { HAPPIER_INSTANT_DISCLOSURE_MOTION } from '../presentation/collection/collectionMotion.js';
+import { HappierText } from '../presentation/text/Text.js';
+import { useHappierUiAccessibility, useOptionalHappierUiTypography } from '../environment/context.js';
+import { HAPPIER_SPACE_STEPS } from '../environment/spacing.js';
+import { resolveHappierTextStepStyle } from '../presentation/layout/pageText.js';
+import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
+import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
+import { Button, IconButton } from './Button.js';
 import type { CollectionAnatomy } from './Collection.js';
 import { Badge, Banner } from './Foundation.js';
+import { Select } from './Form.js';
+import { Item, ItemGroup } from './List.js';
+import { Menu } from './Overlay.js';
+import { SettingRow } from './Setting.js';
 import { Icon, type IconName } from './Icon.js';
 import { PageHeader } from './PageHeader.js';
 import {
+  usePluginTheme,
   usePluginTranslation,
   type PluginTranslate,
 } from './PluginUiProvider.js';
@@ -399,4 +429,399 @@ export function capabilityCollectionAnatomy<Item>(
   input: CapabilityCollectionAnatomyInput<Item>,
 ): CollectionAnatomy<Item> {
   return buildHappierCapabilityCollectionAnatomy(input, COLLECTION_PARTS);
+}
+
+/** A place an item can be on: every machine, one machine, or one project on every machine. */
+export type WhereItsOnPlace = Exclude<HappierReachPlace, Readonly<{ t: 'workspace' }>>;
+/** One rule beside Everywhere: a place (or every machine for one Agent), turned on or off there. */
+export type WhereItsOnRule = Readonly<{ place: WhereItsOnPlace; agentId?: string; on: boolean }>;
+/** The person's choice; the plugin applies it to its own rules and saves them. */
+export type WhereItsOnIntent = HappierWhereItsOnIntent;
+export type WhereItsOnIntentResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>;
+
+export type WhereItsOnControlProps = Readonly<{
+  /** What the item is, for the words ("Never gets this skill"). */
+  kind: HappierWhereItsOnItemKind;
+  /** Everywhere on or off, before the rules beside it. */
+  everywhere: 'on' | 'off';
+  rules: readonly WhereItsOnRule[];
+  /** What "Add an exception" offers, by name; `online` is the plugin's own reachability (null: not known). */
+  places: Readonly<{
+    agents: readonly Readonly<{ id: string; name: string }>[];
+    machines: readonly Readonly<{ id: string; name: string; online: boolean | null }>[];
+    projects?: readonly Readonly<{ key: string; name: string; machineCount: number }>[];
+  }>;
+  /**
+   * Where it is available right now, per machine. Omitted: no consequence line. Null: still resolving (the line
+   * keeps its slot).
+   */
+  availability?: readonly HappierWhereItsOnProjectionRow[] | null;
+  /** The person's choice. Return `{ ok: false, message }` to show the change failed with Try again. */
+  onIntent: (intent: WhereItsOnIntent) => Promise<WhereItsOnIntentResult> | WhereItsOnIntentResult | void;
+  /** `section` (default): a detail page's section. `pick`: the compact form in an add flow. */
+  presentation?: 'section' | 'pick';
+  /** While the plugin's rules load, the sentence keeps its slot and nothing can change. */
+  loading?: boolean;
+  /** Why the viewer cannot change it; keeps the sentence and drops the controls. */
+  readOnlyReason?: string;
+  testID: string;
+}>;
+
+function clause(params: HappierWhereItsOnClauseParams): Readonly<{ agent: string; at: string }> {
+  const place = params.place === undefined ? '' : `${params.placeKind === 'machine' ? 'on' : 'in'} ${params.place}`;
+  return { agent: params.agent ?? '', at: place };
+}
+const joinWords = (...parts: readonly (string | undefined)[]) => parts.filter((part) => part).join(' ');
+
+function joinEnglish(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+function whereItsOnLabels(translate: PluginTranslate): HappierWhereItsOnControlLabels {
+  const k = `${KEY}.where`;
+  const joinList = (parts: readonly string[]) => translate(`${k}.joinList`, joinEnglish(parts), { list: joinEnglish(parts) });
+  return {
+    joinList,
+    where: {
+      onEverywhere: () => translate(`${k}.onEverywhere`, 'On everywhere'),
+      everywhere: () => translate(`${k}.everywhere`, 'Everywhere'),
+      off: () => translate(`${k}.off`, 'Off'),
+      only: (params) => {
+        const { agent, at } = clause(params);
+        return translate(`${k}.only`, joinWords('Only', agent && `for ${agent}`, at), { agent, place: at });
+      },
+      on: (params) => {
+        const { agent, at } = clause(params);
+        return translate(`${k}.on`, agent ? joinWords('on for', agent, at) : joinWords('on', at), { agent, place: at });
+      },
+      except: (params) => {
+        const { agent, at } = clause(params);
+        return translate(`${k}.except`, joinWords('except', agent, at), { agent, place: at });
+      },
+      exceptions: (count) => translate(`${k}.exceptions`, count === 1 ? '1 exception' : `${count} exceptions`, { count }),
+      more: (count) => translate(`${k}.more`, `${count} more`, { count }),
+      effect: {
+        everywhereOn: () => translate(`${k}.effect.everywhereOn`, 'Every machine and agent, and the ones you add later'),
+        everywhereOff: () => translate(`${k}.effect.everywhereOff`, 'Off unless a rule below turns it on'),
+        agentNever: (kind) =>
+          translate(`${k}.effect.agentNever`, kind === 'skill' ? 'Never gets this skill, wherever it’s on' : 'Never gets this server, wherever it’s on', { kind }),
+        agentEverywhereOn: () => translate(`${k}.effect.agentEverywhereOn`, 'Gets it even where the rest is off'),
+        machineOn: () => translate(`${k}.effect.machineOn`, 'Every agent on this machine'),
+        machineOff: () => translate(`${k}.effect.machineOff`, 'No agent on this machine'),
+        projectOn: () => translate(`${k}.effect.projectOn`, 'In this project, on every machine'),
+        projectOff: () => translate(`${k}.effect.projectOff`, 'Not in this project, on any machine'),
+        folderOn: () => translate(`${k}.effect.folderOn`, 'In this folder on this machine'),
+        folderOff: () => translate(`${k}.effect.folderOff`, 'Not in this folder'),
+        agentAtOn: ({ agent, place, placeKind }) =>
+          translate(`${k}.effect.agentAtOn`, `${agent} gets it ${placeKind === 'machine' ? 'on' : 'in'} ${place}`, { agent, place }),
+        agentAtOff: ({ agent, place, placeKind }) =>
+          translate(`${k}.effect.agentAtOff`, `${agent} doesn’t get it ${placeKind === 'machine' ? 'on' : 'in'} ${place}`, { agent, place }),
+      },
+      available: ({ agents, machines, projects }) =>
+        translate(`${k}.available`, `Available to ${agents} on ${machines}${projects ? `, only in ${projects}` : ''}`, {
+          agents,
+          machines,
+          projects: projects ?? '',
+        }),
+      availableNowhere: () => translate(`${k}.availableNowhere`, 'Not available anywhere yet'),
+      offlineNote: (machine) => translate(`${k}.offlineNote`, `${machine} is offline. It gets this when it’s back.`, { machine }),
+      offlineNoteMany: (count) => translate(`${k}.offlineNoteMany`, `${count} offline machines get it when they’re back.`, { count }),
+      cantTake: (agent, kind) =>
+        translate(`${k}.cantTake`, kind === 'skill' ? `${agent} can’t load skills.` : `${agent} can’t use MCP servers.`, { agent, kind }),
+      moreMachines: (count) => translate(`${k}.moreMachines`, count === 1 ? '1 more machine' : `${count} more machines`, { count }),
+    },
+    control: {
+      title: () => translate(`${k}.title`, 'Where it’s on'),
+      description: () => translate(`${k}.description`, 'Set it once and every machine follows. The most specific rule wins.'),
+      on: () => translate(`${k}.turnOn`, 'On'),
+      off: () => translate(`${k}.turnOff`, 'Off'),
+      turnedOnIn: () => translate(`${k}.turnedOnIn`, 'Turned on in'),
+      except: () => translate(`${k}.exceptGroup`, 'Except'),
+      nowhereYet: () => translate(`${k}.nowhereYet`, 'Nowhere yet. Add a project, a machine or an agent.'),
+      addException: () => translate(`${k}.addException`, 'Add an exception'),
+      addPlace: () => translate(`${k}.addPlace`, 'Add a place'),
+      menuAgent: () => translate(`${k}.menuAgent`, 'An agent'),
+      menuAgentEverywhere: () => translate(`${k}.menuAgentEverywhere`, 'An agent, everywhere'),
+      menuMachine: () => translate(`${k}.menuMachine`, 'A machine'),
+      menuProject: () => translate(`${k}.menuProject`, 'A project'),
+      menuProjectEverywhere: () => translate(`${k}.menuProjectEverywhere`, 'A project, on every machine'),
+      offline: () => translate(`${k}.offline`, 'offline'),
+      unknown: () => translate(`${k}.unknown`, 'unknown'),
+      machineCount: (count) => translate(`${k}.machineCount`, count === 1 ? '1 machine' : `${count} machines`, { count }),
+      allAgents: () => translate(`${k}.allAgents`, 'All agents'),
+      agentOnly: (agent) => translate(`${k}.agentOnly`, `${agent} only`, { agent }),
+      whichAgents: (place) => translate(`${k}.whichAgents`, `Which agents in ${place}`, { place }),
+      remove: (target) => translate(`${k}.remove`, `Remove the rule for ${target}`, { target }),
+      staysOff: (agents) => translate(`${k}.staysOff`, `${agents} stays off here`, { agents }),
+      change: () => translate(`${k}.change`, 'Change'),
+      changeFailed: () => translate(`${k}.changeFailed`, 'Couldn’t save that change.'),
+      tryAgain: () => translate(`${KEY}.fix.tryAgain`, 'Try again'),
+    },
+  };
+}
+
+/** The names and list words the slot components read (the slots stay stable module components). */
+const WhereWordsContext = createContext<Readonly<{ names: HappierWhereItsOnNames; joinList: (parts: readonly string[]) => string }> | null>(null);
+
+const PLACE_ICON: Readonly<Record<'desktop' | 'folder', IconName>> = { desktop: 'desktop', folder: 'file' };
+const ICON_SIZE = { xs: 'small', sm: 'small', md: 'medium' } as const;
+
+function WhereDisclosure(props: React.ComponentProps<HappierWhereItsOnHost['Disclosure']>): ReactElement {
+  const host = useOptionalPluginUiPresentationHost();
+  const theme = usePluginTheme();
+  const { reducedMotion } = useHappierUiAccessibility();
+  return (
+    <HappierDisclosure
+      testID={props.testID}
+      expanded={props.expanded}
+      onExpandedChange={props.onExpandedChange}
+      showDivider={props.showDivider ?? false}
+      motion={host?.disclosureMotion ?? HAPPIER_INSTANT_DISCLOSURE_MOTION}
+      reducedMotion={reducedMotion || host?.disclosureMotion === undefined}
+      separatorStyle={{ backgroundColor: theme.colors.border }}
+      header={(state) => (
+        <Item
+          testID={props.rowTestID}
+          onPress={state.headerProps.onPress}
+          accessibilityRole="button"
+          accessibilityExpanded={state.expanded}
+          showDivider={false}
+          accessory={
+            props.changeLabel !== undefined && !state.expanded ? (
+              <Text variant="label" tone="accent">
+                {props.changeLabel}
+              </Text>
+            ) : (
+              <HappierDisclosureChevron expanded={state.expanded} color={theme.colors.secondaryText} reducedMotion={reducedMotion} />
+            )
+          }
+        >
+          {props.title}
+        </Item>
+      )}
+    >
+      {props.children}
+    </HappierDisclosure>
+  );
+}
+
+function WhereAddMenu(props: React.ComponentProps<HappierWhereItsOnHost['AddMenu']>): ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <Menu
+      testID={props.testID}
+      open={open}
+      onOpenChange={setOpen}
+      trigger={props.title}
+      triggerAccessibilityLabel={props.title}
+      triggerAppearance="control"
+      triggerIcon="add"
+      showGroupLabels
+      groups={props.groups.map((group) => ({
+        id: group.title,
+        accessibilityLabel: group.title,
+        items: group.items.map((item) => ({
+          id: item.id,
+          label: item.title,
+          ...(item.mark?.kind === 'icon' ? { icon: PLACE_ICON[item.mark.name] } : {}),
+          ...(item.trailing ? { subtitle: item.trailing.text } : {}),
+        })),
+      }))}
+      onSelect={(id) => {
+        setOpen(false);
+        props.onSelect(id);
+      }}
+    />
+  );
+}
+
+function WhereText(props: React.ComponentProps<HappierWhereItsOnHost['Text']>): ReactElement {
+  const typography = useOptionalHappierUiTypography();
+  return (
+    <HappierText
+      variant={props.variant}
+      tone={props.tone === 'primary' ? 'neutral' : props.tone === 'secondary' ? 'secondary' : 'muted'}
+      {...(props.testID === undefined ? {} : { testID: props.testID })}
+      {...(props.hidden ? { accessibilityElementsHidden: true, importantForAccessibility: 'no' as const } : {})}
+      {...(props.tabular ? { tabularNumbers: true } : {})}
+      style={[
+        props.emphasis === 'semiBold'
+          ? resolveHappierTextStepStyle(resolveHappierTypeScale(props.variant, Platform.OS, 'semiBold'), typography)
+          : null,
+        props.style ?? null,
+      ]}
+    >
+      {props.children}
+    </HappierText>
+  );
+}
+
+function WhereAgentNames(props: React.ComponentProps<HappierWhereItsOnHost['AgentNames']>): ReactElement {
+  const words = useContext(WhereWordsContext);
+  const names = words ? words.joinList(words.names.agentNames(props.agentIds)) : props.agentIds.join(', ');
+  return <WhereText variant="body" tone="secondary" testID={props.testID}>{names}</WhereText>;
+}
+
+/** The public components each slot draws with; the composition stays with the shared owner. */
+const PUBLIC_WHERE_SLOTS: HappierWhereItsOnHost = {
+  Section: ({ testID, title, description, children }) => (
+    <ItemGroup testID={testID} title={title} {...(description === undefined ? {} : { description })}>
+      {children}
+    </ItemGroup>
+  ),
+  Disclosure: WhereDisclosure,
+  Everywhere: ({ testID, title, subtitle, options, value, disabled, onChange }) => (
+    <SettingRow
+      testID={testID}
+      title={title}
+      hint={subtitle}
+      layout="adaptive"
+      disabled={disabled}
+      control={
+        <Select
+          testID={`${testID}:choice`}
+          label={title}
+          presentation="segmented"
+          options={options.map((option) => ({ value: option.id, label: option.label }))}
+          value={value}
+          disabled={disabled}
+          onChange={(next) => onChange(next === 'on' ? 'on' : 'off')}
+        />
+      }
+    />
+  ),
+  RuleList: ({ children }) => <>{children}</>,
+  GroupLabel: ({ title }) => (
+    <View style={WHERE_GROUP_LABEL}>
+      <Text variant="meta" tone="secondary">
+        {title}
+      </Text>
+    </View>
+  ),
+  Rule: ({ testID, title, subtitle, mark, wideControls, controls, note }) => (
+    <Item
+      testID={testID}
+      title={title}
+      subtitle={subtitle}
+      icon={mark}
+      showDivider={false}
+      {...(controls === undefined ? {} : { accessory: controls, accessoryOutsidePressable: true, accessoryWraps: wideControls })}
+    >
+      {note}
+    </Item>
+  ),
+  RemoveButton: ({ testID, accessibilityLabel, onPress }) => (
+    <IconButton testID={testID} accessibilityLabel={accessibilityLabel} icon={<Icon name="close" size="small" tone="secondary" />} onPress={onPress} />
+  ),
+  AddMenu: WhereAddMenu,
+  AgentSelect: ({ testID, accessibilityLabel, items, selectedId, onSelect }) => (
+    <Select
+      testID={testID}
+      label={accessibilityLabel}
+      presentation="field"
+      options={items.map((item) => ({ value: item.id, label: item.title }))}
+      value={selectedId}
+      onChange={(next) => onSelect(String(next))}
+    />
+  ),
+  ConsequenceRow: ({ testID, children }) => (
+    <Item testID={testID} showDivider={false}>
+      {children}
+    </Item>
+  ),
+  ErrorLine: ({ testID, title, diagnostic, actionLabel, onAction }) => (
+    <Banner
+      testID={testID}
+      tone="danger"
+      title={title}
+      description={diagnostic}
+      action={<Button variant="secondary" size="small" title={actionLabel} onPress={onAction} />}
+    />
+  ),
+  Text: WhereText,
+  PlaceGlyph: ({ name, size }) => <Icon name={PLACE_ICON[name]} size={ICON_SIZE[size]} tone="secondary" />,
+  AgentMark: () => null,
+  AgentNames: WhereAgentNames,
+  hasAgentMark: () => false,
+};
+
+const WHERE_GROUP_LABEL = {
+  paddingHorizontal: HAPPIER_SPACE_STEPS.s16,
+  paddingTop: HAPPIER_SPACE_STEPS.s12,
+  paddingBottom: HAPPIER_SPACE_STEPS.s4,
+} as const;
+
+/**
+ * "Where it's on" for a plugin's own installable things: the same sentence, Everywhere On | Off, rules and add menu
+ * Happier's Skills and MCP pages use. The plugin passes where its item is on, already computed, and receives the
+ * person's choice as an intent, which it applies to its own rules; no rule engine is needed or published.
+ */
+export function WhereItsOnControl(props: WhereItsOnControlProps): ReactElement {
+  const translate = usePluginTranslation();
+  const labels = useMemo(() => whereItsOnLabels(translate), [translate]);
+  const { places } = props;
+  const names = useMemo<HappierWhereItsOnNames>(() => {
+    const agentName = (id: string) => places.agents.find((agent) => agent.id === id)?.name ?? id;
+    return {
+      agentName,
+      agentNames: (ids) => [...new Set(ids.map(agentName))],
+      machineName: (id) => places.machines.find((machine) => machine.id === id)?.name ?? id,
+      projectName: (key) => places.projects?.find((project) => project.key === key)?.name ?? key,
+      folderLabel: (_machineId, root) => root,
+    };
+  }, [places]);
+  const controlPlaces = useMemo(
+    () => ({
+      agentIds: places.agents.map((agent) => agent.id),
+      machines: places.machines.map((machine) => ({ machineId: machine.id, name: machine.name, online: machine.online })),
+      projects: (places.projects ?? []).map((project) => ({
+        projectKey: project.key,
+        name: project.name,
+        machineCount: project.machineCount,
+      })),
+    }),
+    [places],
+  );
+  const state = useMemo(
+    () => ({
+      everywhere: props.everywhere,
+      rules: props.rules.map(
+        (rule): HappierWhereItsOnRuleState => ({
+          place: rule.place,
+          ...(rule.agentId === undefined ? {} : { agentId: rule.agentId }),
+          on: rule.on,
+        }),
+      ),
+    }),
+    [props.everywhere, props.rules],
+  );
+  const { onIntent } = props;
+  const handleIntent = useMemo(
+    () =>
+      async (intent: HappierWhereItsOnIntent): Promise<WhereItsOnIntentResult> => {
+        const result: WhereItsOnIntentResult | void = await onIntent(intent);
+        return result === undefined ? { ok: true } : result;
+      },
+    [onIntent],
+  );
+  const words = useMemo(() => ({ names, joinList: labels.joinList }), [names, labels]);
+  return (
+    <WhereWordsContext.Provider value={words}>
+      <HappierWhereItsOnControl
+        kind={props.kind}
+        state={state}
+        status={props.loading ? 'loading' : 'ready'}
+        {...(props.availability === undefined ? {} : { projection: props.availability })}
+        places={controlPlaces}
+        onIntent={handleIntent}
+        presentation={props.presentation ?? 'section'}
+        {...(props.readOnlyReason === undefined ? {} : { readOnlyReason: props.readOnlyReason })}
+        testID={props.testID}
+        names={names}
+        labels={labels}
+        host={PUBLIC_WHERE_SLOTS}
+      />
+    </WhereWordsContext.Provider>
+  );
 }

@@ -11,7 +11,7 @@ import { HappierText } from '../text/Text.js';
 import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
 import { HAPPIER_PAGE_METRICS, HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
 export { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
-import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame } from '../layout/WidgetFrame.js';
+import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame, resolveHappierWidgetFrameInsetPx } from '../layout/WidgetFrame.js';
 import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
 import { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
 import type { UsageRecordsModel } from '../usage/charts/UsageWorkCharts.js';
@@ -53,7 +53,14 @@ export type HappierPublicProfileLabels = Readonly<{
 export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;
 
 type PublishedPublicProfileProps = Readonly<{
-  view: Omit<PublicProfileViewV1, 'appearance' | 'service' | 'urls'> & Readonly<{ urls: PublicProfileViewV1['urls'] | null }>;
+  view: Omit<PublicProfileViewV1, 'appearance' | 'service' | 'urls' | 'snapshot'> & Readonly<{
+    urls: PublicProfileViewV1['urls'] | null;
+    /**
+     * Null only on the owner's own page before its Usage can be read: the header, period line (saying
+     * why) and the owner's blocks still draw; visitors always receive a snapshot.
+     */
+    snapshot: PublicProfileViewV1['snapshot'] | null;
+  }>;
   labels: HappierPublicProfileLabels;
   /**
    * The applied atmosphere band (picture or planet), painted by the host's own adapter at the given
@@ -82,6 +89,8 @@ export type HappierPublicProfileOwner = Readonly<{
    * header, period and footer while blocks are added, sized and arranged. Never passed to visitors.
    */
   renderBlocks?: () => ReactNode;
+  /** The owner's customizing bar, on the page between its header and the period (lab `ppcomp-E`). */
+  renderToolbar?: () => ReactNode;
 }>;
 
 export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
@@ -116,9 +125,10 @@ export function HappierPublicProfile(props: HappierPublicProfileProps) {
 function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const theme = useHappierUiTheme();
   const { view, labels } = props;
-  const usageModels = useMemo(() => projectPublicUsageChartModels(view.snapshot, view.metadata), [view.snapshot, view.metadata]);
+  const usageModels = useMemo(() => view.snapshot ? projectPublicUsageChartModels(view.snapshot, view.metadata) : null,
+    [view.snapshot, view.metadata]);
   const formatRecord = props.usage?.labels.records?.format;
-  const usageRecords = useMemo(() => formatRecord ? projectPublicUsageRecords(view.snapshot, formatRecord) : null,
+  const usageRecords = useMemo(() => formatRecord && view.snapshot ? projectPublicUsageRecords(view.snapshot, formatRecord) : null,
     [view.snapshot, formatRecord]);
   const testID = props.testID ?? 'public-profile';
   const columns = props.singleColumn ? 1 : 2;
@@ -135,9 +145,9 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const byId = new Map(
     view.layout.items.map((item) => [item.id, item] as const),
   );
-  const renderCell = (cell: WidgetGroupCell) => {
+  const renderCell = (cell: WidgetGroupCell, span: 'full' | 'half') => {
     const item = byId.get(cell.id);
-    return item ? (
+    return item && usageModels ? (
       <PublicProfileItem
         key={item.id}
         item={item}
@@ -147,6 +157,7 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
         usage={props.usage}
         owner={props.owner}
         singleColumn={columns === 1}
+        coldWidthPx={props.usage?.cold ? publicProfileColdCellWidth(publicProfileColdContentWidth(columns === 1), span) : undefined}
         testID={testID}
       />
     ) : null;
@@ -192,6 +203,7 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
           testID={testID}
           singleColumn={columns === 1}
           credit={labels.heroCredit}
+          overlapsBand={props.renderAvatar !== undefined}
           renderBand={props.renderHero}
         >
           {identity}
@@ -199,17 +211,20 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
       ) : null}
       <View style={styles.column}>
         {props.renderHero ? null : identity}
+        {props.owner?.renderToolbar?.()}
         <View style={styles.period}>
           <HappierText variant="heading" tone="neutral">
             {labels.periodTitle}
           </HappierText>
-          <HappierText variant="meta" tone="secondary" tabularNumbers>
-            {labels.periodDetail}
-          </HappierText>
+          {labels.periodDetail ? (
+            <HappierText variant="meta" tone="secondary" tabularNumbers>
+              {labels.periodDetail}
+            </HappierText>
+          ) : null}
         </View>
         {props.owner?.renderBlocks ? (
           props.owner.renderBlocks()
-        ) : bands.length === 0 ? (
+        ) : !usageModels ? null : bands.length === 0 ? (
           <HappierText
             variant="body"
             tone="secondary"
@@ -261,6 +276,8 @@ function PublicProfileHero(
     testID: string;
     singleColumn: boolean;
     credit?: string;
+    /** Only an avatar sits over the band's edge; a name alone starts below the artwork, never on it. */
+    overlapsBand: boolean;
     renderBand: (geometry: HappierPublicProfileHeroGeometry) => ReactNode;
     children: ReactNode;
   }>,
@@ -280,27 +297,43 @@ function PublicProfileHero(
           </View>
         ) : null}
       </View>
-      <View style={[styles.column, { marginTop: -avatarPx / 2 }]}>{props.children}</View>
+      <View style={[styles.heroColumn, { marginTop: props.overlapsBand ? -avatarPx / 2 : HAPPIER_PAGE_METRICS.cardPaddingPx }]}>
+        {props.children}
+      </View>
     </View>
   );
+}
+
+/**
+ * The page column's content width for an edition on a host that cannot measure (the server): the wide column at its
+ * maximum, the phone edition at the phone width it is painted for. A narrower window scales the drawings down.
+ */
+function publicProfileColdContentWidth(singleColumn: boolean): number {
+  const column = singleColumn ? HAPPIER_PUBLIC_PROFILE_HERO_METRICS.rasterWidthPx.phone : HAPPIER_PAGE_METRICS.columnMaxWidthPx.wide;
+  return column - 2 * HAPPIER_PAGE_METRICS.sheetInsetPx;
+}
+
+/** A cell's share of a band: the whole width, or one of a pair beside the band's gap. */
+function publicProfileColdCellWidth(bandWidthPx: number, span: 'full' | 'half'): number {
+  return span === 'full' ? bandWidthPx : Math.floor((bandWidthPx - HAPPIER_PAGE_METRICS.cardGapPx) / 2);
 }
 
 function Band(
   props: Readonly<{
     band: WidgetGroupBand;
-    renderCell: (cell: WidgetGroupCell) => ReactNode;
+    renderCell: (cell: WidgetGroupCell, span: 'full' | 'half') => ReactNode;
   }>,
 ) {
   const { band } = props;
   if (band.kind === 'row')
-    return <View style={styles.band}>{props.renderCell(band.cell)}</View>;
+    return <View style={styles.band}>{props.renderCell(band.cell, 'full')}</View>;
   if (band.kind === 'slot') return null;
   return (
     <View style={[styles.band, styles.pair]}>
       {band.columns.map((column, index) =>
         column.length ? (
           <View key={index} style={styles.pairColumn}>
-            {column.map(props.renderCell)}
+            {column.map((cell) => props.renderCell(cell, 'half'))}
           </View>
         ) : null,
       )}
@@ -317,6 +350,8 @@ function PublicProfileItem(
     usage?: HappierPublicProfileUsageHost;
     owner?: HappierPublicProfileOwner;
     singleColumn: boolean;
+    /** The cell's width in the page column on a host that cannot measure. */
+    coldWidthPx?: number;
     testID: string;
   }>,
 ) {
@@ -330,9 +365,11 @@ function PublicProfileItem(
         usageRecords={props.usageRecords}
         usage={props.usage}
         owner={props.owner}
+        coldWidthPx={props.coldWidthPx === undefined ? undefined : props.coldWidthPx - 2 * resolveHappierWidgetFrameInsetPx(item.frameStyle)}
         testID={props.testID}
       />
     );
+  const groupInnerPx = props.coldWidthPx === undefined ? undefined : props.coldWidthPx - 2 * resolveHappierWidgetFrameInsetPx(item.frameStyle);
   const bands = packWidgetGroupBands(
     resolveWidgetGroupCells(
       'corePage',
@@ -354,7 +391,7 @@ function PublicProfileItem(
         <Band
           key={band.key}
           band={band}
-          renderCell={(cell) => {
+          renderCell={(cell, span) => {
             const child = children.get(cell.id);
             return child ? (
               <PublicProfileBlock
@@ -365,6 +402,7 @@ function PublicProfileItem(
                 usageRecords={props.usageRecords}
                 usage={props.usage}
                 owner={props.owner}
+                coldWidthPx={groupInnerPx === undefined ? undefined : publicProfileColdCellWidth(groupInnerPx, span)}
                 testID={props.testID}
                 bare
               />
@@ -384,12 +422,13 @@ export function HappierPublicProfileWidget(props: Readonly<{
   usage?: HappierPublicProfileUsageHost;
   testID: string;
 }>) {
-  const models = useMemo(() => projectPublicUsageChartModels(props.view.snapshot), [props.view.snapshot]);
+  const models = useMemo(() => props.view.snapshot ? projectPublicUsageChartModels(props.view.snapshot) : null, [props.view.snapshot]);
   const format = props.usage?.labels.records?.format;
-  const records = useMemo(() => format ? projectPublicUsageRecords(props.view.snapshot, format) : null, [props.view.snapshot, format]);
+  const records = useMemo(() => format && props.view.snapshot ? projectPublicUsageRecords(props.view.snapshot, format) : null,
+    [props.view.snapshot, format]);
   const widget = props.view.layout.items.flatMap(item => item.kind === 'widget' ? [item] : item.children)
     .find(item => item.id === props.widgetId);
-  return widget ? <PublicProfileBlock widget={widget} labels={props.labels} usageModels={models} usageRecords={records}
+  return widget && models ? <PublicProfileBlock widget={widget} labels={props.labels} usageModels={models} usageRecords={records}
     usage={props.usage} testID={props.testID} bare /> : null;
 }
 
@@ -401,6 +440,8 @@ function PublicProfileBlock(
     usageRecords: UsageRecordsModel | null;
     usage?: HappierPublicProfileUsageHost;
     owner?: HappierPublicProfileOwner;
+    /** The body's drawing width on a host that cannot measure. */
+    coldWidthPx?: number;
     testID: string;
     bare?: boolean;
   }>,
@@ -414,7 +455,7 @@ function PublicProfileBlock(
   ) : null;
   const body = props.widget.presentation.kind === 'usage'
     ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels} records={props.usageRecords}
-      host={props.usage} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
+      host={props.usage} width={props.coldWidthPx} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
     : renderInertDeclarativeView(props.widget.presentation.document.root, theme, props.labels.inert);
   const shownBody = onlyYou ? <View style={styles.quieted}>{body}</View> : body;
   if (props.bare)
@@ -493,6 +534,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     paddingBottom: HAPPIER_PAGE_METRICS.pagePaddingBottomPx,
     gap: HAPPIER_PAGE_METRICS.cardGapPx * 2,
+  },
+  // The identity under the band shares the page column's edge; the page's bottom room is the column's.
+  heroColumn: {
+    width: '100%',
+    maxWidth: HAPPIER_PAGE_METRICS.columnMaxWidthPx.wide,
+    alignSelf: 'center',
+    paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
   },
   identity: {
     flexDirection: 'row',

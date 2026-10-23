@@ -49,7 +49,7 @@ export function publicProfileUsageOriginalBody(props: PublicProfileUsageBodyProp
     case 'usage_daily':
       if (!models.sky) return null;
       return <UsageDailyChart theme={theme} testID={testID} gap={theme.spacing.large}
-        chart={{ label: labels.activityLevel, size: 'full', width: host.width, showLegend: false, showPeakValue: false,
+        chart={{ label: labels.activityLevel, size: 'full', width: props.width, showLegend: false, showPeakValue: false,
           summary: labels.activityLevel, valueFormatter: labels.level, unknownLabel: host.labels.unavailable,
           valuesLabel: labels.showValues, valuesCollapseLabel: labels.hideValues,
           series: [{ id: 'levels', label: labels.activityLevel, color: host.paint.accent, points: models.sky.days.map(day => ({
@@ -99,11 +99,11 @@ export function publicProfileUsageOriginalBody(props: PublicProfileUsageBodyProp
       const hours = presentation.inputs.style === 'weekdayHour' && models.daylight ? {
         label: labels.activityLevel, series: [{ id: 'levels', label: labels.activityLevel, color: host.paint.accent,
           points: models.daylight.hours.map((value, hour) => ({ id: String(hour), x: labels.clock(hour), y: value })) }],
-        variant: 'bar' as const, size: 'full' as const, width: host.width, valueFormatter: labels.level,
+        variant: 'bar' as const, size: 'full' as const, width: props.width, valueFormatter: labels.level,
         showLegend: false, showPeakValue: false, unknownLabel: host.labels.unavailable,
         valuesLabel: labels.showValues, valuesCollapseLabel: labels.hideValues,
       } : undefined;
-      return <UsageRhythmChart theme={theme} testID={testID} width={host.width}
+      return <UsageRhythmChart theme={theme} testID={testID} width={props.width}
         spacing={{ body: theme.spacing.large, blocks: theme.spacing.large, block: theme.spacing.small }}
         headings={{ calendar: caption, weekdayHour: caption, byHour: caption }} calendar={calendar} punch={punch}
         hours={presentation.inputs.style === 'weekdayHour' ? hours : undefined} footer={coverage} />;

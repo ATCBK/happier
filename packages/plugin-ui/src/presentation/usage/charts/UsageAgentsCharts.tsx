@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { Circle, Defs, Ellipse, G, Marker, Path, Pattern, Rect, Svg } from 'react-native-svg';
+import { HAPPIER_WIDGET_FRAME_METRICS } from '../../layout/WidgetFrame.js';
 
 import { HappierText } from '../../text/Text.js';
 import {
@@ -164,7 +165,9 @@ export function UsageCrew(props: AgentsProps & Readonly<{ model: readonly UsageA
       return <View key={JSON.stringify(entry.agentId)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 9,
         borderTopWidth: index === 0 ? 0 : 1, borderColor: ink.grid }}>
         <View style={{ width: 18, alignItems: 'center' }}>{entry.agentId === null
-          ? <View style={{ width: 8, height: 8, borderRadius: 4, borderWidth: 1.2, borderColor: ink.neutral }} /> : agent?.mark ?? null}</View>
+          ? <View style={{ width: 8, height: 8, borderRadius: 4, borderWidth: 1.2, borderColor: ink.neutral }} />
+          // A host without identity marks (the cold server page) keeps the Agent's colour in the slot.
+          : agent?.mark ?? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: agent?.color ?? ink.neutral }} />}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <HappierText style={text.strong} numberOfLines={1}>{compact ? shortName(props.agents, entry.agentId, props.labels.unknownAgent) : fullName(props.agents, entry.agentId, props.labels.unknownAgent)}</HappierText>
           {entry.coverage ? <HappierText style={text.caption} numberOfLines={1}>{compact ? entry.coverage.short : entry.coverage.long}</HappierText> : null}
@@ -240,9 +243,11 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
               if (index < 0 || band.high[index]! - band.low[index]! < 16) return null;
               used.add(index);
               const text = props.labels.inline(shortName(props.agents, id, props.labels.unknownAgent), shareOf(weeks[index]!, id));
-              const half = (text.length * (svgText.styles.strong.fontSize ?? 13) * 0.7) / 2;
+              // The label is drawn semibold in the body role; it keeps the card's inset from either edge of the river.
+              const half = (text.length * (svgText.styles.body.fontSize ?? 13) * 0.66) / 2;
+              const inset = HAPPIER_WIDGET_FRAME_METRICS.cardInsetPx;
               const y = mid - (band.low[index]! + band.high[index]!) / 2;
-              return <G key={`l${id ?? "unknown"}`}>{svgText.draw({ x: Math.min(width - half - 4, Math.max(half + 4, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
+              return <G key={`l${id ?? "unknown"}`}>{svgText.draw({ x: Math.min(width - half - inset, Math.max(half + inset, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
             });
           })()}
           {weeks.map((week, index) => index % 3 === 0 || index === weeks.length - 1 ? svgText.draw({ x: x(index), y: height - 3,
@@ -275,7 +280,7 @@ export function UsageShipped(props: AgentsProps & Readonly<{ model: UsageShipped
   const bottom = height - 18;
   const model = props.model;
   const spineInk = props.paint.accent;
-  const mix = `usage-shipped-mix-${props.testID ?? 'x'}`;
+  const mix = `usage-shipped-mix-${useId().replace(/[^a-zA-Z0-9_-]/gu, '')}`;
   const counts = new Map<string, number>();
   if (model.mode === 'weeks') for (const week of model.weeks) for (const spine of week.spines) counts.set(spine, (counts.get(spine) ?? 0) + 1);
   const byAgent = model.mode === 'weeks' && props.labels.colourBy === 'agent';
@@ -343,6 +348,8 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
   const [width, onLayout] = useUsageChartWidth(props.width);
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
+  // Marker ids are document-global; each drawing owns its own so another edition on the page can't supply its arrows.
+  const markerId = `usage-const-${useId().replace(/[^a-zA-Z0-9_-]/gu, '')}`;
   const phone = width !== null && width < 600;
   // Every member is placed. Up to seven sit on the composed slots; more go round one ring, planets scaled to fit.
   const nodes = props.model.nodes;
@@ -366,7 +373,7 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
         const edges = (props.model.edges ?? []).filter((edge) => position.has(edge.from) && position.has(edge.to));
         return <>
           <Svg width={width} height={height}>
-            <Defs>{nodes.map((node) => <Marker key={JSON.stringify(node.agentId)} id={`usage-const-arrow-${node.agentId}`} viewBox="0 0 8 8" refX={7} refY={4} markerWidth={9} markerHeight={9}
+            <Defs>{nodes.map((node) => <Marker key={JSON.stringify(node.agentId)} id={`${markerId}-arrow-${node.agentId}`} viewBox="0 0 8 8" refX={7} refY={4} markerWidth={9} markerHeight={9}
               markerUnits="userSpaceOnUse" orient="auto-start-reverse"><Path d="M0,0L8,4L0,8Z" fill={colour(node.agentId)} /></Marker>)}</Defs>
             {edges.map((edge, index) => {
               const stroke = 1 + Math.sqrt(edge.count) * 0.28;
@@ -375,7 +382,7 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
                 const r = radius(edge.from);
                 return <G key={index}>
                   <Path d={`M${r1(x1 - r * 0.75)},${r1(y1 - r * 0.62)}C${r1(x1 - r * 2.4)},${r1(y1 - r * 2.8)} ${r1(x1 + r * 2.4)},${r1(y1 - r * 2.8)} ${r1(x1 + r * 0.75)},${r1(y1 - r * 0.62)}`}
-                    fill="none" stroke={colour(edge.from)} strokeOpacity={0.9} strokeWidth={r1(stroke)} strokeDasharray={EDGE_DASH[edge.kind]} markerEnd={`url(#usage-const-arrow-${edge.from})`} />
+                    fill="none" stroke={colour(edge.from)} strokeOpacity={0.9} strokeWidth={r1(stroke)} strokeDasharray={EDGE_DASH[edge.kind]} markerEnd={`url(#${markerId}-arrow-${edge.from})`} />
                   {svgText.draw({ x: x1, y: y1 - r * 2.35, anchor: 'middle', tone: 'strong', halo: props.paint.paper, text: String(edge.count) })}
                 </G>;
               }
@@ -387,7 +394,7 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
               const mx = (sx + tx) / 2 - uy * bend, my = (sy + ty) / 2 + ux * bend;
               return <G key={index}>
                 <Path d={`M${r1(sx)},${r1(sy)}Q${r1(mx)},${r1(my)} ${r1(tx)},${r1(ty)}`} fill="none" stroke={colour(edge.from)} strokeOpacity={0.9} strokeWidth={r1(stroke)}
-                  strokeDasharray={EDGE_DASH[edge.kind]} markerEnd={`url(#usage-const-arrow-${edge.from})`} />
+                  strokeDasharray={EDGE_DASH[edge.kind]} markerEnd={`url(#${markerId}-arrow-${edge.from})`} />
                 {svgText.draw({ x: (sx + tx) / 2 - uy * bend * 0.62, y: (sy + ty) / 2 + ux * bend * 0.62 + 4, anchor: 'middle', tone: 'strong', halo: props.paint.paper, text: String(edge.count) })}
               </G>;
             })}

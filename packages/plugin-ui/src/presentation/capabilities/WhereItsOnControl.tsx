@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { Platform, StyleSheet, View, type TextStyle } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { HAPPIER_SPACE_STEPS } from '../../environment/spacing.js';
+import type { HappierPortableStyle } from '../portableTypes.js';
 import { useHappierPageSection } from '../layout/PageSection.js';
 import {
   describeHappierReach,
@@ -8,12 +9,10 @@ import {
   foldHappierMachineNames,
   happierWhereItsOnAgentNames,
   sayHappierWhereItsOn,
-  type HappierReachChange,
+  type HappierReachGrouped,
   type HappierReachPlace,
   type HappierReachRule,
-  type HappierReachRuleDraft,
   type HappierReachWrite,
-  type HappierWhereItsOnGroup,
   type HappierWhereItsOnItemKind,
   type HappierWhereItsOnLabels,
   type HappierWhereItsOnNames,
@@ -21,22 +20,106 @@ import {
   type HappierWhereItsOnSentence,
 } from './whereItsOn.js';
 
-export type HappierWhereItsOnReplaceChange = Extract<HappierReachChange, { kind: 'replace' }>;
+/**
+ * One stated rule beside Everywhere: a place, optionally narrowed to one Agent, turned on or off there. `key` is the
+ * rule's identity when the caller has one (it names the row's test ids); otherwise it is derived from the place.
+ */
+export type HappierWhereItsOnRuleState = Readonly<{
+  key?: string;
+  place: HappierReachPlace;
+  agentId?: string | undefined;
+  on: boolean;
+}>;
 
 /**
- * Happier's reach rule engine, which the control writes through: grouping and precedence, rule identity, applying a
- * change, the create-time default. It is the reach owner's, not this control's; the caller binds it.
+ * Where an item is on, already computed by whoever owns its rules: Everywhere On | Off, and the rules stated beside
+ * it. `sentence` is the caller's when its rule engine prunes redundant rules; without one, every stated rule reads.
  */
-export type HappierWhereItsOnReach = Readonly<{
-  group: HappierWhereItsOnGroup;
-  /** Old stored duplicates collapse to the precedence owner's winner. */
-  normalize: (rules: readonly HappierReachRule[]) => readonly HappierReachRule[];
-  key: (rule: Readonly<{ target: HappierReachPlace; agentId?: string | undefined }>) => string;
-  apply: (rules: readonly HappierReachRule[], change: HappierReachChange) => readonly HappierReachRule[];
-  toDrafts: (rules: readonly HappierReachRule[]) => readonly HappierReachRuleDraft[];
-  /** A new item's rules before the person picks. */
-  createDefault: (kind: HappierWhereItsOnItemKind) => readonly HappierReachRule[];
+export type HappierWhereItsOnState = Readonly<{
+  everywhere: 'on' | 'off';
+  rules: readonly HappierWhereItsOnRuleState[];
+  sentence?: HappierWhereItsOnSentence;
 }>;
+
+/**
+ * The person's choice, which the caller applies to its own rules: turn Everywhere on or off, add a place (or an
+ * Agent everywhere) as on or off, remove a rule, or narrow a place turned on to one Agent (`to` absent: all Agents).
+ */
+export type HappierWhereItsOnIntent =
+  | Readonly<{ kind: 'everywhere'; state: 'on' | 'off' }>
+  | Readonly<{ kind: 'add'; place: HappierReachPlace; agentId?: string; state: 'on' | 'off' }>
+  | Readonly<{ kind: 'remove'; place: HappierReachPlace; agentId?: string }>
+  | Readonly<{ kind: 'narrow'; place: HappierReachPlace; from?: string; to?: string }>;
+
+/** An intent as reach writes, for a caller whose rule engine applies writes (one write per changed rule). */
+export function happierWhereItsOnIntentWrites(intent: HappierWhereItsOnIntent): readonly HappierReachWrite[] {
+  const agent = (agentId: string | undefined) => (agentId === undefined ? {} : { agentId });
+  switch (intent.kind) {
+    case 'everywhere':
+      return [{ place: { t: 'allMachines' }, state: intent.state }];
+    case 'add':
+      return [{ place: intent.place, ...agent(intent.agentId), state: intent.state }];
+    case 'remove':
+      return [{ place: intent.place, ...agent(intent.agentId), state: 'inherit' }];
+    case 'narrow':
+      return [
+        { place: intent.place, ...agent(intent.from), state: 'inherit' },
+        { place: intent.place, ...agent(intent.to), state: 'on' },
+      ];
+  }
+}
+
+function placeKey(place: HappierReachPlace): string {
+  switch (place.t) {
+    case 'allMachines':
+      return 'all';
+    case 'machine':
+      return `machine:${place.machineId}`;
+    case 'project':
+      return `project:${place.projectKey}`;
+    case 'workspace':
+      return `workspace:${place.machineId}:${place.workspaceRoot}`;
+  }
+}
+const ruleKey = (rule: HappierWhereItsOnRuleState) =>
+  rule.key ?? `${placeKey(rule.place)}|${rule.agentId ?? '*'}`;
+
+/** The state as rules the sentence words read (they read place, Agent and on/off only). */
+function stateRules(state: HappierWhereItsOnState): readonly HappierReachRule[] {
+  return [
+    { id: 'everywhere', target: { t: 'allMachines' }, enabled: state.everywhere === 'on', createdAt: 0, updatedAt: 0 },
+    ...state.rules.map((rule): HappierReachRule => ({
+      id: ruleKey(rule),
+      target: rule.place,
+      ...(rule.agentId !== undefined ? { agentId: rule.agentId } : {}),
+      enabled: rule.on,
+      createdAt: 0,
+      updatedAt: 0,
+    })),
+  ];
+}
+
+/** Without an engine every stated rule reads: a plain partition by Agent and on/off. */
+function statedGroups(rules: readonly HappierReachRule[]): HappierReachGrouped {
+  const base = rules.find((rule) => rule.target.t === 'allMachines' && rule.agentId === undefined);
+  const split = (items: readonly HappierReachRule[]) => ({
+    turnedOnIn: items.filter((rule) => rule.target.t !== 'allMachines' && rule.enabled),
+    except: items.filter((rule) => rule.target.t !== 'allMachines' && !rule.enabled),
+  });
+  const agentIds = [...new Set(rules.flatMap((rule) => (rule.agentId === undefined ? [] : [rule.agentId])))];
+  return {
+    base: base ? (base.enabled ? 'on' : 'off') : 'none',
+    ...split(rules.filter((rule) => rule.agentId === undefined)),
+    agents: agentIds.map((agentId) => {
+      const items = rules.filter((rule) => rule.agentId === agentId);
+      const everywhere = items.find((rule) => rule.target.t === 'allMachines');
+      return { agentId, everywhere: everywhere ? (everywhere.enabled ? 'on' : 'off') : null, ...split(items) };
+    }),
+  };
+}
+
+const samePlace = (left: HappierReachPlace, right: HappierReachPlace) => placeKey(left) === placeKey(right);
+
 export type HappierWhereItsOnChangeResult =
   | Readonly<{ ok: true }>
   | Readonly<{ ok: false; message: string }>;
@@ -97,7 +180,7 @@ export type HappierWhereItsOnTextProps = Readonly<{
   tabular?: boolean;
   /** Decorative (a separator dot). */
   hidden?: boolean;
-  style?: TextStyle;
+  style?: Pick<HappierPortableStyle, 'flexShrink' | 'paddingHorizontal' | 'paddingBottom' | 'whiteSpace'>;
   testID?: string;
   children?: React.ReactNode;
 }>;
@@ -247,17 +330,20 @@ export type HappierWhereItsOnHost = Readonly<{
 
 export type HappierWhereItsOnControlProps = Readonly<{
   kind: HappierWhereItsOnItemKind;
-  rules: readonly HappierReachRule[];
+  state: HappierWhereItsOnState;
   status: 'ready' | 'loading' | 'unavailable';
-  /** The rules' live reach per machine; null while resolving (the consequence keeps its slot). */
-  projection: readonly HappierWhereItsOnProjectionRow[] | null;
+  /**
+   * The rules' live reach per machine; null while resolving (the consequence keeps its slot). Undefined: the
+   * caller has no reach to report, and no consequence line is drawn.
+   */
+  projection?: readonly HappierWhereItsOnProjectionRow[] | null;
   /** What "Add an exception" / "Add a place" offers; `online` is the caller's reachability. */
   places: HappierWhereItsOnPlaces;
   /** Which Agents can take this item. Absent: every Agent takes it. */
   agentTakes?: (agentId: string) => 'full' | 'index' | 'none';
-  /** One change = one call carrying the whole next value. */
-  onChange: (
-    change: HappierWhereItsOnReplaceChange,
+  /** The person's choice; the caller applies it to its rules. A failed result keeps the choice for Try again. */
+  onIntent: (
+    intent: HappierWhereItsOnIntent,
   ) => Promise<HappierWhereItsOnChangeResult>;
   /** 'section': a detail page's section (the closed sentence opens in place). 'pick': the compact form in add flows. */
   presentation: 'section' | 'pick';
@@ -267,7 +353,6 @@ export type HappierWhereItsOnControlProps = Readonly<{
   names: HappierWhereItsOnNames;
   labels: HappierWhereItsOnControlLabels;
   host: HappierWhereItsOnHost;
-  reach: HappierWhereItsOnReach;
   /** The caller's spacing steps (a compact density tightens them). */
   space?: Readonly<Record<'s4' | 's8' | 's12' | 's16', number>>;
 }>;
@@ -280,23 +365,11 @@ const PLACE_RANK: Record<HappierReachPlace['t'], number> = {
   workspace: 3,
 };
 
-function nextDrafts(
-  reach: HappierWhereItsOnReach,
-  rules: readonly HappierReachRule[],
-  writes: readonly HappierReachWrite[],
-): HappierWhereItsOnReplaceChange {
-  const next = writes.reduce<readonly HappierReachRule[]>(
-    (current, write) => reach.apply(current, { kind: 'write', write }),
-    rules,
-  );
-  return { kind: 'replace', rules: reach.toDrafts(next) };
-}
-
 /** Every Agent the control may name: the offered ones, the ones rules name, and the ones the projection reports. */
 export function collectHappierWhereItsOnAgentIds(
   agentIds: readonly string[],
-  rules: readonly HappierReachRule[],
-  projection: readonly HappierWhereItsOnProjectionRow[] | null,
+  rules: readonly Readonly<{ agentId?: string | undefined }>[],
+  projection: readonly HappierWhereItsOnProjectionRow[] | null | undefined,
 ): readonly string[] {
   const ids = new Set<string>(agentIds);
   for (const rule of rules)
@@ -304,31 +377,6 @@ export function collectHappierWhereItsOnAgentIds(
   for (const row of projection ?? [])
     for (const agent of row.agents) ids.add(agent.agentId);
   return [...ids];
-}
-
-/**
- * Add flows before the item exists: a local draft that starts from the reach owner's create-time default and the
- * create call's `where` (undefined until the person changes the pick, then the last `replace`).
- */
-export function useHappierWhereItsOnDraft(
-  kind: HappierWhereItsOnItemKind,
-  reach: HappierWhereItsOnReach,
-): Readonly<{
-  rules: readonly HappierReachRule[];
-  where: HappierReachChange | undefined;
-  onChange: HappierWhereItsOnControlProps['onChange'];
-}> {
-  const [state, setState] = React.useState<
-    Readonly<{ rules: readonly HappierReachRule[]; where: HappierReachChange | undefined }>
-  >(() => ({ rules: reach.createDefault(kind), where: undefined }));
-  const onChange = React.useCallback<HappierWhereItsOnControlProps['onChange']>(
-    async (change) => {
-      setState((current) => ({ rules: reach.apply(current.rules, change), where: change }));
-      return { ok: true };
-    },
-    [reach],
-  );
-  return { rules: state.rules, where: state.where, onChange };
 }
 
 /** "On everywhere · except Gemini · except in [folder] client-site": the head emphasised, a project carrying its glyph. */
@@ -391,15 +439,15 @@ function SentenceText(
 const NAME_OPEN = '\u0003';
 const NAME_CLOSE = '\u0004';
 // Web only (the text is CSS): a name stays whole, so the sentence wraps before it, never inside it.
-const WHOLE_NAME = Platform.select<TextStyle>({
-  web: { whiteSpace: 'nowrap' } as TextStyle,
+const WHOLE_NAME = Platform.select<NonNullable<HappierWhereItsOnTextProps['style']>>({
+  web: { whiteSpace: 'nowrap' },
 });
 
 /** "Available to [Claude], [Codex] and [OpenCode] on MacBook Pro and nl2", then the notes. */
 function ConsequenceLine(
   props: Readonly<{
     kind: HappierWhereItsOnItemKind;
-    projection: HappierWhereItsOnControlProps['projection'];
+    projection: readonly HappierWhereItsOnProjectionRow[] | null;
     machines: HappierWhereItsOnPlaces['machines'];
     names: HappierWhereItsOnNames;
     labels: HappierWhereItsOnControlLabels;
@@ -520,69 +568,59 @@ function SheetHairline() {
 
 /**
  * "Where it's on" (Capabilities D18): the sentence, which opens in place into Everywhere On | Off, the rules under
- * "Turned on in" and "Except", and one add menu; the live consequence underneath. Every edit is one `replace`
- * computed with the caller's reach engine; words come only from `whereItsOn`.
+ * "Turned on in" and "Except", and one add menu; the live consequence underneath. The caller passes the computed
+ * state and applies the person's choice (an intent) to its own rules; words come only from `whereItsOn`.
  */
 export const HappierWhereItsOnControl = React.memo(
   function HappierWhereItsOnControl(props: HappierWhereItsOnControlProps) {
-    const { names, labels, host, reach } = props;
+    const { names, labels, host, state } = props;
     const words = labels.control;
     const space = props.space ?? HAPPIER_SPACE_STEPS;
     const [expanded, setExpanded] = React.useState(false);
     const [failure, setFailure] = React.useState<Readonly<{
-      change: HappierWhereItsOnReplaceChange;
+      intent: HappierWhereItsOnIntent;
       message: string;
     }> | null>(null);
     const editable =
       props.readOnlyReason === undefined && props.status === 'ready';
-    const rules = React.useMemo(
-      () => reach.normalize(props.rules),
-      [reach, props.rules],
-    );
 
     const sentence = React.useMemo(
-      () => sayHappierWhereItsOn(rules, names, labels, reach.group),
-      [rules, names, labels, reach],
+      () =>
+        state.sentence ??
+        sayHappierWhereItsOn(stateRules(state), names, labels, statedGroups),
+      [state, names, labels],
     );
-    const base = rules.find(
-      (rule) => rule.target.t === 'allMachines' && rule.agentId === undefined,
-    );
-    const baseOn = base?.enabled === true;
+    const baseOn = state.everywhere === 'on';
     // Broadest first (an Agent everywhere, then machines, projects, folders), as the sentence reads them.
-    const ruleRows = rules
-      .filter((rule) => rule !== base)
-      .sort(
-        (left, right) => PLACE_RANK[left.target.t] - PLACE_RANK[right.target.t],
-      );
-    const onRows = ruleRows.filter((rule) => rule.enabled);
-    const offRows = ruleRows.filter((rule) => !rule.enabled);
+    const ruleRows = state.rules
+      .filter((rule) => !(rule.place.t === 'allMachines' && rule.agentId === undefined))
+      .sort((left, right) => PLACE_RANK[left.place.t] - PLACE_RANK[right.place.t]);
+    const onRows = ruleRows.filter((rule) => rule.on);
+    const offRows = ruleRows.filter((rule) => !rule.on);
     const exceptedAgentIds = offRows
-      .filter(
-        (rule) => rule.target.t === 'allMachines' && rule.agentId !== undefined,
-      )
+      .filter((rule) => rule.place.t === 'allMachines' && rule.agentId !== undefined)
       .map((rule) => rule.agentId!);
 
-    const { onChange } = props;
+    const { onIntent } = props;
     const commit = React.useCallback(
-      async (change: HappierWhereItsOnReplaceChange) => {
+      async (intent: HappierWhereItsOnIntent) => {
         setFailure(null);
-        const result = await onChange(change);
-        if (!result.ok) setFailure({ change, message: result.message });
+        const result = await onIntent(intent);
+        if (!result.ok) setFailure({ intent, message: result.message });
       },
-      [onChange],
+      [onIntent],
     );
-    const write = React.useCallback(
-      (...writes: HappierReachWrite[]) => {
-        void commit(nextDrafts(reach, rules, writes));
+    const choose = React.useCallback(
+      (intent: HappierWhereItsOnIntent) => {
+        void commit(intent);
       },
-      [commit, reach, rules],
+      [commit],
     );
 
     const addGroups = React.useMemo(() => {
-      const present = new Set(rules.map((rule) => reach.key(rule)));
       const has = (place: HappierReachPlace, agentId?: string) =>
-        present.has(
-          reach.key({ target: place, ...(agentId ? { agentId } : {}) }),
+        state.rules.some(
+          (rule) => rule.agentId === agentId && samePlace(rule.place, place),
         );
       const agentItems = props.places.agentIds
         .filter((agentId) => !has({ t: 'allMachines' }, agentId))
@@ -641,21 +679,21 @@ export const HappierWhereItsOnControl = React.memo(
             { title: words.menuAgentEverywhere(), items: agentItems },
           ];
       return groups.filter((group) => group.items.length > 0);
-    }, [rules, props.places, names, baseOn, props.testID, host, words, reach]);
+    }, [state.rules, props.places, names, baseOn, props.testID, host, words]);
 
     const onAdd = React.useCallback(
       (itemId: string) => {
         const [kindOfPlace, ...rest] = itemId.split(':');
         const id = rest.join(':');
-        const state = baseOn ? ('off' as const) : ('on' as const);
+        const turn = baseOn ? ('off' as const) : ('on' as const);
         if (kindOfPlace === 'agent')
-          write({ place: { t: 'allMachines' }, agentId: id, state });
+          choose({ kind: 'add', place: { t: 'allMachines' }, agentId: id, state: turn });
         else if (kindOfPlace === 'machine')
-          write({ place: { t: 'machine', machineId: id }, state });
+          choose({ kind: 'add', place: { t: 'machine', machineId: id }, state: turn });
         else if (kindOfPlace === 'project')
-          write({ place: { t: 'project', projectKey: id }, state });
+          choose({ kind: 'add', place: { t: 'project', projectKey: id }, state: turn });
       },
-      [baseOn, write],
+      [baseOn, choose],
     );
 
     const {
@@ -667,14 +705,19 @@ export const HappierWhereItsOnControl = React.memo(
       AgentMark,
       PlaceGlyph,
     } = host;
-    const ruleRow = (rule: HappierReachRule) => {
+    const ruleRow = (row: HappierWhereItsOnRuleState) => {
+      const rule = {
+        target: row.place,
+        ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
+        enabled: row.on,
+      };
       const described = describeHappierReachRule(
         rule,
         names,
         props.kind,
         labels,
       );
-      const key = reach.key(rule);
+      const key = ruleKey(row);
       const testID = `${props.testID}:rule:${key}`;
       // A place turned on can be narrowed to one Agent; the select swaps the qualifier in one change.
       const narrowable = rule.enabled && rule.target.t !== 'allMachines';
@@ -724,19 +767,12 @@ export const HappierWhereItsOnControl = React.memo(
             ]}
             onSelect={(id) => {
               if (id === (selected ?? allId)) return;
-              const agentId = id === allId ? null : id;
-              write(
-                {
-                  place: rule.target,
-                  ...(rule.agentId ? { agentId: rule.agentId } : {}),
-                  state: 'inherit',
-                },
-                {
-                  place: rule.target,
-                  ...(agentId ? { agentId } : {}),
-                  state: 'on',
-                },
-              );
+              choose({
+                kind: 'narrow',
+                place: rule.target,
+                ...(rule.agentId ? { from: rule.agentId } : {}),
+                ...(id === allId ? {} : { to: id }),
+              });
             }}
           />
         );
@@ -746,10 +782,10 @@ export const HappierWhereItsOnControl = React.memo(
           testID={`${testID}:remove`}
           accessibilityLabel={words.remove(described.title)}
           onPress={() =>
-            write({
+            choose({
+              kind: 'remove',
               place: rule.target,
               ...(rule.agentId ? { agentId: rule.agentId } : {}),
-              state: 'inherit',
             })
           }
         />
@@ -761,12 +797,11 @@ export const HappierWhereItsOnControl = React.memo(
         rule.target.t !== 'allMachines'
           ? exceptedAgentIds.filter(
               (agentId) =>
-                !rules.some(
+                !state.rules.some(
                   (other) =>
                     other.agentId === agentId &&
-                    other.enabled &&
-                    reach.key({ target: other.target }) ===
-                      reach.key({ target: rule.target }),
+                    other.on &&
+                    samePlace(other.place, rule.target),
                 ),
             )
           : [];
@@ -820,7 +855,7 @@ export const HappierWhereItsOnControl = React.memo(
       );
     };
 
-    const group = (title: string, rows: readonly HappierReachRule[], key: string) =>
+    const group = (title: string, rows: readonly HappierWhereItsOnRuleState[], key: string) =>
       rows.length === 0 ? null : (
         <View key={key} testID={`${props.testID}:${key}`}>
           <GroupLabel title={title} />
@@ -849,9 +884,7 @@ export const HappierWhereItsOnControl = React.memo(
           ]}
           value={baseOn ? 'on' : 'off'}
           disabled={!editable}
-          onChange={(next) =>
-            write({ place: { t: 'allMachines' }, state: next })
-          }
+          onChange={(next) => choose({ kind: 'everywhere', state: next })}
         />
         {/* The rules are their own list: their marks align the rule titles without moving the sentence or Everywhere. */}
         <host.RuleList>
@@ -938,6 +971,7 @@ export const HappierWhereItsOnControl = React.memo(
         >
           {expanded ? body : null}
         </host.Disclosure>
+        {props.projection === undefined ? null : (
         <host.ConsequenceRow
           testID={`${props.testID}:consequenceRow`}
           showDivider={failure !== null}
@@ -952,18 +986,19 @@ export const HappierWhereItsOnControl = React.memo(
             labels={labels}
             host={host}
             agentTakes={props.agentTakes ?? takesEverything}
-            anyRuleOn={rules.some((rule) => rule.enabled)}
+            anyRuleOn={baseOn || state.rules.some((rule) => rule.on)}
             gap={space.s4}
             testID={`${props.testID}:consequence`}
           />
         </host.ConsequenceRow>
+        )}
         {failure ? (
           <host.ErrorLine
             testID={`${props.testID}:error`}
             title={words.changeFailed()}
             diagnostic={failure.message}
             actionLabel={words.tryAgain()}
-            onAction={() => void commit(failure.change)}
+            onAction={() => void commit(failure.intent)}
           />
         ) : null}
       </host.Section>

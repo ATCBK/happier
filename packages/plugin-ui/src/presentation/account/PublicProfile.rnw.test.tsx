@@ -305,25 +305,59 @@ describe('HappierPublicProfile', () => {
     },
   );
   it('does not invent original Recap highlights from separately shared totals when highlight evidence is absent', () => {
-    const view = projectPublicProfile({ context, metadata: {}, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
-      policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, snapshot,
-      layout: { v: 1, items: [{ kind: 'widget', id: 'recap-missing', title: 'Recap', size: 'wide', frameStyle: 'plain',
-        presentation: { kind: 'usage', widgetId: 'usage_recap', inputs: {} } }] },
+    const view = projectPublicProfile({
+      context,
+      metadata: {},
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      snapshot,
+      layout: {
+        v: 1,
+        items: [
+          {
+            kind: 'widget',
+            id: 'recap-missing',
+            title: 'Recap',
+            size: 'wide',
+            frameStyle: 'plain',
+            presentation: {
+              kind: 'usage',
+              widgetId: 'usage_recap',
+              inputs: {},
+            },
+          },
+        ],
+      },
     });
     if (!view) throw new Error('expected admitted recap placement');
-    const mounted = mountThroughReactNativeWeb(createElement(HappierUiEnvironmentProvider, {
-      environment: projectHappierUiEnvironment(createSurfaceContext()),
-      children: createElement(HappierPublicProfile, { view, labels, usage: {
-        paint: { accent: '#007aff', paper: '#ffffff', dark: false }, agent: id => ({ id, name: id, color: '#007aff' }),
-        labels: { chartLabel: () => 'Recap', unavailable: 'No highlights recorded', original: originalLabels },
-      } }),
-    }));
+    const mounted = mountThroughReactNativeWeb(
+      createElement(HappierUiEnvironmentProvider, {
+        environment: projectHappierUiEnvironment(createSurfaceContext()),
+        children: createElement(HappierPublicProfile, {
+          view,
+          labels,
+          usage: {
+            paint: { accent: '#007aff', paper: '#ffffff', dark: false },
+            agent: (id) => ({ id, name: id, color: '#007aff' }),
+            labels: {
+              chartLabel: () => 'Recap',
+              unavailable: 'No highlights recorded',
+              original: originalLabels,
+            },
+          },
+        }),
+      }),
+    );
     try {
-      const block = mounted.container.querySelector('[data-testid="public-profile-block-recap-missing"]');
+      const block = mounted.container.querySelector(
+        '[data-testid="public-profile-block-recap-missing"]',
+      );
       expect(block?.textContent).toContain('No highlights recorded');
       expect(block?.textContent).not.toContain('Active days');
       expect(block?.textContent).not.toContain('87654321');
-    } finally { mounted.unmount(); }
+    } finally {
+      mounted.unmount();
+    }
   });
   it.each([true, false])(
     'feeds only permitted period records and anonymous durations to the existing shared records body (recorded: %s)',
@@ -692,6 +726,64 @@ describe('HappierPublicProfile', () => {
     }
   });
 
+  it('draws the owner’s whole page before any Usage snapshot, with the customizing bar between the header and the period', () => {
+    const owned = mountThroughReactNativeWeb(
+      createElement(HappierUiEnvironmentProvider, {
+        environment: projectHappierUiEnvironment(createSurfaceContext()),
+        children: createElement(HappierPublicProfile, {
+          view: {
+            v: 1,
+            handle: 'leeroy',
+            indexable: false,
+            state: 'published',
+            identity: context.identity,
+            metadata: {},
+            snapshot: null,
+            layout: { v: 1, items: [] },
+            urls: context.urls,
+          },
+          labels,
+          renderHero: () => createElement('div', { 'data-testid': 'band-art' }),
+          owner: {
+            hiddenBlockIds: new Set<string>(),
+            onlyYou: 'Only you',
+            renderToolbar: () =>
+              createElement(
+                'div',
+                { 'data-testid': 'owner-toolbar' },
+                'Customizing your profile',
+              ),
+            renderBlocks: () =>
+              createElement(
+                'div',
+                { 'data-testid': 'owner-area' },
+                'Your editable area',
+              ),
+          },
+        }),
+      }),
+    );
+    try {
+      const text = owned.container.textContent ?? '';
+      expect(
+        owned.container.querySelector('[data-testid="public-profile-hero"]'),
+      ).not.toBeNull();
+      expect(
+        owned.container.querySelector('[data-testid="owner-area"]'),
+      ).not.toBeNull();
+      expect(text).toContain('Leeroy Brun');
+      expect(text.indexOf(labels.identityLine)).toBeLessThan(
+        text.indexOf('Customizing your profile'),
+      );
+      expect(text.indexOf('Customizing your profile')).toBeLessThan(
+        text.indexOf(labels.periodTitle),
+      );
+      expect(text).toContain(labels.footerNote);
+    } finally {
+      owned.unmount();
+    }
+  });
+
   it('keeps a name-only header with no band when the page has no atmosphere', () => {
     const view = projectPublicProfile({
       context,
@@ -967,7 +1059,7 @@ describe('HappierPublicProfile', () => {
     if (!view) throw new Error('expected a published view');
     const usage = {
       paint: { accent: '#007aff', paper: '#ffffff', dark: false },
-      width: 640,
+      cold: true,
       agent: (id: string) => ({
         id,
         name: id === 'codex' ? 'Codex' : 'Claude Code',
@@ -1002,7 +1094,7 @@ describe('HappierPublicProfile', () => {
             quieter: 'Quieter',
             busier: 'Busier',
           },
-          caption: 'Shared ordinal activity',
+          caption: () => 'Shared ordinal activity',
           values: {
             show: 'Show values',
             hide: 'Hide values',
@@ -1138,6 +1230,63 @@ describe('HappierPublicProfile', () => {
           '[data-testid="public-profile-block-days"]',
         ),
       ).not.toBeNull();
+    } finally {
+      mounted.unmount();
+    }
+  });
+  it('draws Sky of days without measurement on a cold host, at a width the page column gives a wide row and a half', () => {
+    const publicSnapshot = PublicProfileSnapshotV1Schema.parse({
+      ...snapshot,
+      period: { startMs: Date.UTC(2026, 8, 1), endMs: Date.UTC(2026, 8, 8), timeZoneOffsetMinutes: 0 },
+      facts: { ...snapshot.facts, calendar: [{ date: '2026-09-01', level: 4 }, { date: '2026-09-02', level: 2 }] },
+    });
+    const sky = (id: string, size: 'wide' | 'medium') => ({ kind: 'widget' as const, id, title: id, size, frameStyle: 'card' as const,
+      presentation: { kind: 'usage' as const, widgetId: 'usage_rhythm' as const, inputs: { style: 'sky' } } });
+    const view = projectPublicProfile({
+      context,
+      policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, calendar: true } },
+      metadata: {},
+      snapshot: publicSnapshot,
+      appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+      layout: { v: 1, items: [sky('row', 'wide'), sky('left', 'medium'), sky('right', 'medium')] },
+    });
+    if (!view) throw new Error('expected a published view');
+    const day = (date: string) => date;
+    const usage = {
+      paint: { accent: '#007aff', paper: '#ffffff', dark: false },
+      cold: true,
+      agent: (id: string) => ({ id, name: id, color: '#007aff' }),
+      labels: {
+        chartLabel: () => 'Shared activity',
+        unavailable: 'Not recorded',
+        sky: {
+          formatValue: String, month: day, day,
+          levels: { quiet: 'Quiet', steady: 'Steady', busy: 'Busy', busiest: 'Busiest' },
+          streakBestOngoing: String, streakBest: String, streakNow: String, streakShort: String,
+          key: { tie: 'Tie', notAttributed: 'Not attributed', noActivity: 'No activity', notRecorded: 'Not recorded', quieter: 'Quieter', busier: 'Busier' },
+          caption: () => 'Shared ordinal activity',
+          values: { show: 'Show values', hide: 'Hide values', dateColumn: 'Day', valueColumn: 'Level', leaderColumn: 'Agent',
+            noActivity: 'No activity', notRecorded: 'Not recorded', tie: 'Tie', notAttributed: 'Not attributed' },
+        },
+      },
+    };
+    const mounted = mountThroughReactNativeWeb(
+      createElement(HappierUiEnvironmentProvider, {
+        environment: projectHappierUiEnvironment(createSurfaceContext()),
+        children: createElement(HappierPublicProfile, { view, labels, usage }),
+      }),
+    );
+    try {
+      const drawn = (id: string) => {
+        const svg = mounted.container.querySelector(`[data-testid="public-profile-block-${id}"] svg[viewBox]`);
+        expect(svg, id).not.toBeNull();
+        return Number(svg!.getAttribute('viewBox')!.split(' ')[2]);
+      };
+      const row = drawn('row');
+      const half = drawn('left');
+      expect(drawn('right')).toBe(half);
+      expect(half).toBeLessThan(row / 2 + 1);
+      expect(row).toBeGreaterThan(half * 2 - 40);
     } finally {
       mounted.unmount();
     }

@@ -1541,6 +1541,7 @@ export {
   CapabilityDetailHeader,
   CapabilityFacts,
   CapabilityStatusChip,
+  WhereItsOnControl,
   capabilityCollectionAnatomy,
   type CapabilityBlockingBannerProps,
   type CapabilityCollectionAnatomyInput,
@@ -1555,6 +1556,20 @@ export {
   type CapabilityStatusKind,
   type CapabilityStatusPlacement,
   type CapabilityTrust,
+  type WhereItsOnControlProps,
+  type WhereItsOnIntent,
+  type WhereItsOnIntentResult,
+  type WhereItsOnPlace,
+  type WhereItsOnRule,
 } from './Capabilities.js';
+export {
+  CapabilityAddBody,
+  type CapabilityAddBodyProps,
+  type CapabilityAddConfig,
+  type CapabilityAddDetailFooter,
+  type CapabilityAddFound,
+  type CapabilityAddLevel,
+  type CapabilityAddMode,
+} from './CapabilityAddBody.js';
 /** The most blocking capability status that speaks at a placement; null when none does (healthy is quiet). */
 export { pickMostBlockingHappierCapabilityStatus as pickMostBlockingCapabilityStatus } from '../presentation/capabilities/capabilityStatus.js';

@@ -53,8 +53,11 @@ export type HappierPublicProfileUsageHost = Readonly<{
   paint: UsageChartPaint;
   agent: (agentId: string) => UsageChartAgent;
   renderPlanet?: UsagePlanetSlot;
-  /** Cold render hosts supply the drawing width; interactive hosts may use the body's measurement. */
-  width?: number;
+  /**
+   * The host cannot measure (the server's cold page): each placed block draws at the width its cell has in the
+   * page column and scales down with a narrower window. Interactive hosts measure the body instead.
+   */
+  cold?: boolean;
   labels: HappierPublicProfileUsageLabels;
 }>;
 
@@ -64,16 +67,18 @@ export type PublicProfileUsageBodyProps = Readonly<{
   models: PublicUsageChartModels;
   records: UsageRecordsModel | null;
   host: HappierPublicProfileUsageHost;
+  /** The block's drawing width on a cold host, from its place in the page column. */
+  width?: number;
   testID: string;
 }>;
 
 /** A thin model/host adapter; shared Usage bodies own all chart markup and geometry. */
-export function PublicProfileUsageBody({ presentation, models, records, host, testID }: PublicProfileUsageBodyProps) {
+export function PublicProfileUsageBody({ presentation, models, records, host, width, testID }: PublicProfileUsageBodyProps) {
   const theme = useHappierUiTheme();
   const { labels } = host;
-  const base = { theme, paint: host.paint, width: host.width, label: labels.chartLabel(presentation.widgetId), testID };
+  const base = { theme, paint: host.paint, width, label: labels.chartLabel(presentation.widgetId), testID };
   const agents = (ids: readonly (string | null)[]) => [...new Set(ids)].flatMap(id => id === null ? [] : [host.agent(id)]);
-  const original = publicProfileUsageOriginalBody({ presentation, models, records, host, testID }, theme);
+  const original = publicProfileUsageOriginalBody({ presentation, models, records, host, width, testID }, theme);
   if (original) return original;
   switch (presentation.widgetId) {
     case 'usage_recap':

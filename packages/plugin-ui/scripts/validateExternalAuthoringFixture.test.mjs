@@ -34,16 +34,14 @@ test('public components admission follows declaration reexports and rejects raw 
   });
 });
 
-test('the author components and root expose neutral owners while excluding mounted host controls', () => {
+test('the author components and root agree while excluding mounted host controls', () => {
   const entrypoints = [
-    { specifier: 'presentation', sourceModule: 'src/presentation/index.public.ts' },
     { specifier: 'components', sourceModule: 'src/components/index.public.ts' },
     { specifier: 'root', sourceModule: 'src/index.public.ts' },
   ];
   const program = createPublicSurfaceProgram(entrypoints.map(({ sourceModule }) => resolve(packageRoot, sourceModule)), packageRoot);
   const rows = projectEntrypointExportRows({ program, packageRoot, entrypoints });
   const exports = (specifier) => new Set(rows.filter((row) => row.specifier === specifier).map((row) => row.exportName));
-  const presentation = exports('presentation');
   const components = exports('components');
   const root = exports('root');
   // Mounted host providers, registrars and native player controls are implementation-only.
@@ -53,15 +51,14 @@ test('the author components and root expose neutral owners while excluding mount
     'HappierLiveStreamPlayerDisplayState', 'HappierLiveStreamPlayerHost', 'HappierLiveStreamPlayerRendererEvent',
     'HappierLiveStreamPlayerRenderEvent', 'HappierLiveStreamInputLayer', 'HappierLiveStreamPlayer',
     'HappierPageChrome', 'HappierPageChromeProvider', 'HappierColumnEdgeContext', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
+    'HappierWhereItsOnControl', 'HappierCapabilityAddBody',
   ]);
   for (const name of hostControls) {
     assert.ok(!components.has(name), `components exposes mounted host control ${name}`);
     assert.ok(!root.has(name), `root exposes mounted host control ${name}`);
   }
-  const authorName = (name) => name === 'FloatingFrame' ? 'HappierFloatingFrame'
-    : name === 'FloatingFrameProps' ? 'HappierFloatingFrameProps' : name;
-  const missing = [...presentation].filter((name) => !hostControls.has(name) && !components.has(authorName(name)));
-  assert.deepEqual(missing, [], 'neutral presentation exports must reach the components author layer');
+  // /presentation is host-only (docs/plugin-platform.md). The shared-family ownership audit
+  // proves which neutral owners have public adapters; host exports are not an author palette.
   assert.deepEqual([...components].filter((name) => !root.has(name)), [], 'root must re-export the complete author layer');
 });
 

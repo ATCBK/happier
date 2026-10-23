@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CapabilityKitExample } from '../../fixtures/external-authoring/src/capabilityKitSurface.js';
+import { CapabilityAddExample, CapabilityKitExample } from '../../fixtures/external-authoring/src/capabilityKitSurface.js';
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
@@ -41,6 +41,53 @@ describe('external author capability kit', () => {
       expect(onSignIn).toHaveBeenCalledWith('linear');
       expect(byId(mounted.container, 'author-capability.banner')).toBeNull();
       expect(byId(mounted.container, 'author-capability.header.status')).toBeNull();
+    } finally { mounted.unmount(); }
+  });
+
+  it('says where an author item is on from its own state and hands the person\'s choice back as an intent', async () => {
+    const onWhere = vi.fn();
+    const context = createSurfaceContext();
+    const mounted = mountThroughReactNativeWeb(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <CapabilityKitExample onWhere={onWhere} />
+    </PluginUiProvider>);
+    try {
+      const sentence = () => byId(mounted.container, 'author-capability.where:sentenceText')!.textContent?.replace(/\s+/gu, ' ');
+      expect(sentence()).toContain('On everywhere');
+      expect(sentence()).toContain('except Gemini');
+      expect(byId(mounted.container, 'author-capability.where:consequence')!.textContent).toContain('Available to Claude on build-box');
+
+      await act(async () => byId(mounted.container, 'author-capability.where:sentence')!.click());
+      const off = [...byId(mounted.container, 'author-capability.where:everywhere')!.querySelectorAll<HTMLElement>('[role="radio"]')]
+        .find((node) => node.textContent === 'Off')!;
+      await act(async () => off.click());
+      expect(onWhere).toHaveBeenCalledWith({ kind: 'everywhere', state: 'off' });
+      expect(sentence()).not.toContain('On everywhere');
+
+      await act(async () => byId(mounted.container, 'author-capability.where:rule:all|gemini:remove')!.click());
+      expect(onWhere).toHaveBeenLastCalledWith({ kind: 'remove', place: { t: 'allMachines' }, agentId: 'gemini' });
+      expect(sentence()).not.toContain('Gemini');
+    } finally { mounted.unmount(); }
+  });
+
+  it('lets an author add its own things through the shared Add body: the list, one item\'s details and its install', async () => {
+    const onInstall = vi.fn();
+    const onClose = vi.fn();
+    const context = createSurfaceContext();
+    const mounted = mountThroughReactNativeWeb(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <CapabilityAddExample onInstall={onInstall} onClose={onClose} />
+    </PluginUiProvider>);
+    try {
+      expect(byId(mounted.container, 'author-add.row.linear')!.textContent).toContain('Linear');
+      expect(byId(mounted.container, 'author-add.row.figma')).not.toBeNull();
+      await act(async () => byId(mounted.container, 'author-add.row.linear')!.click());
+      expect(byId(mounted.container, 'author-add:detail:linear')).not.toBeNull();
+      await act(async () => byId(mounted.container, 'author-add:primary')!.click());
+      expect(onInstall).toHaveBeenCalledWith('linear');
+      // Installed and staying: the footer turns to Done.
+      expect(byId(mounted.container, 'author-add:done')).not.toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+      await act(async () => byId(mounted.container, 'author-add:done')!.click());
+      expect(onClose).toHaveBeenCalledTimes(1);
     } finally { mounted.unmount(); }
   });
 });

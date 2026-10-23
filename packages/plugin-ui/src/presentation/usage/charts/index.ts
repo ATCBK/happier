@@ -16,6 +16,7 @@ export { UsageRecapBody, type UsageRecapHighlight, type UsageRecapModel } from '
 export { UsageSkyOfDays, type UsageSkyModel, type UsageSkyDay, type UsageSkyLeader, type UsageSkyRun, type UsageSkyLabels } from './UsageSkyOfDays.js';
 export { UsageWeekTide, UsageDaylight, type UsageWeekHourModel, type UsageWeekTideLabels, type UsageDaylightModel, type UsageDaylightLabels } from './UsageRhythmEncodings.js';
 export { UsageDayInAgents, type UsageDayModel, type UsageDayLabels } from './UsageDayInAgents.js';
+export { UsageChartGhost, type UsageChartGhostShape } from './UsageChartGhost.js';
 export {
   UsageScore, UsageOrbit, UsageCrew, UsageAgentRiver, UsageShipped, UsageConstellation,
   type UsageScoreModel, type UsageScoreLabels, type UsageAgentShare, type UsageOrbitLabels, type UsageCrewLabels, type UsageRiverModel, type UsageRiverLabels,
