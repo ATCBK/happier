@@ -22,6 +22,7 @@ export type FetchTranscriptRawPageParams = Readonly<{
     method: 'GET'; path: string;
   }>) => Readonly<Record<string, string>> | null;
   sessionId: string;
+  messageId?: string;
   limit: number;
   direction: TranscriptDirection;
   beforeSeq?: number;
@@ -67,6 +68,7 @@ function defaultFetchTranscriptRawPage(params: FetchTranscriptRawPageParams): Pr
       ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
       : {}),
     sessionId: params.sessionId,
+    ...(params.messageId !== undefined ? { messageId: params.messageId } : {}),
     limit: params.limit,
     ...(typeof params.beforeSeq === 'number' ? { beforeSeq: params.beforeSeq } : {}),
     ...(typeof params.afterSeq === 'number' ? { afterSeq: params.afterSeq } : {}),
@@ -139,6 +141,7 @@ export async function fetchTranscriptSemanticPage(params: Readonly<{
   }>) => Readonly<Record<string, string>> | null;
   sessionId: string;
   contentContext: SessionStoredContentCryptoContext;
+  messageId?: string;
   limit: number;
   rawPageLimit: number;
   maxRawRowsToScan: number;
@@ -195,6 +198,7 @@ export async function fetchTranscriptSemanticPage(params: Readonly<{
         ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
         : {}),
       sessionId: params.sessionId,
+      ...(params.messageId !== undefined ? { messageId: params.messageId } : {}),
       limit: Math.min(rawPageLimit, maxRawRowsToScan - rawRowsScanned),
       direction: params.direction,
       ...(params.direction === 'before' && cursor !== undefined ? { beforeSeq: cursor } : {}),

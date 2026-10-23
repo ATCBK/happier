@@ -40,6 +40,7 @@ export async function fetchEncryptedTranscriptMessagesPage(params: Readonly<{
   }>) => Readonly<Record<string, string>> | null;
   sessionId: string;
   limit: number;
+  messageId?: string;
   beforeSeq?: number;
   afterSeq?: number;
   scope?: 'main' | 'sidechain' | 'all';
@@ -65,6 +66,7 @@ export async function fetchEncryptedTranscriptMessagesPage(params: Readonly<{
   }
   const path = buildSessionMessagesPath({
     sessionId: params.sessionId,
+    ...(params.messageId !== undefined ? { messageId: params.messageId } : {}),
     scope: params.scope ?? 'main',
     limit: params.limit,
     ...(beforeSeq !== undefined ? { beforeSeq } : {}),
@@ -118,6 +120,11 @@ export async function fetchEncryptedTranscriptMessagesPage(params: Readonly<{
   if (!page.success || typeof page.data.hasMore !== 'boolean') throw createSessionTranscriptStoredContentUnavailableError();
   const nextBeforeSeq = page.data.nextBeforeSeq ?? null;
   const nextAfterSeq = page.data.nextAfterSeq ?? null;
+  if (params.messageId !== undefined && (page.data.messages.length > 1
+    || page.data.messages.some(row => row.id !== params.messageId)
+    || page.data.hasMore || nextBeforeSeq !== null || nextAfterSeq !== null)) {
+    throw createSessionTranscriptStoredContentUnavailableError();
+  }
   // Ordinary released pages prove completeness explicitly. Unlike the separate
   // external-shareable projection, they cannot carry a blocked continuation.
   if (page.data.hasMore && (page.data.messages.length === 0 || (afterSeq !== undefined

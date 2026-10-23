@@ -31,6 +31,7 @@ describe('Session semantic readers content mode', () => {
       idOrPrefix: sessionId,
     };
     await expect(getSessionTranscript(params)).rejects.toMatchObject({ code: 'session_content_mode_mismatch' });
+    await expect(getSessionTranscript({ ...params, messageId: 'message-1' })).rejects.toMatchObject({ code: 'session_content_mode_mismatch' });
     await expect(getSessionEvents(params)).rejects.toMatchObject({ code: 'session_content_mode_mismatch' });
   });
 });

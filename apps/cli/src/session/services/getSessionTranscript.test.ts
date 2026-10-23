@@ -33,6 +33,87 @@ describe('getSessionTranscript', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it('measures HTTP work to reopen a known semantic message behind ten history pages', async () => {
+    const { getSessionTranscript } = await import('./getSessionTranscript');
+    const wantedId = 'message-3';
+    const wantedText = 'selected source '.repeat(400).trim();
+    const rows = Array.from({ length: 210 }, (_, index) => ({
+      id: `message-${index + 1}`, seq: index + 1, createdAt: index + 1, messageRole: 'user',
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text',
+        text: index === 2 ? wantedText : `Unrelated message ${index + 1}` } } },
+    }));
+    let messageRows = 0;
+    transcriptResponse.mockImplementation(async () => {
+      const url = new URL(String(transcriptRequests().at(-1)?.[0]));
+      const messageId = url.searchParams.get('messageId');
+      const before = Number(url.searchParams.get('beforeSeq') ?? rows.length + 1);
+      const eligible = rows.filter(row => row.seq < before && (messageId === null || row.id === messageId));
+      const selected = eligible.slice(-Number(url.searchParams.get('limit') ?? 20));
+      messageRows += selected.length;
+      const hasMore = messageId === null && eligible.length > selected.length;
+      return { messages: selected, hasMore, nextBeforeSeq: hasMore ? selected[0]!.seq : null, nextAfterSeq: null };
+    });
+    let cursor: string | undefined;
+    let selected: Awaited<ReturnType<typeof getSessionTranscript>> | undefined;
+    for (;;) {
+      const request = { credentials, idOrPrefix: sessionId, messageId: wantedId,
+        ...(cursor === undefined ? {} : { cursor }) };
+      const result = await getSessionTranscript(request);
+      if (!result.ok) throw new Error(result.errorCode);
+      if (result.items.some(item => item.id === wantedId)) { selected = result; break; }
+      if (!result.hasMore || !result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    const counts = { historyMessages: rows.length, http: get.mock.calls.length,
+      transcriptHttp: transcriptRequests().length, messageRows };
+    expect(selected).toMatchObject({ ok: true, items: expect.arrayContaining([
+      expect.objectContaining({ id: wantedId, role: 'user', kind: 'user_message', text: wantedText }),
+    ]) });
+    expect(counts).toEqual({ historyMessages: 210, http: 3, transcriptHttp: 1, messageRows: 1 });
+  });
+
+  it('preserves semantic text truncation and role filtering for an exact message', async () => {
+    const { getSessionTranscript } = await import('./getSessionTranscript');
+    const row = { id: 'exact', seq: 3, createdAt: 3, messageRole: 'user',
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'abcdef' } } } };
+    transcriptResponse.mockResolvedValue({ messages: [row], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+    expect(await getSessionTranscript({ credentials, idOrPrefix: sessionId, messageId: row.id, maxCharsPerMessage: 3 }))
+      .toMatchObject({ ok: true, items: [{ id: row.id, role: 'user', kind: 'user_message', text: 'abc', truncated: true }],
+        nextCursor: null, hasMore: false });
+    expect(await getSessionTranscript({ credentials, idOrPrefix: sessionId, messageId: row.id, roles: ['assistant'] }))
+      .toMatchObject({ ok: true, items: [], nextCursor: null, hasMore: false });
+    expect(transcriptRequests()).toHaveLength(2);
+  });
+
+  it('settles an absent exact message without opening any history page', async () => {
+    const { getSessionTranscript } = await import('./getSessionTranscript');
+    transcriptResponse.mockResolvedValue({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+    expect(await getSessionTranscript({ credentials, idOrPrefix: sessionId, messageId: 'missing' }))
+      .toMatchObject({ ok: true, items: [], hasMore: false, nextCursor: null,
+        diagnostics: { rawRowsScanned: 0, pagesFetched: 1, scanLimitReached: false } });
+    expect(transcriptRequests()).toHaveLength(1);
+    expect(new URL(String(transcriptRequests()[0]?.[0])).searchParams.get('messageId')).toBe('missing');
+  });
+
+  it.each(['wrong_id', 'continuation', 'multiple_rows'] as const)('refuses an exact response with %s before semantic disclosure or paging', async violation => {
+    const { getSessionTranscript } = await import('./getSessionTranscript');
+    const row = { id: violation === 'wrong_id' ? 'unselected' : 'exact', seq: 3, createdAt: 3,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'PRIVATE_UNSELECTED' } } } };
+    transcriptResponse.mockResolvedValue({ messages: violation === 'multiple_rows' ? [row, row] : [row],
+      hasMore: violation === 'continuation', nextBeforeSeq: violation === 'continuation' ? 3 : null, nextAfterSeq: null });
+    await expect(getSessionTranscript({ credentials, idOrPrefix: sessionId, messageId: 'exact' }))
+      .rejects.toMatchObject({ code: 'session_transcript_stored_content_unavailable' });
+    expect(transcriptRequests()).toHaveLength(1);
+  });
+
+  it.each([{ cursor: null }, { direction: 'before' as const }, { limit: 1 }, { projection: 'externalShareableV1' as const }])(
+    'rejects exact selection combined with incompatible input %j before HTTP', async incompatible => {
+      const { getSessionTranscript } = await import('./getSessionTranscript');
+      expect(await getSessionTranscript({ credentials, idOrPrefix: sessionId, messageId: 'exact', ...incompatible }))
+        .toMatchObject({ ok: false, errorCode: 'invalid_input' });
+      expect(get).not.toHaveBeenCalled();
+    });
+
   it('routes the closed external projection through publication rows and exact completed turn anchors', async () => {
     const { getSessionTranscript } = await import('./getSessionTranscript');
     const admittedUser = {

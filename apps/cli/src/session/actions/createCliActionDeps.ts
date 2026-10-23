@@ -9083,6 +9083,7 @@ export function createCliActionDeps(params: Readonly<{
     sessionTranscriptGet: async ({
       context,
       sessionId,
+      messageId,
       projection,
       callerPluginId,
       limit,
@@ -9118,6 +9119,7 @@ export function createCliActionDeps(params: Readonly<{
         credentials: params.credentials,
         resolveAuthorizationHeaders,
         idOrPrefix: sessionId,
+        ...(messageId !== undefined ? { messageId } : {}),
         ...(projection ? { projection } : {}),
         ...(callerPluginId ? { callerPluginId } : {}),
         ...(typeof limit === 'number' ? { limit } : {}),

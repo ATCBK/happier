@@ -26,6 +26,7 @@ type GetSessionTranscriptParams = Readonly<{
     method: 'GET' | 'POST'; path: string; body?: unknown;
   }>) => Readonly<Record<string, string>> | null;
   idOrPrefix: string;
+  messageId?: string;
   limit?: number;
   cursor?: string | null;
   direction?: TranscriptDirection;
@@ -96,6 +97,10 @@ export function getSessionTranscript(
 export async function getSessionTranscript(
   params: GetSessionTranscriptParams,
 ): Promise<GetSessionTranscriptResult | GetExternalShareableSessionTranscriptResult> {
+  if (params.messageId !== undefined && (params.cursor !== undefined || params.direction !== undefined
+    || params.limit !== undefined || params.projection !== undefined)) {
+    return { ok: false, errorCode: 'invalid_input', errorMessage: 'invalid_input' };
+  }
   const sessionTarget = await resolveSessionTransportContext({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
@@ -209,6 +214,7 @@ export async function getSessionTranscript(
         : {}),
       sessionId: sessionTarget.sessionId,
       contentContext: sessionTarget,
+      ...(params.messageId !== undefined ? { messageId: params.messageId } : {}),
       limit,
       rawPageLimit: params.sessionListPreview
         ? 1
