@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
-import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutor, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationV1Schema,
   SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1, SessionMessageReplySourceTurnReleaseV1Schema,
   type SessionMessageReplyProgressV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
@@ -231,9 +231,9 @@ describe('Session reply publication through the real Action and publisher', () =
     const sessionId = 'cmv3replyreceiveraaaaaaaa';
     const receiverSession = createPlainSessionFixture({ id: sessionId });
     const credentials = { token: 'reply-owner', encryption: null };
-    const cause = { requestRef: 'original-input', requester: { serverId: 'reply-home', accountId: 'bob' },
-      persona: { serverId: 'reply-home', sessionId },
-      origin: { kind: 'session' as const, session: { serverId: 'reply-home', sessionId }, messageId: 'committed-original' } };
+    const cause = { requestRef: 'original-input', requester: { serverId: 'srv_reply_home', accountId: 'bob' },
+      persona: { serverId: 'srv_reply_home', sessionId },
+      origin: { kind: 'session' as const, session: { serverId: 'srv_reply_home', sessionId }, messageId: 'committed-original' } };
     let progress: SessionMessageReplyProgressV1 = { v: 1, mode: 'wait', acceptedTurnId: 'accepted-turn', disposition: 'observing',
     };
     const transcript = new Map<string, unknown>();
@@ -299,6 +299,10 @@ describe('Session reply publication through the real Action and publisher', () =
       initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({
         sessionId, agentRuntimeApplicability: 'supported',
       })],
+      getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {},
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_reply_home' }, session: {
+          pendingInput: { protocolVersion: 1 }, runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 },
+        } } }) }),
       transport: { serverId: 'reply-home', serverUrl: 'https://reply-home.test',
         createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
     });
