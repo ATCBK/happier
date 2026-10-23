@@ -5,6 +5,8 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { EMPTY_SCM_CAPABILITIES } from './core/snapshotMappers';
 import { buildSnapshotSignature } from './statusSync/projectState';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { log } from '@/log';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import {
@@ -71,6 +73,48 @@ describe('repository scope snapshot publication and reuse', () => {
         storage.setState(initialState, true);
         machineRpc.mockReset();
         vi.restoreAllMocks();
+    });
+
+    it.each([undefined, 'exact-home'])('preserves refresh failure identity on Home %s through real repository publication', async (serverId) => {
+        const machine = createMachineFixture({ id: 'r297-machine' });
+        const base = createSessionFixture();
+        const session = createSessionFixture({ id: 'r297-session', metadata: { ...base.metadata!, machineId: machine.id, path: '/r297-repo' } });
+        storage.setState({
+            machines: { [machine.id]: machine }, sessions: { [session.id]: session },
+            ...(serverId ? {
+                machineListByServerId: { [serverId]: [machine] },
+                sessionListRowsByServerId: { [serverId]: { [session.id]: session } },
+            } : {}),
+        });
+        const syncer = new ScmStatusSync();
+        const detail = 'TypeError: Snapshot normalization failed';
+        const logCount = () => log.getLogs().filter(line => line.includes(detail)).length;
+        const before = logCount();
+        try {
+            machineRpc.mockRejectedValueOnce(new TypeError('Snapshot normalization failed\nprivate second line'));
+            await syncer.getSync(session.id, serverId).invalidateAndAwait();
+            const failure = storage.getState().getSessionProjectScmSnapshotError(session.id, serverId);
+            expect(failure).toMatchObject({ errorCode: 'REPOSITORY_REFRESH_FAILED' });
+            expect(failure?.message).not.toBe(RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE);
+            expect(failure?.message).not.toContain('normalization');
+            expect(logCount() - before).toBe(1);
+
+            // The transport succeeds, then the real snapshot normalizer throws locally.
+            machineRpc.mockResolvedValueOnce({ success: true, snapshot: { ...makeSnapshot([]), repo: undefined } });
+            await syncer.getSync(session.id, serverId).invalidateAndAwait();
+            expect(storage.getState().getSessionProjectScmSnapshotError(session.id, serverId))
+                .toMatchObject({ errorCode: 'REPOSITORY_REFRESH_FAILED' });
+
+            machineRpc.mockRejectedValueOnce(Object.assign(new Error(RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE), {
+                rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            }));
+            await syncer.getSync(session.id, serverId).invalidateAndAwait();
+            expect(storage.getState().getSessionProjectScmSnapshotError(session.id, serverId)).toMatchObject({
+                errorCode: 'BACKEND_UNAVAILABLE', message: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
+            });
+        } finally {
+            syncer.stop(session.id, serverId);
+        }
     });
 
     it('keeps identical session and repository IDs on different Homes in independent sync lifetimes', () => {

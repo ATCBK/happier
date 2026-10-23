@@ -333,7 +333,7 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
         ).toBe(SCM_OPERATION_ERROR_CODES.COMMAND_FAILED);
     });
 
-    it('reports a typed unsupported response when the transport returns null', async () => {
+    it('reports a refresh failure when the transport returns a malformed response', async () => {
         setScmState({
             sessions: {
                 session_1: {
@@ -349,11 +349,12 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
 
         const service = new ScmRepositoryService();
         await expect(service.fetchSnapshotForSession('session_1')).rejects.toMatchObject({
-            scmErrorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+            scmErrorCode: SCM_OPERATION_ERROR_CODES.REPOSITORY_REFRESH_FAILED,
+            diagnosticDetail: 'Error: SCM_UNSUPPORTED_RESPONSE_ERROR',
         });
     });
 
-    it('reports backend unavailability without exposing a transport exception', async () => {
+    it('keeps an unrecognized read exception in diagnostic detail rather than display copy', async () => {
         vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_001);
         setScmState({
             sessions: {
@@ -370,7 +371,9 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
 
         const service = new ScmRepositoryService();
         await expect(service.fetchSnapshotForSession('session_1')).rejects.toMatchObject({
-            scmErrorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
+            scmErrorCode: SCM_OPERATION_ERROR_CODES.REPOSITORY_REFRESH_FAILED,
+            message: 'Source control command failed. Refresh repository status and try again.',
+            diagnosticDetail: 'Error: network glitch',
         });
     });
 

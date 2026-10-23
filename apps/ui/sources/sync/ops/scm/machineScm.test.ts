@@ -182,12 +182,7 @@ describe('machineScm', () => {
         }));
     });
 
-    it('classifies a transport failure as an unavailable backend instead of a failed command', async () => {
-        // `F-UI-2`: `scmFallbackError` is only reached from the CATCH of the machine RPC — a real
-        // git failure comes back as a well-formed `{ success: false, error, errorCode }` response and
-        // never throws. So the terminal branch was labelling "no answer arrived" as COMMAND_FAILED and
-        // handing the raw exception text to the UI, which rendered an internal
-        // `TypeError: Cannot read properties of undefined (reading 'emit')` in the user error slot.
+    it('keeps an internal read failure distinct from an unavailable RPC method and display copy', async () => {
         setScmSettings({ settings: {} });
         machineRpcWithServerScopeMock.mockRejectedValue(
             new TypeError("Cannot read properties of undefined (reading 'emit')"),
@@ -198,10 +193,11 @@ describe('machineScm', () => {
 
         expect(response).toEqual({
             success: false,
-            error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
-            errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
+            error: 'Source control command failed. Refresh repository status and try again.',
+            errorCode: SCM_OPERATION_ERROR_CODES.REPOSITORY_REFRESH_FAILED,
+            diagnosticDetail: "TypeError: Cannot read properties of undefined (reading 'emit')",
         });
-        expect(JSON.stringify(response)).not.toContain('emit');
+        expect(response.error).not.toContain('emit');
     });
 
     it('forwards a projected packed backend preference through the canonical SCM request', async () => {

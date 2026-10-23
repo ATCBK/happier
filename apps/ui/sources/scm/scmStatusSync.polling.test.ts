@@ -147,7 +147,7 @@ describe('ScmStatusSync polling', () => {
     setTimeoutSpy.mockRestore();
   });
 
-  it('stores a typed unavailability when the refresh throws an internal error', async () => {
+  it('stores a typed refresh failure when the refresh throws an internal error', async () => {
     // `F-UI-2`: this catch wrote `error.message` straight into the snapshot-error store, and the git
     // surface renders that string. An internal exception from the machine RPC transport therefore
     // reached the user as `Cannot read properties of undefined (reading 'emit')`. A genuine
@@ -175,7 +175,7 @@ describe('ScmStatusSync polling', () => {
     await syncer.getSync('s1').invalidateAndAwait();
 
     expect(updateSnapshotErrorMock).toHaveBeenCalledWith('s1', expect.objectContaining({
-      errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
+      errorCode: SCM_OPERATION_ERROR_CODES.REPOSITORY_REFRESH_FAILED,
     }));
     const stored = updateSnapshotErrorMock.mock.calls.at(-1)?.[1];
     expect(JSON.stringify(stored)).not.toContain('emit');

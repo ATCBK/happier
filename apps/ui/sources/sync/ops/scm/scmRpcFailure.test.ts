@@ -11,7 +11,7 @@ describe('SCM RPC failure normalization', () => {
             [Object.assign(new Error('timeout'), { code: 'MACHINE_RPC_TIMEOUT' }), 'COMMAND_TIMEOUT'],
         ] as const) expect(scmFallbackError(error, { method: RPC_METHODS.SCM_PULL_REQUEST_LIST, request: {} })).toMatchObject({ errorCode });
         expect(scmFallbackError(Object.assign(new Error('Denied'), { code: 'denied' }),
-            { method: RPC_METHODS.SCM_PULL_REQUEST_LIST, request: {} }).errorCode).toBe('BACKEND_UNAVAILABLE');
+            { method: RPC_METHODS.SCM_PULL_REQUEST_LIST, request: {} }).errorCode).toBe('REPOSITORY_REFRESH_FAILED');
     });
     it('does not grant mutation retry authority after a lost result', () => {
         const error = new Error('transport timeout with private diagnostics');
@@ -35,7 +35,20 @@ describe('SCM RPC failure normalization', () => {
             expect(response.outcome?.kind).not.toBe('outcome_unknown');
         }
         const query = scmFallbackError(new Error('timeout'), { method: RPC_METHODS.SCM_STATUS_SNAPSHOT, request: {} });
-        expect(query.errorCode).toBe('BACKEND_UNAVAILABLE');
+        expect(query.errorCode).toBe('REPOSITORY_REFRESH_FAILED');
+    });
+
+    it('retains local read exception identity separately from display copy', () => {
+        const failure = scmFallbackError(new TypeError('Snapshot normalization failed\nprivate second line'), {
+            method: RPC_METHODS.SCM_STATUS_SNAPSHOT, request: {},
+        });
+        expect(failure).toMatchObject({
+            errorCode: 'REPOSITORY_REFRESH_FAILED',
+            diagnosticDetail: 'TypeError: Snapshot normalization failed',
+        });
+        expect(failure.error).not.toContain('RPC method not available');
+        expect(failure.error).not.toContain('normalization');
+        expect(JSON.stringify(failure)).not.toContain('private second line');
     });
 
     it('does not claim a malformed mutation response proves no effect', () => {

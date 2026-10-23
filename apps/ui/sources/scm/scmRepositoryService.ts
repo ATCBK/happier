@@ -152,10 +152,13 @@ function normalizeScmSnapshotResponseOrThrow(input: {
     }
     if (!response.success) {
         const message = response.error || 'Failed to fetch source-control status snapshot';
-        const err = new Error(message) as Error & { scmErrorCode?: string };
+        const err = new Error(message) as Error & { scmErrorCode?: string; diagnosticDetail?: string };
         if (typeof (response as { errorCode?: unknown }).errorCode === 'string') {
             err.scmErrorCode = (response as { errorCode?: string }).errorCode;
         }
+        // UI transport failures already logged their original exception at the failure point.
+        const detail = (response as { diagnosticDetail?: unknown }).diagnosticDetail;
+        if (typeof detail === 'string') err.diagnosticDetail = detail;
         throw err;
     }
 

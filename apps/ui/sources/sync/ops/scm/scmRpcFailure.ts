@@ -1,11 +1,14 @@
-import { createScmOperationUnknownOutcome, SCM_OPERATION_ERROR_CODES, ScmOperationOutcomeSchema, ScmCommitPublicationSchema, ScmCommitHookContentChangesSchema, type ScmOperationErrorCode, type ScmOperationOutcome, type ScmOperationReconciliation } from '@happier-dev/protocol/scm';
+import { createScmOperationUnknownOutcome, SCM_OPERATION_ERROR_CODES, ScmOperationErrorCodeSchema, ScmOperationOutcomeSchema, ScmCommitPublicationSchema, ScmCommitHookContentChangesSchema, type ScmOperationErrorCode, type ScmOperationOutcome, type ScmOperationReconciliation } from '@happier-dev/protocol/scm';
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
+import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcSessionMachineControlUnavailableError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import { log } from '@/log';
 
 const SCM_UNSUPPORTED_RESPONSE_ERROR = 'SCM_UNSUPPORTED_RESPONSE_ERROR';
+// Reuse the existing safe SCM failure copy; exception identity belongs only in diagnostics.
+const SCM_READ_FAILURE_MESSAGE = 'Source control command failed. Refresh repository status and try again.';
 
 type ScmRpcFailureContext = Readonly<{
     method: string;
@@ -16,6 +19,8 @@ export type ScmRpcFailure = Readonly<{
     success: false;
     error: string;
     errorCode: ScmOperationErrorCode;
+    /** Local diagnostic identity; never use as display copy or include request content. */
+    diagnosticDetail?: string;
     outcome?: ScmOperationOutcome;
     /** UI Action admission is not a Git failure or an uncertain dispatched command. */
     actionErrorCode?: string;
@@ -64,19 +69,45 @@ function reconciliationFor({ method, request }: ScmRpcFailureContext): ScmOperat
 }
 
 export function scmFallbackError(error: unknown, context: ScmRpcFailureContext): ScmRpcFailure {
+    const isRead = getScmRpcSideEffectClass(context.method) === 'read';
+    const carrier = error && typeof error === 'object' ? error as {
+        scmErrorCode?: unknown; diagnosticDetail?: unknown; name?: unknown; message?: unknown;
+    } : undefined;
+    const finish = (failure: ScmRpcFailure): ScmRpcFailure => {
+        // Writes retain their established uncertain-outcome envelope without private diagnostics.
+        if (!isRead) return failure;
+        const retainedDetail = typeof carrier?.diagnosticDetail === 'string' ? carrier.diagnosticDetail : undefined;
+        const name = typeof carrier?.name === 'string' ? carrier.name.split(/[\r\n]/, 1)[0] : 'Error';
+        const message = typeof carrier?.message === 'string' ? carrier.message : typeof error === 'string' ? error : '';
+        const diagnosticDetail = retainedDetail ?? `${name}: ${message.split(/[\r\n]/, 1)[0]}`;
+        // A repository refresh may rethrow an already normalized read. Its diagnostic was
+        // logged at the originating failure; carry it forward without logging it twice.
+        if (retainedDetail === undefined) log.log(`[scm] ${context.method} ${failure.errorCode}: ${diagnosticDetail}`);
+        return { ...failure, diagnosticDetail };
+    };
+    if (isRead && carrier) {
+        const nativeCode = ScmOperationErrorCodeSchema.safeParse(carrier.scmErrorCode);
+        if (nativeCode.success) return finish({
+            success: false, errorCode: nativeCode.data,
+            error: typeof carrier.message === 'string' ? carrier.message : nativeCode.data,
+        });
+    }
     if (error && typeof error === 'object') {
         const rpcError: RpcErrorCarrier = {
             rpcErrorCode: typeof (error as { rpcErrorCode?: unknown }).rpcErrorCode === 'string' ? (error as { rpcErrorCode: string }).rpcErrorCode : undefined,
             message: typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message : undefined,
         };
         if (isRpcMethodNotAvailableError(rpcError)) {
-            return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE };
+            return finish({ success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE });
         }
         if (isRpcMethodNotFoundError(rpcError)) {
-            return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED };
+            return finish({ success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED });
+        }
+        if (isRpcSessionMachineControlUnavailableError(rpcError)) {
+            return finish({ success: false, error: RPC_ERROR_MESSAGES.SESSION_MACHINE_CONTROL_UNAVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE });
         }
     }
-    if (getScmRpcSideEffectClass(context.method) !== 'read') {
+    if (!isRead) {
         return {
             success: false,
             error: SCM_OPERATION_ERROR_CODES.COMMAND_OUTCOME_UNKNOWN,
@@ -85,18 +116,15 @@ export function scmFallbackError(error: unknown, context: ScmRpcFailureContext):
             ...(context.method.startsWith('scm.diffSummary.') ? {} : { outcome: createScmOperationUnknownOutcome(reconciliationFor(context)) }),
         };
     }
-    if (error instanceof Error && error.message === SCM_UNSUPPORTED_RESPONSE_ERROR) {
-        return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED };
-    }
     // Preserve recognized read outages through the existing native failure
     // vocabulary. Generic refusals still quarantine private Work witnesses.
-    if (isMachineRpcTimeoutError(error)) return {
-        success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_TIMEOUT,
-    };
-    if (isTransientConnectivityError(error)) return {
-        success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_NETWORK_FAILED,
-    };
-    return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE };
+    if (isMachineRpcTimeoutError(error)) return finish({
+        success: false, error: SCM_READ_FAILURE_MESSAGE, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_TIMEOUT,
+    });
+    if (isTransientConnectivityError(error)) return finish({
+        success: false, error: SCM_READ_FAILURE_MESSAGE, errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_NETWORK_FAILED,
+    });
+    return finish({ success: false, error: SCM_READ_FAILURE_MESSAGE, errorCode: SCM_OPERATION_ERROR_CODES.REPOSITORY_REFRESH_FAILED });
 }
 
 export function assertScmResponse<T extends { success: boolean; error?: string; errorCode?: string }>(value: unknown): T {

@@ -175,7 +175,7 @@ describe('sessionScm', () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
     });
 
-    it('returns unsupported fallback when status snapshot rpc payload is null', async () => {
+    it('reports unresolved Machine control without claiming a missing RPC method', async () => {
         getStateMock.mockReturnValue(createSessionScmState());
         sessionRpcMock.mockResolvedValue(null);
 
@@ -184,7 +184,7 @@ describe('sessionScm', () => {
 
         expect(response.success).toBe(false);
         expect(response.errorCode).toBe(SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE);
-        expect(response.error).toBe(RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE);
+        expect(response.error).toBe(RPC_ERROR_MESSAGES.SESSION_MACHINE_CONTROL_UNAVAILABLE);
     });
 
     it('prefers machine RPC when a session has an attached machine', async () => {

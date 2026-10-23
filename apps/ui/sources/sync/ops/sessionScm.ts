@@ -69,11 +69,12 @@ import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
-import { RPC_ERROR_MESSAGES, RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 
 import { runMachineScmRpcWithFallback } from './scm/machineScm';
 import type { ScmRpcTransportResult } from './scm/scmRpcAdmission';
-import type { ScmRpcFailure } from './scm/scmRpcFailure';
+import { scmFallbackError, type ScmRpcFailure } from './scm/scmRpcFailure';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
@@ -102,11 +103,10 @@ async function callScmPreferMachineTransport<
     );
 
     if (!machineTarget) {
-        const failure = {
-            success: false,
-            error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
-            errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
-        } as const;
+        const failure = scmFallbackError(createRpcCallError({
+            error: RPC_ERROR_MESSAGES.SESSION_MACHINE_CONTROL_UNAVAILABLE,
+            errorCode: RPC_ERROR_CODES.SESSION_MACHINE_CONTROL_UNAVAILABLE,
+        }), { method, request });
         return method.startsWith('scm.diffSummary.')
             ? { ok: false, errorCode: failure.errorCode, error: failure.error }
             : failure;
