@@ -50,6 +50,9 @@ vi.mock("@/app/session/pending/publishPendingMutation", () => ({ emitPendingActi
 
 vi.mock("@/utils/logging/log", () => ({ warn: vi.fn(), log: vi.fn() }));
 
+// Cold owner loading is suite setup; the cases measure presence behavior with fake timers.
+await import("./timeout");
+
 beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();

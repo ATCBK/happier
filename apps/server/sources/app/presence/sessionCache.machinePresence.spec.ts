@@ -34,6 +34,9 @@ installDbModuleMock({
     db: transactionMock.wrapDb(dbMocks.db),
 });
 
+// Load the real owner after its DB boundary, outside behavioral deadlines and fake timers.
+await import("./sessionCache");
+
 describe("ActivityCache machine presence", () => {
     let activityCache: any | null = null;
 
