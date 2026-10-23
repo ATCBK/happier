@@ -1647,6 +1647,11 @@ authoring version; it never depends on notification-channel success. With no sto
 rule witness, owner-implicit Inbox acceptance creates no cursor or enrollment and
 reports `alreadyRepresented: false`. This development operation neither acknowledges
 a push/Voice send nor changes the original notifier's retry ownership.
+For explicit Run and Discussion sources, this same endpoint advances only the
+private delivered-original progress. It does not publish a Follow-configuration
+invalidation: the relation and policy are unchanged. Actual source changes and
+configuration edits retain their existing change-feed publications, so a later
+original remains discoverable without re-demanding unrelated unavailable Runs.
 The existing `POST /v2/sessions/:sessionId/pending` also admits an Account evaluator's
 exact `followSources`, `followRelations` and public `followDeliveryV1` under its
 own Account receipt. Private witnesses require the receiver Account's credential;
