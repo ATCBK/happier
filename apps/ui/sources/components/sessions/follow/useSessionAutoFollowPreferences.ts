@@ -7,6 +7,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isAccountFollowConfigurationChangeRelevant } from './sessionFollowAccountChange';
 import {
     createIdleSessionFollowMutationIntent,
     reduceSessionFollowMutationIntent,
@@ -105,7 +106,8 @@ export function useSessionAutoFollowPreferences(serverId: string) {
             if (next && wasAllowed === false) void refresh();
         });
         const changes = subscribeHomeAccountChange((event) => {
-            if (!retired && areServerProfileIdentifiersEquivalent(event.serverId, serverId)) void refresh();
+            if (!retired && areServerProfileIdentifiersEquivalent(event.serverId, serverId)
+                && isAccountFollowConfigurationChangeRelevant(event)) void refresh();
         });
         // Load the current Account preference as soon as the settings section mounts.
         // Without this initial read, the section remains in its loading placeholder until

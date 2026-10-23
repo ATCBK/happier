@@ -103,6 +103,45 @@ it('loads Account preferences on first render and preserves a failed toggle for 
     await screen.unmount();
 });
 
+it('does not read preferences for 1,000 unrelated detailed Account changes but refreshes Follow configuration', async () => {
+    const home = await renderEnabledPreferencesSection('https://preferences-relevance.example');
+    let reads = 0;
+    let assigned = true;
+    setPreferencesFetch(async () => {
+        reads++;
+        return Response.json({ assigned, direct: false, team: false, group: false });
+    });
+    const screen = await renderSettingsView(<SessionAutoFollowPreferencesSection serverId={home.id} />);
+    await vi.waitFor(() => expect(isOn(screen, 'assigned')).toBe(true));
+    const baseline = reads;
+    const unrelatedKinds = ['kv', 'session', 'artifact', 'machine', 'account'] as const;
+    await act(async () => {
+        for (let index = 0; index < 1_000; index++) publishHomeAccountChange(home.id, [`unrelated-${index}`],
+            { changeKinds: [unrelatedKinds[index % unrelatedKinds.length]!], sessionListQueryAffects: true });
+    });
+    await flushAsyncWork();
+    expect(reads).toBe(baseline);
+    assigned = false;
+    const { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } = await import('@happier-dev/protocol/sessions/follow/changes');
+    await act(async () => publishHomeAccountChange(home.id, [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID], { changeKinds: ['account'] }));
+    await vi.waitFor(() => expect(isOn(screen, 'assigned')).toBe(false));
+    expect(reads).toBe(baseline + 1);
+    for (const event of [
+        { entityIds: ['self'], changeKinds: ['account'] as const },
+        { entityIds: ['shared-session'], changeKinds: ['share'] as const },
+        { source: 'connected' as const },
+        { entityIds: ['future-entity'], changeKinds: ['future-kind'] },
+        {},
+    ]) {
+        const before = reads;
+        assigned = !assigned;
+        await act(async () => publishHomeAccountChange(home.id, 'entityIds' in event ? event.entityIds : undefined, event));
+        await vi.waitFor(() => expect(isOn(screen, 'assigned')).toBe(assigned));
+        expect(reads).toBe(before + 1);
+    }
+    await screen.unmount();
+});
+
 it('coalesces Account-change wakes during a save and reconciles to the Home after success or failure', async () => {
     const home = await renderEnabledPreferencesSection('https://preferences-follow-race.example');
     const initial = { assigned: true, direct: false, team: false, group: false };
