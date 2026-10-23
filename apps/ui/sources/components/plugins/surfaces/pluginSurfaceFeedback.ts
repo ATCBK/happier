@@ -14,6 +14,7 @@ import { PluginUiMountedActionReferenceV1Schema, type PluginUiMountedActionRefer
 
 import { createAppShellTransientInteractions } from '@/components/appShell/plugins/appShellQuestionInteractions';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
+import { t } from '@/text';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import {
     publishPresentationNotice,
@@ -165,9 +166,11 @@ export function createPluginActionCurrentIntentHandler(input: Readonly<{
             ...(request.action.description ? { body: request.action.description } : {}),
         };
         const title = readConfirmationText(confirmation.title);
-        const confirmLabel = 'confirmLabel' in confirmation && confirmation.confirmLabel
+        const confirmLabel = request.action.confirmVerb
+            ? readConfirmationText(request.action.confirmVerb)
+            : 'confirmLabel' in confirmation && confirmation.confirmLabel
             ? readConfirmationText(confirmation.confirmLabel)
-            : undefined;
+            : t('approvals.approve');
         const outcome = await interactions.confirm({
             kind: 'confirmation',
             title,

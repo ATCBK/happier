@@ -449,6 +449,7 @@ describe('mounted plugin surface feedback and confirmation (§3.4, UI-T21)', () 
                             en: {
                                 'acme.publish.title': 'Publish this preview?',
                                 'acme.publish.body': 'It becomes visible to your team.',
+                                'acme.publish.verb': 'Publish',
                             },
                         },
                     },
@@ -466,6 +467,8 @@ describe('mounted plugin surface feedback and confirmation (§3.4, UI-T21)', () 
                 execution: { target: 'client' },
                 dangerLevel: 'safe',
                 available: true,
+                confirmVerb: { key: 'acme.publish.verb', fallback: 'Post' },
+                irreversible: true,
                 confirmation: {
                     title: { key: 'acme.publish.title', fallback: 'Publish?' },
                     body: { key: 'acme.publish.body', fallback: 'Are you sure?' },
@@ -479,7 +482,7 @@ describe('mounted plugin surface feedback and confirmation (§3.4, UI-T21)', () 
 
         expect(modalHarness.readConfig().chrome?.title).toBe('Publish this preview?');
         expect(modalHarness.show.mock.calls[0]?.[0]).toMatchObject({
-            props: { description: 'It becomes visible to your team.' },
+            props: { description: 'It becomes visible to your team.', confirmLabel: 'Publish' },
         });
         modalHarness.readConfig().props.onConfirm();
         await expect(pending).resolves.toMatchObject({ status: 'approved' });

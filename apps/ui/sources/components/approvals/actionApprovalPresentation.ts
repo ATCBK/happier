@@ -2,7 +2,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { buildApprovalPreviewSummary } from '@happier-dev/protocol/actions/actionExecutor';
 import { describeApprovalActionFields, type ApprovalActionReference } from '@happier-dev/protocol/actions/actionApprovalPresentation';
-import { resolveActionSummary, resolveActionTitle } from '@/text/actionTitles';
+import { resolveActionConfirmVerb, resolveActionSummary, resolveActionTitle } from '@/text/actionTitles';
 import { t } from '@/text';
 import { getPreferredLanguage } from '@/text/i18n';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
@@ -45,10 +45,10 @@ export function readActionApprovalSubject(input: ActionApprovalPresentationInput
 /** One UI copy boundary for confirmation, Inbox, page and preview; authored plugin copy stays authored. */
 export function presentActionApproval(input: ActionApprovalPresentationInput): Readonly<{ title: string | null; summary: string | null; confirmLabel: string | null; destructive?: boolean }> {
     const serviceControl = presentLocalServiceControlApproval({ actionId: input.actionId, actionArgs: input.actionArgs, subject: input.subject });
-    if (serviceControl) return serviceControl;
     const parsed = ActionIdSchema.safeParse(input.actionId);
     if (!parsed.success) return { title: input.authoredTitle?.trim() || null, summary: input.authoredSummary?.trim() || null, confirmLabel: null };
     const spec = getActionSpec(parsed.data);
+    if (serviceControl) return { ...serviceControl, confirmLabel: resolveActionConfirmVerb(spec.confirmVerb), destructive: spec.irreversible === true };
     const role = input.role?.roleId === readActionApprovalRoleId(input) ? input.role : null;
     const roleKind = role ? role.source === 'built_in' ? t('roles.settings.sourceBuiltIn')
         : role.source === 'user' ? t('roles.settings.sourceYours')
@@ -72,15 +72,11 @@ export function presentActionApproval(input: ActionApprovalPresentationInput): R
     const disclosure = spec.id === 'relay.runtime.personal_home.backup' ? t('personalHome.settings.backupDisclosureBody') : null;
     const title = t('actionPresentation.title', { actionId: spec.id, source: titleSource,
         subject: roleIdentity ? `${roleIdentity.name} · ${roleIdentity.kind}` : input.subject });
-    // The Action declares no confirm verb of its own: the button names the Action only when the title is about
-    // its subject; a title that already is the Action's words gets the generic approval verb, never an echo.
-    const confirmLabel = title === titleSource ? t('approvals.approve') : titleSource;
-    // A danger effect the user is asked about by default is the Action's declaration of an irreversible effect.
-    const irreversible = spec.sideEffectClass === 'danger' && spec.approvalPolicy?.uiConfirmation === 'policy';
+    const confirmLabel = resolveActionConfirmVerb(spec.confirmVerb);
     return {
         confirmLabel,
         title,
         summary: disclosure ? [visibleSummary, disclosure].filter(Boolean).join('\n\n') : visibleSummary,
-        ...(irreversible ? { destructive: true } : {}),
+        ...(spec.irreversible ? { destructive: true } : {}),
     };
 }

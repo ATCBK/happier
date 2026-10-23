@@ -3,7 +3,6 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { buildApprovalPreviewSummary } from '@happier-dev/protocol/actions/actionExecutor';
 import { preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { presentActionApproval, readActionApprovalSubject } from './actionApprovalPresentation';
-import { resolveActionTitle } from '@/text/actionTitles';
 import { buildRoleCatalog } from '@/sync/domains/roles/roleCatalog';
 import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -21,7 +20,7 @@ describe('the shared Action approval presentation owner', () => {
         const summary = presentActionApproval({ actionId: 'localServices.launcher.start', actionArgs }).summary;
         expect(summary).toBe('Start httpPort from qaS-studio.');
     });
-    it('names the Service a Stop or Restart confirmation acts on, with a destructive Stop', async () => {
+    it('names the Service a Stop or Restart confirmation acts on, without inferring irreversibility', async () => {
         const target = { kind: 'managed_service', managedServiceId: 'managed-a', machineId: 'worker',
             declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } } };
         const stopArgs = getActionSpec('localServices.actions.stopManaged').inputSchema.parse({ requestId: 'r1', target, action: 'stop_managed' });
@@ -33,7 +32,8 @@ describe('the shared Action approval presentation owner', () => {
         expect(readActionApprovalSubject({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs })).toEqual({ kind: 'machine', id: 'worker' });
         expect(readActionApprovalSubject({ actionId: 'localServices.actions.restartManaged', actionArgs: restartArgs })).toEqual({ kind: 'machine', id: 'worker' });
         const stop = presentActionApproval({ actionId: 'localServices.actions.stopManaged', actionArgs: stopArgs, subject: 'NLDW4-5-40-40' });
-        expect(stop).toMatchObject({ title: 'Stop httpPort?', confirmLabel: 'Stop', destructive: true });
+        expect(stop).toMatchObject({ title: 'Stop httpPort?', confirmLabel: 'Stop' });
+        expect(stop.destructive).toBeFalsy();
         expect(stop.summary).toBe('This stops httpPort on NLDW4-5-40-40 now. Anything using its address loses its connection.');
         const restart = presentActionApproval({ actionId: 'localServices.actions.restartManaged', actionArgs: restartArgs, subject: 'NLDW4-5-40-40' });
         expect(restart).toMatchObject({ title: 'Restart httpPort?', confirmLabel: 'Restart' });
@@ -132,12 +132,12 @@ describe('the shared Action approval presentation owner', () => {
         expect(presentActionApproval({ actionId: 'workspace.sync.relationship.flush', actionArgs }).title).toBe('Sync workspace now');
     });
 
-    it('never repeats the dialog title on the confirm button, and names the Action when the title names a subject', async () => {
+    it('uses a declared localized verb and otherwise the generic approval verb regardless of subject', async () => {
         // No subject: the title is the Action's own words, so the button is the generic approval verb.
         for (const language of ['en', 'fr'] as const) {
             await preloadTranslations(language);
             setPreferredLanguageFromSettings(language);
-            for (const actionId of ['machines.terminal.open', 'session.draft.delete', 'discussion.owner.transfer'] as const) {
+            for (const actionId of ['machines.terminal.open', 'discussion.owner.transfer'] as const) {
                 const presentation = presentActionApproval({ actionId });
                 expect(presentation.confirmLabel).toBe(t('approvals.approve'));
                 expect(presentation.confirmLabel).not.toBe(presentation.title);
@@ -147,7 +147,14 @@ describe('the shared Action approval presentation owner', () => {
         // With a subject the title reads about the subject, so the button may still name the Action.
         const withSubject = presentActionApproval({ actionId: 'machines.terminal.open', subject: 'Devbox' });
         expect(withSubject.title).not.toBe(withSubject.confirmLabel);
-        expect(withSubject.confirmLabel).toBe(getActionSpec('machines.terminal.open').title);
+        expect(withSubject.confirmLabel).toBe(t('approvals.approve'));
+    });
+
+    it('localizes the declared confirmation verb', async () => {
+        expect(presentActionApproval({ actionId: 'session.draft.delete' }).confirmLabel).toBe('Delete');
+        await preloadTranslations('fr');
+        setPreferredLanguageFromSettings('fr');
+        expect(presentActionApproval({ actionId: 'session.draft.delete' }).confirmLabel).toBe('Supprimer');
         // An id the catalog does not know has no Action title to borrow: the caller keeps its own default.
         expect(presentActionApproval({ actionId: 'plugin.unknown', authoredTitle: 'Do it' }).confirmLabel).toBeNull();
     });
@@ -156,6 +163,13 @@ describe('the shared Action approval presentation owner', () => {
         // The draft delete declares a danger effect that the user is asked about by default.
         expect(presentActionApproval({ actionId: 'session.draft.delete' }).destructive).toBe(true);
         expect(presentActionApproval({ actionId: 'plugins.uninstall' }).destructive).toBe(true);
+        // An update asks by policy, but is not declared irreversible.
+        expect(presentActionApproval({ actionId: 'updates.batch.start' }).destructive).toBeFalsy();
+    });
+
+    it('uses declared irreversibility even when the UI does not ask by default', () => {
+        // Explicit irreversibility applies even when the UI does not ask by default.
+        expect(presentActionApproval({ actionId: 'session.delete' }).destructive).toBe(true);
         for (const actionId of ['machines.terminal.open', 'session.draft.open', 'discussion.owner.transfer'] as const) {
             expect(presentActionApproval({ actionId }).destructive, actionId).toBeFalsy();
         }
@@ -238,7 +252,7 @@ describe('the shared Action approval presentation owner', () => {
         expect(confirmation).toEqual(request);
         expect(confirmation).toEqual({ title: 'Créer un lien public pour « Notes de version » ?',
             summary: 'Toute personne disposant de ce lien pourra lire le document.',
-            confirmLabel: resolveActionTitle('artifact.public_link.create', getActionSpec('artifact.public_link.create')) });
+            confirmLabel: t('approvals.approve') });
         expect(presentActionApproval({ actionId: 'artifact.delete', actionArgs: { artifactId: 'release-notes' } }).title)
             .toBe('Supprimer un document');
         expect(presentActionApproval({ actionId: 'ui.pet.choose', actionArgs: {} }).summary)

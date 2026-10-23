@@ -23,7 +23,7 @@ export function presentLocalServiceControlApproval(input: Readonly<{
     actionArgs?: unknown;
     /** The Machine the Service runs on, by name, when the presenting app resolved it. */
     subject?: string | null;
-}>): Readonly<{ title: string; summary: string; confirmLabel: string; destructive: boolean }> | null {
+}>): Readonly<{ title: string; summary: string }> | null {
     if (!CONTROL_ACTION_IDS.has(input.actionId)) return null;
     const stop = input.actionId === 'localServices.actions.stopManaged';
     const request = LocalServiceActionRequestV1Schema.safeParse(input.actionArgs);
@@ -34,12 +34,8 @@ export function presentLocalServiceControlApproval(input: Readonly<{
     return stop ? {
         title: t('localServices.effectReview.stopTitle', params),
         summary: machine ? t('localServices.effectReview.stopBodyOn', params) : t('localServices.effectReview.stopBody', params),
-        confirmLabel: t('localServices.effectReview.stop'),
-        destructive: true,
     } : {
         title: t('localServices.effectReview.restartTitle', params),
         summary: machine ? t('localServices.effectReview.restartBodyOn', params) : t('localServices.effectReview.restartBody', params),
-        confirmLabel: t('localServices.effectReview.restart'),
-        destructive: false,
     };
 }

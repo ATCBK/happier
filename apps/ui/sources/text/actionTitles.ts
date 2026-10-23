@@ -1313,6 +1313,14 @@ export function resolveActionSummary(actionId: string, source: string): string {
     return source === getTranslationValue(key, 'en') ? t(key) : source;
 }
 
+/** Uses the existing host translation tree for a declared key, retaining authored literal copy. */
+export function resolveActionConfirmVerb(value: ActionSpec['confirmVerb']): string {
+    if (value === undefined) return t('approvals.approve');
+    if (typeof value === 'string') return value;
+    const translated = getTranslationValue(value.key);
+    return typeof translated === 'string' ? translated : value.fallback;
+}
+
 /** Shared by the picker, block headings and reference labels. Plugin titles are already localized. */
 export function resolveActionTitle(actionId: string, spec: Pick<ActionSpec, 'title'> | null): string {
     if (Object.hasOwn(ACTION_TITLE_KEYS, actionId)) {
