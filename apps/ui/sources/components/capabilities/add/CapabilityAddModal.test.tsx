@@ -69,7 +69,7 @@ async function renderBody(
       anatomy: buildCapabilityCollectionAnatomy<Skill>({
         title: (skill) => skill.name,
         description: (skill) => skill.description,
-        facts: () => ({ presentation: 'row' as const }),
+        facts: () => ({}),
         accessibilityLabel: (skill) => skill.name,
         testID: (skill) => `row:${skill.name}`,
       }),
@@ -192,7 +192,8 @@ describe('CapabilityAddModalBody', () => {
     const { screen } = await renderBody(async () => ({ itemId: 'x' }), {
       sourceFailures: [{ sourceId: 'acme', message: 'Acme · Limited until 14:05', onRetry }],
     });
-    const line = screen.findAll((node) => node.props?.testID === 'add:sourceFailure:acme')[0];
+    // The state card that draws the line (the Add body's source-failure slot renders it).
+    const line = screen.findAll((node) => node.props?.testID === 'add:sourceFailure:acme' && node.props.action !== undefined)[0];
     expect(line?.props.title).toBe('Acme · Limited until 14:05');
     await act(async () => { await line!.props.action.onPress(); });
     expect(onRetry).toHaveBeenCalledTimes(1);

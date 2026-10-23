@@ -12,7 +12,7 @@ import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarne
 const bundledBrands = vi.hoisted(() => [] as Readonly<{ pluginId: string; resourceId: string; releaseVersion: string;
     displayName: string; digest: string; bytes: Uint8Array; monochrome: boolean }>[]);
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
-    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [], BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
+    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [], BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [], BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
 }));
 // Exercise the real page through its recycler boundary, without importing unrelated Agent settings screens.
 vi.mock('@legendapp/list/react-native', async original =>

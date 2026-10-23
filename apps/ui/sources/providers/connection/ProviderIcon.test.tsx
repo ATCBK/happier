@@ -8,6 +8,7 @@ const bundledBrands = vi.hoisted(() => [] as Readonly<{ pluginId: string; resour
 // The app/Expo byte inventory is a package asset boundary; presentation and admission stay real.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
     BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
 }));
 

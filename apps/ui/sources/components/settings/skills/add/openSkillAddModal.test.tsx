@@ -235,4 +235,15 @@ describe('Skills Add modal through the real Account and registry owners', () => 
         await screen.pressByTestIdAsync('skills.add:primary');
         expect(home.boundary.list().map(row => row.id)).toEqual([skillId]);
     });
+    it('draws a registry that lists no skills as an empty state that leads on to writing one', async () => {
+        const { sourceId } = await createRegistrySourcesUiHome('modal-empty-registry', { external: async url =>
+            url.includes('/git/trees/') ? Response.json({ sha: 'a'.repeat(40), tree: [] }) : null });
+        const onClose = vi.fn(), onWrite = vi.fn();
+        const screen = await renderScreen(<SkillAddModal onClose={onClose} params={{ sourceId, onWrite, onAdded: vi.fn() }} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add.empty')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('capabilities.skillAdd.emptyTitle');
+        await screen.pressByTestIdAsync('skills.add.empty.write');
+        expect(onClose).toHaveBeenCalledTimes(1);
+        expect(onWrite).toHaveBeenCalledTimes(1);
+    });
 });

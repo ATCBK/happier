@@ -65,6 +65,7 @@ const {
 type FilesDiffPresentationStyleValue = 'split' | 'unified' | undefined;
 
 let filesDiffPresentationStyleValue: FilesDiffPresentationStyleValue = 'split';
+let filesDiffSyntaxHighlightingModeValue: 'off' | 'simple' | 'advanced' | undefined = 'off';
 let scmRemoteConfirmPolicyValue = 'always';
 let scmGitRepoPreferredBackendValue: 'git' | 'sapling' = 'git';
 let scmGitRepoPreferredBackendQualifiedIdValue: string | null = null;
@@ -89,7 +90,7 @@ installSettingsViewCommonModuleMocks({
                 if (name === 'scmRemoteConfirmPolicy') return [scmRemoteConfirmPolicyValue, setScmRemoteConfirmPolicy];
                 if (name === 'scmPushRejectPolicy') return ['prompt_fetch', setScmPushRejectPolicy];
                 if (name === 'scmDefaultDiffModeByBackend') return [{}, setScmDefaultDiffModeByBackend];
-                if (name === 'filesDiffSyntaxHighlightingMode') return ['off', setFilesDiffSyntaxHighlightingMode];
+                if (name === 'filesDiffSyntaxHighlightingMode') return [filesDiffSyntaxHighlightingModeValue, setFilesDiffSyntaxHighlightingMode];
                 if (name === 'filesDiffRendererMode') return ['pierre', setFilesDiffRendererMode];
                 if (name === 'filesDiffPresentationStyle') return [filesDiffPresentationStyleValue, setFilesDiffPresentationStyle];
                 if (name === 'filesChangedFilesRowDensity') return ['comfortable', setFilesChangedFilesRowDensity];
@@ -221,6 +222,7 @@ describe('SourceControlSettingsView', () => {
         expect(setPrepareAfterTurn).not.toHaveBeenCalled();
     });
     beforeEach(() => {
+        filesDiffSyntaxHighlightingModeValue = 'off';
         daemonProjectionState.current = { phase: 'unsupported', inputs: null };
         scmGitRepoPreferredBackendValue = 'git';
         scmGitRepoPreferredBackendQualifiedIdValue = null;
@@ -501,6 +503,13 @@ describe('SourceControlSettingsView', () => {
         const sapling = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.sapling.defaultDiff');
         expect(sapling?.props.rightElement).toBeFalsy();
         expect(sapling?.props.detail).toBe('settingsSourceControl.diffMode.pending');
+    });
+
+    it('shows the canonical highlighting default when the stored mode is unset', async () => {
+        filesDiffSyntaxHighlightingModeValue = undefined;
+        const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
+        const control = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.highlighting'));
+        expect(control.activeTabId).toBe('advanced');
     });
 
     it('allows updating diff syntax highlighting mode', async () => {

@@ -22,6 +22,7 @@ import {
 import type { CapabilityTrust } from '@/components/capabilities/facts/CapabilityFacts';
 import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -459,7 +460,16 @@ export function SkillAddModal(
           ...failure,
           message: `${sourceTitle(failure.sourceId)} · ${failure.message}`,
         })),
-        empty: <CatalogEmpty query={query} onClear={() => setQuery('')} />,
+        empty: (
+          <CatalogEmpty
+            query={query}
+            onClear={() => setQuery('')}
+            onWrite={() => {
+              props.onClose();
+              params.onWrite();
+            }}
+          />
+        ),
       },
       renderDetail: (row) => (
         <SkillAddDetail
@@ -578,24 +588,41 @@ export function SkillAddModal(
   return <CapabilityAddModalBody {...props} config={config} />;
 }
 
-function CatalogEmpty(props: Readonly<{ query: string; onClear: () => void }>) {
+function CatalogEmpty(props: Readonly<{ query: string; onClear: () => void; onWrite: () => void }>) {
   const { theme } = useUnistyles();
   const query = props.query.trim();
+  if (!query) {
+    // Registries that list nothing: what Browse is for, and the ways forward (the registry menu sits above; Write is
+    // the one that leaves Browse). A failed source never reaches here: the body keeps its Retry line for that.
+    return (
+      <View style={styles.emptyPage}>
+        <EmptyState
+          layout="centered"
+          size="page"
+          scene="exploring"
+          title={t('capabilities.skillAdd.emptyTitle')}
+          subtitle={t('capabilities.skillAdd.emptyBody')}
+          primaryAction={{
+            label: t('capabilities.skills.home.writeOwn'),
+            onPress: props.onWrite,
+            testID: `${TEST_ID}.empty.write`,
+          }}
+          testID={`${TEST_ID}.empty`}
+        />
+      </View>
+    );
+  }
   return (
     <View style={styles.empty}>
       <Text variant="body" style={{ color: theme.colors.text.secondary }}>
-        {query
-          ? t('capabilities.skillAdd.noMatch', { query })
-          : t('capabilities.skillAdd.nothingHere')}
+        {t('capabilities.skillAdd.noMatch', { query })}
       </Text>
-      {query ? (
-        <RoundButton
-          size="small"
-          display="inverted"
-          title={t('capabilities.skillAdd.clear')}
-          onPress={props.onClear}
-        />
-      ) : null}
+      <RoundButton
+        size="small"
+        display="inverted"
+        title={t('capabilities.skillAdd.clear')}
+        onPress={props.onClear}
+      />
     </View>
   );
 }
@@ -779,6 +806,8 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: 'center',
     gap: theme.space.s8,
   },
+  // Centred in the body the list leaves, as the Add-an-agent plugin source draws its empty state.
+  emptyPage: { flex: 1, justifyContent: 'center' },
   empty: {
     alignItems: 'center',
     gap: theme.space.s12,

@@ -280,7 +280,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
             : description
     ), [contributionCatalogIsStale]);
     const currentDiffModeByBackend = scmDefaultDiffModeByBackend ?? {};
-    const effectiveFilesDiffSyntaxHighlightingMode = (filesDiffSyntaxHighlightingMode ?? 'off') as 'off' | 'simple' | 'advanced';
+    const effectiveFilesDiffSyntaxHighlightingMode = filesDiffSyntaxHighlightingMode ?? settingsDefaults.filesDiffSyntaxHighlightingMode;
     const effectiveFilesDiffRendererMode = filesDiffRendererMode === 'happier' ? 'happier' : 'pierre';
     const effectiveFilesDiffPresentationStyle = filesDiffPresentationStyle === 'unified' || filesDiffPresentationStyle === 'split'
         ? filesDiffPresentationStyle

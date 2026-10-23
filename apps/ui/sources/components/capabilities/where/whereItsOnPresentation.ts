@@ -1,5 +1,6 @@
-import type { ReachRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
+import type { ReachRuleV1, ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import {
+  type ReachRulesChangeV1,
   applyReachRulesChangeV1,
   groupReachRulesV1,
   normalizeReachRulesV1,
@@ -22,7 +23,7 @@ import {
   type HappierWhereItsOnLabels,
   type HappierWhereItsOnNames,
   type HappierWhereItsOnProjectionRow,
-  type HappierWhereItsOnReach,
+  type HappierWhereItsOnGroup,
   type HappierWhereItsOnSentence,
   type HappierWhereItsOnStatement,
 } from '@happier-dev/plugin-ui/presentation';
@@ -44,8 +45,20 @@ export type WhereItsOnConsequence = HappierWhereItsOnConsequence;
 
 const writeContext = () => ({ nowMs: Date.now(), newId: randomUUID });
 
-/** Happier's reach rule engine (protocol `reachRulesChangeV1`), which the shared control writes through. */
-export const whereItsOnReach: HappierWhereItsOnReach = {
+/**
+ * Happier's reach rule engine (protocol `reachRulesChangeV1`): the host binding of the shared control turns rules into
+ * its state and its intents back into one `replace`; the shared words read `group`.
+ */
+export type WhereItsOnReach = Readonly<{
+  group: HappierWhereItsOnGroup;
+  normalize: (rules: ReachRulesV1) => ReachRulesV1;
+  key: (rule: Readonly<{ target: ReachRuleV1['target']; agentId?: string }>) => string;
+  apply: (rules: ReachRulesV1, change: ReachRulesChangeV1) => ReachRulesV1;
+  toDrafts: typeof reachRulesToDraftsV1;
+  createDefault: (kind: 'skill' | 'mcp_server') => ReachRulesV1;
+}>;
+
+export const whereItsOnReach: WhereItsOnReach = {
   group: (rules) => groupReachRulesV1(rules),
   normalize: (rules) => normalizeReachRulesV1(rules),
   key: (rule) => reachRuleKeyV1(rule),

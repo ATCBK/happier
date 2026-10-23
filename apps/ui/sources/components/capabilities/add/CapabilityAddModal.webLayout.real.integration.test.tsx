@@ -44,7 +44,7 @@ const config: CapabilityAddModalConfig<Entry> = {
             // A row that was already added says so at its title line's end and has no button; the others carry one.
             whereSummary: (entry) => (entry.added ? 'Added' : null),
             action: (entry) => (entry.added ? null : <View testID={`add-button:${entry.name}`} style={{ width: 56, height: 28 }} />),
-            facts: () => ({ presentation: 'row' }),
+            facts: () => ({}),
             accessibilityLabel: (entry) => entry.name,
             testID: (entry) => `row:${entry.name}`,
         }),

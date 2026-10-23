@@ -6,12 +6,14 @@ import {
   HappierPressable,
   HappierWhereItsOnControl,
   collectHappierWhereItsOnAgentIds,
+  happierWhereItsOnIntentWrites,
   resolveHappierFieldBoxLabel,
-  useHappierWhereItsOnDraft,
   type HappierWhereItsOnChangeResult,
   type HappierWhereItsOnControlProps,
   type HappierWhereItsOnHost,
+  type HappierWhereItsOnIntent,
   type HappierWhereItsOnMenuItem,
+  type HappierWhereItsOnState,
 } from '@happier-dev/plugin-ui/presentation';
 import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
@@ -34,16 +36,25 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { useWhereItsOnNames } from './useWhereItsOnNames';
-import { whereItsOnControlLabels, whereItsOnReach } from './whereItsOnPresentation';
+import { sayWhereItsOn, whereItsOnControlLabels, whereItsOnReach } from './whereItsOnPresentation';
 
 /**
- * Happier's binding of the shared "Where it's on" control (`@happier-dev/plugin-ui` presentation owns what it shows,
- * in which order and what each control writes): Happier's names (Agent catalog identities, machines, Account
- * Projects), words and settings primitives.
+ * Happier's binding of the shared "Where it's on" control (`@happier-dev/plugin-ui` presentation owns what it shows
+ * and in which order, and says the person's choice as an intent): Happier's reach rules (protocol
+ * `reachRulesChangeV1`, which turns them into the control's state and its intents into one `replace`), names (Agent
+ * catalog identities, machines, Account Projects), words and settings primitives.
  */
 export type WhereItsOnChangeResult = HappierWhereItsOnChangeResult;
-export type WhereItsOnControlProps = Omit<HappierWhereItsOnControlProps, 'names' | 'labels' | 'host' | 'reach' | 'space'> &
+export type WhereItsOnReplaceChange = Extract<ReachRulesChangeV1, { kind: 'replace' }>;
+export type WhereItsOnControlProps = Omit<
+  HappierWhereItsOnControlProps,
+  'state' | 'onIntent' | 'projection' | 'names' | 'labels' | 'host' | 'space'
+> &
   Readonly<{
+    rules: ReachRulesV1;
+    projection: NonNullable<HappierWhereItsOnControlProps['projection']> | null;
+    /** One change = one call carrying the whole next value. */
+    onChange: (change: WhereItsOnReplaceChange) => Promise<WhereItsOnChangeResult>;
     /** Accepted from the detail pages but not drawn: the control has never offered Undo (pre-existing, unchanged). */
     onUndo?: () => Promise<void>;
   }>;
@@ -285,11 +296,16 @@ const HOST_SLOTS: Omit<Host, 'hasAgentMark'> = {
   AgentNames: ({ agentIds, machines, testID }) => <AgentNameRun agentIds={agentIds} machines={machines} testID={testID} />,
 };
 
-export const WhereItsOnControl = React.memo(function WhereItsOnControl({ onUndo: _onUndo, ...props }: WhereItsOnControlProps) {
+export const WhereItsOnControl = React.memo(function WhereItsOnControl({
+  onUndo: _onUndo,
+  rules: storedRules,
+  onChange,
+  ...props
+}: WhereItsOnControlProps) {
   const { theme } = useUnistyles();
   const agentIds = React.useMemo(
-    () => collectHappierWhereItsOnAgentIds(props.places.agentIds, props.rules, props.projection),
-    [props.places.agentIds, props.rules, props.projection],
+    () => collectHappierWhereItsOnAgentIds(props.places.agentIds, storedRules, props.projection),
+    [props.places.agentIds, storedRules, props.projection],
   );
   const { names, identityById } = useWhereItsOnNames({
     agentIds,
@@ -300,14 +316,36 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl({ onUndo:
     () => ({ ...HOST_SLOTS, hasAgentMark: (agentId) => identityById.has(agentId) }),
     [identityById],
   );
+  // Old stored duplicates collapse to the precedence owner's winner; the sentence states only rules that decide.
+  const rules = React.useMemo(() => whereItsOnReach.normalize(storedRules), [storedRules]);
+  const state = React.useMemo<HappierWhereItsOnState>(() => {
+    const base = rules.find((rule) => rule.target.t === 'allMachines' && rule.agentId === undefined);
+    return {
+      everywhere: base?.enabled === true ? 'on' : 'off',
+      rules: rules
+        .filter((rule) => rule !== base)
+        .map((rule) => ({
+          key: whereItsOnReach.key(rule),
+          place: rule.target,
+          ...(rule.agentId !== undefined ? { agentId: rule.agentId } : {}),
+          on: rule.enabled,
+        })),
+      sentence: sayWhereItsOn(rules, names),
+    };
+  }, [rules, names]);
+  const onIntent = React.useCallback(
+    (intent: HappierWhereItsOnIntent) => onChange(applyWhereItsOnIntent(rules, intent)),
+    [rules, onChange],
+  );
   return (
     <WhereIdentityContext.Provider value={identityById}>
       <HappierWhereItsOnControl
         {...props}
+        state={state}
+        onIntent={onIntent}
         names={names}
         labels={whereItsOnControlLabels}
         host={host}
-        reach={whereItsOnReach}
         space={theme.space}
       />
     </WhereIdentityContext.Provider>
@@ -323,7 +361,23 @@ export function useDraftReachRules(kind: 'skill' | 'mcp_server'): Readonly<{
   where: ReachRulesChangeV1 | undefined;
   onChange: WhereItsOnControlProps['onChange'];
 }> {
-  return useHappierWhereItsOnDraft(kind, whereItsOnReach);
+  const [state, setState] = React.useState<Readonly<{ rules: ReachRulesV1; where: ReachRulesChangeV1 | undefined }>>(
+    () => ({ rules: whereItsOnReach.createDefault(kind), where: undefined }),
+  );
+  const onChange = React.useCallback<WhereItsOnControlProps['onChange']>(async (change) => {
+    setState((current) => ({ rules: whereItsOnReach.apply(current.rules, change), where: change }));
+    return { ok: true };
+  }, []);
+  return { rules: state.rules, where: state.where, onChange };
+}
+
+/** The person's choice applied by the reach engine, as the one `replace` the caller saves. */
+function applyWhereItsOnIntent(rules: ReachRulesV1, intent: HappierWhereItsOnIntent): WhereItsOnReplaceChange {
+  const next = happierWhereItsOnIntentWrites(intent).reduce<ReachRulesV1>(
+    (current, write) => whereItsOnReach.apply(current, { kind: 'write', write }),
+    rules,
+  );
+  return { kind: 'replace', rules: whereItsOnReach.toDrafts(next) };
 }
 
 const styles = StyleSheet.create(() => ({
