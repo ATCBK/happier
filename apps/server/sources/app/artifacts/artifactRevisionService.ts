@@ -1,5 +1,4 @@
 import { inTx, type Tx } from "@/storage/inTx";
-import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
 import { acquireArtifactPublicationLocksInTx, readArtifactForCallerInTx, readmitArtifactContentInTx } from "./artifactAccessService";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
@@ -61,7 +60,7 @@ export async function restoreArtifactBodyRevision(input: Readonly<{
     artifactId: string;
     bodyVersion: number;
     header: Uint8Array;
-    kind?: ArtifactCoarseKindV1;
+    kind?: string;
     body?: Uint8Array;
     provenance?: Uint8Array;
     provenanceDataEncryptionKey?: Uint8Array;

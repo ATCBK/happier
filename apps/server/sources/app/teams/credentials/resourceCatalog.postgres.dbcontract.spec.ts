@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Tx } from "@/storage/inTx";
 import * as catalog from "./resourceRead";
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Account credential discovery (PostgreSQL)", () => {
@@ -59,7 +60,8 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Account credent
                 selects = 0;
                 maxBindings = 0;
                 projectedMembershipRows = 0;
-                const result = await observedClient.$transaction(tx => catalog.readTeamCredentialDiscoveryInTx(tx, {
+                // Prisma's query-extension transaction type omits the unused $metrics client member.
+                const result = await observedClient.$transaction(tx => catalog.readTeamCredentialDiscoveryInTx(tx as unknown as Tx, {
                     teamIds: ids, actorAccountId: actor.id, authentication, limit: 100, ...(cursor ? { cursor } : {}),
                 }), { isolationLevel: "RepeatableRead" });
                 return { result, selects, maxBindings, projectedMembershipRows };
