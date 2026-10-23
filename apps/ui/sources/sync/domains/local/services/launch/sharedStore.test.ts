@@ -217,8 +217,9 @@ describe('shared local-service launcher store', () => {
             return { protocolVersion: 1, snapshot: { ...snapshot, updatedAt: generation,
                 targets: snapshot.targets.map(target => ({ ...target, serviceState: running ? 'healthy' : 'stopped' })) } };
         });
-        const source = { machineId: 'machine-a', serverId: 'server-a', scope: 'workspace' as const, workspaceRoot: '/repo' };
-        const bindings = { ...source, projection: 'managed_bindings' as const, accountId: 'owner' };
+        const source = { machineId: 'machine-a', serverId: 'server-a', accountId: 'owner', credentialKey: 'credential-a',
+            scope: 'workspace' as const, workspaceRoot: '/repo' };
+        const bindings = { ...source, projection: 'managed_bindings' as const };
         const otherHome = { ...source, serverId: 'server-b' };
         const dispose = [source, bindings, otherHome].map(key => subscribeLocalServiceLauncherStore(key, () => {}));
         await vi.waitFor(() => expect(watches.length).toBeGreaterThanOrEqual(2));
@@ -269,7 +270,8 @@ describe('shared local-service launcher store', () => {
             return { protocolVersion: 1, snapshot };
         });
         const source = { machineId: 'machine-a', serverId, scope: 'workspace' as const, workspaceRoot: '/repo' };
-        const bindings = { ...source, projection: 'managed_bindings' as const, accountId: 'owner' };
+        // This bare executor intentionally exercises the standalone, unqualified contract.
+        const bindings = { ...source, projection: 'managed_bindings' as const };
         const otherHome = { ...source, serverId: 'server-b' };
         const healthy = { ...source, workspaceRoot: '/healthy' };
         const dispose = [source, bindings, otherHome, healthy].map(key => subscribeLocalServiceLauncherStore(key, () => {}));
