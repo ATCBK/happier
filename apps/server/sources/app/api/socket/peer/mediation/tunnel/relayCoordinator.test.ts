@@ -16,8 +16,9 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const machineId = 'cost-machine';
         const inspectedSocketIds = new Set<string>();
         const values = io.sockets.sockets.values.bind(io.sockets.sockets);
-        vi.spyOn(io.sockets.sockets, 'values').mockImplementation(function* () {
+        vi.spyOn(io.sockets.sockets, 'values').mockImplementation(function* (): ReturnType<typeof values> {
             for (const socket of values()) { inspectedSocketIds.add(socket.id); yield socket; }
+            return undefined;
         });
         const get = io.sockets.sockets.get.bind(io.sockets.sockets);
         vi.spyOn(io.sockets.sockets, 'get').mockImplementation(id => {
