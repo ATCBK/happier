@@ -285,16 +285,17 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
       };
     }, [discoveryReadiness.pending, discoveryReadiness.ready, discoveryReadiness.revision, startDiscovery]);
 
-    // Account configuration remains readable while Machine discovery is pending.
-    // Both reads re-acquire on the host's existing readmission signal, never a timer.
+    // Account configuration waits for its requester, independently of Machine
+    // discovery, and re-acquires through that requester's admission signal.
     React.useEffect(() => {
+      if (configuredReadiness.pending || configuredReadiness.ready === false) return;
       void runConfiguredRead({ v: 1 });
-    }, [configuredReadiness.revision, runConfiguredRead]);
+    }, [configuredReadiness.pending, configuredReadiness.ready, configuredReadiness.revision, runConfiguredRead]);
 
     const read = React.useCallback(() => {
       if (!discoveryReadiness.pending && discoveryReadiness.ready !== false) startDiscovery();
-      void runConfiguredRead({ v: 1 });
-    }, [discoveryReadiness.pending, discoveryReadiness.ready, runConfiguredRead, startDiscovery]);
+      if (!configuredReadiness.pending && configuredReadiness.ready !== false) void runConfiguredRead({ v: 1 });
+    }, [configuredReadiness.pending, configuredReadiness.ready, discoveryReadiness.pending, discoveryReadiness.ready, runConfiguredRead, startDiscovery]);
 
     const refresh = React.useCallback(() => {
       // Everything this page learned from its own presses is discarded, because the

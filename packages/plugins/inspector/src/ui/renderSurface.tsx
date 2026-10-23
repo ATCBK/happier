@@ -248,7 +248,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   }, [canOpenSurface, hostApi, text]);
 
   const refreshPluginList = React.useCallback((afterReload = false): Promise<void> => {
-    if (readiness.pending) return Promise.resolve();
+    if (readiness.pending || readiness.ready === false) return Promise.resolve();
     if (inventoryRead.current && !afterReload) return inventoryRead.current;
     if (!hostApi) {
       setError({ kind: 'inventory', code: 'host_api_unavailable',
@@ -283,7 +283,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     });
     inventoryRead.current = read;
     return read;
-  }, [hostApi, readiness.pending, text]);
+  }, [hostApi, readiness.pending, readiness.ready, text]);
 
   React.useEffect(() => {
     void refreshPluginList();
@@ -693,6 +693,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
             <Action.Execute
               action="plugins.list"
               input={{}}
+              disabled={readiness.pending || readiness.ready === false}
               title={text('plugins.inspector.surface.readWithAction', 'Read via Action.Execute')}
             />
             <Action.Copy

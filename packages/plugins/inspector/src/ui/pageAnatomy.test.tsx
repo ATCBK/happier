@@ -8,6 +8,7 @@ import {
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
 
 import { renderSurface } from './renderSurface.js';
 
@@ -44,6 +45,34 @@ async function mount(container: 'appPage' | 'rightSidebarTab') {
 }
 
 describe('Inspector page anatomy', () => {
+  it('defers automatic and manual inventory reads until requester admission and after withdrawal', async () => {
+    const executeAction = vi.fn(async (): Promise<JsonValue> => ({ plugins: [] }));
+    const context = { ...createContext('appPage'), requesterExecutionReady: false,
+      machineConnectionPending: false, machineExecutionReady: true };
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'requester-ready', mountNonce: 'requester-ready' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: context, adapter: createPluginUiRnwSemanticSurfaceAdapter(), handlers: { executeAction },
+    });
+    try {
+      expect(executeAction).not.toHaveBeenCalled();
+      expect((await fixture.getByRole('button', { name: 'Read via Action.Execute' })).state?.disabled).toBe(true);
+      await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Refresh with icon button' })); });
+      expect(executeAction).not.toHaveBeenCalled();
+      await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: true }); });
+      await expect(fixture.getByText('No plugins installed.')).resolves.toBeDefined();
+      expect(executeAction).toHaveBeenCalledTimes(1);
+      const demo = await fixture.getByRole('button', { name: 'Read via Action.Execute' });
+      expect(demo.state?.disabled).not.toBe(true);
+      await act(async () => { await fixture.press(demo); });
+      expect(executeAction).toHaveBeenCalledTimes(2);
+      expect(executeAction).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'plugins.list' }));
+      await act(async () => { await fixture.updateSurface(context); });
+      expect((await fixture.getByRole('button', { name: 'Read via Action.Execute' })).state?.disabled).toBe(true);
+      await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Refresh with icon button' })); });
+      expect(executeAction).toHaveBeenCalledTimes(2);
+    } finally { await fixture.dispose(); }
+  });
   it('opens its full page with the public page header and titled sections', async () => {
     const fixture = await mount('appPage');
     try {

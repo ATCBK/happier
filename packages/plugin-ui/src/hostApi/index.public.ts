@@ -109,8 +109,8 @@ function usePluginResourceResult(
     [resourceStore, resourceKey],
   );
   const subscribe = useCallback(
-    (listener: () => void) => active && !readiness.pending ? entry.subscribe(listener, live) : () => {},
-    [entry, live, active, readiness.pending, readiness.revision],
+    (listener: () => void) => active && !readiness.pending && readiness.ready !== false ? entry.subscribe(listener, live) : () => {},
+    [entry, live, active, readiness.pending, readiness.ready, readiness.revision],
   );
   const state = useSyncExternalStore(subscribe, entry.getSnapshot, entry.getSnapshot);
   const presented = useMemo<PluginUiResourceSnapshot>(() => {
@@ -120,8 +120,9 @@ function usePluginResourceResult(
   }, [readiness.pending, state]);
 
   const refresh = useCallback(async () => {
+    if (readiness.pending || readiness.ready === false) return;
     await entry.refresh();
-  }, [entry]);
+  }, [entry, readiness.pending, readiness.ready]);
 
   return useMemo(() => ({ resource: presented, refresh }), [refresh, presented]);
 }

@@ -233,6 +233,31 @@ afterEach(async () => {
 });
 
 describe('the mounted PRs & Issues source settings page', () => {
+  it('defers configured reads and Refresh until its requester is admitted independently of Machine discovery', async () => {
+    let configuredReads = 0;
+    const harness = createHarness({ discovery: { kind: 'complete', candidates: [], failures: [] },
+      configured: async () => {
+        configuredReads += 1;
+        return { kind: 'read', status: 'complete', instances: [configuredRecord('Already configured', 'active')] };
+      },
+    });
+    const page = await mountSettings(harness, {}, renderSurface, createSurfaceContextFixture({
+      requesterExecutionReady: false, machineConnectionPending: false, machineExecutionReady: false,
+    }));
+    expect(configuredReads).toBe(0);
+    await pressControl(page, 'Refresh');
+    expect(configuredReads).toBe(0);
+    await act(async () => { await page.updateSurface(createSurfaceContextFixture({
+      requesterExecutionReady: true, machineConnectionPending: true, machineExecutionReady: false,
+    })); });
+    await expect(page.getByText('Already configured')).resolves.toBeDefined();
+    expect(configuredReads).toBe(1);
+    await act(async () => { await page.updateSurface(createSurfaceContextFixture({
+      requesterExecutionReady: true, machineConnectionPending: false, machineExecutionReady: true,
+    })); });
+    expect(configuredReads).toBe(1);
+  });
+
   it('defers Machine discovery while the host is pending, keeps Account reads independent, and reacquires on readmission', async () => {
     let discoveryReads = 0;
     const harness = createHarness({
