@@ -136,11 +136,11 @@ function WideToolbar(props: CollectionToolbarProps): ReactElement {
         {props.lens ?? null}
         {props.refine?.render() ?? null}
         {slots?.selection ?? null}
+        {props.accessory ?? null}
       </Row>
       {/* It wraps too: a narrow window would otherwise push the arrangement switch off the right edge. Bounded by
           the toolbar's width, or a wrapping row sized to its content never has a reason to wrap. */}
       <Row gap="xsmall" wrap align="center" style={trailStyle}>
-        {props.accessory ?? null}
         {freshness == null ? null : (
           <Status
             tone={freshness.tone}

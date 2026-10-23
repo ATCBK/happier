@@ -1980,9 +1980,11 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const headerPlacesSearch = typeof props.header === 'function';
   const selectionMode = useListSelectionModeControl(multipleStore, selectableKeys.length > 0);
   const pageChrome = useHappierPageChromeInternal();
-  // Phone-narrow: the toolbar recomposes (`CollectionToolbar`) and the search fills its row. Before the first
-  // measurement the host's phone header (it shows the title) already says so, so the first frame composes right.
-  const compactToolbar = size === null ? pageChrome?.showsTitle === true : size.width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx;
+  // Too narrow for the one toolbar row (a phone, or a list narrowed beside a details pane): the toolbar folds into its
+  // two calm rows (`CollectionToolbar`) and the search fills its row, instead of wrapping control by control. Before
+  // the first measurement the host's phone header (it shows the title) already says so, so the first frame composes
+  // right.
+  const compactToolbar = size === null ? pageChrome?.showsTitle === true : size.width < HAPPIER_PAGE_METRICS.toolbarFoldBelowWidthPx;
   const header = typeof props.header === 'function' ? props.header({
     title: props.title === undefined || pageChrome?.showsTitle === true ? null : (
       <HappierText variant="heading" tone="neutral" accessibilityRole="header" numberOfLines={1}>{props.title}</HappierText>

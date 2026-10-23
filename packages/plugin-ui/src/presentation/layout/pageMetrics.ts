@@ -143,6 +143,13 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    */
   rowStackBelowWidthPx: 520,
   /**
+   * Below this width a Collection's one toolbar row (the page's name, a readable search, the lens and filters
+   * leading; freshness, Refresh, ⋯, the arrangement switch and the page's Run on trailing) no longer fits, so
+   * `CollectionToolbar` folds into its two calm rows instead of wrapping control by control — a list narrowed
+   * beside a details pane, a small window, a phone.
+   */
+  toolbarFoldBelowWidthPx: 1080,
+  /**
    * The narrowest a section title and description may get beside the section's
    * action (the label column above). By default, a compact action ("Cancel", "Add")
    * that leaves more than this on a phone stays on the title's line.

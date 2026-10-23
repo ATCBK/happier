@@ -4981,6 +4981,24 @@ describe('the Collection toolbar', () => {
     view.unmount();
   });
 
+  it('folds into its two rows when the list is narrowed beside a details pane, instead of wrapping control by control', () => {
+    const view = mount({
+      search,
+      header: toolbarHeader([]),
+      renderPopover: openPopover,
+    });
+    // A 1440 window with the app's details pane open leaves the list about this wide.
+    view.measure(780);
+    const toolbar = view.query('toolbar')!;
+    expect(toolbar.contains(view.query('search'))).toBe(true);
+    expect(toolbar.contains(view.query('lens'))).toBe(true);
+    // Filters and order fold behind the one counted Filters button; the arrangement switch stays.
+    expect(view.query('refine:toolbar')).toBeNull();
+    expect(button(toolbar, 'Filters: 2')).not.toBeNull();
+    expect(toolbar.querySelector('[role="radiogroup"], [role="tablist"]')).not.toBeNull();
+    view.unmount();
+  });
+
   it('on a phone folds filters, order, freshness and refresh behind two round buttons, keeping the lens and the view switch', () => {
     const calls: string[] = [];
     const view = mount({
