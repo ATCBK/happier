@@ -88,11 +88,12 @@ describe('admitted background service host activation', () => {
                 source: { kind: 'file_backed', sourceAuthority, entryPath },
             });
             const requests: { pluginId: string; agentId: string; occurrenceId: string }[] = [];
+            let retainedOperationServices = 0;
             const roots: { __backgroundServiceProcessPlugins: BackgroundServiceProcessPluginHost } = {
                 __backgroundServiceProcessPlugins: {
                     prepareAgentInvocationServices: async request => {
                         requests.push({ pluginId: request.pluginId, agentId: request.agentId, occurrenceId: request.occurrenceId });
-                        return owner.prepareBackgroundServiceProcessOperationServices({
+                        const prepared = await owner.prepareBackgroundServiceProcessOperationServices({
                             plugin: { id: request.pluginId, version: request.pluginVersion },
                             contribution: { id: localAgentId, qualifiedId: `${pluginId}/agents/${localAgentId}` },
                             occurrenceId: request.occurrenceId, correlationId: request.correlationId,
@@ -106,6 +107,12 @@ describe('admitted background service host activation', () => {
                             }) },
                             resolveExecutable: async () => { throw new Error('Reader must use its admitted system tool'); },
                         });
+                        // Count live capabilities at the real parent/child service boundary.
+                        retainedOperationServices += 1;
+                        return { ...prepared, async dispose() {
+                            await prepared.dispose();
+                            retainedOperationServices -= 1;
+                        } };
                     },
                 },
             };
@@ -126,6 +133,7 @@ describe('admitted background service host activation', () => {
                         deadlineAtMs: Date.now() + 30_000, signal: context.signal,
                     });
                     expect(observed, await readFile(join(root, 'reader-errors'), 'utf8').catch(() => '')).toMatchObject({ ok: true });
+                    expect(retainedOperationServices).toBe(0);
                     const cancellation = new AbortController();
                     let resolveStarted!: (pid: number) => void;
                     let rejectStarted!: (error: Error) => void;
@@ -150,6 +158,7 @@ describe('admitted background service host activation', () => {
                         await expect(pending).resolves.toMatchObject({ ok: false, code: 'cancelled' });
                         expect(await waitForProcessExit(pid)).toBe(true);
                         expect(context.signal.aborted).toBe(false);
+                        expect(retainedOperationServices).toBe(0);
                     } finally { cancellation.abort(); watcher.close(); }
                 },
             }) });

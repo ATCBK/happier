@@ -9,11 +9,40 @@ import { createProductionPluginInvocationServiceOwners } from '../../invocation/
 import { createStablePluginHttpHost } from '../../fetch/service';
 import type { PluginInvocationLogRecord } from '../../invocation/services/logger';
 import { ingestPluginManifestV2 } from '@happier-dev/protocol';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { PLUGIN_MANIFEST as CLAUDE_PLUGIN_MANIFEST } from '@happier-dev/plugins-claude';
 import { PLUGIN_MANIFEST as CODEX_PLUGIN_MANIFEST } from '@happier-dev/plugins-codex';
 import { createBackgroundServiceProcessServiceClient, createBackgroundServiceProcessServiceHost, type BackgroundServiceProcessBridgeMessage } from './backgroundServiceProcessBridge';
 
 describe('background process invocation services', () => {
+    it('releases completed native operation capabilities instead of retaining the indexed corpus in the daemon', async () => {
+        const parent = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} } });
+        const roots = { prepare: (signal: AbortSignal) => parent.prepareBackgroundServiceProcessOperationServices({
+            plugin: { id: 'fixture', version: '1.0.0' }, contribution: { id: 'reader', qualifiedId: 'fixture/agents/reader' },
+            occurrenceId: 'occurrence', correlationId: 'reader', surface: 'agent', signal,
+            isOccurrenceCurrent: () => !signal.aborted,
+        }, { hostAccessRequests: [] }) };
+        let client: ReturnType<typeof createBackgroundServiceProcessServiceClient<typeof roots>>;
+        const copy = (message: BackgroundServiceProcessBridgeMessage) => JSON.parse(JSON.stringify(message));
+        const host = createBackgroundServiceProcessServiceHost({ services: roots, send: message => queueMicrotask(() => client.receive(copy(message))) });
+        client = createBackgroundServiceProcessServiceClient<typeof roots>({ description: JSON.parse(JSON.stringify(host.description)), send: message => queueMicrotask(() => host.receive(copy(message))) });
+        const completed: Awaited<ReturnType<typeof roots.prepare>>[] = [];
+        try {
+            for (let index = 0; index < 100; index += 1) {
+                const controller = new AbortController();
+                const prepared = await client.services.prepare(controller.signal);
+                await prepared.services.__backgroundServiceProcessLocal.writeLog({ level: 'info', message: 'owned operation' });
+                controller.abort();
+                await prepared.dispose();
+                completed.push(prepared);
+            }
+            const retained = await Promise.allSettled(completed.map(prepared => prepared.services.__backgroundServiceProcessLocal.writeLog({ level: 'info', message: 'retired operation' })));
+            expect(retained.filter(result => result.status === 'fulfilled')).toHaveLength(0);
+            expect(retained.every(result => result.status === 'rejected' && result.reason instanceof PluginError
+                && result.reason.code === 'background_service_process_method_unavailable')).toBe(true);
+        } finally { await client.dispose(); await host.dispose(); await parent.dispose(); }
+    });
+
     it.each([CLAUDE_PLUGIN_MANIFEST, CODEX_PLUGIN_MANIFEST])('binds a native reader without requiring unrelated Agent runtime services ($id)', async manifest => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-process-native-admission-'));
         await writeFile(join(directory, 'native-transcript'), 'owned native fixture');

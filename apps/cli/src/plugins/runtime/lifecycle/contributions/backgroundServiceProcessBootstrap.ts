@@ -10,7 +10,7 @@ import { createPluginTypeScriptGenerationScope, loadVerifiedPluginModule } from 
 import type { PluginDaemonModuleNamespace } from '../../types';
 import type { AdmittedBackgroundServicePlugin } from './backgroundServiceProcessSource';
 import { activatePluginRuntimeRegistry } from '../manager';
-import { createBackgroundServiceProcessServices, type PreparedBackgroundServiceProcessLocalServices } from './backgroundServiceProcessServices';
+import { createBackgroundServiceProcessServices, type PreparedBackgroundServiceProcessOperationServices } from './backgroundServiceProcessServices';
 import type { CreateAgentInvocationServices } from '../../invocation/services/types';
 
 
@@ -47,7 +47,7 @@ export type BackgroundServiceProcessHostEntryLoader = (
 export type BackgroundServiceProcessPluginHost = Readonly<{
     prepareAgentInvocationServices(
         input: BackgroundServiceProcessAgentInvocationRequest,
-    ): Promise<PreparedBackgroundServiceProcessLocalServices>;
+    ): Promise<PreparedBackgroundServiceProcessOperationServices>;
 }>;
 
 export type BackgroundServiceProcessAgentInvocationRequest = Pick<
@@ -135,24 +135,44 @@ export async function resolveBackgroundServiceProcessBootstrap(
             providerBindingActive: input.providerBindingActive,
             signal,
         });
-        signal.throwIfAborted();
-        const admittedAgent = registry?.agentRuntimesByAgentId.get(input.agentId);
-        if (!admittedAgent || admittedAgent.pluginId !== input.pluginId || admittedAgent.occurrenceId !== input.occurrenceId) {
-            throw new Error('background_service_process_agent_context_unavailable');
-        }
-        const local = createBackgroundServiceProcessServices({
-            metadata: {
-                plugin: { id: input.pluginId, version: input.pluginVersion },
-                contribution: {
-                    id: admittedAgent.localAgentId,
-                    qualifiedId: resolveAgentContributionQualifiedId({ pluginId: input.pluginId, localId: admittedAgent.localAgentId }),
+        let local: ReturnType<typeof createBackgroundServiceProcessServices>;
+        try {
+            signal.throwIfAborted();
+            const admittedAgent = registry?.agentRuntimesByAgentId.get(input.agentId);
+            if (!admittedAgent || admittedAgent.pluginId !== input.pluginId || admittedAgent.occurrenceId !== input.occurrenceId) {
+                throw new Error('background_service_process_agent_context_unavailable');
+            }
+            local = createBackgroundServiceProcessServices({
+                metadata: {
+                    plugin: { id: input.pluginId, version: input.pluginVersion },
+                    contribution: {
+                        id: admittedAgent.localAgentId,
+                        qualifiedId: resolveAgentContributionQualifiedId({ pluginId: input.pluginId, localId: admittedAgent.localAgentId }),
+                    },
                 },
-            },
-            signal,
-            localPolicy: prepared.localPolicy,
-            clientServices: prepared.services,
-        });
-        localAgentServices.add(local);
+                signal,
+                localPolicy: prepared.localPolicy,
+                clientServices: prepared.services,
+            });
+        } catch (error) {
+            if (!context.signal.aborted) await prepared.dispose();
+            throw error;
+        }
+        let disposal: Promise<void> | undefined;
+        const owned = { services: local.services, dispose: () => {
+            disposal ??= (async () => {
+                signal.removeEventListener('abort', onAbort);
+                await local.dispose();
+                // Run cancellation already closes the whole bridge and releases its scopes.
+                if (!context.signal.aborted) await prepared.dispose();
+                localAgentServices.delete(owned);
+            })();
+            return disposal;
+        } };
+        const onAbort = () => { void owned.dispose().catch(() => {}); };
+        localAgentServices.add(owned);
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) { await owned.dispose(); signal.throwIfAborted(); }
         return local.services;
     };
     const run = async (

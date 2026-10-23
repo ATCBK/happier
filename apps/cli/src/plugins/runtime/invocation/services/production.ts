@@ -121,7 +121,7 @@ import type {
 import type { StableTargetedContributionsOwner } from './targetedContributions';
 import type { StablePluginComposerContentOwner } from './composerContent';
 import { PluginError } from '@happier-dev/plugin-sdk';
-import type { BackgroundServiceProcessLocalPolicy, PreparedBackgroundServiceProcessLocalServices } from '../../lifecycle/contributions/backgroundServiceProcessServices';
+import type { BackgroundServiceProcessLocalPolicy, PreparedBackgroundServiceProcessLocalServices, PreparedBackgroundServiceProcessOperationServices } from '../../lifecycle/contributions/backgroundServiceProcessServices';
 import { projectBackgroundServiceProcessProxiedServices } from '../../lifecycle/contributions/backgroundServiceProcessPolicy';
 
 type ResolvePluginExecutable = (
@@ -1189,19 +1189,25 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         createOrdinaryServiceBinding,
         createOperationServices,
         prepareBackgroundServiceProcessLocalPolicy,
-        async prepareBackgroundServiceProcessOperationServices(seed: PluginInvocationServicesSeed, operation: PluginOperationServicesInput): Promise<PreparedBackgroundServiceProcessLocalServices> {
+        async prepareBackgroundServiceProcessOperationServices(seed: PluginInvocationServicesSeed, operation: PluginOperationServicesInput): Promise<PreparedBackgroundServiceProcessOperationServices> {
+            const lifetime = new AbortController();
             const processOperation = { ...operation, executionRealm: 'background-service-process' as const };
-            const admitted = createOperationServicesWithBinding(seed, processOperation);
-            // Consumed Agent readers receive the available operation services, just
-            // like ordinary Agent operations. Their manifest also declares runtime
-            // needs (for example a terminal) that these reads never consume.
-            // Runner admission still refuses unsupported required HostAccess;
-            // individual unavailable services retain their fail-closed bindings.
-            const local = await prepareBackgroundServiceProcessLocalPolicy(admitted.seed, admitted.binding, processOperation);
-            return { localPolicy: local.localPolicy, services: {
-                ...projectBackgroundServiceProcessProxiedServices(admitted.services),
-                ...local.services,
-            } };
+            try {
+                const admitted = createOperationServicesWithBinding({ ...seed, signal: AbortSignal.any([seed.signal, lifetime.signal]) }, processOperation);
+                // Consumed Agent readers receive the available operation services, just
+                // like ordinary Agent operations. Their manifest also declares runtime
+                // needs (for example a terminal) that these reads never consume.
+                // Runner admission still refuses unsupported required HostAccess;
+                // individual unavailable services retain their fail-closed bindings.
+                const local = await prepareBackgroundServiceProcessLocalPolicy(admitted.seed, admitted.binding, processOperation);
+                return { localPolicy: local.localPolicy, services: {
+                    ...projectBackgroundServiceProcessProxiedServices(admitted.services),
+                    ...local.services,
+                }, async dispose() { lifetime.abort(); } };
+            } catch (error) {
+                lifetime.abort();
+                throw error;
+            }
         },
         createManagedProviderRuntimeInvocationServices(
             seed: Parameters<typeof createServicesFactory>[0],

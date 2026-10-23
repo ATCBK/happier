@@ -49,6 +49,11 @@ export type PreparedBackgroundServiceProcessLocalServices = Readonly<{
     services: Readonly<Record<string, unknown>> & Readonly<{ __backgroundServiceProcessLocal: BackgroundServiceProcessLocalHost }>;
 }>;
 
+/** An Agent operation's callable graph must retire before its containing run settles. */
+export type PreparedBackgroundServiceProcessOperationServices = PreparedBackgroundServiceProcessLocalServices & Readonly<{
+    dispose(): Promise<void>;
+}>;
+
 function readIdentity(value: unknown): Readonly<{ id: string; version: string }> {
     if (typeof value !== 'object' || value === null || !('id' in value) || typeof value.id !== 'string' || !('version' in value) || typeof value.version !== 'string') {
         throw new PluginError({ code: 'background_service_process_context_invalid', message: 'Background service has no admitted plugin identity' });

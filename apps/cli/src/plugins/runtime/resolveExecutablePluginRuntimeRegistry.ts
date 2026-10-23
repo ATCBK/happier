@@ -953,7 +953,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
     createAgentInvocationServices: CreateAgentInvocationServices;
     prepareBackgroundServiceProcessAgentServices?(
         agentParams: import('./lifecycle/contributions/backgroundServiceProcessBootstrap').BackgroundServiceProcessAgentInvocationRequest,
-    ): Promise<import('./lifecycle/contributions/backgroundServiceProcessServices').PreparedBackgroundServiceProcessLocalServices>;
+    ): Promise<import('./lifecycle/contributions/backgroundServiceProcessServices').PreparedBackgroundServiceProcessOperationServices>;
     /** Reuses exact retained/current-source attestation for daemon-owned services. */
     attestRetainedRunnerAgentServiceBinding?(params: Readonly<{
         binding: AgentSessionRunnerBindingV1;
