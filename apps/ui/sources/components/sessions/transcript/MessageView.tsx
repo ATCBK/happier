@@ -16,6 +16,7 @@ import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/ap
 import { useLayoutMaxWidthStyle } from "@/components/ui/layout/layout";
 import { ToolView } from '@/components/tools/shell/views/ToolView';
 import { ToolTimelineRow } from '@/components/tools/shell/views/ToolTimelineRow';
+import { selectToolApprovalRequestsForMessages } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import { buildMessageRouteId, resolveMessageRouteIdForDisplay } from "@happier-dev/session-core/messages";
 import { readUnsupportedContentMeta } from "@happier-dev/session-core/messages";
 import {
@@ -1539,6 +1540,10 @@ function ToolCallBlock(props: {
   const messagesById = props.toolRouteCommon.messagesById;
   const reducerState = props.toolRouteCommon.reducerState;
   const toolRouteMessageId = resolveMessageRouteIdForDisplay({ message: props.message, messagesById, reducerState });
+  // Narrow after the live message and its displayed route are known. Doing this at the list
+  // renderer would miss streaming inputs and repeat the route owner's reverse-index lookup.
+  const approvalRequests = selectToolApprovalRequestsForMessages({ requests: props.approvalRequests,
+    sessionId: props.sessionId, rowId: props.message.id, messages: [message], messageId: toolRouteMessageId });
   const toolSeq = resolveTranscriptMessageSeq(props.message);
   const { onJumpToAnchor: handleJumpToAnchor, openPath: handleOpenToolSessionMediaPath } = useTranscriptFileLinks({
     sessionId: props.sessionId, serverId: props.toolChromeCommon.serverId,
@@ -1629,7 +1634,7 @@ function ToolCallBlock(props: {
           messageId={toolRouteMessageId}
           jumpHighlightSeq={toolSeq}
           headerAction={toolPinAction}
-          approvalRequests={props.approvalRequests}
+          approvalRequests={approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
           displaySettings={props.toolChromeCommon.toolDisplaySettings}
@@ -1644,7 +1649,7 @@ function ToolCallBlock(props: {
           messageId={toolRouteMessageId}
           jumpHighlightSeq={toolSeq}
           headerAction={toolPinAction}
-          approvalRequests={props.approvalRequests}
+          approvalRequests={approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
           displaySettings={props.toolChromeCommon.toolDisplaySettings}

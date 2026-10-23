@@ -441,7 +441,7 @@ describe('ToolTimelineRow (permission pending)', () => {
         expect(errorStatus?.props.accessibilityLabel).toBe('Filesystem unavailable');
     });
 
-    it.each(['rejected', 'canceled'] as const)('marks a completed call whose Action approval was %s as blocked in its own words', async (status) => {
+    it.each(['rejected', 'canceled'] as const)('marks a completed call whose Action approval was %s as refused, as its group does', async (status) => {
         const tool: any = {
             id: 'tool-declined',
             name: 'writeTextFile',
@@ -476,6 +476,6 @@ describe('ToolTimelineRow (permission pending)', () => {
                 }]}
             />, createTestSessionTranscriptSource({ loadSidechain: (sidechainId) => ensureSidechainMessagesLoadedMock('s1', sidechainId) }),);
 
-        expect(screen.findByTestId('tool-timeline-row-permission-blocked')?.props.accessibilityLabel).toBe(`approvals.status.${status}`);
+        expect(screen.findByTestId('tool-timeline-row-permission-blocked')?.props.accessibilityLabel).toBe('toolView.actionOutcome.refused');
     });
 });

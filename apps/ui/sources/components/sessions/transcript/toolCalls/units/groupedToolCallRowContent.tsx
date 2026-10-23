@@ -9,6 +9,7 @@ import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/ap
 
 import { ToolView } from '@/components/tools/shell/views/ToolView';
 import { ToolTimelineRow } from '@/components/tools/shell/views/ToolTimelineRow';
+import { selectToolApprovalRequestsForMessages } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import { MessageViewWithSessionCommon } from '@/components/sessions/transcript/MessageView';
 import type { ToolRowPinAction } from '@/components/sessions/transcript/toolCalls/ToolCallPinAction';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -42,6 +43,8 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
     toolChromeCommon: TranscriptToolChromeCommon;
     toolRouteCommon: TranscriptToolRouteCommon;
 }>): React.ReactNode {
+    const approvalRequests = selectToolApprovalRequestsForMessages({ requests: params.approvalRequests,
+        sessionId: params.sessionId, rowId: params.message.id, messages: [params.message], messageId: params.nestedMessageId });
     const visualOriginV1 = params.message.meta?.forkVisualOriginV1;
     const withVisualOrigin = (content: React.ReactNode) => visualOriginV1 === undefined ? content
         : <TranscriptVisualContextProvider visualOriginV1={visualOriginV1}>{content}</TranscriptVisualContextProvider>;
@@ -54,7 +57,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
                 serverId={params.toolChromeCommon.serverId}
                 layoutContext="tool_calls_group"
                 forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
-                approvalRequests={params.approvalRequests}
+                approvalRequests={approvalRequests}
                 messagePins={params.messagePins}
                 onToggleToolPin={params.onToggleToolPin}
                 interaction={params.interaction}
@@ -84,7 +87,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
                 jumpHighlightSeq={params.message.seq ?? null}
                 headerAction={params.toolPinAction}
                 forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
-                approvalRequests={params.approvalRequests}
+                approvalRequests={approvalRequests}
                 interaction={params.interaction}
                 displaySettings={params.toolChromeCommon.toolDisplaySettings}
             />
@@ -102,7 +105,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
             jumpHighlightSeq={params.message.seq ?? null}
             headerAction={params.toolPinAction}
             forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
-            approvalRequests={params.approvalRequests}
+            approvalRequests={approvalRequests}
             interaction={params.interaction}
             displaySettings={params.toolChromeCommon.toolDisplaySettings}
             embedded

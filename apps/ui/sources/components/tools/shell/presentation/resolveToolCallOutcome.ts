@@ -1,10 +1,12 @@
 import type { ToolCall } from '@happier-dev/session-core/messages';
 import { maybeParseJson } from '@happier-dev/protocol/activity/parseJson';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import {
   isRecord,
   readHappierActionToolResultCandidates,
 } from '@happier-dev/protocol/actions/happierActionToolResult';
+import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
 
 import {
   resolveToolActionFailure,
@@ -12,6 +14,7 @@ import {
 } from './resolveToolActionFailure';
 import {
   resolveToolStatusIndicatorKind,
+  type DeclinedApprovalDisposition,
   type ToolStatusIndicatorKind,
 } from './resolveToolStatusIndicatorKind';
 
@@ -30,36 +33,45 @@ export type ToolCallOutcome =
     }>
   | Readonly<{ kind: 'status'; indicator: ToolStatusIndicatorKind }>;
 
-/** The most decoded form of a result: the parsed text of an MCP text envelope, its structured content, or the payload. */
+/** Structured MCP output takes precedence over supplementary text; otherwise retain text/bridge decoding. */
 export function readDecodedToolResult(tool: ToolCall): unknown {
   const candidates = readHappierActionToolResultCandidates(
     tool.result,
     tool.input,
   );
+  const envelope = candidates[0];
+  if (isRecord(envelope) && envelope.structuredContent != null)
+    return envelope.structuredContent;
   return candidates.length > 0
     ? candidates[candidates.length - 1]
     : maybeParseJson(tool.result);
 }
 
-export function resolveToolCallOutcome(tool: ToolCall): ToolCallOutcome {
-  const indicator = resolveToolStatusIndicatorKind(tool);
+export function resolveToolCallOutcome(
+  tool: ToolCall,
+  declinedApproval: DeclinedApprovalDisposition | null = null,
+): ToolCallOutcome {
+  const indicator = resolveToolStatusIndicatorKind(tool, declinedApproval);
   const failure = indicator === 'error' ? resolveToolActionFailure(tool) : null;
   if (failure) return { kind: 'failure', failure };
   if (indicator !== 'completed' || tool.result == null)
     return { kind: 'status', indicator };
+  const actionId = readHappierActionCallId(tool.name, tool.input);
+  if (!actionId) return { kind: 'status', indicator };
   const decoded = readDecodedToolResult(tool);
   const approval = ActionApprovalRequestCreatedResultSchema.safeParse(decoded);
   if (approval.success)
     return { kind: 'approval_requested', artifactId: approval.data.artifactId };
-  // A settlement union's `pending` arm: the request was taken, its effect had not settled yet.
-  if (isRecord(decoded) && decoded.type === 'pending') {
+  // Only Session creation's strict settlement union gives `pending` this meaning.
+  const settlement = actionId === 'session.spawn_new' ? SessionSpawnNewResultV1Schema.safeParse(decoded) : null;
+  if (settlement?.success && settlement.data.type === 'pending') {
     const {
       type: _type,
       outcome,
       retryWithSameCreationKey: _retry,
       ...details
-    } = decoded;
-    return { kind: 'pending', confirmed: outcome !== 'unknown', details };
+    } = settlement.data;
+    return { kind: 'pending', confirmed: outcome === 'accepted', details };
   }
   return { kind: 'status', indicator };
 }

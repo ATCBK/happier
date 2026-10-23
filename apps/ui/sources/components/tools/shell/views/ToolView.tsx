@@ -45,7 +45,7 @@ import { Typography } from '@/constants/Typography';
 import { isGenericSubAgentToolName, isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
+import { buildApprovalToolCallLocation, selectMatchingToolApprovalRequests, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
@@ -204,15 +204,13 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
 
     const normalizedToolName = headerModel.normalizedToolName;
     const matchingApprovalRequests = React.useMemo(() => {
-        const requests = props.approvalRequests ?? [];
-        if (requests.length === 0) return [];
-        return requests.filter((request) => doesApprovalMatchToolCall({
-            request,
+        return selectMatchingToolApprovalRequests({
+            requests: props.approvalRequests,
             sessionId,
             messageId,
             tool: toolForRendering,
             normalizedToolName,
-        }));
+        });
     }, [messageId, normalizedToolName, props.approvalRequests, sessionId, toolForRendering]);
     const declinedApproval = readDeclinedApprovalAtCall(matchingApprovalRequests);
     const declinedApprovalShown = declinedApproval !== null;

@@ -49,10 +49,9 @@ import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
 import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOutcomeStatus';
 import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
-import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
+import { resolveToolActionFailure, toolActionOutcomeLabel } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
-import { formatApprovalStatusLabel } from '@/components/approvals/approvalStatusLabel';
-import { buildApprovalToolCallLocation, doesApprovalMatchToolCall, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
+import { buildApprovalToolCallLocation, selectMatchingToolApprovalRequests, readDeclinedApprovalAtCall, readToolOutputText } from './toolApprovalPromptMatching';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
 import {
@@ -218,15 +217,13 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
 
     const normalizedToolName = headerModel.normalizedToolName;
     const matchingApprovalRequests = React.useMemo(
-        () => (props.approvalRequests ?? []).filter((request) =>
-            doesApprovalMatchToolCall({
-                request,
+        () => selectMatchingToolApprovalRequests({
+                requests: props.approvalRequests,
                 sessionId: props.sessionId,
                 messageId: props.messageId,
                 tool: toolForRendering,
                 normalizedToolName,
             }),
-        ),
         [normalizedToolName, props.approvalRequests, props.messageId, props.sessionId, toolForRendering],
     );
     const declinedApproval = readDeclinedApprovalAtCall(matchingApprovalRequests);
@@ -337,8 +334,9 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
             ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error'))
             : statusKind === 'permission_blocked'
                 ? (
-                    // A declined Action approval has no permission request: it says how the person answered it.
-                    (!toolForRendering.permission && declinedApproval ? formatApprovalStatusLabel(declinedApproval) : null)
+                    // A declined Action approval has no permission request: the call was refused, in the group's
+                    // word; its card says how the person answered.
+                    (!toolForRendering.permission && declinedApproval ? toolActionOutcomeLabel('refused') : null)
                     ?? resolveToolPermissionTerminalErrorMessage({
                         tool: toolForRendering,
                         metadata: props.metadata,

@@ -10,7 +10,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { buildToolHeaderModel } from './buildToolHeaderModel';
 import { toolActionOutcomeLabel } from './resolveToolActionFailure';
-import type { ToolStatusIndicatorKind } from './resolveToolStatusIndicatorKind';
+import type { DeclinedApprovalDisposition, ToolStatusIndicatorKind } from './resolveToolStatusIndicatorKind';
 import { resolveToolCallOutcome } from './resolveToolCallOutcome';
 import { ToolOutcomeStatus } from './ToolOutcomeStatus';
 import { ToolStatusIndicator } from './ToolStatusIndicator';
@@ -43,6 +43,8 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
     metadata: Metadata | null;
     /** The Session whose Agent asked, named when a manager Session handles its question (an Agent-raised question). */
     askedBy?: string | null;
+    /** How the person answered this call's Action approval, when they declined it: the call reads as refused. */
+    declinedApproval?: DeclinedApprovalDisposition | null;
   }>,
 ) {
   const model = React.useMemo(
@@ -58,9 +60,17 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
   );
   const tool = model.toolForRendering;
   // One outcome owner for this header and the page's Result section.
-  const result = React.useMemo(() => resolveToolCallOutcome(tool), [tool]);
+  const declinedApproval = props.declinedApproval ?? null;
+  const result = React.useMemo(() => resolveToolCallOutcome(tool, declinedApproval), [declinedApproval, tool]);
   let outcome: React.ReactNode;
-  if (result.kind === 'status') {
+  if (result.kind === 'status' && result.indicator === 'permission_blocked' && declinedApproval) {
+    // The same quiet mark and word a typed refusal gets.
+    outcome = (
+      <View style={styles.outcome}>
+        <ToolOutcomeStatus testID="tool-details-outcome" label={toolActionOutcomeLabel('refused')} glyph="minus-circle" tone="quiet" />
+      </View>
+    );
+  } else if (result.kind === 'status') {
     const word = outcomeWord(result.indicator);
     outcome =
       word === null ? undefined : result.indicator === 'error' ? (

@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
-import { storage, useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
+import { storage, useMessage, useTranscriptApprovalArtifactsForSession, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
 import { resolveSessionMessageRouteId } from '@happier-dev/session-core/messages';
 import { sync } from '@/sync/sync';
 import { Deferred } from "@/components/ui/forms/Deferred";
@@ -13,6 +13,9 @@ import { useDestinationFocus, useDestinationInstanceKey, useDestinationPageTitle
 import { DefaultBackButton } from '@/components/navigation/Header';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { readDeclinedApprovalAtToolCall, usePreparedToolApprovalRequests } from '@/components/tools/shell/views/toolApprovalPromptMatching';
+import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { ToolDetailsPageHeader } from '@/components/tools/shell/presentation/ToolDetailsPageHeader';
 import { isQuestionRoutedToManager } from '@/components/tools/renderers/workflow/askUserQuestionCardState';
 import { readInboxSessionTitle } from '@/components/inbox/sessionAttention/inboxSessionPrivacy';
@@ -115,9 +118,17 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         () => session && tool && isQuestionRoutedToManager({ tool, agentState }) ? readInboxSessionTitle(session, sessionServerId) : null,
         [agentState, session, sessionServerId, tool],
     );
+    // The call's Action approval is a separate artifact: a declined one makes the call read as refused.
+    const approvalRequests = usePreparedToolApprovalRequests(useTranscriptApprovalArtifactsForSession(
+        normalizeSessionAddress(session?.serverId, props.sessionId),
+        TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS,
+    ));
+    const declinedApproval = tool
+        ? readDeclinedApprovalAtToolCall({ requests: approvalRequests, sessionId: props.sessionId, messageId: message?.id, tool })
+        : null;
     const toolPageHeader = React.useMemo(
-        () => tool ? <ToolDetailsPageHeader tool={tool} metadata={ownerMetadata} askedBy={askedBy} /> : null,
-        [askedBy, ownerMetadata, tool],
+        () => tool ? <ToolDetailsPageHeader tool={tool} metadata={ownerMetadata} askedBy={askedBy} declinedApproval={declinedApproval} /> : null,
+        [askedBy, declinedApproval, ownerMetadata, tool],
     );
 
     // A call's page is opened from its Session: Back returns there, even on a deep link with no history. A hosted

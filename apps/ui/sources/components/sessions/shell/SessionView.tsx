@@ -40,6 +40,7 @@ import { useSessionExecutionRunsSupported } from "@/hooks/server/useSessionExecu
 import { useEventCallback } from "@/hooks/ui/useEventCallback";
 import { Modal } from "@/modal";
 import { COMPOSER_SETTLED_APPROVAL_PRESENTATIONS, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from "@/components/tools/shell/approvals/transcriptSettledApprovalPresentations";
+import { usePreparedToolApprovalRequests } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import { useWorkspaceRefs, storage, useEnabledAutomationsCountForSession, useComposerApprovalArtifactsForSession, useEndpointConnectivity, useIsDataReady, useLocalSetting, useTranscriptApprovalArtifactsForSession, useSessionPendingMessages, useSessionTranscriptIds, useSessionVisibleReadSeq, useSetting, useSyncError } from "@/sync/domains/state/storage";
 import type { SessionRouteHydrationState } from "@/sync/domains/session/sessionRouteHydrationState";
 import { readSessionContentAvailability } from "@/sync/domains/session/encryptedContentAvailability";
@@ -1029,7 +1030,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
     );
     const approvalRequests = useComposerApprovalArtifactsForSession(approvalSessionAddress, COMPOSER_SETTLED_APPROVAL_PRESENTATIONS);
     // The transcript also keeps decided approvals whose body has a settled presentation (AGW-8).
-    const transcriptApprovalRequests = useTranscriptApprovalArtifactsForSession(approvalSessionAddress, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS);
+    const transcriptApprovalRequests = usePreparedToolApprovalRequests(useTranscriptApprovalArtifactsForSession(approvalSessionAddress, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS));
     const safeArea = useChromeSafeAreaInsets();
     const safeAreaTopInset = props.safeAreaTopMode === 'external' ? 0 : safeArea.top;
     const headerSafeAreaTopMode = props.headerSafeAreaTopMode ?? props.safeAreaTopMode ?? 'internal';

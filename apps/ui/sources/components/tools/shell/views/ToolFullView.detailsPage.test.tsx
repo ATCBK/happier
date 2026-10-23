@@ -6,6 +6,9 @@ import {
   standardCleanup,
 } from '@/dev/testkit';
 import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { toolActionOutcomeLabel } from '../presentation/resolveToolActionFailure';
+import { readDecodedToolResult, resolveToolCallOutcome } from '../presentation/resolveToolCallOutcome';
 import {
   collectHostText,
   findPressableByText,
@@ -122,13 +125,87 @@ const createSessionPendingCall = makeToolCall({
     content: [
       {
         type: 'text',
-        text: '{"type":"pending","retryWithSameCreationKey":true,"outcome":"accepted","operation":{"machineId":"machine-1","operationId":"operation-1"}}',
+        text: JSON.stringify(SessionSpawnNewResultV1Schema.parse({ type: 'pending', retryWithSameCreationKey: true,
+          outcome: 'accepted', operation: { serverId: 'server-1', machineId: 'machine-1', operationId: 'operation-1' } })),
       },
     ],
   },
 });
 
 describe('ToolFullView as the tool-details page', () => {
+  it('uses structured approval output alongside explanatory MCP text in both header and Result', async () => {
+    const approval = { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'session.archive' };
+    const tool = makeToolCall({ ...archiveAskedCall, result: {
+      structuredContent: approval,
+      content: [{ type: 'text', text: 'Approval requested.' }],
+    } });
+    expect(readDecodedToolResult(tool)).toEqual(approval);
+    const screen = await renderScreen(<ToolFullView tool={tool} owningMessageId="tool-message-2" sessionId="s1"
+      metadata={null} messages={[]} header={<ToolDetailsPageHeader tool={tool} metadata={null} />} />);
+    expect(headerOutcome(screen)).toBe('toolView.approvalRequested.title');
+    expect(screen.tree.root.findAllByProps({ testID: 'tool-details-approval-request' }).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    { name: 'mcp__external__lookup', input: {}, result: { type: 'pending', task: 'domain-specific data' } },
+    { name: 'mcp__external__lookup', input: {}, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } },
+    { ...createSessionPendingCall, result: { type: 'pending', outcome: 'accepted' } },
+    { ...createSessionPendingCall, result: { type: 'pending', retryWithSameCreationKey: true } },
+    { ...createSessionPendingCall, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted', task: 'extra' } },
+    { ...createSessionPendingCall, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted', operation: { machineId: 'machine-1', operationId: 'operation-1' } } },
+    { ...archiveAskedCall, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } },
+    { name: 'mcp__external__lookup', input: {}, result: archiveAskedCall.result },
+  ])('keeps completed non-settlement data as an ordinary result: %#', async (input) => {
+    const tool = makeToolCall({ ...input, state: 'completed' });
+    expect(resolveToolCallOutcome(tool)).toEqual({ kind: 'status', indicator: 'completed' });
+    const screen = await renderScreen(<ToolFullView tool={tool} owningMessageId="tool-message-data" sessionId="s1"
+      metadata={null} messages={[]} header={<ToolDetailsPageHeader tool={tool} metadata={null} />} />);
+    expect(headerOutcome(screen)).toBe('toolView.outcome.completed');
+    expect(screen.tree.root.findAllByProps({ testID: 'tool-details-pending' })).toHaveLength(0);
+    expect(screen.tree.root.findAllByProps({ testID: 'tool-details-approval-request' })).toHaveLength(0);
+  });
+
+  it.each(['accepted', 'unknown'] as const)('reads schema-valid structured Create session settlement (%s)', (outcome) => {
+    const operation = { serverId: 'server-1', machineId: 'machine-1', operationId: 'operation-1' };
+    const tool = makeToolCall({ ...createSessionPendingCall, result: {
+      structuredContent: SessionSpawnNewResultV1Schema.parse({ type: 'pending', retryWithSameCreationKey: true, outcome, operation }),
+      content: [{ type: 'text', text: 'Session creation has not settled.' }],
+    } });
+    expect(resolveToolCallOutcome(tool)).toEqual({ kind: 'pending', confirmed: outcome === 'accepted', details: { operation } });
+  });
+
+  it.each([
+    { result: { content: [{ type: 'text', text: '{"value":1}' }] }, expected: { value: 1 } },
+    { result: { structuredContent: { value: 2 }, content: [] }, expected: { value: 2 } },
+    { result: { structuredContent: null, content: [{ type: 'text', text: '{"value":3}' }] }, expected: { value: 3 } },
+    { result: { structuredContent: { value: 4 }, content: [{ type: 'image', data: 'image', mimeType: 'image/png' }, { type: 'text', text: 'Image attached.' }] }, expected: { value: 4 } },
+    { result: { content: [{ type: 'image', data: 'image', mimeType: 'image/png' }, { type: 'text', text: 'Image attached.' }] }, expected: { content: [{ type: 'image', data: 'image', mimeType: 'image/png' }, { type: 'text', text: 'Image attached.' }] } },
+  ])('preserves neighboring MCP decoded results: %#', ({ result, expected }) => {
+    expect(readDecodedToolResult(makeToolCall({ ...archiveCall, result }))).toEqual(expected);
+  });
+
+  it('retains first-party JSON shell-bridge decoding and Action identity', () => {
+    const approval = { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'session.archive' };
+    const tool = makeToolCall({ name: 'Bash', state: 'completed', input: {
+      actionId: 'session.archive', input: { sessionId: 'session-archived-1' },
+      _happier: { v: 2, protocol: 'claude', provider: 'claude', rawToolName: 'Bash', canonicalToolName: 'action_execute' },
+      happierToolsShellBridge: { kind: 'call', source: 'happier', rawCommand: 'happier tools call action_execute --json',
+        tool: 'action_execute', json: true, sessionId: null, directory: null, argsJson: null, args: {} },
+    }, result: { stdout: JSON.stringify({ v: 1, ok: true, kind: 'tools_call', data: {
+      source: 'happier', tool: 'action_execute', isError: false, output: approval,
+    } }) } });
+    expect(readDecodedToolResult(tool)).toEqual(approval);
+    expect(resolveToolCallOutcome(tool)).toEqual({ kind: 'approval_requested', artifactId: 'approval-1' });
+  });
+
+  it('retains typed Action failures even when structured output accompanies explanatory text', () => {
+    const tool = makeToolCall({ ...archiveCall, result: {
+      structuredContent: { errorCode: 'target_unavailable', error: 'target_unavailable' },
+      content: [{ type: 'text', text: 'The target is unavailable.' }],
+    } });
+    expect(resolveToolCallOutcome(tool)).toMatchObject({ kind: 'failure', failure: { code: 'target_unavailable' } });
+  });
+
   it('says a call that asked for approval was sent for approval, in its header too', async () => {
     const screen = await renderScreen(
       React.createElement(ToolFullView, {
@@ -141,6 +218,16 @@ describe('ToolFullView as the tool-details page', () => {
       }),
     );
     expect(headerOutcome(screen)).toBe('toolView.approvalRequested.title');
+  });
+
+  it('reads a completed call whose Action approval was declined as refused in its header, never Completed', async () => {
+    const call = makeToolCall({ name: 'writeTextFile', state: 'completed', input: { path: './notes.txt', content: 'x' }, result: null });
+    const header = async (declinedApproval: 'rejected' | 'canceled' | null) =>
+      headerOutcome(await renderScreen(React.createElement(ToolDetailsPageHeader, { tool: call, metadata: null, declinedApproval })));
+
+    expect(await header(null)).toBe('toolView.outcome.completed');
+    expect(await header('rejected')).toBe(toolActionOutcomeLabel('refused'));
+    expect(await header('canceled')).toBe(toolActionOutcomeLabel('refused'));
   });
 
   it('names the Agent that asked a question in the page header, and nothing when no asker is given', async () => {
