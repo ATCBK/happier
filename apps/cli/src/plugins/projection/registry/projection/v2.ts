@@ -827,7 +827,7 @@ function buildCommandsById(
     return commandsById;
 }
 
-function buildResourcesById(
+export function buildResourcesById(
     registry: ResolvedContributionRegistry,
     purposeScopes: ReturnType<typeof deriveRegistryConnectedAccountPurposeAuthorizations>,
     pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
@@ -1041,10 +1041,6 @@ export function buildPluginProjectionV2(params: Readonly<{
     introspectionRuntimeSnapshot?: PluginTargetActivationIntrospectionSnapshot;
     /** The requesting client's display locale, when it named one. */
     requestedLocale?: string;
-    scmRuntimeAvailability?: Readonly<{
-        backendIds: ReadonlySet<string>;
-        hostingProviderIds: ReadonlySet<string>;
-    }>;
 }>): PluginProjectionV2 {
     const installedPackages = params.installedPackages ?? [];
     const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(params.registry);
@@ -1105,7 +1101,6 @@ export function buildPluginProjectionV2(params: Readonly<{
             : {}),
         pluginUiHostRuntime: params.pluginUiHostRuntime,
         ...(params.requestedLocale === undefined ? {} : { requestedLocale: params.requestedLocale }),
-        scmRuntimeAvailability: params.scmRuntimeAvailability,
         onInvalidEntry: ({ family, entryId, entry, issues }) => {
             diagnosticMetadataByPluginId ??= collectPluginDiagnosticMetadata({ registry: params.registry, installedPackages });
             const pluginId = readOptionalString(entry.pluginId);

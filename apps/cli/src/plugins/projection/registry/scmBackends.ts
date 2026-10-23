@@ -11,7 +11,7 @@ function readProjectedText(value: unknown): string | undefined {
 
 export const scmBackendProjectionFamily = definePluginProjectionFamilyV2({
     family: 'scmBackends',
-    project({ registry, scmRuntimeAvailability }) {
+    project({ registry }) {
         return {
             family: 'scmBackends',
             entriesById: Object.fromEntries(
@@ -25,10 +25,6 @@ export const scmBackendProjectionFamily = definePluginProjectionFamilyV2({
                             })
                             : backend.id,
                     }))
-                    .filter(({ key }) => (
-                        scmRuntimeAvailability === undefined
-                        || scmRuntimeAvailability.backendIds.has(key)
-                    ))
                     .sort((left, right) => left.key.localeCompare(right.key))
                     .map(({ backend, key }) => [
                         key,

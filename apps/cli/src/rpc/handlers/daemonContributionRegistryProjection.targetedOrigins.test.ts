@@ -2,8 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonPluginUiTargetedContributionsReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
+import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
-import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import {
     invalidateDaemonContributionRegistryProjectionCache,
@@ -11,6 +15,85 @@ import {
 } from './daemonContributionRegistryProjection';
 
 describe('targeted detail execution origins through admitted runtime publication', () => {
+    it('publishes complete external Resource declarations with targeted handles and follows source replacement and withdrawal', async () => {
+        const targetId = 'acme.resource-host';
+        const contributorId = 'acme.resource-source';
+        const unrelatedId = 'acme.unrelated-scm';
+        const protocol = { id: 'detail', version: 1 } as const;
+        const target = definePlugin({
+            id: targetId, version: '1.0.0',
+            contributionPoints: { details: defineContributionProtocol({ ...protocol, operations: {},
+                surfaces: { detail: { required: true, presentation: 'content',
+                    inputSchema: defineProtocolObject({}, { policy: 'closed' }) } },
+            }).point() },
+        });
+        const contributor = (version: string, contentType?: string) => ({
+            manifest: createPluginManifestV2Fixture({ id: contributorId, version, contributes: {
+                resources: contentType ? [{ id: 'rows', source: 'dynamic', kind: 'config', scope: 'global', contentType }] : [],
+                ui: { renderers: [{ id: 'detail', kind: 'declarative', root: { kind: 'text', text: 'Resource detail' } }] },
+                targetedPluginContributions: [{ id: 'source', target: { pluginId: targetId, pointId: 'details' },
+                    protocol, operations: {}, surfaces: { detail: { renderer: 'detail' } } }],
+            } }),
+            files: { 'daemon.mjs': 'export function activate() { throw new Error("Discovery must stay cold"); }' },
+        });
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ coldStart: true, plugins: [
+            { manifest: target.manifest, files: {} }, contributor('1.0.0', 'text/plain'),
+            { manifest: createPluginManifestV2Fixture({ id: unrelatedId, contributes: {
+                resources: [{ id: 'private', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' }],
+                scmBackends: [{ id: 'vcs', title: 'Unrelated SCM', kind: 'acme', capabilities: ['detect'] }],
+            } }), files: { 'daemon.mjs': 'export function activate() { throw new Error("Unrelated SCM must stay cold"); }' } },
+        ] });
+        const replacements: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>[] = [];
+        let currentRuntime = fixture.registry;
+        try {
+            const handlers = new Map<string, RpcHandler>();
+            registerDaemonContributionRegistryProjectionHandler({ registerHandler(method, handler) { handlers.set(method, handler); } }, {
+                resolveRuntimeRegistry: async () => currentRuntime,
+                // The filesystem catalog is a genuine boundary; targeted reads must not need full describe.
+                resolveInstalledPackages: async () => { throw new Error('Targeted Resource census requested full describe'); },
+                resolvePluginProjectionExecutionOriginContext: () => ({ serverIdentityId: 'srv_resources', machineId: 'machine-resources' }),
+            });
+            const handler = handlers.get(RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ);
+            if (!handler) throw new Error('Expected real targeted-contributions RPC');
+            const read = async (pluginId = targetId) => DaemonPluginUiTargetedContributionsReadResponseSchema.parse(
+                await handler({ machineId: 'machine-resources', pluginId }));
+            const first = await read();
+            expect(first).toMatchObject({ status: 'current', resourceDeclarationsByPluginId: {
+                [targetId]: {}, [contributorId]: { [`${contributorId}/rows`]: {
+                    pluginId: contributorId, id: 'rows', resourceKind: 'config', scope: 'global', contentType: 'text/plain',
+                    occurrenceId: currentRuntime.readPluginOccurrenceId?.(contributorId),
+                } },
+            } });
+            expect(first).not.toHaveProperty('projection');
+            expect(first).not.toHaveProperty(['resourceDeclarationsByPluginId', unrelatedId]);
+            if (first.status !== 'current') throw new Error('Expected current external Resource declarations');
+            expect(first.targetedSurfaceMounts).toHaveLength(1);
+            // A target with no points/renderers still receives its complete Resource set.
+            expect(await read(contributorId)).toMatchObject({ status: 'current', targetedSurfaceMounts: [],
+                resourceDeclarationsByPluginId: { [contributorId]: { [`${contributorId}/rows`]: { contentType: 'text/plain' } } } });
+            for (const [version, contentType] of [['2.0.0', 'application/json'], ['3.0.0', undefined]] as const) {
+                const replacement = await createAuthoredAdmittedPluginRuntimeFixture({
+                    happyHomeDir: fixture.happyHomeDir, controller: fixture.controller, coldStart: true,
+                    plugins: [{ ...contributor(version, contentType), replaceExisting: true }],
+                });
+                replacements.push(replacement);
+                currentRuntime = replacement.registry;
+                const next = await read();
+                expect(next).toMatchObject({ status: 'current', resourceDeclarationsByPluginId: {
+                    [targetId]: {}, [contributorId]: contentType ? { [`${contributorId}/rows`]: {
+                        contentType, occurrenceId: currentRuntime.readPluginOccurrenceId?.(contributorId),
+                    } } : {},
+                } });
+                if (!contentType) expect(next).not.toHaveProperty(['resourceDeclarationsByPluginId', contributorId, `${contributorId}/rows`]);
+                expect(currentRuntime.activatedPluginIds.size).toBe(0);
+                expect(currentRuntime.scmBackendsById?.size).toBe(0);
+            }
+        } finally {
+            for (const replacement of replacements.reverse()) await replacement.dispose();
+            await fixture.dispose();
+        }
+    });
+
     it('mounts a real source-backed GitHub detail and diagnoses a dropped runtime materialization reader', async () => {
         const pluginId = 'happier.scm.forge.github';
         const fixture = await createAdmittedPluginRuntimeFixture({
@@ -58,8 +141,7 @@ describe('targeted detail execution origins through admitted runtime publication
             };
 
             const response = await read(fixture.registry);
-            expect(response.status).toBe('current');
-            if (response.status !== 'current') throw new Error(`Detail projection refused: ${response.status === 'unavailable' ? response.code : response.status}`);
+            if (response.status !== 'current') throw new Error(`Detail projection refused: ${response.status === 'unavailable' ? response.code : response.status}; target diagnostics: ${JSON.stringify(fixture.registry.pluginDiagnosticsByPluginId['happier.triage'] ?? [])}`);
             const mount = response.targetedSurfaceMounts.find((entry) => entry.contributor.pluginId === pluginId);
             expect(mount).toMatchObject({
                 role: 'detail',

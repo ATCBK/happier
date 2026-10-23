@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
-import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
+import { timeWebLatencyPhase, withStorageReadTrace, withWebLatencyTrace } from './webLatencyTrace';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -9,6 +9,34 @@ afterEach(() => {
 });
 
 describe('daemon web latency request correlation', () => {
+  it('keeps fast storage boundaries at debug and preserves pending starts, failures and diagnostic isolation', async () => {
+    vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
+    vi.stubEnv('HAPPIER_LOG_LEVEL', ' DEBUG ');
+    vi.stubEnv('DEBUG', '');
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+    const info = vi.spyOn(logger, 'infoFile').mockImplementation(() => undefined);
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const requestId = 'rpc_23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+    const failure = new Error('private filesystem operand');
+    let settle!: () => void;
+    const boundary = new Promise<void>(resolve => { settle = resolve; });
+    const pending = withStorageReadTrace(requestId, () => timeWebLatencyPhase('storage.page.projection', async () => {
+      await boundary;
+      return timeWebLatencyPhase('storage.classification.rules', () => { throw failure; });
+    }));
+    const rejected = expect(pending).rejects.toBe(failure);
+    expect(debug).toHaveBeenCalledWith('[storage-read]', expect.objectContaining({
+      requestId, stage: 'storage.page.projection', status: 'started', spanId: 1,
+    }));
+    settle(); await rejected;
+    expect(debug).toHaveBeenCalledWith('[storage-read]', expect.objectContaining({
+      requestId, stage: 'storage.classification.rules', status: 'settled', outcome: 'failed', spanId: 2, parentSpanId: 1,
+    }));
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(failure.message);
+    expect(info).not.toHaveBeenCalled();
+    debug.mockImplementation(() => { throw new Error('file unavailable'); });
+    await expect(withStorageReadTrace(requestId, () => timeWebLatencyPhase('storage.page.snapshot', () => 42))).resolves.toBe(42);
+  });
   it('reports the active phase before a pending boundary settles, with the same correlation at settlement', async () => {
     vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
     const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);

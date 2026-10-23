@@ -46,7 +46,7 @@ describe('plugin entity drag projection', () => {
             loadResult: { loadedPlugins: [loaded(pluginId)], diagnosticsByPluginId: {} }, provenance: 'first_party',
         }));
         const registry = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes, generation: 1,
-            generationAuthority: { commit: null, generations: new Map(), rejectedGenerations: new Map(), isCurrent: async () => true },
+            generationAuthority: { commit: null, generations: new Map(), rejectedGenerations: new Map() },
         });
         try {
             expect(registry.contributes.dragSources).toHaveLength(1);

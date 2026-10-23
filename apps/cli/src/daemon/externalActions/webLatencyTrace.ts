@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger } from '@/ui/logger';
+import { resolveFileLogLevel } from '@/ui/logFileLevel';
+import { DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
 
 const context = new AsyncLocalStorage<Readonly<{
   requestId: string;
@@ -7,6 +9,7 @@ const context = new AsyncLocalStorage<Readonly<{
   sequence: { next: number };
   spanId?: number;
   parentSpanId?: number;
+  storageRead?: true;
 }>>();
 
 export type WebLatencyTracePoint = Readonly<{ requestId: string; spanId?: number }>;
@@ -40,8 +43,48 @@ export function withWebLatencyTrace<T>(requestId: unknown, operation: () => T, s
     ? context.run({ requestId, ...(sessionId ? { sessionId } : {}), sequence: { next: 0 } }, operation) : operation();
 }
 
+/** Receives only the dispatcher's already privacy-normalized diagnostic identity. */
+export function withStorageReadTrace<T>(requestId: string, operation: () => T): T {
+  return context.run({ requestId, sequence: { next: 0 }, storageRead: true }, operation);
+}
+
+async function timeStorageReadStage<T>(stage: string, operation: () => T | Promise<T>): Promise<T> {
+  const parent = context.getStore();
+  if (!parent?.storageRead) return await operation();
+  const started = performance.now();
+  const atMs = Date.now();
+  const span = { ...parent, spanId: ++parent.sequence.next,
+    ...(parent.spanId === undefined ? {} : { parentSpanId: parent.spanId }) };
+  const start = { stage, requestId: span.requestId, spanId: span.spanId,
+    ...(span.parentSpanId === undefined ? {} : { parentSpanId: span.parentSpanId }),
+    status: 'started' as const, atMs, elapsedMs: 0 };
+  // Daemons retain debug file logs by default. Only explicit diagnostic demand
+  // enables fast spans; use the resolver's non-daemon fallback to exclude that
+  // implicit retention while preserving its explicit-level normalization.
+  const debug = process.env.HAPPIER_WEB_LATENCY_TRACE === '1'
+    || resolveFileLogLevel({ env: process.env, isDaemonProcess: false }) === 'debug';
+  try { if (debug) logger.debug('[storage-read]', start); } catch { /* Diagnostic only. */ }
+  let outcome: 'completed' | 'failed' = 'failed';
+  try {
+    const result = await context.run(span, operation);
+    outcome = 'completed';
+    return result;
+  } finally {
+    const elapsedMs = Math.max(0, performance.now() - started);
+    const settled = { ...start, status: 'settled' as const, atMs: Date.now(), elapsedMs, outcome };
+    try {
+      if (elapsedMs >= DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS) {
+        // Promote the matching start retrospectively, without a timer or fast-read logs.
+        logger.infoFile('[storage-read]', start);
+        logger.infoFile('[storage-read]', settled);
+      } else if (debug) logger.debug('[storage-read]', settled);
+    } catch { /* Diagnostic only. */ }
+  }
+}
+
 export async function timeWebLatencyPhase<T>(phase: string, operation: () => T | Promise<T>, source?: WebLatencyTracePoint,
   approvalFacts?: () => WebLatencyApprovalFacts): Promise<T> {
+  if (phase.startsWith('storage.')) return timeStorageReadStage(phase, operation);
   if (process.env.HAPPIER_WEB_LATENCY_TRACE !== '1') return await operation();
   const started = performance.now();
   const parent = context.getStore();

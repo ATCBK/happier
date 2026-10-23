@@ -39,6 +39,7 @@ import { DaemonPluginSettingsWatchRequestSchema, DaemonPluginSettingsWatchRespon
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonPluginSettingsWatchResponse } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { DaemonPluginTargetedSourceDeclarationV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { DaemonPluginUiResourceDeclarationsByPluginIdV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import {
     createResolvedContributionRegistry,
@@ -56,6 +57,7 @@ import type {
 } from '@/plugins/projection/registry/types';
 import {
     buildAgentsById,
+    buildResourcesById,
     buildPluginConnectedAccountAdmissionProjectionV2,
     buildPluginSettingsProjectionV2,
     buildPluginProjectionV2,
@@ -110,8 +112,8 @@ import {
 } from '@/plugins/settings/localSettingsContributions';
 import { resolveNotificationChannelSettingsContributions } from '@/plugins/settings/notificationChannelSettings';
 import { resolveInvocationContributionPolicyFacts } from '@/plugins/runtime/policy/evaluate';
-import { activateScmRuntimeContributionsOnDemand } from '@/scm/scmBackendCatalog';
 import {
+    deriveRegistryConnectedAccountPurposeAuthorizations,
     resolveRegistryConnectedAccountActionFormPurposeAuthorization,
 } from '@/daemon/connectedServices/purposeBindings/deriveRegistryConnectedAccountPurposeAuthorizations';
 import type {
@@ -1376,9 +1378,6 @@ async function withProjectionBuild<T>(
         const changedKeyParts = changedProjectionBuildKeyParts(initial.parts);
         const startedAtMs = Date.now();
         const started = (async () => {
-            // Full demand alone activates SCM. Capture its resulting facts
-            // before keying and synchronously projecting the response.
-            if (full && lease.runtimeRegistry) await activateScmRuntimeContributionsOnDemand(lease.runtimeRegistry);
             const installedPackages = full || admission
                 ? await resolveInstalledPackagesForProjection(opts, lease.runtimeRegistry) : [];
             const prepared = capture({ ...baseInputs, installedPackages,
@@ -1490,10 +1489,6 @@ function buildProjection(
         pluginExecutionOriginsByPluginId,
         pluginFinalPolicyCurrentRuntimesById,
     } = buildInputs;
-    const scmRuntimeAvailability = {
-        backendIds: new Set(lease.runtimeRegistry?.scmBackendsById?.keys() ?? []),
-        hostingProviderIds: new Set(lease.runtimeRegistry?.scmHostingProvidersById.keys() ?? []),
-    };
     const modelsByRendererKey = typeof lease.runtimeRegistry?.generation === 'number'
         ? resolveDeclarativeProjectionModels({
             registry: lease.registry,
@@ -1540,7 +1535,6 @@ function buildProjection(
         ...(pluginFinalPolicyCurrentRuntimesById
             ? { pluginFinalPolicyCurrentRuntimesById }
             : {}),
-        scmRuntimeAvailability,
         ...(introspectionRuntimeSnapshot ? { introspectionRuntimeSnapshot } : {}),
         ...(buildInputs.locale ? { requestedLocale: buildInputs.locale } : {}),
     });
@@ -1755,8 +1749,35 @@ async function readTargetedContributions(
             )).map((renderer) => [
                 `${renderer.pluginId}\0${renderer.definition.id}`, renderer,
             ] as const)).values()];
+            const resourcePluginIds = new Set([
+                request.pluginId,
+                ...targetedContributions.points.flatMap((point) => point.protocols.flatMap((protocol) => (
+                    protocol.contributions.map((contribution) => contribution.contributor.pluginId)
+                ))),
+                ...renderers.flatMap((renderer) => renderer.pluginId ? [renderer.pluginId] : []),
+            ]);
+            const resourceRegistry = {
+                ...runtimeRegistry.contributes,
+                resources: runtimeRegistry.contributes.resources.filter((resource) => (
+                    resource.pluginId && resourcePluginIds.has(resource.pluginId)
+                )),
+                activationTargets: runtimeRegistry.contributes.activationTargets.filter((target) => resourcePluginIds.has(target.pluginId)),
+            };
+            const pluginExecutionOriginsByPluginId = renderers.length > 0 || resourceRegistry.resources.length > 0
+                ? await resolvePluginExecutionOriginsForProjection(opts, runtimeRegistry.contributes, runtimeRegistry)
+                : Object.freeze({});
+            const resourceDeclarationsByPluginId: DaemonPluginUiResourceDeclarationsByPluginIdV1 = Object.fromEntries(
+                [...resourcePluginIds].map((pluginId) => [pluginId, {}]),
+            );
+            if (resourceRegistry.resources.length > 0) {
+                const resourcesById = buildResourcesById(resourceRegistry,
+                    deriveRegistryConnectedAccountPurposeAuthorizations(resourceRegistry), pluginExecutionOriginsByPluginId);
+                for (const [key, resource] of Object.entries(resourcesById)) {
+                    resourceDeclarationsByPluginId[resource.pluginId]![key] = resource;
+                }
+            }
             if (renderers.length === 0) {
-                return { status: 'current', targetedContributions, targetedSurfaceMounts: [] };
+                return { status: 'current', targetedContributions, targetedSurfaceMounts: [], resourceDeclarationsByPluginId };
             }
             const pluginUiHostRuntime = await resolveProjectionHostRuntime(opts, request);
             const modelsByRendererKey = typeof runtimeRegistry.generation === 'number'
@@ -1777,9 +1798,6 @@ async function readTargetedContributions(
                     },
                 })
                 : Object.freeze({});
-            const pluginExecutionOriginsByPluginId = await resolvePluginExecutionOriginsForProjection(
-                opts, runtimeRegistry.contributes, runtimeRegistry,
-            );
             const rendererProjection = buildPluginProjectionFamilyV2({
                 registry: createResolvedContributionRegistry({
                     uiRenderersV2: renderers,
@@ -1792,6 +1810,7 @@ async function readTargetedContributions(
             return {
                 status: 'current',
                 targetedContributions,
+                resourceDeclarationsByPluginId,
                 targetedSurfaceMounts: [...readMountedTargetedSurfaceMountsProjection({
                     runtimeRegistry,
                     mountedTarget,

@@ -51,7 +51,7 @@ function projectCapabilities(definition: object) {
 
 export const scmHostingProviderProjectionFamily = definePluginProjectionFamilyV2({
     family: 'scmHostingProviders',
-    project({ registry, scmRuntimeAvailability }) {
+    project({ registry }) {
         return {
             family: 'scmHostingProviders',
             entriesById: Object.fromEntries(
@@ -65,10 +65,6 @@ export const scmHostingProviderProjectionFamily = definePluginProjectionFamilyV2
                             })
                             : provider.id,
                     }))
-                    .filter(({ key }) => (
-                        scmRuntimeAvailability === undefined
-                        || scmRuntimeAvailability.hostingProviderIds.has(key)
-                    ))
                     .sort((left, right) => left.key.localeCompare(right.key))
                     .map(({ provider, key }) => [
                         key,

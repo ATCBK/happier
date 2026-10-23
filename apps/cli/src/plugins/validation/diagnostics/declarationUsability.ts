@@ -120,7 +120,6 @@ const PLUGIN_DIAGNOSTIC_USABILITY_CLASS: Readonly<Record<
     required_surface_missing: 'runtime',
     surface_schema_invalid: 'runtime',
     renderer_not_found: 'runtime',
-    renderer_chain_invalid: 'runtime',
     contribution_identity_conflict: 'runtime',
     contributor_contribution_limit_exceeded: 'runtime',
     snapshot_limit_exceeded: 'runtime',

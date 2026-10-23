@@ -549,10 +549,6 @@ describe('createDaemonArchivePluginChangePreparer', () => {
     const projection = buildPluginProjectionV2({
       registry: activeLease.registry.contributes,
       generation: activeGeneration,
-      scmRuntimeAvailability: {
-        backendIds: new Set(activeLease.registry.scmBackendsById?.keys() ?? []),
-        hostingProviderIds: new Set(activeLease.registry.scmHostingProvidersById.keys()),
-      },
     });
     expect(projection.familiesById.scmBackends?.entriesById['acme.archive-candidate/stacked'])
       .toMatchObject({ displayName: 'Packed Stacked SCM', operations: ['detect', 'status'] });
@@ -567,10 +563,6 @@ describe('createDaemonArchivePluginChangePreparer', () => {
     const disabledProjection = buildPluginProjectionV2({
       registry: disabledLease.registry.contributes,
       generation: disabledGeneration,
-      scmRuntimeAvailability: {
-        backendIds: new Set(disabledLease.registry.scmBackendsById?.keys() ?? []),
-        hostingProviderIds: new Set(disabledLease.registry.scmHostingProvidersById.keys()),
-      },
     });
     expect(disabledProjection.familiesById.scmBackends?.entriesById['acme.archive-candidate/stacked'])
       .toBeUndefined();

@@ -6387,7 +6387,7 @@ describe('daemon contribution registry projection rpc handler', () => {
         // occurrence. It never carries the machine-wide projection.
         const targetAResponse = await handler({ machineId: 'm1', pluginId: targetA });
         expect(targetAResponse).not.toHaveProperty('projection');
-        expect(Object.keys(targetAResponse).sort()).toEqual(['status', 'targetedContributions', 'targetedSurfaceMounts']);
+        expect(Object.keys(targetAResponse).sort()).toEqual(['resourceDeclarationsByPluginId', 'status', 'targetedContributions', 'targetedSurfaceMounts']);
         expect(targetAResponse).toMatchObject({
             status: 'current',
             targetedContributions: {

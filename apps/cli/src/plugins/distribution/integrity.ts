@@ -1,4 +1,25 @@
 import { createHash, type Hash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+
+export async function readPluginArchiveIntegrity(path: string): Promise<Readonly<{
+  byteLength: number;
+  integrity: string;
+  archiveDigestSha256: `sha256:${string}`;
+}>> {
+  const hash = createHash('sha256');
+  let byteLength = 0;
+  for await (const chunk of createReadStream(path)) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    byteLength += bytes.byteLength;
+    hash.update(bytes);
+  }
+  const digest = hash.digest();
+  return Object.freeze({
+    byteLength,
+    integrity: `sha256-${digest.toString('base64')}`,
+    archiveDigestSha256: `sha256:${digest.toString('hex')}`,
+  });
+}
 
 type SupportedAlgorithm = 'sha256' | 'sha384' | 'sha512';
 const STRENGTH: Readonly<Record<SupportedAlgorithm, number>> = { sha256: 1, sha384: 2, sha512: 3 };

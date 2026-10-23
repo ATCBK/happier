@@ -1,8 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP, type LookupFunction } from 'node:net';
 
-import { Agent, fetch as undiciFetch } from 'undici';
-
 import { resolveUrlConnectionIdentity } from '@/network/urlConnectionIdentity';
 import { areNetworkAddressesPublic } from '@/plugins/distribution/npm/networkPolicy';
 import { awaitPluginAcquisition, createPluginAcquisitionLifetime } from '@/plugins/distribution/acquisitionLifetime';
@@ -184,6 +182,9 @@ export async function openRemoteAcquisition(params: Readonly<{
           redirect: 'manual',
         }), signal);
       } else {
+        signal?.throwIfAborted();
+        const { Agent, fetch: undiciFetch } = await awaitPluginAcquisition(import('undici'), signal);
+        signal?.throwIfAborted();
         const dispatcher = new Agent({
           connect: { lookup: createPinnedLookup(hostname, addresses, errorLabel), timeout: 0 },
           headersTimeout: 0,

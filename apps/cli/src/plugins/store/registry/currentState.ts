@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 
-import { normalizePluginReleaseFactsV1, projectPluginMachineUiArtifactV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { snapshotPluginReleaseFactsV1, projectPluginMachineUiArtifactV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import type { PluginAvailabilityReleasePublishActionInputV1, PluginMachineMaterializationV1, PluginInstallReviewPrincipalDigest, PluginInstallReviewPrincipalPresentationV1, PluginUpdatePolicyV1 } from '@happier-dev/protocol';
 import { PluginInstallReviewPrincipalDigestSchema, PluginInstallReviewPrincipalPresentationV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
@@ -602,7 +602,7 @@ export function createPluginRegistryStateStore(params?: Readonly<{
       }
       const availability = installation.availability;
       const release = availability.release
-        ? normalizePluginReleaseFactsV1(availability.release)
+        ? snapshotPluginReleaseFactsV1(availability.release)
         : undefined;
       if (release) {
         if (availability.sourceClass === 'localPath') {

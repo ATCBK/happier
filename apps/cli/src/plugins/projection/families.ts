@@ -31,10 +31,6 @@ export type PluginProjectionFamilyContextV2 = Readonly<{
      * narrowing", which is the shape an older client receives.
      */
     requestedLocale?: string;
-    scmRuntimeAvailability?: Readonly<{
-        backendIds: ReadonlySet<string>;
-        hostingProviderIds: ReadonlySet<string>;
-    }>;
     /** Invalid wire entries are omitted; the describe owner publishes their attributed diagnostics. */
     onInvalidEntry?: (failure: Readonly<{
         family: string;

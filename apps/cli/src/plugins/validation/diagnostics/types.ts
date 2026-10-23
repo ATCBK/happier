@@ -92,7 +92,6 @@ export const PluginDiagnosticCodeSchema = z.enum([
   'required_surface_missing',
   'surface_schema_invalid',
   'renderer_not_found',
-  'renderer_chain_invalid',
   'contribution_identity_conflict',
   'contributor_contribution_limit_exceeded',
   'snapshot_limit_exceeded',

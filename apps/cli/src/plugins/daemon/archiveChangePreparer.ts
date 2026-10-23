@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { copyFile, lstat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { PluginSourceSpecV1 } from '@happier-dev/protocol';
+import { readPluginArchiveIntegrity } from '@/plugins/distribution/integrity';
 
 import {
   cleanupStagedNpmCompatiblePluginArchive,
@@ -66,26 +65,6 @@ function readRemoteArchiveUrl(locator: string): string | null {
   return canonicalizeRemotePluginArchiveUrl(locator);
 }
 
-async function hashArchive(path: string): Promise<Readonly<{
-  byteLength: number;
-  integrity: string;
-  archiveDigestSha256: `sha256:${string}`;
-}>> {
-  const hash = createHash('sha256');
-  let byteLength = 0;
-  for await (const chunk of createReadStream(path)) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    byteLength += bytes.byteLength;
-    hash.update(bytes);
-  }
-  const digest = hash.digest();
-  return Object.freeze({
-    byteLength,
-    integrity: `sha256-${digest.toString('base64')}`,
-    archiveDigestSha256: `sha256:${digest.toString('hex')}`,
-  });
-}
-
 async function materializeArchive(params: Readonly<{
   locator: string;
   destinationPath: string;
@@ -106,7 +85,7 @@ async function materializeArchive(params: Readonly<{
       maxBytes: maximumBytes,
       errorLabel: 'Remote plugin archive',
     });
-    const facts = await hashArchive(params.destinationPath);
+    const facts = await readPluginArchiveIntegrity(params.destinationPath);
     return Object.freeze({
       distributionSource: Object.freeze({
         kind: 'remoteUrl',
@@ -126,7 +105,7 @@ async function materializeArchive(params: Readonly<{
   if (!copiedStat.isFile() || copiedStat.isSymbolicLink() || (maximumBytes !== null && copiedStat.size > maximumBytes)) {
     throw new Error('Local plugin archive could not be copied into daemon-owned temporary storage');
   }
-  const facts = await hashArchive(params.destinationPath);
+  const facts = await readPluginArchiveIntegrity(params.destinationPath);
   return Object.freeze({
     distributionSource: Object.freeze({ kind: 'localFile', path: sourcePath }),
     ...facts,

@@ -118,6 +118,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       ApprovalExecutionOriginV1['caller'],
       Readonly<{ kind: 'workflowRun' }>
     >['authorization'];
+    reservation?: import('../workflows/recovery').WorkflowDiscussionModelReservationReplay;
     signal?: AbortSignal;
   }>) => Promise<boolean> | boolean;
   resolveCurrentPermissionMode?: (
@@ -303,6 +304,7 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         if (!input.isWorkflowRunAuthorizationCurrent) return stale('workflow_authorization_unavailable');
         if (!await input.isWorkflowRunAuthorizationCurrent({
           authorization: origin.caller.authorization,
+          ...(origin.caller.discussionModelReservation ? { reservation: { origin, input: operands } } : {}),
           ...(signal ? { signal } : {}),
         })) return stale('workflow_authorization_changed');
       }

@@ -1,5 +1,5 @@
 import { PluginAvailabilityPortableReleaseSourceClassV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
-import { normalizePluginReleaseFactsV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { snapshotPluginReleaseFactsV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { normalizePluginAccountCollectionContractsV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import type { PluginAvailabilityPortableReleaseSourceClassV1, PackageAssetArchiveDescriptorV1 } from '@happier-dev/protocol';
 import type { PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
@@ -86,7 +86,7 @@ export function createVerifiedPortablePluginInstallationAvailability(input: Read
     schemaVersion,
     contractDigest,
   }));
-  const release = normalizePluginReleaseFactsV1({
+  const release = snapshotPluginReleaseFactsV1({
     ref: {
       pluginId: input.manifest.id,
       version: input.manifest.version,

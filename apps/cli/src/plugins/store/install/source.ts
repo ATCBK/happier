@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, stat, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import type { PluginSourceSpecV1 } from '@happier-dev/protocol';
+import { readPluginArchiveIntegrity } from '@/plugins/distribution/integrity';
 
 import {
   cleanupStagedNpmCompatiblePluginArchive,
@@ -58,32 +57,12 @@ function normalizeInspectedTrustPolicy(
   return trustPolicy === 'untrusted' ? 'untrusted' : 'prompt';
 }
 
-async function hashArchive(path: string): Promise<Readonly<{
-  byteLength: number;
-  integrity: string;
-  archiveDigestSha256: `sha256:${string}`;
-}>> {
-  const hash = createHash('sha256');
-  let byteLength = 0;
-  for await (const chunk of createReadStream(path)) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    byteLength += bytes.byteLength;
-    hash.update(bytes);
-  }
-  const digest = hash.digest();
-  return Object.freeze({
-    byteLength,
-    integrity: `sha256-${digest.toString('base64')}`,
-    archiveDigestSha256: `sha256:${digest.toString('hex')}`,
-  });
-}
-
 async function stageArchivePluginSource(params: Readonly<{
   happyHomeDir: string;
   archivePath: string;
 }>): Promise<StagedNpmCompatiblePluginArchive> {
   const store = createPluginRegistryStateStore({ happyHomeDir: params.happyHomeDir });
-  const facts = await hashArchive(params.archivePath);
+  const facts = await readPluginArchiveIntegrity(params.archivePath);
   const staged = await stageNpmCompatiblePluginArchive({
     archivePath: params.archivePath,
     byteLength: facts.byteLength,

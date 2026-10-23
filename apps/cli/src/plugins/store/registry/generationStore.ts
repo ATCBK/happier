@@ -1040,7 +1040,6 @@ export async function readCurrentCommittedPluginGenerations(
   commit: PluginRegistryCommitRecord | null;
   generations: ReadonlyMap<string, CurrentCommittedPluginGeneration>;
   rejectedGenerations: ReadonlyMap<string, RejectedCommittedPluginGeneration>;
-  isCurrent: () => Promise<boolean>;
   /**
    * Reads only the current durable execution selection for one plugin. It does
    * not re-admit or re-hash generation bytes; retained runtimes use it to apply
@@ -1128,31 +1127,6 @@ export async function readCurrentCommittedPluginGenerations(
     commit,
     generations,
     rejectedGenerations,
-    async isCurrent(): Promise<boolean> {
-      const current = await readPluginRegistryCommitRecord(paths);
-      try {
-        for (const generation of generations.values()) {
-          await assertGenerationNotRetired(paths, generation.immutableGenerationId);
-        }
-        if (commit && installationState) {
-          if (!current) return false;
-          const currentInstallationState = await readPluginRegistryCommitInstallationAuthority(
-            paths,
-            current,
-          );
-          if (!currentInstallationState) return false;
-          if (!isDeepStrictEqual(
-            pluginExecutionAuthority(current, currentInstallationState),
-            executionAuthority,
-          )) return false;
-        } else if (current) {
-          return false;
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    },
     async readCurrentExecutionSelection(
       pluginId: string,
     ): Promise<CurrentPluginExecutionSelection | null> {

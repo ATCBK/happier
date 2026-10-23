@@ -1063,7 +1063,6 @@ describe('immutable plugin generation store', () => {
         },
       }]]),
     });
-    await expect(current?.isCurrent()).resolves.toBe(true);
 
     const unreviewedPayloadPath = join(
       paths.generationsDir,
@@ -1071,11 +1070,9 @@ describe('immutable plugin generation store', () => {
       'unreviewed-payload.mjs',
     );
     await writeFile(unreviewedPayloadPath, 'export default 2', 'utf8');
-    await expect(current?.isCurrent()).resolves.toBe(true);
     await expect(readCurrentCommittedPluginGenerations(paths)).resolves.toMatchObject({
       generations: new Map([['acme.plugin', expect.anything()]]),
     });
-    await expect(current?.isCurrent()).resolves.toBe(true);
 
     const staleTrustState = stateRevision('generation-current');
     staleTrustState.plugins['acme.plugin']!.enabled = false;
@@ -1135,7 +1132,9 @@ describe('immutable plugin generation store', () => {
       installationState: disabledState,
       createdAtMs: 3,
     }), 'utf8');
-    await expect(current?.isCurrent()).resolves.toBe(false);
+    await expect(current?.readCurrentExecutionSelection?.('acme.plugin')).resolves.toMatchObject({
+      installation: { enabled: false },
+    });
     await writeFile(paths.registryCurrentFilePath, JSON.stringify(commit), 'utf8');
 
     await writeFile(
@@ -1204,10 +1203,7 @@ describe('immutable plugin generation store', () => {
     await rename(prepared.rootPath, relocatedRoot);
     await symlink(relocatedRoot, prepared.rootPath, 'dir');
 
-    // The already-admitted lease remains current by registry identity. A
-    // fresh cold read below owns structural root validation and rejects the
-    // replaced root.
-    await expect(current?.isCurrent()).resolves.toBe(true);
+    // A fresh cold read owns structural root validation and rejects the replaced root.
     await expect(readCurrentCommittedPluginGenerations(paths)).rejects.toThrow(/symbolic link/i);
     const isolated = await readCurrentCommittedPluginGenerations(paths, {
       isolateInvalidInstalledGenerations: true,

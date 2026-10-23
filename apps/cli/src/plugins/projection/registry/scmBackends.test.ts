@@ -138,7 +138,7 @@ describe('SCM backend plugin contributions', () => {
         ]);
     });
 
-    it('projects only backends backed by the current authoritative runtime lease when runtime facts are supplied', () => {
+    it('projects all current admitted backend declarations without requiring runtime activation', () => {
         const registry = createResolvedContributionRegistry({
             agents: [],
             occurrenceIdsByPluginId: Object.fromEntries(['acme.scm.active', 'acme.scm.stale'].map((pluginId) => [
@@ -171,10 +171,6 @@ describe('SCM backend plugin contributions', () => {
         const projection = buildPluginProjectionV2({
             registry,
             generation: 11,
-            scmRuntimeAvailability: {
-                backendIds: new Set(['acme.scm.active/active']),
-                hostingProviderIds: new Set(),
-            },
         });
 
         expect(projection.familiesById.scmBackends?.entriesById).toEqual({
@@ -186,6 +182,12 @@ describe('SCM backend plugin contributions', () => {
                 description: 'Active backend',
                 operations: ['detect', 'status'],
                 metadata: { routing: 'stacked' },
+            }),
+            'acme.scm.stale/stale': expect.objectContaining({
+                id: 'acme.scm.stale/stale',
+                pluginId: 'acme.scm.stale',
+                displayName: 'Acme VCS',
+                operations: ['detect', 'status'],
             }),
         });
     });

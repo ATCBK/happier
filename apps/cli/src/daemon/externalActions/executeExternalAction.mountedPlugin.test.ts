@@ -22,7 +22,7 @@ import { registerExternalActionRpcHandler } from '@/rpc/handlers/externalAction'
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, parseExternalActionDaemonDispatchResultV1 } from '@happier-dev/protocol';
 import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/rpc';
 import type { RpcHandler } from '@/api/rpc/types';
-import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
+import { createPluginAccountBundledSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import { readCurrentMountedAccountPluginExecutionSelection } from '@/plugins/runtime/accountPluginActivationSource';
 
 // Network and on-disk machine credentials are the only replaced boundaries.
@@ -85,8 +85,10 @@ describe('external Action mounted plugin admission', () => {
         offlineUiHosting: 'disabled', writableCollections: [], revision: '1' }, release: null, uiArtifacts: [], packageAssets: [] } }));
     const mountedBinding = placement === 'machine' ? machineBinding : {
       pluginId: 'happier.inspector', contributionLocalId: 'inspector-page', occurrenceId: 'app-account-custody',
-      pluginVersion: declaration.manifest.version, declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest),
-      sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'account-app' } },
+      pluginVersion: declaration.manifest.version,
+      sourceCustody: createPluginAccountBundledSelectionV1({
+        packageName: declaration.sourceSpec.locator, manifest: declaration.manifest,
+      }).sourceCustody,
     };
     const target = { kind: 'machine' as const, machineId: 'machine-1' };
     const authentication = { kind: 'account' as const, tokenEpoch: 0 };

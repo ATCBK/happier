@@ -210,9 +210,10 @@ describe('SCM hosting-provider plugin contributions', () => {
         }
     });
 
-    it('projects only hosting providers backed by the current authoritative runtime lease with auth facts', async () => {
+    it('projects active and dormant hosting declarations with their manifest auth facts', async () => {
         const pluginId = 'acme.scm.hosting';
         const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+            coldStart: true,
             plugins: [authoredHostingPlugin(pluginId, [
                 {
                     id: 'active',
@@ -235,12 +236,12 @@ describe('SCM hosting-provider plugin contributions', () => {
             }]), authoredHostingPlugin('acme.scm.dormant', [
                 { id: 'stale', title: 'Stale Forge', kind: 'acme', capabilities: ['detect'] },
             ])],
-            runtimeOptions: { pluginIds: [pluginId] },
         });
         try {
             const runtime = fixture.registry;
             if (!runtime.activatePluginsForValidation) throw new Error('Expected runtime activation owner');
             await runtime.activatePluginsForValidation([pluginId]);
+            expect(runtime.activatedPluginIds.has('acme.scm.dormant')).toBe(false);
             const active = runtime.scmHostingProvidersById.get(pluginId + '/active');
             expect(active, JSON.stringify(runtime.pluginDiagnosticsByPluginId[pluginId])).toBeDefined();
             if (!runtime.readPluginOccurrenceId || !runtime.isPluginOccurrenceCurrent) throw new Error('Expected admitted plugin occurrence owners');
@@ -252,10 +253,6 @@ describe('SCM hosting-provider plugin contributions', () => {
             const projection = buildPluginProjectionV2({
                 registry: runtime.contributes,
                 generation: fixture.controller.getState().generation,
-                scmRuntimeAvailability: {
-                    backendIds: new Set(runtime.scmBackendsById?.keys()),
-                    hostingProviderIds: new Set(runtime.scmHostingProvidersById.keys()),
-                },
             });
 
             expect(projection.familiesById.scmHostingProviders?.entriesById).toEqual({
@@ -269,6 +266,12 @@ describe('SCM hosting-provider plugin contributions', () => {
                     operations: ['detect', 'clone', 'pullRequest'],
                     authService: { pluginId, localId: 'account' },
                     metadata: { tier: 'enterprise' },
+                }),
+                'acme.scm.dormant/stale': expect.objectContaining({
+                    id: 'acme.scm.dormant/stale',
+                    pluginId: 'acme.scm.dormant',
+                    displayName: 'Stale Forge',
+                    operations: ['detect'],
                 }),
             });
         } finally {
