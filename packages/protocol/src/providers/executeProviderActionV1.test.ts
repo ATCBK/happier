@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProviderActionExecuteV1 } from './executeProviderActionV1.js';
 import { parseProviderActionRequestV1 } from './providerActionsV1.js';
 import { TeamCredentialProviderModelCatalogEntryV1Schema } from '../teams/credentials/resourceV1.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from './connections/connectionRowsV1.js';
 import type { ProviderConnectionsCatalogSnapshotV1 } from './connections/connectionRowsV1.js';
+import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 const agentTargetKey = 'agent:happier.agent.codex/codex';
 const teamCredentialModel = TeamCredentialProviderModelCatalogEntryV1Schema.parse({
@@ -17,6 +20,23 @@ const teamCredentialModel = TeamCredentialProviderModelCatalogEntryV1Schema.pars
 });
 
 describe('shared Provider Action recipient catalog admission', () => {
+  it('admits each Team projection once before applying recipient consent', async () => {
+    // Observe both real entry points; neither validator implementation is replaced.
+    const admissions = vi.spyOn(DaemonProviderModelProjectionResponseV1Schema, 'safeParse');
+    const repeatedParses = vi.spyOn(DaemonProviderModelProjectionResponseV1Schema, 'parse');
+    const execute = createProviderActionExecuteV1({
+      assertCurrent: () => {},
+      rpc: async () => ({ status: 'success', agentTargetKey, groups: [] }),
+      readAccountCatalog: async () => ({ status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }),
+      setDefault: async () => ({ status: 'unchanged' }),
+    });
+    expect(await execute(parseProviderActionRequestV1('providers.models.projection', {
+      machineId: 'machine-a', agentTargetKey, teamCredentialModel,
+    }), {})).toMatchObject({ ok: true, result: { status: 'success', groups: [] } });
+    expect(admissions).toHaveBeenCalledTimes(1);
+    expect(repeatedParses).toHaveBeenCalledTimes(0);
+  });
+
   it.each(['providers.models.projection', 'providers.models.refresh'] as const)(
     'refuses unavailable recipient consent through %s', async actionId => {
       const execute = createProviderActionExecuteV1({

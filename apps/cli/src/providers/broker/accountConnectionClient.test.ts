@@ -230,6 +230,10 @@ describe('personal connection broker consumer', () => {
         endpoint: { endpointId: 'b'.repeat(64) } },
     };
     let admitted = true;
+    let admittedResponseReads = 0;
+    // The Home adapter has already decoded this typed response. Count field reads
+    // to detect another schema traversal inside the consumer, without mocking it.
+    const admittedResponse = { get ok(): true { admittedResponseReads++; return true; } };
     let pendingAdmission: Promise<ProviderBrokerAccountAdmissionResponseV2> | null = null;
     let carrierClosed = false;
     let retirementAttempt = 0;
@@ -238,13 +242,14 @@ describe('personal connection broker consumer', () => {
         initiatorMachineId: 'worker-1', targetMachineId: 'hub-1', connectionId, consumer, application, ...capturedFacts,
         signal: new AbortController().signal, openBroker: async () => opened,
         admitConsumer: async () => pendingAdmission ? await pendingAdmission
-          : admitted ? { ok: true } : { ok: false, reasonCode: 'session_not_active' },
+          : admitted ? admittedResponse : { ok: false, reasonCode: 'session_not_active' },
         openTunnel: async () => ({ localPort: address.port, localCapability: 'c'.repeat(64), observedPath: 'relay',
           retire: async () => { if (++retirementAttempt === 1) throw new Error('Home is unavailable during retirement'); },
           close: async () => { carrierClosed = true; } }) });
       const result = await access.access.request({ method: 'POST', pathAndQuery: '/v1/messages', body: new TextEncoder().encode('{}') });
       expect(await new Response(result.body).text()).toBe('data: admitted\n\n');
       expect(effects).toBe(1);
+      expect(admittedResponseReads).toBe(3); // Pre/post-discovery admission and this fresh request, once each.
       admitted = false;
       const refusal = await access.readHttpBinding().catch((error: unknown) => error);
       expect(refusal).toMatchObject({ code: 'provider_endpoint_unavailable' });

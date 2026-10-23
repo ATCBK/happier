@@ -1,6 +1,6 @@
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1, ProviderBrokerConsumerV1, ProviderConnectionId } from '@happier-dev/protocol';
-import { ProviderBrokerAccountAdmissionResponseV2Schema, ProviderBrokerAccountOpenResponseV2Schema, type ProviderBrokerAccountAdmissionResponseV2, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerAccountOpenRequestV2, type ProviderBrokerAccountOpenResponseV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { ProviderBrokerAccountOpenResponseV2Schema, type ProviderBrokerAccountAdmissionResponseV2, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerAccountOpenRequestV2, type ProviderBrokerAccountOpenResponseV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol/providers/safety/url';
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
@@ -118,7 +118,7 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
       admissionReasonCode = undefined;
       signal.throwIfAborted();
       if (closed) throw unavailable();
-      const admitted = ProviderBrokerAccountAdmissionResponseV2Schema.parse(await input.admitConsumer(opened.authority, signal));
+      const admitted = await input.admitConsumer(opened.authority, signal);
       if (!admitted.ok) {
         admissionReasonCode = admitted.reasonCode;
         throw withAccountConnectionProviderBrokerFailureDiagnostic(unavailable(), {

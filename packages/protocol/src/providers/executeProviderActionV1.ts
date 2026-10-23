@@ -9,7 +9,7 @@ import type { ProviderActionIdV1 } from './providerActionIdsV1.js';
 import type { ProviderDefaultModelSelectionMutationV1 } from './selection/v1.js';
 import type { AccountSettingsMutationResult } from '../account/settings/accountSettingMutationV1.js';
 import type { ProviderConnectionsCatalogSnapshotV1 } from './connections/connectionRowsV1.js';
-import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.js';
+import type { DaemonProviderModelProjectionResponseV1 } from '../rpc/providers.js';
 import { projectAccountProviderModelConfirmationsV1 } from './catalog/accountModelProjectionV1.js';
 
 type AccountActionId = 'providers.defaults.set' | 'providers.models.source_visibility.set';
@@ -146,7 +146,8 @@ export function createProviderActionExecuteV1(host: Readonly<{
     if (!mutation) host.assertCurrent(context);
     if ((request.actionId === 'providers.models.projection' || request.actionId === 'providers.models.refresh')
       && request.input.teamCredentialModel) {
-      const projection = DaemonProviderModelProjectionResponseV1Schema.parse(parsed.data);
+      // Both Action ids select the projection schema at the RPC ingress above.
+      const projection = parsed.data as DaemonProviderModelProjectionResponseV1;
       if (projection.status === 'success') {
         // The worker supplies adapter facts; only the requesting Account can
         // supply consent, identically for UI, CLI and MCP Action callers.

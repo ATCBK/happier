@@ -10,7 +10,6 @@ import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { selectProviderRuntimeCredentialTransportV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { resolveProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/providers/catalog/currentSelectionRecoveryV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
-import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
 import type { ProviderCatalogDeclarationV1, ProviderBoundModelRef, ProviderConnectionId, ProviderCredentialTransportV1, ProviderBrokerApplicationBindingV1, ProviderModelDescriptorV1, ProviderWireProtocol, PersistedBackendTargetRefV2, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import { projectProviderConnectionBrokerApplication } from '@/providers/broker/providerConnectionCpxBridge';
 import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
@@ -141,7 +140,7 @@ export function projectDaemonProviderTeamCredentialRequestPolicySupportV1(input:
     : { supported: false as const };
 
   return {
-    descriptor: ProviderModelDescriptorV1Schema.parse(input.descriptor),
+    descriptor: input.descriptor,
     application: input.application,
     sourceRevision: input.sourceRevision,
     protocolKind,

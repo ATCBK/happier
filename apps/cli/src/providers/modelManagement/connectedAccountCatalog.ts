@@ -2,7 +2,6 @@ import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/cry
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
-import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
 import type { AgentProviderRequirementsV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import type { DaemonProviderModelProjectionGroupV1, DaemonProviderModelProjectionRequestV1 } from '@happier-dev/protocol/rpc/providers';
 
@@ -116,7 +115,7 @@ export async function projectConnectedAccountCatalog(input: Readonly<{
           }) : projectProviderModelSourceStateV1(sourceFacts, descriptor);
           return {
             ref: { agentTargetKey: input.request.agentTargetKey, providerConnectionId: connectionId, modelId: descriptor.id },
-            descriptor: ProviderModelDescriptorV1Schema.parse(descriptor), application, sourceFacts, confirmationSource,
+            descriptor, application, sourceFacts, confirmationSource,
             gatewaySlots: [selection.binding], sources: { manual: false, static: true, probe: false },
             confidence: 'account_unverified', compatibility: { ...compatibility,
               confirmed: !input.request.sourceCatalog && compatibility.result.status === 'experimental'
