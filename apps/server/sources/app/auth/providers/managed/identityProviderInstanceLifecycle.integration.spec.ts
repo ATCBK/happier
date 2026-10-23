@@ -9,12 +9,16 @@ vi.mock("node:crypto", async (importOriginal) => ({
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 
 import {
     createIdentityProviderInstanceInTx,
     readIdentityProviderInstancePresentationByIdInTx,
+    readIdentityProviderRuntimeFactsByIdsInTx,
     recordIdentityProviderInstanceSuccessfulTestInTx,
     replaceIdentityProviderSecretsInTx,
+    resolveIdentityProviderInstanceRuntimeInTx,
+    resolveIdentityProviderRuntimeForOwner,
     setIdentityProviderInstanceEnabledInTx,
     updateIdentityProviderInstanceInTx,
 } from "./identityProviderInstanceLifecycle";
@@ -80,6 +84,45 @@ async function createGitHubInstallation(ownerTeamId: string | null, suffix: numb
 }
 
 describe("managed identity-provider instance creation", () => {
+    it("keeps scalar and set runtime admission identical across owner, disabled, corrupt and revised rows", async () => {
+        const id = "11111111-1111-4111-8111-111111111111" as const;
+        const team = await db.team.create({ data: { name: "Runtime owner" } });
+        const teamOwner = { kind: "team", teamId: team.id } as const;
+        randomUUID.mockReturnValueOnce(id);
+        expect(await inTx(tx => createIdentityProviderInstanceInTx(tx, {
+            owner: { kind: "home" }, kind: "oidc", displayName: "Runtime parity", config,
+            secrets: { v: 1, kind: "oidc", clientSecret: "managed-secret" }, createdByAccountId: null,
+        }))).toMatchObject({ status: "created" });
+        const compare = (requestedOwner: ProviderCatalogContext = { kind: "home" }) => inTx(async tx => {
+            const facts = await readIdentityProviderRuntimeFactsByIdsInTx(tx, { ids: [id, "missing"] });
+            for (const owner of [{ kind: "home" } as const, teamOwner, { kind: "team", teamId: "other-team" } as const]) {
+                for (const includeDisabled of [false, true]) {
+                    for (const providerId of [id, "missing"]) {
+                        const scalar = await resolveIdentityProviderInstanceRuntimeInTx(tx, { id: providerId, owner, includeDisabled });
+                        expect(resolveIdentityProviderRuntimeForOwner(facts.get(providerId), owner, includeDisabled)).toEqual(scalar);
+                    }
+                }
+            }
+            return resolveIdentityProviderRuntimeForOwner(facts.get(id), requestedOwner);
+        });
+        expect(await compare()).toEqual({ status: "disabled" });
+        await db.identityProviderInstance.update({ where: { id }, data: { enabled: true } });
+        expect(await compare()).toMatchObject({ status: "ready", instance: { securityRevision: 1, revision: 1 } });
+        await db.identityProviderInstance.update({ where: { id }, data: {
+            securityRevision: { increment: 1 }, revision: { increment: 1 }, config: { ...config, clientId: "revised" },
+        } });
+        expect(await compare()).toMatchObject({ status: "ready", instance: { securityRevision: 2, revision: 2, config: { clientId: "revised" } } });
+        await db.identityProviderInstance.update({ where: { id }, data: { ownerTeamId: team.id } });
+        expect(await compare(teamOwner)).toMatchObject({ status: "ready", instance: { owner: teamOwner } });
+        expect(await compare()).toEqual({ status: "not_found" });
+        await db.identityProviderInstance.update({ where: { id }, data: { encryptedSecrets: Uint8Array.from([1, 2, 3]) } });
+        expect(await compare(teamOwner)).toEqual({ status: "unreadable" });
+        await db.identityProviderInstance.update({ where: { id }, data: { enabled: false } });
+        expect(await compare(teamOwner)).toEqual({ status: "disabled" });
+        await db.identityProviderInstance.update({ where: { id }, data: { config: { v: 1, kind: "oidc" } } });
+        expect(await compare(teamOwner)).toEqual({ status: "disabled" });
+    });
+
     it("invalidates every linked Account when provider presentation or currentness changes", async () => {
         const id = "11111111-1111-4111-8111-111111111111" as const;
         randomUUID.mockReturnValueOnce(id);

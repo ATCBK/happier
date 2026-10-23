@@ -89,15 +89,12 @@ const instanceRuntimeSelect = {
     encryptedSecrets: true,
 } as const;
 
-const instanceSecretHealthSelect = {
-    id: true,
-    kind: true,
-    config: true,
-    encryptedSecrets: true,
-} as const;
-
 function ownerTeamId(owner: ProviderCatalogContext): string | null {
     return owner.kind === "home" ? null : owner.teamId;
+}
+
+function instanceOwner(row: Pick<IdentityProviderInstanceRow, "ownerTeamId">): ProviderCatalogContext {
+    return row.ownerTeamId === null ? { kind: "home" } : { kind: "team", teamId: row.ownerTeamId };
 }
 
 function sameOwner(row: Pick<IdentityProviderInstanceRow, "ownerTeamId">, owner: ProviderCatalogContext): boolean {
@@ -201,9 +198,7 @@ function projectInstance(row: IdentityProviderInstanceSafeRow): IdentityProvider
     }
     return Object.freeze({
         id: row.id,
-        owner: row.ownerTeamId === null
-            ? Object.freeze({ kind: "home" as const })
-            : Object.freeze({ kind: "team" as const, teamId: row.ownerTeamId }),
+        owner: Object.freeze(instanceOwner(row)),
         kind: parsed.value.kind,
         displayName: row.displayName,
         enabled: row.enabled,
@@ -319,33 +314,6 @@ export async function listIdentityProviderInstancesInTx(
 
 export type IdentityProviderSecretHealth = "configured" | "not_configured" | "unreadable";
 
-/**
- * Reads only redacted secret health for an already-authorized owner-scoped administration view.
- * Secret bytes and parsed secret values remain inside the lifecycle owner.
- */
-export async function readIdentityProviderSecretHealthByIdsInTx(
-    tx: Tx,
-    input: Readonly<{ ids: readonly string[]; owner: ProviderCatalogContext }>,
-): Promise<ReadonlyMap<string, IdentityProviderSecretHealth>> {
-    const ids = [...new Set(input.ids)];
-    if (ids.length === 0) return new Map();
-    const rows = await tx.identityProviderInstance.findMany({
-        where: {
-            id: { in: ids },
-            ownerTeamId: ownerTeamId(input.owner),
-        },
-        select: instanceSecretHealthSelect,
-    });
-    return new Map(rows.map((row) => {
-        const health: IdentityProviderSecretHealth = row.encryptedSecrets === null
-            ? "not_configured"
-            : readSecrets(row) === undefined
-                ? "unreadable"
-                : "configured";
-        return [row.id, health] as const;
-    }));
-}
-
 export type IdentityProviderInstanceRuntimeResult =
     | Readonly<{ status: "ready"; instance: IdentityProviderInstanceView; secrets: IdentityProviderSecrets | null }>
     | Readonly<{ status: "not_found" | "disabled" | "unreadable" }>;
@@ -358,6 +326,21 @@ export type IdentityProviderRuntimeFacts = Readonly<{
     secretHealth: IdentityProviderSecretHealth;
 }>;
 
+function projectIdentityProviderRuntimeFacts(row: IdentityProviderInstanceRow): IdentityProviderRuntimeFacts {
+    const instance = projectInstance(row);
+    const secrets = instance ? readSecrets(row, instance.config) : undefined;
+    return {
+        owner: instanceOwner(row),
+        enabled: row.enabled,
+        instance,
+        runtime: instance && secrets !== undefined
+            ? { status: "ready", instance, secrets }
+            : { status: "unreadable" },
+        secretHealth: row.encryptedSecrets === null ? "not_configured"
+            : secrets === undefined ? "unreadable" : "configured",
+    };
+}
+
 /** One transaction's current provider rows, admitted and decrypted once for
  * both runtime currentness and redacted administration health. */
 export async function readIdentityProviderRuntimeFactsByIdsInTx(
@@ -368,20 +351,20 @@ export async function readIdentityProviderRuntimeFactsByIdsInTx(
     const rows = (await Promise.all(portableQueryChunks({ values: ids, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.identityProviderInstance.findMany({
         where: { id: { in: [...ids] } }, select: instanceRuntimeSelect,
     })))).flat();
-    return new Map(rows.map(row => {
-        const instance = projectInstance(row);
-        const secrets = instance ? readSecrets(row, instance.config) : undefined;
-        return [row.id, {
-            owner: row.ownerTeamId === null ? { kind: "home" as const } : { kind: "team" as const, teamId: row.ownerTeamId },
-            enabled: row.enabled,
-            instance,
-            runtime: instance && secrets !== undefined
-                ? { status: "ready" as const, instance, secrets }
-                : { status: "unreadable" as const },
-            secretHealth: row.encryptedSecrets === null ? "not_configured" as const
-                : secrets === undefined ? "unreadable" as const : "configured" as const,
-        }] as const;
-    }));
+    return new Map(rows.map(row => [row.id, projectIdentityProviderRuntimeFacts(row)]));
+}
+
+function identityProviderRuntimeRefusal(
+    facts: Pick<IdentityProviderRuntimeFacts, "owner" | "enabled"> | undefined,
+    owner: ProviderCatalogContext,
+    includeDisabled: boolean,
+): Readonly<{ status: "not_found" | "disabled" }> | null {
+    if (!facts || facts.owner.kind !== owner.kind
+        || (facts.owner.kind === "team" && owner.kind === "team" && facts.owner.teamId !== owner.teamId)) {
+        return { status: "not_found" };
+    }
+    if (!facts.enabled && !includeDisabled) return { status: "disabled" };
+    return null;
 }
 
 /** Preserve exact owner and disabled-state admission when consuming a row
@@ -391,12 +374,7 @@ export function resolveIdentityProviderRuntimeForOwner(
     owner: ProviderCatalogContext,
     includeDisabled = false,
 ): IdentityProviderInstanceRuntimeResult {
-    if (!facts || facts.owner.kind !== owner.kind
-        || (facts.owner.kind === "team" && owner.kind === "team" && facts.owner.teamId !== owner.teamId)) {
-        return { status: "not_found" };
-    }
-    if (!facts.enabled && !includeDisabled) return { status: "disabled" };
-    return facts.runtime;
+    return identityProviderRuntimeRefusal(facts, owner, includeDisabled) ?? facts!.runtime;
 }
 
 export async function resolveIdentityProviderInstanceRuntimeInTx(
@@ -404,12 +382,10 @@ export async function resolveIdentityProviderInstanceRuntimeInTx(
     input: Readonly<{ id: string; owner: ProviderCatalogContext; includeDisabled?: boolean }>,
 ): Promise<IdentityProviderInstanceRuntimeResult> {
     const row = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceRuntimeSelect });
-    if (!row || !sameOwner(row, input.owner)) return { status: "not_found" };
-    if (!row.enabled && input.includeDisabled !== true) return { status: "disabled" };
-    const instance = projectInstance(row);
-    const secrets = readSecrets(row);
-    if (!instance || secrets === undefined) return { status: "unreadable" };
-    return { status: "ready", instance, secrets };
+    const refusal = identityProviderRuntimeRefusal(row ? { owner: instanceOwner(row), enabled: row.enabled } : undefined,
+        input.owner, input.includeDisabled === true);
+    // Preserve scalar short-circuiting before decrypting wrong-scope or disabled rows.
+    return refusal ?? projectIdentityProviderRuntimeFacts(row!).runtime;
 }
 
 export type RecordIdentityProviderInstanceSuccessfulTestResult =
