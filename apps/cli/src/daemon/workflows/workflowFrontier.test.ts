@@ -410,7 +410,8 @@ describe('recorded durable workflow frontier', () => {
     expect(f.boundary.rows().filter(row => row.index.lifecycle === 'waiting_for_review')).toHaveLength(2);
     const wakes: Array<Readonly<{ resolution: ReturnType<typeof measure>['metrics']; restart: ReturnType<typeof measure>['metrics'] }>> = [];
     // The default count contract completes every cycle at small scale. The
-    // explicit measurement configuration exercises the same journey at 500.
+    // HAPPIER_WORKFLOW_SCALE_MEASUREMENT=1 exercises the same journey at 500
+    // through the default source-test config (with --testTimeout=0).
     const wakeCount = itemCount;
     for (let wake = 0; wake < wakeCount; wake++) {
       await f.boundary.execute({ operation: 'transition', runId, expectedRevision: held.result.parkRevision,
