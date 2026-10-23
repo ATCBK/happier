@@ -114,8 +114,16 @@ describe("session turn projection SQL (executed)", () => {
                     ? ["m38800", "m38801", "m39200", "m39201"]
                     : ["m39200", "m39201", "m39600", "m39601"]);
 
-                type Plan = { "Relation Name"?: string; Alias?: string; "Node Type"?: string; "Index Cond"?: string; Plans?: Plan[] };
-                const explanation = await db.query<{ "QUERY PLAN": Array<{ Plan: Plan }> }>(`EXPLAIN (FORMAT JSON) ${built.sql}`, values);
+                type Plan = {
+                    "Relation Name"?: string;
+                    Alias?: string;
+                    "Node Type"?: string;
+                    "Index Cond"?: string;
+                    "Actual Rows"?: number;
+                    "Rows Removed by Filter"?: number;
+                    Plans?: Plan[];
+                };
+                const explanation = await db.query<{ "QUERY PLAN": Array<{ Plan: Plan }> }>(`EXPLAIN (ANALYZE, FORMAT JSON) ${built.sql}`, values);
                 const accesses: Plan[] = [];
                 const visit = (plan: Plan) => {
                     if (plan["Relation Name"] === "SessionMessage") accesses.push(plan);
@@ -124,8 +132,14 @@ describe("session turn projection SQL (executed)", () => {
                 visit(explanation.rows[0]["QUERY PLAN"][0].Plan);
                 expect(accesses.length).toBeGreaterThan(0);
                 for (const access of accesses) {
+                    // PostgreSQL uniquifies repeated aliases (edge, edge_1, ...).
+                    const isTailSeek = /^edge(?:_\d+)?$/.test(access.Alias ?? "");
                     expect(access["Node Type"]).toMatch(/Index.*Scan/);
-                    expect(access["Index Cond"]).toContain(access.Alias === "edge" ? "sessionId" : "messageRole");
+                    expect(access["Index Cond"]).toContain(isTailSeek ? "sessionId" : "messageRole");
+                    if (isTailSeek) {
+                        expect(access["Actual Rows"]).toBeLessThanOrEqual(1);
+                        expect(access["Rows Removed by Filter"] ?? 0).toBe(0);
+                    }
                 }
             }
         } finally {
