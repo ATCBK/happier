@@ -11,6 +11,8 @@ import { type PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import { resolveMachineRpcRoutePolicy } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { isRequesterProjectExecutionActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { isProviderActionIdV1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { resolveProviderActionRpcRouteV1 } from '@happier-dev/protocol/providers/executeProviderActionV1';
 import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/db';
 import { portableQueryChunks } from '@/storage/portableQueryChunks';
@@ -339,7 +341,8 @@ async function resolveMachineAdmissionFromFactsInTx(tx: Tx, row: MachineFacts | 
         // Session creation/resume uses admitted requester custody at the Action ingress.
         // Its private raw RPC binding remains custodian-only when requested directly.
         const requesterSessionLifecycle = spec?.id === 'session.spawn_new' || spec?.id === 'session.open';
-        method = requesterSessionLifecycle ? undefined : spec?.bindings?.rpcMethod;
+        method = requesterSessionLifecycle ? undefined : isProviderActionIdV1(input.actionId)
+            ? resolveProviderActionRpcRouteV1(input.actionId)?.method : spec?.bindings?.rpcMethod;
         if (!method && !access.owned && !requesterSessionLifecycle && !isRequesterProjectExecutionActionV1(input.actionId)) {
             return { kind: 'denied', code: 'unsupported_operation' };
         }

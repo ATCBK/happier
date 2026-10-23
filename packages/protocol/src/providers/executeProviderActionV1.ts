@@ -47,8 +47,14 @@ function rpcErrorContext(request: RpcRequest) {
   };
 }
 
-function rpcRoute(actionId: RpcActionId): Readonly<{ method: string; mutation: boolean }> {
+type ProviderActionRpcRouteV1 = Readonly<{ method: string; mutation: boolean }>;
+export function resolveProviderActionRpcRouteV1(actionId: RpcActionId): ProviderActionRpcRouteV1;
+export function resolveProviderActionRpcRouteV1(actionId: ProviderActionIdV1): ProviderActionRpcRouteV1 | null;
+/** The execution and Machine admission owners consume the same native route. */
+export function resolveProviderActionRpcRouteV1(actionId: ProviderActionIdV1): ProviderActionRpcRouteV1 | null {
   switch (actionId) {
+    case 'providers.defaults.set':
+    case 'providers.models.source_visibility.set': return null;
     case 'providers.connections.describe': return { method: RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, mutation: false };
     case 'providers.models.list': return { method: RPC_METHODS.DAEMON_PROVIDERS_MODELS, mutation: false };
     case 'providers.models.projection':
@@ -107,7 +113,7 @@ export function createProviderActionExecuteV1(host: Readonly<{
     if (resolveProviderActionOwnerV1(request) !== 'machine') {
       return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };
     }
-    const { method, mutation } = rpcRoute(request.actionId);
+    const { method, mutation } = resolveProviderActionRpcRouteV1(request.actionId);
     const schema = PROVIDER_ACTION_OUTPUT_SCHEMAS_V1[request.actionId];
     const input = readRecord(request.input);
     const errorContext = rpcErrorContext(request);
