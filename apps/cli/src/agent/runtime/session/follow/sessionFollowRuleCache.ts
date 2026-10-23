@@ -86,18 +86,24 @@ export function createSessionFollowRuleCache(input: Readonly<{
     try { return await work; }
     finally { if (refreshing === work) refreshing = null; }
   };
-  const readCurrent = async (options?: Readonly<{ refresh?: boolean }>, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<SessionFollowRuleCacheSnapshot> => {
+  const hasEnabledSessionReceiver = (snapshot: SessionFollowRuleCacheSnapshot, sessionId: string): boolean =>
+    snapshot.status === 'available' && snapshot.rules.some(rule => rule.definition.enabled
+      && rule.receiver.kind === 'session' && rule.receiver.sessionId === sessionId);
+  const readCurrent = async (options?: Readonly<{ refresh?: boolean; refreshForSessionReceiver?: string }>, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<SessionFollowRuleCacheSnapshot> => {
     if (!current()) return { status: 'unavailable', reason: 'account-retired' };
-    const observation = await (options?.refresh ? refresh() : read());
+    // Progress can advance without configuration changing, but only enabled
+    // rules for this receiver have progress to refresh. Unknown configuration
+    // still loads; the same change-feed invalidation withdraws known absence.
+    const receiver = options?.refreshForSessionReceiver;
+    const refreshProgress = receiver !== undefined && (loaded?.snapshot.status !== 'available'
+      || hasEnabledSessionReceiver(loaded.snapshot, receiver));
+    const observation = await (options?.refresh || refreshProgress ? refresh() : read());
     // Account authority may itself await Home. Keep the observed revision
     // until that check settles, without withdrawing another range's refresh.
     if ((revalidateCurrent && !await revalidateCurrent()) || !current()) return { status: 'unavailable', reason: 'account-retired' };
     if (observation.snapshot.status === 'available' && observation.revision !== revision) return { status: 'unavailable', reason: 'rules-changed' };
     return observation.snapshot;
   };
-  const hasEnabledSessionReceiver = (snapshot: SessionFollowRuleCacheSnapshot, sessionId: string): boolean =>
-    snapshot.status === 'available' && snapshot.rules.some(rule => rule.definition.enabled
-      && rule.receiver.kind === 'session' && rule.receiver.sessionId === sessionId);
   return {
     read: readCurrent,
     async hasEnabledSessionReceiver(sessionId: string, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<boolean> {

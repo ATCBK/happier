@@ -544,14 +544,13 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         cursor = page.data.continuation;
       } while (cursor && await current());
     }
-    // Run discovery above has its own source authority. An empty Session
-    // observation needs no forced Account progress refresh without an enabled
-    // receiver rule; configuration changes invalidate this same cache.
+    // Empty recovery has no Session work without an enabled receiver rule.
     if (request.observations.length === 0 && !await rules.hasEnabledSessionReceiver(request.destinationSessionId)) return { coveredEvents };
     // Progress changes independently of rule configuration. Refresh once at
-    // this existing catch-up boundary, never for each original in the range.
+    // this catch-up boundary for enabled receiver rules. Ordinary manager and
+    // explicit Follow ranges reuse configuration through the same cache owner.
     checkpoint(diagnostic, 'rules', 'started');
-    const opened = await rules.read({ refresh: true });
+    const opened = await rules.read({ refreshForSessionReceiver: request.destinationSessionId });
     if (opened.status !== 'available') { checkpoint(diagnostic, 'rules', 'held', { reason: opened.reason }); return { coveredEvents }; }
     if (!await current()) { checkpoint(diagnostic, 'rules', 'held', { reason: 'account_not_current' }); return { coveredEvents }; }
     checkpoint(diagnostic, 'rules', 'completed');

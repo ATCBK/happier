@@ -6,6 +6,7 @@ import { createSessionFollowRuleCache } from './sessionFollowRuleCache';
 import { createAccountSessionFollowRuleCache } from './accountSessionFollowRuleCache';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import type { SessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 
 const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['home'] }),
   policy: { preset: 'important' as const } };
@@ -15,6 +16,57 @@ const row = { ruleId: 'rule', receiver, version: 1,
   ruleId: 'rule', receiver, definition, mode: 'plain', material: null }) };
 
 describe('Account Follow rule cache', () => {
+  it('refreshes receiver progress only for enabled receiver rules and reloads absent rules after invalidation', async () => {
+    const receiverSessionId = 'receiver';
+    const sessionRule = { ...row, receiver: { kind: 'session' as const, sessionId: receiverSessionId },
+      content: sealSessionFollowRuleContentV1({ ruleId: row.ruleId,
+        receiver: { kind: 'session', sessionId: receiverSessionId }, definition, mode: 'plain', material: null }) };
+    let rules: SessionFollowRuleV1[] = [row];
+    let available = true;
+    let invalidate: (change?: Readonly<{ full: boolean }>) => void = () => {};
+    const reads: string[] = [];
+    const http = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      reads.push(path);
+      if (path === '/v1/account/encryption/currentness') return { status: 200,
+        data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+      if (path === '/v2/account/session-follow-preferences') return { status: 200,
+        data: { assigned: false, direct: false, team: false, group: false } };
+      if (path === '/v2/account/session-follow-rules') return available ? { status: 200, data: { rules } }
+        : { status: 503, data: {} };
+      throw new Error(`Unexpected Follow request ${path}`);
+    });
+    const lifetime = new AbortController();
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://receiver-progress.test', signal: lifetime.signal, isCurrent: async () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; } });
+    try {
+      expect(await cache.read()).toMatchObject({ status: 'available' });
+      reads.length = 0;
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'available' });
+      expect(reads).toEqual([]);
+      rules = [sessionRule];
+      invalidate({ full: true });
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'available',
+        rules: [{ receiver: sessionRule.receiver }] });
+      expect(reads.filter(path => path.endsWith('/session-follow-rules'))).toHaveLength(1);
+      rules = [{ ...sessionRule, sources: [{ sourceSessionId: 'current-source',
+        delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 4 } }] }];
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'available',
+        rules: [{ sources: rules[0]!.sources }] });
+      expect(reads.filter(path => path.endsWith('/session-follow-rules'))).toHaveLength(2);
+      available = false;
+      invalidate({ full: true });
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'unavailable' });
+      available = true;
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'available' });
+      lifetime.abort();
+      const beforeRetiredRead = reads.length;
+      expect(await cache.read({ refreshForSessionReceiver: receiverSessionId })).toMatchObject({ status: 'unavailable' });
+      expect(reads).toHaveLength(beforeRetiredRead);
+    } finally { cache.dispose(); http.mockRestore(); }
+  });
   it('retains rule configuration for source-only notifications and reloads it on a rule change', async () => {
     let invalidate: (change?: Readonly<{ full: boolean }>) => void = () => {};
     let ruleReads = 0;

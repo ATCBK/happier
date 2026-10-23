@@ -325,9 +325,9 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     archivedAt: null, active: true, seq: 2, origin: { kind: 'none' as const } };
   const destination = { ...source, id: destinationSessionId, seq: 0 };
   let readable = false;
-  let releaseRules!: () => void;
-  const rulesGate = new Promise<void>(resolve => { releaseRules = resolve; });
-  let readingRules = false;
+  let releaseSource!: () => void;
+  const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; });
+  let readingSource = false;
   let sourceLists = 0;
   const afterSequences: number[] = [];
   const pending: unknown[] = [];
@@ -341,10 +341,7 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
       data: { sessions: [], hasNext: false, nextCursor: null } };
     if (path === '/v2/account/session-follow-rules') {
-      if (entry === 'overlapping-receiver') {
-        if (readable) { readingRules = true; await rulesGate; }
-        return { status: 200, data: { rules: [] } };
-      }
+      if (entry === 'overlapping-receiver') return { status: 200, data: { rules: [] } };
       const demanded = options?.params?.destinationSessionId;
       return { status: 200, data: { rules: [rule], ...(demanded ? { sourceRanges: { status: 'available', sources: [{
         sourceSessionId, delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, throughSeq: 2,
@@ -352,7 +349,11 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     }
     if (path === '/v2/account/session-follow-preferences') return { status: 200,
       data: { assigned: false, direct: false, team: false, group: false } };
-    if (path === `/v2/sessions/${sourceSessionId}`) return readable ? { status: 200, data: { session: source } } : { status: 404, data: {} };
+    if (path === `/v2/sessions/${sourceSessionId}`) {
+      // Overlap at required source admission, independent of private-rule demand.
+      if (entry === 'overlapping-receiver' && readable) { readingSource = true; await sourceGate; }
+      return readable ? { status: 200, data: { session: source } } : { status: 404, data: {} };
+    }
     if (path === `/v2/sessions/${destinationSessionId}`) return { status: 200, data: { session: destination } };
     if (path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
     if (path.includes('/messages')) {
@@ -395,11 +396,11 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
         delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 2 } };
       const listsBefore = sourceLists;
       const latest = dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [observation] });
-      await vi.waitFor(() => expect(readingRules).toBe(true));
+      await vi.waitFor(() => expect(readingSource).toBe(true));
       const older = dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [{ ...observation,
         observed: { ...observation.observed, transcriptSeq: 1 } }] });
       try { await vi.waitFor(() => expect(sourceLists).toBe(listsBefore + 2)); }
-      finally { releaseRules(); }
+      finally { releaseSource(); }
       return (await Promise.all([latest, older]))[0];
     })();
     expect(afterSequences).toEqual([1]);
@@ -418,7 +419,7 @@ it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the obs
     expect(admissionLogs).toEqual([[expect.any(String), expect.objectContaining({
       sourceSessionId, destinationSessionId, sourceMessageSeq: 2, ok: true, localInputId,
     })]]);
-  } finally { releaseRules(); dispatcher.dispose(); }
+  } finally { releaseSource(); dispatcher.dispose(); }
 });
 
 it.each(['complete', 'unavailable-route', 'unavailable-mute', 'optout-before-dispatch', 'unavailable-personal-scope'] as const)(
