@@ -7,10 +7,86 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { createDeferred } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture } from '@/dev/testkit';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 installDisconnectedServerSocketBoundary();
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { mutateConnectedAccountPurposeDefaultsInContext } = await import('./connectedAccountPurposeDefaults');
+const { readConnectedAccountCatalog } = await import('@/sync/api/account/apiConnectedAccountCatalog');
+
+it('activates genuine auxiliary Agent defaults through the current reader and publishes before retained history settles', async () => {
+    const bridge = await loadSyncSingletonForTests();
+    const accountId = 'purpose-auxiliary';
+    const machineId = 'purpose-source-machine';
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const identity = { pluginId: service.pluginId, localId: 'codex' };
+    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+        agentsById: { codex: { id: 'codex', title: 'Codex', identity,
+            connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }],
+            capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } },
+        actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
+    const http = createHomeHubArtifactHttpBoundary(accountId);
+    const history = createDeferred<void>();
+    let historyReads = 0;
+    let readyBeforeHistory = false;
+    let catalog: ReturnType<typeof ConnectedAccountCatalogRowMutationV1Schema.parse>['content'] | undefined;
+    const rowPath = '/v1/account/entity-rows/connected-accounts/purposes';
+    const raw = { connectedServicesDefaultAuthByAgentIdV1: { v: 1,
+        bindingsByAgentId: { codex: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'work' } } } } } };
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://purpose-auxiliary.test', accountId,
+        configureSocket: socket => {
+            configureConnectedServerSocketBoundary(socket);
+            // Only the external daemon ACK is substituted; projection admission,
+            // Account custody and source-only Agent resolution remain real.
+            socket.emitWithAck = vi.fn(async (event, _payload) => event === SOCKET_RPC_EVENTS.CALL
+                ? { ok: true, result: { protocolVersion: 1, projection } }
+                : { v: 1, ok: true, admittedSessionIds: [] });
+        }, request: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ version: 7, content: { t: 'plain', v: raw } });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 7 }));
+            if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+            if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+                id => createPlainMachineRowFixture({ id, accountId }));
+            if (path === '/v2/account/settings/history') {
+                historyReads++;
+                await history.promise;
+                return Response.json({ snapshots: [] });
+            }
+            if (path !== rowPath) return http.request(input, init);
+            if (init?.method !== 'POST') return Response.json(catalog ? { status: 'present', revision: 1, content: catalog } : { status: 'absent' });
+            const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+            expect(mutation).toMatchObject({ expectedRevision: 'absent', sourceSettingsVersion: 7 });
+            catalog = mutation.content;
+            return Response.json({ status: 'updated', revision: 1, cursor: 1 });
+        } });
+    let pending: ReturnType<typeof readConnectedAccountCatalog> | undefined;
+    try {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const scope = { serverId: connection.home.id, accountId };
+        storage.setState({ machineListByServerId: { [scope.serverId]: [createMachineFixture({ id: machineId, active: true, activeAt: Date.now() })] } });
+        pending = readConnectedAccountCatalog(scope, 'purposes', undefined, undefined, {
+            onReady: snapshot => {
+                expect(snapshot).toMatchObject({ status: 'ready', record: { key: 'purposes', value: { bindings: [{
+                    purpose: { consumer: identity, purpose: 'primary' }, target: { kind: 'account', account: { service, accountId: 'work' } },
+                }] } } });
+                readyBeforeHistory = historyReads === 0;
+            },
+        }, { sourceMachineId: machineId });
+        await waitForHomeGovernance(() => expect(historyReads).toBe(1));
+        expect(readyBeforeHistory).toBe(true);
+        history.resolve();
+        expect(await pending).toMatchObject({ status: 'ready', revision: 1, cleanup: { status: 'complete' } });
+        expect(historyReads).toBe(2);
+    } finally {
+        history.resolve(); await pending?.catch(() => {});
+        await connection.dispose(); bridge.dispose();
+    }
+});
 
 it('acknowledges a choice in an active purpose catalog without waiting for settings-history maintenance', async () => {
     const bridge = await loadSyncSingletonForTests();

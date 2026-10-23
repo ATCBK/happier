@@ -1,5 +1,5 @@
 import { loadConnectedAccountCatalogV1, type ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
-import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema,
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, CONNECTED_ACCOUNT_CATALOG_RETAINED_ROOTS_V1, ConnectedAccountCatalogRowReadResponseV1Schema,
     ConnectedAccountCatalogRowMutationV1Schema, ConnectedAccountCatalogRowMutationResponseV1Schema,
     readRetainedConnectedAccountCatalogRecordV1, listConnectedConfigurationCatalogSavedSecretRefsV1,
     sealConnectedAccountCatalogContentV1, type ConnectedAccountCatalogKeyV1, type ConnectedAccountCatalogRecordV1,
@@ -95,6 +95,7 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                 context.assertCurrent();
                 return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
             };
+            let emptySourceInitialization = false;
             const catalog = await loadConnectedAccountCatalogV1({ key, mode, material, signal,
                 readRow: () => readConnectedAccountCatalogRowInContext(context, key, signal, { fresh: fresh || publication !== null }),
                 ...(publication?.onReady ? { onReadyBeforeCleanup: async catalog => {
@@ -110,6 +111,8 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                             return source;
                         };
                         let source = await readSource();
+                        emptySourceInitialization = purpose === 'initialization'
+                            && !Object.hasOwn(source.raw ?? {}, CONNECTED_ACCOUNT_CATALOG_RETAINED_ROOTS_V1[key]);
                         const retained = purpose === 'initialization' && key === 'configurations'
                             ? readRetainedConnectedAccountCatalogRecordV1(source.raw ?? {}, key) : null;
                         // Only a complete genuine source with personal references needs
@@ -145,11 +148,18 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                         }
                         return { raw: source.raw ?? {}, version: source.version };
                     },
-                    initializeRecord: input => writeConnectedAccountCatalogRecordInContext(context, input, signal),
+                    initializeRecord: input => {
+                        // Protocol has already folded auxiliary Agent defaults into
+                        // this record. Their real migration is not an empty source.
+                        if (input.record.key === 'purposes' && (input.record.value.bindings.length > 0
+                            || (input.record.value.teamResourceSelections?.length ?? 0) > 0)) emptySourceInitialization = false;
+                        return writeConnectedAccountCatalogRecordInContext(context, input, signal);
+                    },
                     replaceSource: input => context.mutateRawSettings(() => ({ ...input.raw }), {
                         expectedSettingsVersion: input.expectedVersion, rebaseOnConflict: false, observeOutcome: true,
                     }),
-                    normalizeHistory: async destinationAuthority => normalizeAccountSettingsHistoryAfterTransfer({
+                    normalizeHistory: async destinationAuthority => emptySourceInitialization ? { status: 'complete' as const }
+                        : normalizeAccountSettingsHistoryAfterTransfer({
                         credentials: context.credentials, encryption: (await context.resolveAccountEncryption()).encryption,
                         settingsScope: { serverId: context.serverId, accountId: context.accountId }, destinationAuthority,
                         requestContext: { request: context.request, isCurrent: context.accountLifetime.isCurrent },
@@ -171,12 +181,17 @@ export function readConnectedAccountCatalogInContext(context: ConnectedAccountCa
     sourceAdmission?: ConnectedAccountCatalogSourceAdmission): Promise<ConnectedAccountCatalogSnapshotV1> {
     return readConnectedAccountCatalogWithAdmissionInContext(context, key, signal, publication ?? {}, sourceAdmission);
 }
-/** Active-row edits await current authority, not retained-source/history maintenance. */
+/** Current readers and edits share row authority; only actual absence activates the source owner. */
 export async function readConnectedAccountCatalogForMutationInContext(context: ConnectedAccountCatalogAccountContext,
-    key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal): Promise<ConnectedAccountCatalogSnapshotV1> {
+    key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal,
+    publication?: ConnectedAccountCatalogReadPublication,
+    sourceAdmission?: ConnectedAccountCatalogSourceAdmission): Promise<ConnectedAccountCatalogSnapshotV1> {
     const admitted = await readConnectedAccountCatalogWithAdmissionInContext(context, key, signal, null, undefined, true);
-    return admitted.status === 'unavailable' && admitted.reason === 'authority-not-confirmed'
-        ? readConnectedAccountCatalogInContext(context, key, signal) : admitted;
+    if (admitted.status === 'unavailable' && admitted.reason === 'authority-not-confirmed') {
+        return readConnectedAccountCatalogInContext(context, key, signal, publication, sourceAdmission);
+    }
+    publication?.onReady?.(admitted, context.accountLifetime.isCurrent);
+    return admitted;
 }
 export async function readConnectedAccountCatalog(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1,
     signal?: AbortSignal, assertCapturedAccountCurrent?: () => void,
@@ -186,7 +201,7 @@ export async function readConnectedAccountCatalog(scope: ServerAccountScope, key
         assertCapturedAccountCurrent?.();
         return await withConnectedAccountCatalogAccount(scope, signal, context => {
             assertCapturedAccountCurrent?.();
-            return readConnectedAccountCatalogInContext(context, key, signal, publication, sourceAdmission);
+            return readConnectedAccountCatalogForMutationInContext(context, key, signal, publication, sourceAdmission);
         });
     } catch (error) { return failure(error, signal); }
 }

@@ -14,7 +14,7 @@ import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import type { SavedSecretReferenceResolution } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
-import { withConnectedAccountCatalogAccount, readConnectedAccountCatalogInContext, writeConnectedAccountCatalogRecordAndPublishInContext, ConnectedAccountCatalogOperationError } from '@/sync/api/account/apiConnectedAccountCatalog';
+import { withConnectedAccountCatalogAccount, readConnectedAccountCatalogForMutationInContext, writeConnectedAccountCatalogRecordAndPublishInContext, ConnectedAccountCatalogOperationError } from '@/sync/api/account/apiConnectedAccountCatalog';
 import type { OneShotAccountSettingsMutationResult } from '@/sync/engine/settings/syncSettings';
 import type { SavedSecretFullReferenceResourceCreationParams, SavedSecretFullReferenceResourceCreationResult, SavedSecretFullReferenceResourceMutationCapture } from '@/sync/ops/settings/savedSecretResourceOperations';
 
@@ -576,7 +576,7 @@ export async function mutateScopedAccountVoiceCredentialSource(params: Readonly<
   }
   const { sync } = await import('@/sync/sync');
   return withConnectedAccountCatalogAccount(params.scope, undefined, async (context) => {
-    const snapshot = await readConnectedAccountCatalogInContext(context, 'purposes');
+    const snapshot = await readConnectedAccountCatalogForMutationInContext(context, 'purposes');
     if (snapshot.status !== 'ready' || snapshot.record.key !== 'purposes') {
       throw new Error('connected_purpose_catalog_unavailable');
     }

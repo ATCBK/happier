@@ -11,7 +11,8 @@ import { executeConnectedServiceConfigurationActionV1 } from '@happier-dev/proto
 installConnectedServicesCommonModuleMocks();
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost, readConnectedAccountCatalogInContext } = await import('./apiConnectedAccountCatalog');
+const { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost, readConnectedAccountCatalogInContext,
+    readConnectedAccountCatalog } = await import('./apiConnectedAccountCatalog');
 beforeEach(async () => {
     await home.reset();
     installHomeGovernanceBoundaries(home);
@@ -20,7 +21,82 @@ beforeEach(async () => {
 afterEach(async () => { await home.reset(); resetRuntimeFetch(); });
 
 describe('Connected configuration Account transport', () => {
-    it('re-admits an opened catalog before its early publication when revocation precedes the socket event', async () => {
+    it.each(['active', 'absent-empty', 'absent-legacy', 'active-maintenance'] as const)(
+        'bounds a current catalog read to its destination while retaining real source maintenance (%s)', async initial => {
+        const accountId = `current-config-${initial}`;
+        const sourceValue = { v: 1 as const, entries: [] };
+        const root = 'connectedAccountServiceConfigurationsV1';
+        let raw: Record<string, unknown> = { preferredLanguage: 'de',
+            ...(initial === 'absent-legacy' || initial === 'active-maintenance' ? { [root]: sourceValue } : {}) };
+        let settingsVersion = 41;
+        let revision = 3;
+        const record = () => ({ key: 'configurations', value: { v: 1, entries: [{
+            service: { pluginId: 'custom.current', localId: 'service' }, modeId: 'manual', revision: `current-${revision}`,
+            values: { endpoint: `https://current-${revision}.example.test` }, secretRefs: {},
+        }] } });
+        let row = ConnectedAccountCatalogRowReadResponseV1Schema.parse(initial.startsWith('active')
+            ? { status: 'present', revision, content: { t: 'plain', v: record() } } : { status: 'absent' });
+        const serverId = await home.addHome({ name: 'Current configuration', serverUrl: `https://${accountId}.test`,
+            accountId, currentAccount: true, accountEncryptionMode: 'plain', active: false });
+        home.answer(serverId, 'GET /v1/account/encryption/currentness', { select: () => ({
+            body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion }),
+        }) });
+        home.answer(serverId, 'GET /v2/account/settings', { select: () => ({ body: { version: settingsVersion, content: { t: 'plain', v: raw } } }) });
+        home.answer(serverId, 'GET /v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
+        const destination = '/v1/account/entity-rows/connected-accounts/configurations';
+        home.answer(serverId, `GET ${destination}`, { select: () => ({ body: row }) });
+        home.answer(serverId, `POST ${destination}`, { select: input => {
+            const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(input);
+            expect(mutation.expectedRevision).toBe('absent');
+            expect(mutation.sourceSettingsVersion).toBe(41);
+            row = ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: mutation.content });
+            return { body: { status: 'updated', revision: 1, cursor: 1 } };
+        } });
+        home.answer(serverId, 'POST /v2/account/settings', { select: input => {
+            const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
+            expect(mutation.expectedVersion).toBe(settingsVersion);
+            if (mutation.content?.t !== 'plain') throw new Error('Expected Plain source cleanup');
+            raw = mutation.content.v;
+            return { body: { success: true, version: ++settingsVersion } };
+        } });
+        const versions = Array.from({ length: 25 }, (_, index) => index + 1);
+        home.answer(serverId, 'GET /v2/account/settings/history', { body: { snapshots: versions.map(version => ({
+            version, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 100,
+        })) } });
+        for (const version of versions) {
+            home.answer(serverId, `GET /v2/account/settings/history/${version}`, { body: { version,
+                createdAt: '2026-01-01T00:00:00.000Z', content: { t: 'plain', v: { [root]: sourceValue, preferredLanguage: 'de' } },
+            } });
+            home.answer(serverId, `POST /v2/account/settings/history/${version}/mutate`, { body: { status: 'applied' } });
+        }
+        const before = home.requests.length;
+        const scope = { serverId, accountId };
+        await withConnectedAccountCatalogAccount(scope, undefined, async context => {
+            const first = initial === 'active-maintenance'
+                ? await readConnectedAccountCatalogInContext(context, 'configurations')
+                : await readConnectedAccountCatalog(scope, 'configurations');
+            expect(first).toMatchObject({ status: 'ready', revision: initial.startsWith('active') ? 3 : 1 });
+            if (initial === 'active') {
+                revision = 4;
+                row = ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision, content: { t: 'plain', v: record() } });
+                expect(await readConnectedAccountCatalog(scope, 'configurations')).toMatchObject({ status: 'ready', revision: 4,
+                    record: { value: { entries: [{ values: { endpoint: 'https://current-4.example.test' } }] } } });
+            }
+        });
+        const requests = home.requests.slice(before);
+        const history = requests.filter(request => request.path.startsWith('/v2/account/settings/history'));
+        if (initial === 'active' || initial === 'absent-empty') {
+            expect(history.map(request => request.path)).toEqual([]);
+            expect(requests.filter(request => request.path.startsWith('/v1/account/entity-rows/') && request.path !== destination)).toEqual([]);
+        } else {
+            expect(history.filter(request => /^\/v2\/account\/settings\/history\/\d+$/.test(request.path))).toHaveLength(25);
+            expect(history.filter(request => request.path.endsWith('/mutate'))).toHaveLength(25);
+            expect(raw).toEqual({ preferredLanguage: 'de' });
+        }
+        if (initial === 'active') expect(requests.filter(request => request.path === '/v2/account/settings')).toEqual([]);
+    });
+
+    it.each(['current', 'maintenance'] as const)('re-admits an opened catalog before its early publication when revocation precedes the socket event (%s)', async intent => {
         const accountId = 'held-configuration-owner';
         const serverId = await home.addHome({ name: 'Held configuration', serverUrl: 'https://held-account-config.test',
             accountId, currentAccount: true, accountEncryptionMode: 'plain', active: false });
@@ -39,10 +115,13 @@ describe('Connected configuration Account transport', () => {
         } });
         let disclosed = false;
         await withConnectedAccountCatalogAccount({ serverId, accountId }, undefined, async context => {
-            const result = await readConnectedAccountCatalogInContext(context, 'configurations', undefined, {
+            const publication = {
                 onReady: catalog => { if (catalog.status === 'ready' || catalog.status === 'partial') disclosed = true; },
                 hasPendingCleanup: () => true,
-            });
+            } satisfies NonNullable<Parameters<typeof readConnectedAccountCatalogInContext>[3]>;
+            const result = intent === 'current'
+                ? await readConnectedAccountCatalog({ serverId, accountId }, 'configurations', undefined, undefined, publication)
+                : await readConnectedAccountCatalogInContext(context, 'configurations', undefined, publication);
             expect(result.status).toBe('unavailable');
         });
         expect(disclosed).toBe(false);

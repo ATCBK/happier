@@ -6,7 +6,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
-import { readConnectedAccountCatalogInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
+import { readConnectedAccountCatalogForMutationInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { createWidgetActionInputResolverV1, composeWidgetGroupContextV1, findWidgetLayoutParentV1, readWidgetActionSurfacePortV1, WidgetSurfaceReadV1Schema, resolveConfiguredWidgetTargetInputV1, resolveWidgetViewerPurposeValuesV1, resolveWidgetConnectedAccountOptionsV1, isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, type WidgetActionInputResolverV1, type WidgetInputBindingsV1 } from '@happier-dev/protocol/widgets';
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -111,7 +111,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                 session: storage.getState().sessions[owner.sessionId] }) : {};
     };
     const readProvidedContext = async (request: Request) => composeWidgetGroupContextV1({ providedContext: readContext(request), groupBindings: await readGroupBindings(request) });
-    const purposeCatalogs = new WeakMap<Request, ReturnType<typeof readConnectedAccountCatalogInContext>>();
+    const purposeCatalogs = new WeakMap<Request, ReturnType<typeof readConnectedAccountCatalogForMutationInContext>>();
     const purposePaths = (request: Request, descriptor: WidgetCandidate) => Object.entries(request.instance.bindings)
         .filter(([path, binding]) => binding.kind === 'viewer'
             && descriptor.connectedAccountPurposeBindings?.some(declaration => declaration.path === path && declaration.purpose === binding.purpose)
@@ -120,7 +120,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
         if (purposePaths(request, descriptor).length === 0) return NO_PURPOSE_BINDINGS;
         let pending = purposeCatalogs.get(request);
         if (!pending) {
-            pending = readConnectedAccountCatalogInContext(account, 'purposes', request.signal);
+            pending = readConnectedAccountCatalogForMutationInContext(account, 'purposes', request.signal);
             purposeCatalogs.set(request, pending);
         }
         const catalog = await pending;
