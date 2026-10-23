@@ -926,16 +926,11 @@ describe('authenticated finite Project Action owner', () => {
                 const inspect = client.createProjectDefinitionAction('home', ingress);
                 const read = () => inspect({ actionId, input: { workspace: h.address }, context: { serverId: 'home' } });
                 await read(); // Warm module/plugin loading before comparing the same passive composition.
-                const phaseLog = vi.spyOn(logger, 'debug');
-                const samples: number[] = [];
                 for (let sample = 0; sample < 3; sample++) {
                     h.get.mockClear(); h.post.mockClear();
-                    const sampleStarted = performance.now();
                     const output = await read();
-                    samples.push(Math.round(performance.now() - sampleStarted));
                     expect(ProjectDefinitionInspectOutputSchema.parse(output)).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
                 }
-                phaseLog.mockRestore();
                 expect(h.spawned).toEqual([]);
             } else {
                 const result = await createProjectFiniteAction(runtime, ingress)({ actionId, input: { workspace: h.address,
