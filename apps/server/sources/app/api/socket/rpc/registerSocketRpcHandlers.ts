@@ -873,6 +873,20 @@ export function registerSocketRpcHandlers(params: Readonly<{
     }>>();
     let disconnected = false;
 
+    const retireMachineAvailabilityIfUnused = async (machineId: string): Promise<void> => {
+        const stillOwnsAvailability = () => {
+            for (const method of ownedMethods) {
+                if (parseMachineScopedRpcMethod(method)?.machineId === machineId) return true;
+            }
+            return false;
+        };
+        if (stillOwnsAvailability()) return;
+        const room = buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId });
+        await params.socket.leave(room);
+        // A registration can finish while an older adapter leave is pending.
+        if (!disconnected && stillOwnsAvailability()) await params.socket.join(room);
+    };
+
     const retirePresentationBinding = async (
         sessionId: string,
         binding: Readonly<{ ownerAccountId: string; clientId: string }>,
@@ -993,12 +1007,16 @@ export function registerSocketRpcHandlers(params: Readonly<{
             }
 
             await params.socket.join(buildRpcMethodRoom({ userId: params.userId, method }));
+            ownedMethods.add(method);
+            writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
             const availability = parseMachineScopedRpcMethod(method);
             if (availability && machineScopedSocketMachineId === null && !params.ephemeralRunnerAdmission) {
                 await params.socket.join(buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId: availability.machineId }));
+                if (!ownedMethods.has(method)) {
+                    await retireMachineAvailabilityIfUnused(availability.machineId);
+                    return;
+                }
             }
-            ownedMethods.add(method);
-            writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
             recordRpcRegistration(method);
             params.socket.emit(SOCKET_RPC_EVENTS.REGISTERED, { method });
             if (method === `${machineScopedSocketMachineId}:${RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS}`) {
@@ -1052,21 +1070,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     writeSocketRegisteredRpcMethods(params.socket, ownedMethods);
                 } else {
                     const availability = parseMachineScopedRpcMethod(method);
-                    if (availability) {
-                        const availabilityRoom = buildMachineRpcAvailabilityRoom({ userId: params.userId, machineId: availability.machineId });
-                        const stillOwnsAvailability = () => {
-                            for (const owned of ownedMethods) {
-                                if (parseMachineScopedRpcMethod(owned)?.machineId === availability.machineId) return true;
-                            }
-                            return false;
-                        };
-                        if (!stillOwnsAvailability()) {
-                            await params.socket.leave(availabilityRoom);
-                            // Match method-room retirement: an overlapping registration can
-                            // finish while the older leave is pending at the adapter boundary.
-                            if (!disconnected && stillOwnsAvailability()) await params.socket.join(availabilityRoom);
-                        }
-                    }
+                    if (availability) await retireMachineAvailabilityIfUnused(availability.machineId);
                     recordRpcUnregistration(method);
                     await emitMachineScopedRpcUnregisteredWhenUnavailable({
                         userId: params.userId,

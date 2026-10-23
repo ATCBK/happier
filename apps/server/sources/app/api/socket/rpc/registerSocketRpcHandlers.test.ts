@@ -4015,6 +4015,26 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(rooms.get(indexRoom)?.has(ui)).toBe(true);
     });
 
+    it('does not advertise a registration unregistered during its availability join', async () => {
+        const { io, rooms, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
+        const ui = createRoomAwareSocket({ id: 'ui-same-method-race', data: { clientType: 'user-scoped' } });
+        const daemon = createRoomAwareSocket({ id: 'daemon-same-method-race', data: { clientType: 'machine-scoped', machineId: 'machine-1' } });
+        addToRoom(getMachineSocketRoom('user-1', 'machine-1'), daemon);
+        const method = `machine-1:${RPC_METHODS.UI_ACTION_EXECUTE}`;
+        const indexRoom = buildMachineRpcAvailabilityRoom({ userId: 'user-1', machineId: 'machine-1' });
+        registerSocketRpcHandlers({ userId: 'user-1', socket: ui as unknown as Socket, io });
+        ui.join.mockImplementation(async (room: string) => {
+            addToRoom(room, ui);
+            if (room === indexRoom) await triggerSocketHandler(ui, SOCKET_RPC_EVENTS.UNREGISTER, { method });
+        });
+        await triggerSocketHandler(ui, SOCKET_RPC_EVENTS.REGISTER, { method });
+        expect(ui.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.UNREGISTERED, { method });
+        expect(ui.emit).not.toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method });
+        expect(daemon.emit).not.toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method });
+        expect(rooms.get(`rpc:user-1:${method}`)?.has(ui)).not.toBe(true);
+        expect(rooms.get(indexRoom)?.has(ui)).not.toBe(true);
+    });
+
     it("rejects explicit Session stop from a shared editor before lifecycle dispatch", async () => {
         const socket = createFakeSocket({
             id: "caller-socket",
