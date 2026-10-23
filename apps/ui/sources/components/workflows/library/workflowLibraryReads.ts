@@ -114,6 +114,9 @@ function createDefinitionLibraryReader(captureLifetime: () => ServerAccountScope
             unsubscribeDefinitionChange = subscribeHomeAccountChange((event) => {
                 const lifetime = captureLifetime();
                 if (lifetime === null || !areServerProfileIdentifiersEquivalent(event.serverId, lifetime.scope.serverId)) return;
+                // Session-only catch-up changes neither saved definitions nor
+                // Machine-contributed workflows. Unknown wakes remain conservative.
+                if (event.changeKinds?.length && event.changeKinds.every(kind => kind === 'session')) return;
                 const deletedDefinitionId = event.deletedArtifactIds?.[0];
                 if (deletedDefinitionId !== undefined) {
                     const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);

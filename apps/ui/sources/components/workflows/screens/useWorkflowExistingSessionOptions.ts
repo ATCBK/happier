@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { shallow } from 'zustand/shallow';
 
 import { isAutomationSessionCandidate, isAutomationSessionCandidateVisible } from '@/sync/domains/automations/isAutomationSessionCandidate';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -77,7 +78,16 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
     let previous: WorkflowSessionOptions = { existingSessions: [], sessionDropCandidates: [] };
     let candidateInputs: Pick<StorageState, 'sessions' | 'settings' | 'isDataReady'> | null = null;
     let candidates: StorageState['sessions'][string][] = [];
+    let projectionInputs: readonly unknown[] | null = null;
     return (state: StorageState): WorkflowSessionOptions => {
+        // Subscribe the projection to its inputs, not to every root publication.
+        // Target resolution also reads Machine and list-row facts through the
+        // canonical resolver; those remain live even when Session records do not change.
+        const inputs = [state.sessions, state.settings, state.isDataReady, state.machines,
+            state.machineListByServerId, state.machineListStatusByServerId,
+            state.sessionListRowsByServerId, state.getProjectForSession];
+        if (projectionInputs !== null && shallow(inputs, projectionInputs)) return previous;
+        projectionInputs = inputs;
         // Eligibility parses Agent/backend policy. Unrelated store publications
         // must not repeat it for every Session. Keep target attribution below
         // live: Machine, project and list-row changes can alter that answer
