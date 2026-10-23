@@ -4362,6 +4362,15 @@ and the existing Channels descriptor/fetch/Session-upload path carries the files
 Existing native MIME part identities, including flattened inline descendants,
 remain stable.
 
+In unreleased 0.3, Email parser/module exceptions produce content-free
+`email_parser_module_not_found`, `email_parser_syntax_error` or
+`email_parser_runtime_failed` Action evidence. The existing Channels poll
+settlement honors the Action's retryable bit and schedules its normal backoff;
+genuine transport failures retain provider `network` evidence. Parsing failure
+returns no partial observations or checkpoint, and reply parsing refuses SMTP
+submission with a safe retry result. MIME content-limit rejection remains a
+content non-admission rather than a runtime failure.
+
 Channels' unreleased 0.3 ingress compares attachment identity through the
 shared attachment codec. Email's retained slash-joined MIME part paths and
 their portable encoding name the same native parts. This leaves the existing
