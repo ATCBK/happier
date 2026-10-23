@@ -69,7 +69,79 @@ export type ScopeActionInputById = {
                     projectKey: string;
                 }[];
             } | undefined;
-            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            excludedStatuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            machines?: {
+                include: {
+                    serverId: string;
+                    machineId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    machineId: string;
+                }[];
+            } | undefined;
+            agents?: {
+                include: string[];
+                exclude: string[];
+            } | undefined;
+            sections?: {
+                include: {
+                    serverId: string;
+                    sectionId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    sectionId: string;
+                }[];
+            } | undefined;
+            owners?: {
+                include: {
+                    serverId: string;
+                    accountId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    accountId: string;
+                }[];
+            } | undefined;
+            branches?: {
+                include: string[];
+                exclude: string[];
+            } | undefined;
+            updated?: {
+                op: 'before';
+                atMs: number;
+            } | {
+                op: 'after';
+                atMs: number;
+            } | {
+                op: 'between';
+                fromMs: number;
+                toMs: number;
+            } | undefined;
+            includeInactive?: boolean | undefined;
+            extensions?: Record<string, {
+                kind: 'set';
+                include: string[];
+                exclude: string[];
+            } | {
+                kind: 'boolean';
+                value: boolean;
+            } | {
+                kind: 'time';
+                selection: {
+                    op: 'before';
+                    atMs: number;
+                } | {
+                    op: 'after';
+                    atMs: number;
+                } | {
+                    op: 'between';
+                    fromMs: number;
+                    toMs: number;
+                };
+            }> | undefined;
             underSessionId?: string | undefined;
             homeServerIds?: string[] | undefined;
             audiences?: ({
@@ -196,7 +268,79 @@ export type ScopeActionResultById = {
                     projectKey: string;
                 }[];
             } | undefined;
-            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            statuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            excludedStatuses?: ('unknown' | 'archived' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+            machines?: {
+                include: {
+                    serverId: string;
+                    machineId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    machineId: string;
+                }[];
+            } | undefined;
+            agents?: {
+                include: string[];
+                exclude: string[];
+            } | undefined;
+            sections?: {
+                include: {
+                    serverId: string;
+                    sectionId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    sectionId: string;
+                }[];
+            } | undefined;
+            owners?: {
+                include: {
+                    serverId: string;
+                    accountId: string;
+                }[];
+                exclude: {
+                    serverId: string;
+                    accountId: string;
+                }[];
+            } | undefined;
+            branches?: {
+                include: string[];
+                exclude: string[];
+            } | undefined;
+            updated?: {
+                op: 'between';
+                fromMs: number;
+                toMs: number;
+            } | {
+                op: 'before';
+                atMs: number;
+            } | {
+                op: 'after';
+                atMs: number;
+            } | undefined;
+            includeInactive?: boolean | undefined;
+            extensions?: Record<string, {
+                kind: 'set';
+                include: string[];
+                exclude: string[];
+            } | {
+                kind: 'boolean';
+                value: boolean;
+            } | {
+                kind: 'time';
+                selection: {
+                    op: 'between';
+                    fromMs: number;
+                    toMs: number;
+                } | {
+                    op: 'before';
+                    atMs: number;
+                } | {
+                    op: 'after';
+                    atMs: number;
+                };
+            }> | undefined;
             underSessionId?: string | undefined;
         };
         includeInactive: boolean;

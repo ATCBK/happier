@@ -4,6 +4,15 @@
 import type { AccountCreationOperand, AccountOperand, ProviderCatalogParserV1 } from './pluginActionDtoSupport.generated.js';
 
 export type ProvidersActionInputById = {
+    readonly "providers.gateways.choose": {
+        contributionKey?: string | undefined;
+        machineId?: string | undefined;
+        service?: {
+            pluginId: string;
+            localId: string;
+        } | undefined;
+        purpose?: string | undefined;
+    };
     readonly "providers.connections.describe": AccountOperand<{
         machineId: string;
         connectionId?: string | undefined;
@@ -1132,6 +1141,43 @@ export type ProvidersActionInputById = {
     };
 };
 export type ProvidersActionResultById = {
+    readonly "providers.gateways.choose": {
+        status: 'selected';
+        contribution: {
+            contributionKey: string;
+            purposes: {
+                purpose: string;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+            }[];
+        };
+    } | {
+        status: 'choice_required';
+        choices: {
+            contributionKey: string;
+            purposes: {
+                purpose: string;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+            }[];
+        }[];
+    } | {
+        status: 'unavailable';
+        choices: {
+            contributionKey: string;
+            purposes: {
+                purpose: string;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+            }[];
+        }[];
+    };
     readonly "providers.connections.describe": {
         status: 'success';
         connections: {

@@ -22,6 +22,7 @@ export type SessionReadStateActionResultById = {
                 lastViewedSessionSeq: number;
                 unreadSince: number | null;
             };
+            latestFailureSeq: number | null;
             relevance: {
                 relevant: boolean;
                 reasons: readonly ('owned_by_me' | 'responsible_for_me' | 'shared_directly_with_me' | 'authored_by_me' | 'mentioned_in_discussion' | 'followed_by_me' | 'pinned_by_me' | 'explicit_attention' | 'follow_once')[];

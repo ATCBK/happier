@@ -116,6 +116,19 @@ export type TeamsActionInputById = {
         } | undefined;
         cursor?: string | undefined;
         limit?: number | undefined;
+    } | {
+        teamIds: string[];
+        application?: {
+            agentTargetKey: string;
+            implementationIdentity: {
+                pluginId: string;
+                localId: string;
+            };
+            endpointTemplateId: string;
+            protocol: string;
+        } | undefined;
+        cursor?: string | undefined;
+        limit?: number | undefined;
     };
     readonly "teams.credentials.create": {
         teamId: string;
@@ -1633,6 +1646,235 @@ export type TeamsActionResultById = {
             } | null | undefined;
         }[];
         nextCursor: string | null;
+    } | {
+        resources: {
+            id: string;
+            teamId: string;
+            displayName: string;
+            resourceRevision: number;
+            readiness: {
+                kind: 'available';
+            } | {
+                kind: 'resource_corrupt';
+            } | {
+                kind: 'resource_unavailable';
+            } | {
+                kind: 'source_unavailable';
+            } | {
+                kind: 'broker_unavailable';
+                reason?: 'application_unavailable' | 'model_unavailable' | 'projection_unavailable' | 'response_invalid' | 'not_granted' | 'incompatible' | 'catalog_empty' | undefined;
+            } | {
+                kind: 'update_required';
+            } | {
+                kind: 'policy_denied';
+            } | {
+                kind: 'limit_reached';
+                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                resetsAtUtc: string;
+            };
+            recoveryAction: 'update_required' | 'retry' | 'source_owner_action' | 'select_broker' | 'choose_another_resource' | null;
+            mayBroker: boolean;
+            mayReceiveDirect: boolean;
+            directMaterialState: 'revoked' | 'never_delivered' | 'preparing' | 'current' | 'stale';
+            sessionUsePolicy: 'personal_allowed' | 'team_context_required' | 'team_visibility_required' | null;
+            providerModels: {
+                selection: {
+                    kind: 'team_credential_provider_model';
+                    resourceId: string;
+                    teamId: string;
+                    expectedResourceRevision: number;
+                    agentTargetKey: string;
+                    modelId: string;
+                    deliveryMode: 'brokered' | 'direct';
+                };
+                descriptor: {
+                    id: string;
+                    name: string;
+                    costTier?: 'low' | 'standard' | 'premium' | undefined;
+                    aliases?: string[] | undefined;
+                    description?: string | undefined;
+                    contextWindowTokens?: number | undefined;
+                    extendedContextModelId?: string | undefined;
+                    modelOptions?: {
+                        id: string;
+                        name: string;
+                        type: string;
+                        currentValue: string;
+                        description?: string | undefined;
+                        options?: {
+                            value: string;
+                            name: string;
+                            description?: string | undefined;
+                        }[] | undefined;
+                        overridesWhenOn?: {
+                            optionIds: string[];
+                            forcedValue?: string | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                    capabilities?: {
+                        toolRoundTrips?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                        reasoningControls?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                        structuredOutput?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                    } | undefined;
+                };
+                application: {
+                    agentTargetKey: string;
+                    implementationIdentity: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    endpointTemplateId: string;
+                    protocol: string;
+                };
+                sourceRevision: string;
+                availability: 'available' | 'resource_corrupt' | 'policy_denied' | 'source_owner_required';
+                sourceFacts?: {
+                    endpoint: {
+                        id: string;
+                        protocol: string;
+                        capabilities: {
+                            streaming: 'unknown' | 'supported' | 'unsupported';
+                            toolRoundTrips: 'unknown' | 'supported' | 'unsupported';
+                            statefulResponses: 'unknown' | 'supported' | 'unsupported';
+                            reasoningControls: 'unknown' | 'supported' | 'unsupported';
+                        };
+                    };
+                    credential?: {
+                        kind: 'apiKey';
+                        slotId: 'apiKey';
+                        required: boolean;
+                        transports: {
+                            id: string;
+                            protocols: string[];
+                            uses: ('management' | 'probe' | 'runtime')[];
+                            destination: {
+                                kind: 'httpHeader';
+                                name: string;
+                                format: 'raw' | 'bearer' | {
+                                    template: string;
+                                };
+                            } | {
+                                kind: 'queryParam';
+                                name: string;
+                                format: 'raw' | 'bearer' | {
+                                    template: string;
+                                };
+                            };
+                        }[];
+                        keyUrl?: string | undefined;
+                    } | undefined;
+                    compatibilityOverrides?: {
+                        agentTargetKey: string;
+                        protocol: string;
+                        status: 'incompatible' | 'verified' | 'experimental';
+                        reason: string;
+                        evidence?: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                } | undefined;
+                confirmationSource?: {
+                    connectionId: string;
+                    catalogSourceKey: string;
+                } | undefined;
+                compatibility?: {
+                    result: {
+                        status: 'verified';
+                        selectedProtocol: string;
+                        evidence: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        };
+                    } | {
+                        status: 'experimental';
+                        selectedProtocol: string;
+                        reasons: ('no_compatible_protocol' | 'no_auth_unsupported' | 'credential_transport_unavailable' | 'optional_credential_no_auth_unsupported' | 'capability_streaming_unsupported' | 'capability_streaming_unknown' | 'capability_toolRoundTrips_unsupported' | 'capability_toolRoundTrips_unknown' | 'capability_statefulResponses_unsupported' | 'capability_statefulResponses_unknown' | 'capability_reasoningControls_unsupported' | 'capability_reasoningControls_unknown' | 'model_required_for_capability_resolution' | 'model_capability_toolRoundTrips_unsupported' | 'model_capability_toolRoundTrips_unknown' | 'model_capability_reasoningControls_unsupported' | 'model_capability_reasoningControls_unknown' | 'compatibility_override_incompatible' | 'compatibility_override_experimental' | 'compatibility_evidence_missing' | 'model_capability_evidence_required' | 'agent_external_providers_unsupported' | 'adapter_contract_invalid')[];
+                        confirmationScope: {
+                            kind: 'connection';
+                        } | {
+                            kind: 'model';
+                            modelId: string;
+                        };
+                        evidence?: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        } | undefined;
+                    } | {
+                        status: 'incompatible';
+                        reasons: ('no_compatible_protocol' | 'no_auth_unsupported' | 'credential_transport_unavailable' | 'optional_credential_no_auth_unsupported' | 'capability_streaming_unsupported' | 'capability_streaming_unknown' | 'capability_toolRoundTrips_unsupported' | 'capability_toolRoundTrips_unknown' | 'capability_statefulResponses_unsupported' | 'capability_statefulResponses_unknown' | 'capability_reasoningControls_unsupported' | 'capability_reasoningControls_unknown' | 'model_required_for_capability_resolution' | 'model_capability_toolRoundTrips_unsupported' | 'model_capability_toolRoundTrips_unknown' | 'model_capability_reasoningControls_unsupported' | 'model_capability_reasoningControls_unknown' | 'compatibility_override_incompatible' | 'compatibility_override_experimental' | 'compatibility_evidence_missing' | 'model_capability_evidence_required' | 'agent_external_providers_unsupported' | 'adapter_contract_invalid')[];
+                    };
+                    compatibilityFingerprint: string;
+                    confirmed: boolean;
+                } | undefined;
+                direct?: {
+                    sourceMemberKey: string;
+                    sourceVersion: string;
+                } | null | undefined;
+            }[];
+            connectedServiceSelections: ({
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            })[];
+            sourcePresentation: {
+                kind: 'connected_service';
+                service: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
+                };
+            } | {
+                kind: 'provider';
+                provider: {
+                    identity: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    definitionRevision: 1;
+                };
+            } | null;
+            directDeliveryRecorded?: boolean | undefined;
+            usageCapabilities?: {
+                inferenceRequests: 'available' | 'unavailable';
+                totalTokens: 'available' | 'unavailable';
+                costUsd: 'available' | 'unavailable';
+                limitCoverage: 'brokered_only' | 'unavailable';
+            } | undefined;
+            usageLimit?: {
+                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                remaining: string;
+                resetsAtUtc: string;
+            } | null | undefined;
+        }[];
+        nextCursor: string | null;
+        failures: {
+            teamId: string;
+            error: 'resource_corrupt' | 'broker_unavailable' | 'update_required' | 'source_owner_required' | 'invalid_resource_input' | 'not_found_or_not_visible' | 'forbidden' | 'resource_changed' | 'team_authentication_required' | 'team_authentication_policy_unavailable' | 'feature_disabled' | 'source_replaced_or_missing' | 'invalid_audience' | 'disclosure_not_allowed' | 'resource_not_found' | 'resource_forbidden' | 'member_not_eligible' | 'session_policy_incompatible' | 'invalid_limit' | 'limit_identity_immutable' | 'subject_not_in_team' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'team_credential_usage_limit';
+        }[];
     };
     readonly "teams.credentials.create": {
         id: string;
@@ -1825,7 +2067,7 @@ export type TeamsActionResultById = {
             metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
             resetsAtUtc: string;
         };
-        code?: 'resource_unavailable' | 'source_unavailable' | 'broker_unavailable' | 'update_required' | 'policy_denied' | 'invalid_request' | 'resource_forbidden' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request' | 'source_invalid' | 'request_malformed' | 'route_not_allowed' | 'model_not_allowed' | 'reasoning_effort_not_allowed' | 'request_constraint_unsupported' | 'grant_invalid' | 'grant_unknown_key' | 'grant_bad_signature' | 'grant_expired' | 'grant_not_yet_valid' | 'grant_binding_mismatch' | 'transport_identity_mismatch' | 'request_too_large' | 'invalid_api_key' | 'upstream_unavailable' | 'request_cancelled' | undefined;
+        code?: 'resource_unavailable' | 'source_unavailable' | 'broker_unavailable' | 'update_required' | 'policy_denied' | 'resource_changed' | 'resource_forbidden' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'team_credential_usage_limit' | 'invalid_request' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'duplicate_request' | 'source_invalid' | 'request_malformed' | 'route_not_allowed' | 'model_not_allowed' | 'reasoning_effort_not_allowed' | 'request_constraint_unsupported' | 'grant_invalid' | 'grant_unknown_key' | 'grant_bad_signature' | 'grant_expired' | 'grant_not_yet_valid' | 'grant_binding_mismatch' | 'transport_identity_mismatch' | 'request_too_large' | 'invalid_api_key' | 'upstream_unavailable' | 'request_cancelled' | undefined;
         recovery?: string | undefined;
     };
     readonly "teams.credentials.preparation.get": {
@@ -4050,7 +4292,7 @@ export type TeamsActionResultById = {
             externalGroupBindings: number;
             managedMemberships: number;
         };
-        blockers: ('identity_connection_in_use' | 'team_authentication_policy_in_use' | 'team_authentication_policy_unavailable' | 'account_would_lose_login' | 'home_authentication_policy_unavailable' | 'directory_source_in_use' | 'external_group_binding_in_use' | 'managed_membership_in_use')[];
+        blockers: ('team_authentication_policy_unavailable' | 'identity_connection_in_use' | 'team_authentication_policy_in_use' | 'account_would_lose_login' | 'home_authentication_policy_unavailable' | 'directory_source_in_use' | 'external_group_binding_in_use' | 'managed_membership_in_use')[];
         connection: {
             v: 1;
             id: string;

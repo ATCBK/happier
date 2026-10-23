@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { QualifiedAudienceSelection, SessionTargetV1, SessionUsageLimitCheckNowRequestV1Input, SessionUsageLimitConsumeResetCreditRequestV1Input, VoiceProviderSettingsJsonValueV1 } from './pluginActionDtoSupport.generated.js';
+import type { ExtensionSelectionV1, QualifiedAudienceSelection, SessionTargetV1, SessionUsageLimitCheckNowRequestV1Input, SessionUsageLimitConsumeResetCreditRequestV1Input, UpdatedSelectionV1, VoiceProviderSettingsJsonValueV1 } from './pluginActionDtoSupport.generated.js';
 
 export type SessionControlActionInputById = {
     readonly "session.pending.action.set": {
@@ -151,7 +151,49 @@ export type SessionControlActionInputById = {
                             projectKey: string;
                         }[];
                     }> | undefined;
-                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    excludedStatuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    machines?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                    }> | undefined;
+                    agents?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    sections?: Readonly<{
+                        include: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                        exclude: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                    }> | undefined;
+                    owners?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                    }> | undefined;
+                    branches?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    updated?: UpdatedSelectionV1<true> | undefined;
+                    includeInactive?: boolean | undefined;
+                    extensions?: Readonly<Record<string, ExtensionSelectionV1<true>>> | undefined;
                     underSessionId?: string | undefined;
                     homeServerIds: readonly string[];
                     audiences: readonly QualifiedAudienceSelection<true>[];
@@ -859,6 +901,8 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                finished: number;
+                attentionPrimary: 'unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking' | null;
                 archived?: number | undefined;
             } | undefined;
             archivedAt?: number | null | undefined;
@@ -1319,8 +1363,8 @@ export type SessionControlActionResultById = {
             runtime: 'unknown' | 'background_active' | 'waiting' | 'working' | 'idle' | 'offline';
             freshness: 'unknown' | 'live' | 'stale' | 'offline';
             operational: {
-                primary: 'none' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'working';
-                reasons: ('failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'resuming' | 'working' | 'blocked_input' | 'background_activity' | 'runtime_offline' | 'runtime_stale' | 'runtime_unservable' | 'content_locked')[];
+                primary: 'none' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'ready' | 'pending_input' | 'working';
+                reasons: ('failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'ready' | 'pending_input' | 'archived' | 'resuming' | 'working' | 'blocked_input' | 'background_activity' | 'runtime_offline' | 'runtime_stale' | 'runtime_unservable' | 'content_locked')[];
             };
             encryption: 'unknown' | 'plain' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'ready';
             availability: 'complete' | 'locked' | 'partial';
@@ -1334,6 +1378,7 @@ export type SessionControlActionResultById = {
             } | undefined;
             title?: string | undefined;
             statusReason?: string | undefined;
+            processTerminalState?: 'stopped' | undefined;
             currentWork?: {
                 title: string;
                 itemId?: string | undefined;
@@ -1359,6 +1404,8 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                finished: number;
+                attentionPrimary: 'unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking' | null;
                 archived?: number | undefined;
             } | undefined;
             pendingReviewRuns?: number | undefined;
@@ -1416,6 +1463,8 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            finished: number;
+                            attentionPrimary: 'unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking' | null;
                             archived?: number | undefined;
                         } | undefined;
                         archivedAt?: number | null | undefined;
@@ -1876,8 +1925,8 @@ export type SessionControlActionResultById = {
                         runtime: 'unknown' | 'background_active' | 'waiting' | 'working' | 'idle' | 'offline';
                         freshness: 'unknown' | 'live' | 'stale' | 'offline';
                         operational: {
-                            primary: 'none' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'working';
-                            reasons: ('failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'resuming' | 'working' | 'blocked_input' | 'background_activity' | 'runtime_offline' | 'runtime_stale' | 'runtime_unservable' | 'content_locked')[];
+                            primary: 'none' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'ready' | 'pending_input' | 'working';
+                            reasons: ('failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'ready' | 'pending_input' | 'archived' | 'resuming' | 'working' | 'blocked_input' | 'background_activity' | 'runtime_offline' | 'runtime_stale' | 'runtime_unservable' | 'content_locked')[];
                         };
                         encryption: 'unknown' | 'plain' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'ready';
                         availability: 'complete' | 'locked' | 'partial';
@@ -1891,6 +1940,7 @@ export type SessionControlActionResultById = {
                         } | undefined;
                         title?: string | undefined;
                         statusReason?: string | undefined;
+                        processTerminalState?: 'stopped' | undefined;
                         currentWork?: {
                             title: string;
                             itemId?: string | undefined;
@@ -1916,6 +1966,8 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            finished: number;
+                            attentionPrimary: 'unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking' | null;
                             archived?: number | undefined;
                         } | undefined;
                         pendingReviewRuns?: number | undefined;

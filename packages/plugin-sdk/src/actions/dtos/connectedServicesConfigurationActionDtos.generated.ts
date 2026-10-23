@@ -5,6 +5,16 @@ import type { PluginJsonValueV2 } from '../../identity.js';
 import type { BoundedLegacyJsonValue, PluginPolicyExpressionV2, PluginSettingFieldSchemaV2 } from './pluginActionDtoSupport.generated.js';
 
 export type ConnectedServicesConfigurationActionInputById = {
+    readonly "connectedServices.accounts.list": {
+        service?: {
+            pluginId: string;
+            localId: string;
+        } | {
+            pluginId: 'happier';
+            localId: 'mcp-sign-in';
+        } | undefined;
+    };
+    readonly "connectedServices.catalog.list": Record<string, never>;
     readonly "connectedServices.authentication.beginConnect": {
         service: {
             pluginId: string;
@@ -749,6 +759,1403 @@ export type ConnectedServicesConfigurationActionInputById = {
     };
 };
 export type ConnectedServicesConfigurationActionResultById = {
+    readonly "connectedServices.accounts.list": {
+        accounts: {
+            account: {
+                scopes: string[];
+                ref: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+                status: 'connected' | 'refreshing' | 'needs_reauth' | 'refresh_failed_retryable';
+                authenticationModeId: string | null;
+                configurationReady: boolean;
+                configurationRevision: string | null;
+                revisionSemantics: 'revisioned';
+                credentialRevision: string;
+                providerIdentity?: {
+                    accountId?: string | null | undefined;
+                    email?: string | null | undefined;
+                    organizationId?: string | null | undefined;
+                } | undefined;
+                displayName?: string | undefined;
+                kind?: 'oauth' | 'token' | null | undefined;
+                expiresAt?: number | null | undefined;
+                lastUsedAt?: number | null | undefined;
+            } | {
+                scopes: string[];
+                ref: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+                status: 'connected' | 'refreshing' | 'needs_reauth' | 'refresh_failed_retryable';
+                authenticationModeId: string | null;
+                configurationReady: boolean;
+                configurationRevision: string | null;
+                revisionSemantics: 'legacy_unfenced';
+                credentialRevision: null;
+                providerIdentity?: {
+                    accountId?: string | null | undefined;
+                    email?: string | null | undefined;
+                    organizationId?: string | null | undefined;
+                } | undefined;
+                displayName?: string | undefined;
+                kind?: 'oauth' | 'token' | null | undefined;
+                expiresAt?: number | null | undefined;
+                lastUsedAt?: number | null | undefined;
+            };
+            health: 'error' | 'healthy' | 'attention';
+        }[];
+        pools: {
+            pool: {
+                v: 1;
+                ref: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
+                    };
+                    groupId: string;
+                };
+                incarnation: string;
+                displayName: string | null;
+                policy: {
+                    v: 1;
+                    strategy: 'expiry_first' | 'priority' | 'least_limited' | 'manual';
+                    autoSwitch: boolean;
+                    switchOn: {
+                        usageLimit: boolean;
+                        authExpired: boolean;
+                        accountChanged: boolean;
+                        refreshFailure: boolean;
+                    };
+                    cooldownMs: number;
+                    honorProviderResetsAt: boolean;
+                    autoRestorePrimaryWhenReset: boolean;
+                    maxSwitchesPerTurn: number;
+                    maxSwitchesPerSessionHour: number;
+                    softSwitchRemainingPercent: number;
+                    probeIfSnapshotOlderThanMs: number;
+                    preTurnProbeMode: 'never' | 'when_stale' | 'always_for_group';
+                    preTurnProbeOrder: 'current_first_then_candidates' | 'candidates_first_then_current';
+                    recoveryMode: 'off' | 'wait_until_reset' | 'switch_then_resume' | 'switch_or_wait';
+                    resumePromptMode: 'custom' | 'off' | 'standard';
+                    autoUseQuotaResetsWhenExhausted?: boolean | undefined;
+                    autoDisablePlanInvalidAccounts?: boolean | undefined;
+                    quotaLimitSelection?: {
+                        mode: 'all';
+                        providerLimitIds: string[];
+                    } | {
+                        mode: 'selected';
+                        providerLimitIds: string[];
+                    } | undefined;
+                };
+                activeConnectedAccountId: string | null;
+                generation: number;
+                runtimeStateRevision: number;
+                state: {
+                    [x: string]: unknown;
+                    status?: 'unknown' | 'error' | 'ready' | 'switching' | 'exhausted' | undefined;
+                    lastSwitchAt?: number | null | undefined;
+                    lastSwitchReason?: string | null | undefined;
+                    activeSince?: {
+                        accountId: string;
+                        atMs: number;
+                    } | null | undefined;
+                };
+                createdAt: number;
+                updatedAt: number;
+                members: {
+                    v: 1;
+                    connectedAccountId: string;
+                    priority: number;
+                    enabled: boolean;
+                    state: {
+                        [x: string]: unknown;
+                        cooldownUntilMs?: number | null | undefined;
+                        exhaustedUntilMs?: number | null | undefined;
+                        quotaExhaustedUntilMs?: number | null | undefined;
+                        rateLimitedUntilMs?: number | null | undefined;
+                        capacityLimitedUntilMs?: number | null | undefined;
+                        authInvalidUntilMs?: number | null | undefined;
+                        planUnavailableUntilMs?: number | null | undefined;
+                        modelUnavailableUntilMsByModelId?: Record<string, number> | undefined;
+                        autoDisabledReason?: 'model_not_entitled' | null | undefined;
+                        validationBlockedUntilMs?: number | null | undefined;
+                        lastFailureKind?: string | null | undefined;
+                        lastFailureCode?: string | null | undefined;
+                        lastObservedPlanType?: string | null | undefined;
+                        lastObservedAtMs?: number | null | undefined;
+                        providerResetsAtMs?: number | null | undefined;
+                        credentialHealthStatus?: 'connected' | 'refreshing' | 'needs_reauth' | 'refresh_failed_retryable' | null | undefined;
+                    };
+                    createdAt: number;
+                    updatedAt: number;
+                }[];
+            };
+            health: 'error' | 'healthy' | 'attention' | null;
+        }[];
+        source: {
+            completeness: 'complete';
+            observedAtMs: number | null;
+        };
+        healthBasis: 'credentials';
+    };
+    readonly "connectedServices.catalog.list": {
+        status: 'unavailable' | 'ready' | 'partial';
+        services: {
+            service: {
+                pluginId: string;
+                localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
+            };
+            descriptor: {
+                id: string;
+                serviceId: string;
+                provenance: 'first_party' | 'external';
+                sourceKind: string;
+                title: string | {
+                    key: string;
+                    fallback: string;
+                };
+                authentication: {
+                    defaultModeId: string;
+                    modes: ({
+                        id: string;
+                        kind: 'oauthAuthorizationCode';
+                        pkce: 'required';
+                        outcomeReconciliation: 'none' | 'providerCheck' | 'lateEvidence';
+                        title?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        callbackUrl?: string | undefined;
+                        scopes?: string[] | undefined;
+                        allowRawAuthorizationCode?: boolean | undefined;
+                        configuration?: {
+                            scope: 'service' | 'account';
+                            changeBehavior: 'refresh' | 'reconnect';
+                            fields: ({
+                                secret: true;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: PluginJsonValueV2 | undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountOrigin';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountFixedOrigin';
+                                schema: {
+                                    type: 'string';
+                                    enum: string[];
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                };
+                                originByValue: Record<string, string>;
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountBase';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            })[];
+                        } | undefined;
+                    } | {
+                        id: string;
+                        kind: 'manual';
+                        outcomeReconciliation: 'none';
+                        fields: ({
+                            secret: boolean;
+                            id: string;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            schema: PluginSettingFieldSchemaV2;
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                            availability?: {
+                                when?: PluginPolicyExpressionV2 | undefined;
+                                disabledWhen?: undefined;
+                                disabledReason?: undefined;
+                            } | {
+                                disabledWhen: PluginPolicyExpressionV2;
+                                disabledReason: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                when?: PluginPolicyExpressionV2 | undefined;
+                            } | undefined;
+                            presentation?: {
+                                control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                placeholder?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                options?: {
+                                    value: PluginJsonValueV2;
+                                    title: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    description?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                }[] | undefined;
+                                step?: number | undefined;
+                                binding?: {
+                                    kind: 'direct';
+                                    settingId?: string | undefined;
+                                } | {
+                                    kind: 'perActiveServer';
+                                    fallbackSettingId: string;
+                                    byServerIdSettingId: string;
+                                } | undefined;
+                                hidden?: boolean | undefined;
+                                order?: number | undefined;
+                            } | undefined;
+                            analytics?: {
+                                valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                identityScope: 'person' | 'device_user';
+                                trackCurrentState?: boolean | undefined;
+                                trackChanges?: boolean | undefined;
+                                serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                            } | undefined;
+                            default?: undefined;
+                        } | {
+                            secret: boolean;
+                            id: string;
+                            title: string | {
+                                key: string;
+                                fallback: string;
+                            };
+                            schema: PluginSettingFieldSchemaV2;
+                            description?: string | {
+                                key: string;
+                                fallback: string;
+                            } | undefined;
+                            availability?: {
+                                when?: PluginPolicyExpressionV2 | undefined;
+                                disabledWhen?: undefined;
+                                disabledReason?: undefined;
+                            } | {
+                                disabledWhen: PluginPolicyExpressionV2;
+                                disabledReason: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                when?: PluginPolicyExpressionV2 | undefined;
+                            } | undefined;
+                            presentation?: {
+                                control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                placeholder?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                options?: {
+                                    value: PluginJsonValueV2;
+                                    title: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    description?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                }[] | undefined;
+                                step?: number | undefined;
+                                binding?: {
+                                    kind: 'direct';
+                                    settingId?: string | undefined;
+                                } | {
+                                    kind: 'perActiveServer';
+                                    fallbackSettingId: string;
+                                    byServerIdSettingId: string;
+                                } | undefined;
+                                hidden?: boolean | undefined;
+                                order?: number | undefined;
+                            } | undefined;
+                            analytics?: {
+                                valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                identityScope: 'person' | 'device_user';
+                                trackCurrentState?: boolean | undefined;
+                                trackChanges?: boolean | undefined;
+                                serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                            } | undefined;
+                            default?: PluginJsonValueV2 | undefined;
+                        })[];
+                        title?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        configuration?: {
+                            scope: 'service' | 'account';
+                            changeBehavior: 'refresh' | 'reconnect';
+                            fields: ({
+                                secret: true;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: PluginJsonValueV2 | undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountOrigin';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountFixedOrigin';
+                                schema: {
+                                    type: 'string';
+                                    enum: string[];
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                };
+                                originByValue: Record<string, string>;
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountBase';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            })[];
+                        } | undefined;
+                        directExport?: {
+                            contractVersion: 'happier.team-credential-manual-connected-account-direct.v1';
+                        } | undefined;
+                    } | {
+                        id: string;
+                        kind: 'oauthDeviceCode';
+                        outcomeReconciliation: 'none' | 'providerCheck' | 'lateEvidence';
+                        title?: string | {
+                            key: string;
+                            fallback: string;
+                        } | undefined;
+                        scopes?: string[] | undefined;
+                        configuration?: {
+                            scope: 'service' | 'account';
+                            changeBehavior: 'refresh' | 'reconnect';
+                            fields: ({
+                                secret: true;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                schema: PluginSettingFieldSchemaV2;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: PluginJsonValueV2 | undefined;
+                                required?: boolean | undefined;
+                                semantic?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountOrigin';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountFixedOrigin';
+                                schema: {
+                                    type: 'string';
+                                    enum: string[];
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                };
+                                originByValue: Record<string, string>;
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            } | {
+                                secret: false;
+                                id: string;
+                                title: string | {
+                                    key: string;
+                                    fallback: string;
+                                };
+                                semantic: 'connectedAccountBase';
+                                schema: {
+                                    type: 'string';
+                                    minLength: number;
+                                    title?: string | undefined;
+                                    description?: string | undefined;
+                                    maxLength?: number | undefined;
+                                };
+                                required: true;
+                                description?: string | {
+                                    key: string;
+                                    fallback: string;
+                                } | undefined;
+                                availability?: {
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                    disabledWhen?: undefined;
+                                    disabledReason?: undefined;
+                                } | {
+                                    disabledWhen: PluginPolicyExpressionV2;
+                                    disabledReason: string | {
+                                        key: string;
+                                        fallback: string;
+                                    };
+                                    when?: PluginPolicyExpressionV2 | undefined;
+                                } | undefined;
+                                presentation?: {
+                                    control?: 'number' | 'auto' | 'text' | 'textarea' | 'switch' | 'select' | 'multiSelect' | 'json' | undefined;
+                                    placeholder?: string | {
+                                        key: string;
+                                        fallback: string;
+                                    } | undefined;
+                                    options?: {
+                                        value: PluginJsonValueV2;
+                                        title: string | {
+                                            key: string;
+                                            fallback: string;
+                                        };
+                                        description?: string | {
+                                            key: string;
+                                            fallback: string;
+                                        } | undefined;
+                                    }[] | undefined;
+                                    step?: number | undefined;
+                                    binding?: {
+                                        kind: 'direct';
+                                        settingId?: string | undefined;
+                                    } | {
+                                        kind: 'perActiveServer';
+                                        fallbackSettingId: string;
+                                        byServerIdSettingId: string;
+                                    } | undefined;
+                                    hidden?: boolean | undefined;
+                                    order?: number | undefined;
+                                } | undefined;
+                                analytics?: {
+                                    valueKind: 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';
+                                    privacy: 'safe' | 'bucketed' | 'count_only' | 'presence_only' | 'forbidden';
+                                    identityScope: 'person' | 'device_user';
+                                    trackCurrentState?: boolean | undefined;
+                                    trackChanges?: boolean | undefined;
+                                    serializeCurrentRule?: 'orderedEnumArrayJoin' | 'jsonObjectStringPresence' | undefined;
+                                } | undefined;
+                                default?: undefined;
+                            })[];
+                        } | undefined;
+                    })[];
+                    native?: {
+                        systemTool: 'gh';
+                    } | undefined;
+                };
+                capabilities: string[];
+                availability: {
+                    state: 'available' | 'disabled' | 'blocked';
+                    reason: string;
+                };
+                diagnostics: string[];
+                pluginId?: string | undefined;
+                occurrenceId?: string | undefined;
+                description?: string | {
+                    key: string;
+                    fallback: string;
+                } | undefined;
+                usageIdentity?: {
+                    providerId?: string | undefined;
+                    requiredContext?: 'organization' | undefined;
+                } | undefined;
+                recoveryCredits?: {
+                    supported: true;
+                } | undefined;
+                billingUrl?: string | undefined;
+            } | null;
+            canAdd: boolean;
+            reason: string | null;
+        }[];
+        gateways: {
+            contributionKey: string;
+            purposes: {
+                purpose: string;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+            }[];
+        }[];
+    };
     readonly "connectedServices.authentication.beginConnect": {
         status: 'starting';
         attemptId: string;
@@ -1805,7 +3212,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             attemptId: string;
             kind: 'oauth' | 'device';
             modeId: string;
-            intent: 'connect' | 'reconnect';
+            intent: 'reconnect' | 'connect';
             phase: 'awaitingOAuth' | 'awaitingDeviceAuthorization' | 'outcomeUnknown';
             createdAtMs: number;
             expiresAtMs: number;
@@ -1867,7 +3274,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             allowRawAuthorizationCode?: boolean | undefined;
             configuration?: {
                 scope: 'service' | 'account';
-                changeBehavior: 'reconnect' | 'refresh';
+                changeBehavior: 'refresh' | 'reconnect';
                 fields: ({
                     secret: true;
                     id: string;
@@ -2343,7 +3750,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             } | undefined;
             configuration?: {
                 scope: 'service' | 'account';
-                changeBehavior: 'reconnect' | 'refresh';
+                changeBehavior: 'refresh' | 'reconnect';
                 fields: ({
                     secret: true;
                     id: string;
@@ -2698,7 +4105,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             scopes?: string[] | undefined;
             configuration?: {
                 scope: 'service' | 'account';
-                changeBehavior: 'reconnect' | 'refresh';
+                changeBehavior: 'refresh' | 'reconnect';
                 fields: ({
                     secret: true;
                     id: string;
@@ -3115,7 +4522,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                     remainingPct?: number | null | undefined;
                     scope?: 'unknown' | 'model' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | undefined;
                     providerLimitId?: string | undefined;
-                    limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                    limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                 };
                 remaining?: number | null | undefined;
                 remainingPct?: number | null | undefined;
@@ -3324,7 +4731,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                             remainingPct?: number | null | undefined;
                             scope?: 'unknown' | 'model' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | undefined;
                             providerLimitId?: string | undefined;
-                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                         };
                         remaining?: number | null | undefined;
                         remainingPct?: number | null | undefined;
@@ -3434,8 +4841,8 @@ export type ConnectedServicesConfigurationActionResultById = {
                 state: 'not_loaded' | 'loaded_empty' | 'loaded_data' | 'stale_data' | 'error_last_known_good';
                 source: 'unknown' | 'manual' | 'runtimeSignal' | 'providerHttp' | 'proxy' | 'connectedServiceProbe' | 'cached';
                 v: 1;
-                recordId: string;
                 providerId: string;
+                recordId: string;
                 recordKey: {
                     providerId: string;
                     accountSubjectId: string;
@@ -3450,8 +4857,6 @@ export type ConnectedServicesConfigurationActionResultById = {
                 };
                 staleAfterMs: number;
                 confidence: 'unknown' | 'confirmed' | 'estimated';
-                planLabel?: string | null | undefined;
-                accountLabel?: string | null | undefined;
                 recoveryCredits?: {
                     availableCount: number;
                     credits: {
@@ -3472,11 +4877,6 @@ export type ConnectedServicesConfigurationActionResultById = {
                     source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                     confidence?: 'unknown' | 'exact' | 'estimated' | 'derived' | 'stale' | undefined;
                 } | undefined;
-                recoveryCreditDetails?: Record<string, {
-                    remainingCount: number;
-                    appliesToProviderLimitIds: string[];
-                    unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
-                }> | undefined;
                 diagnostics?: {
                     kind: 'unknown' | 'projection' | 'unavailable' | 'storage' | 'validation' | 'provider_http' | 'runtime_signal';
                     code?: string | undefined;
@@ -3486,6 +4886,13 @@ export type ConnectedServicesConfigurationActionResultById = {
                     observedAtMs?: number | undefined;
                     retryAtMs?: number | undefined;
                 }[] | undefined;
+                planLabel?: string | null | undefined;
+                accountLabel?: string | null | undefined;
+                recoveryCreditDetails?: Record<string, {
+                    remainingCount: number;
+                    appliesToProviderLimitIds: string[];
+                    unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                }> | undefined;
             }[];
             meterDefinitions: {
                 details: {
@@ -3494,7 +4901,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                     scope?: 'unknown' | 'model' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | undefined;
                     note?: string | null | undefined;
                     rawScope?: string | undefined;
-                    limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                    limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                 };
                 label: string;
                 unit: 'unknown' | 'count' | 'credits' | 'tokens' | 'usd' | 'requests';
@@ -3648,7 +5055,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                             remainingPct?: number | null | undefined;
                             scope?: 'unknown' | 'model' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | undefined;
                             providerLimitId?: string | undefined;
-                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                         };
                         remaining?: number | null | undefined;
                         remainingPct?: number | null | undefined;
@@ -3749,7 +5156,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             }[];
         } | undefined;
         unusedCapacity?: {
-            historyStatus: 'unavailable' | 'not_loaded' | 'partial' | 'returned_page';
+            historyStatus: 'unavailable' | 'partial' | 'not_loaded' | 'returned_page';
             windows: {
                 window: {
                     recordId: string;
@@ -3798,7 +5205,7 @@ export type ConnectedServicesConfigurationActionResultById = {
             reason: 'selected' | 'manual_strategy' | 'no_eligible_members';
             excluded: {
                 profileId: string;
-                reason: 'cooldown' | 'auth_invalid' | 'disabled' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
+                reason: 'disabled' | 'cooldown' | 'auth_invalid' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset';
                 retryAtMs?: number | null | undefined;
             }[];
             decisionTrace: {
@@ -3824,7 +5231,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                         capturedAtMs?: number | undefined;
                         exhausted?: boolean | undefined;
                     };
-                    exclusionReason?: 'cooldown' | 'auth_invalid' | 'disabled' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
+                    exclusionReason?: 'disabled' | 'cooldown' | 'auth_invalid' | 'current_active' | 'quota_exhausted' | 'capacity_limited' | 'credential_unavailable' | 'plan_unavailable' | 'validation_blocked' | 'policy_wait_until_reset' | undefined;
                     retryAtMs?: number | null | undefined;
                 }[];
             };
@@ -4495,7 +5902,7 @@ export type ConnectedServicesConfigurationActionResultById = {
                     remainingPct?: number | null | undefined;
                     scope?: 'unknown' | 'model' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'session' | 'rolling' | undefined;
                     providerLimitId?: string | undefined;
-                    limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                    limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                 };
                 remaining?: number | null | undefined;
                 remainingPct?: number | null | undefined;

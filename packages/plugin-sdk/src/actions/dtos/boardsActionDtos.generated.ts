@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { BoardItemRefV1, InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { BoardItemRefV1, ExtensionSelectionV1, InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, QualifiedAudienceSelection, UpdatedSelectionV1, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type BoardsActionInputById = {
     readonly "boards.list": Record<string, never>;
@@ -671,7 +671,49 @@ export type BoardsActionInputById = {
                                 projectKey: string;
                             }[];
                         }> | undefined;
-                        statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                        statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                        excludedStatuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                        machines?: Readonly<{
+                            include: readonly Readonly<{
+                                serverId: string;
+                                machineId: string;
+                            }>[];
+                            exclude: readonly Readonly<{
+                                serverId: string;
+                                machineId: string;
+                            }>[];
+                        }> | undefined;
+                        agents?: Readonly<{
+                            include: readonly string[];
+                            exclude: readonly string[];
+                        }> | undefined;
+                        sections?: Readonly<{
+                            include: readonly {
+                                serverId: string;
+                                sectionId: string;
+                            }[];
+                            exclude: readonly {
+                                serverId: string;
+                                sectionId: string;
+                            }[];
+                        }> | undefined;
+                        owners?: Readonly<{
+                            include: readonly Readonly<{
+                                serverId: string;
+                                accountId: string;
+                            }>[];
+                            exclude: readonly Readonly<{
+                                serverId: string;
+                                accountId: string;
+                            }>[];
+                        }> | undefined;
+                        branches?: Readonly<{
+                            include: readonly string[];
+                            exclude: readonly string[];
+                        }> | undefined;
+                        updated?: UpdatedSelectionV1<true> | undefined;
+                        includeInactive?: boolean | undefined;
+                        extensions?: Readonly<Record<string, ExtensionSelectionV1<true>>> | undefined;
                         underSessionId?: string | undefined;
                         homeServerIds: readonly string[];
                         audiences: readonly QualifiedAudienceSelection<true>[];
@@ -778,7 +820,49 @@ export type BoardsActionResultById = {
                             projectKey: string;
                         }[];
                     }> | undefined;
-                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    excludedStatuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    machines?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                    }> | undefined;
+                    agents?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    sections?: Readonly<{
+                        include: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                        exclude: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                    }> | undefined;
+                    owners?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                    }> | undefined;
+                    branches?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    updated?: UpdatedSelectionV1 | undefined;
+                    includeInactive?: boolean | undefined;
+                    extensions?: Readonly<Record<string, ExtensionSelectionV1>> | undefined;
                     underSessionId?: string | undefined;
                     homeServerIds: readonly string[];
                     audiences: readonly QualifiedAudienceSelection[];
@@ -993,7 +1077,49 @@ export type BoardsActionResultById = {
                             projectKey: string;
                         }[];
                     }> | undefined;
-                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'ready' | 'pending_input' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    statuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    excludedStatuses?: readonly ('unknown' | 'preparing' | 'repair_needed' | 'locked' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'permission_required' | 'action_required' | 'usage_limited' | 'stopped' | 'finished_unseen' | 'mentioned' | 'unread' | 'ready' | 'pending_input' | 'archiving' | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale' | 'background_active' | 'waiting' | 'thinking')[] | undefined;
+                    machines?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            machineId: string;
+                        }>[];
+                    }> | undefined;
+                    agents?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    sections?: Readonly<{
+                        include: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                        exclude: readonly {
+                            serverId: string;
+                            sectionId: string;
+                        }[];
+                    }> | undefined;
+                    owners?: Readonly<{
+                        include: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                        exclude: readonly Readonly<{
+                            serverId: string;
+                            accountId: string;
+                        }>[];
+                    }> | undefined;
+                    branches?: Readonly<{
+                        include: readonly string[];
+                        exclude: readonly string[];
+                    }> | undefined;
+                    updated?: UpdatedSelectionV1 | undefined;
+                    includeInactive?: boolean | undefined;
+                    extensions?: Readonly<Record<string, ExtensionSelectionV1>> | undefined;
                     underSessionId?: string | undefined;
                     homeServerIds: readonly string[];
                     audiences: readonly QualifiedAudienceSelection[];

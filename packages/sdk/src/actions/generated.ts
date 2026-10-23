@@ -1181,6 +1181,7 @@ export type GeneratedActions = Readonly<{
       readonly default: Readonly<{
         readonly set: (input: PublicActionInputById["connectedServices.accounts.default.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.accounts.default.set">>;
       }> ;
+      readonly list: (input: PublicActionInputById["connectedServices.accounts.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.accounts.list">>;
       readonly purposeDefault: Readonly<{
         readonly set: (input: PublicActionInputById["connectedServices.accounts.purposeDefault.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.accounts.purposeDefault.set">>;
       }> ;
@@ -1208,6 +1209,9 @@ export type GeneratedActions = Readonly<{
     }> ;
     readonly billing: Readonly<{
       readonly open: (input: PublicActionInputById["connectedServices.billing.open"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.billing.open">>;
+    }> ;
+    readonly catalog: Readonly<{
+      readonly list: (input: PublicActionInputById["connectedServices.catalog.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.catalog.list">>;
     }> ;
     readonly configuration: Readonly<{
       readonly get: (input: PublicActionInputById["connectedServices.configuration.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"connectedServices.configuration.get">>;
@@ -2101,6 +2105,9 @@ export type GeneratedActions = Readonly<{
     }> ;
     readonly defaults: Readonly<{
       readonly set: (input: PublicActionInputById["providers.defaults.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"providers.defaults.set">>;
+    }> ;
+    readonly gateways: Readonly<{
+      readonly choose: (input: PublicActionInputById["providers.gateways.choose"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"providers.gateways.choose">>;
     }> ;
     readonly legacy: Readonly<{
       readonly prepare: (input: PublicActionInputById["providers.legacy.prepare"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"providers.legacy.prepare">>;
@@ -3646,6 +3653,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         default: {
           set: (input: PublicActionInputById["connectedServices.accounts.default.set"], options?: ActionExecutionOptions) => execute("connectedServices.accounts.default.set", input, options),
         },
+        list: (input: PublicActionInputById["connectedServices.accounts.list"], options?: ActionExecutionOptions) => execute("connectedServices.accounts.list", input, options),
         purposeDefault: {
           set: (input: PublicActionInputById["connectedServices.accounts.purposeDefault.set"], options?: ActionExecutionOptions) => execute("connectedServices.accounts.purposeDefault.set", input, options),
         },
@@ -3673,6 +3681,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       },
       billing: {
         open: (input: PublicActionInputById["connectedServices.billing.open"], options?: ActionExecutionOptions) => execute("connectedServices.billing.open", input, options),
+      },
+      catalog: {
+        list: (input: PublicActionInputById["connectedServices.catalog.list"], options?: ActionExecutionOptions) => execute("connectedServices.catalog.list", input, options),
       },
       configuration: {
         get: (input: PublicActionInputById["connectedServices.configuration.get"], options?: ActionExecutionOptions) => execute("connectedServices.configuration.get", input, options),
@@ -4566,6 +4577,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       },
       defaults: {
         set: (input: PublicActionInputById["providers.defaults.set"], options?: ActionExecutionOptions) => execute("providers.defaults.set", input, options),
+      },
+      gateways: {
+        choose: (input: PublicActionInputById["providers.gateways.choose"], options?: ActionExecutionOptions) => execute("providers.gateways.choose", input, options),
       },
       legacy: {
         prepare: (input: PublicActionInputById["providers.legacy.prepare"], options?: ActionExecutionOptions) => execute("providers.legacy.prepare", input, options),
