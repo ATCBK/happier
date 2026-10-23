@@ -81,7 +81,146 @@ describe('public-profile media admission', () => {
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-profile-delivery-', initFiles: true,
         env: { NODE_OPTIONS: [process.env.NODE_OPTIONS, '--conditions=happier-source'].filter(Boolean).join(' ') } }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
-    afterEach(async () => { vi.restoreAllMocks(); await db.uploadedFile.deleteMany(); await db.account.deleteMany(); });
+    afterEach(async () => { fontIo.afterRead = undefined; vi.restoreAllMocks(); await db.uploadedFile.deleteMany(); await db.account.deleteMany(); });
+
+    it.each(['hide', 'withdraw'] as const)('discards every painted representation when %s wins during font IO', async change => {
+        harness.resetEnv(env);
+        const owner = await publishedAccount();
+        await withAuthenticatedTestApp(app => { registerAccountPublicProfileRoutes(app); registerPublicProfileReadRoutes(app); }, async app => {
+            for (const suffix of ['/badge/tokens.svg', '/card.svg', '/card.png?theme=light', '/og.png',
+                '/background?theme=light&viewport=phone&density=1']) {
+                const body = publishBody({ ...DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1,
+                    atmosphere: { source: 'planet', planet: { placement: 'side', style: 'airy', digits: true } } });
+                expect((await publishPublicProfile(owner.id, body, env, deps)).kind).toBe('updated');
+                const unavailable = await app.inject({ method: 'GET', url: `/@missing_profile${suffix}` });
+                let changed = false;
+                fontIo.afterRead = async () => {
+                    changed = true;
+                    if (change === 'withdraw') await unpublishPublicProfile(owner.id);
+                    else {
+                        const policy = structuredClone(DEFAULT_PUBLIC_PROFILE_POLICY_V1);
+                        policy.fields.name = false;
+                        await updatePublicProfile(owner.id, { policy });
+                    }
+                };
+                const response = await app.inject({ method: 'GET', url: `/@delivery_owner${suffix}`, headers: { 'if-none-match': '*' } });
+                expect(changed, `font IO reached for ${suffix || 'HTML'}`).toBe(true);
+                expect(response.statusCode, suffix || 'HTML').toBe(unavailable.statusCode);
+                expect(response.headers.etag, suffix || 'HTML').toBeUndefined();
+                expect(response.rawPayload, suffix || 'HTML').toEqual(unavailable.rawPayload);
+            }
+        });
+        harness.restoreEnv();
+    });
+
+    it('preserves a real paint failure only while its captured publication remains admitted', async () => {
+        harness.resetEnv(env);
+        const owner = await publishedAccount();
+        await withAuthenticatedTestApp(app => registerPublicProfileReadRoutes(app), async app => {
+            const unavailable = await app.inject({ method: 'GET', url: '/@missing_profile/card.svg' });
+            fontIo.afterRead = async () => { throw new Error('physical font read failed'); };
+            const unchanged = await app.inject({ method: 'GET', url: '/@delivery_owner/card.svg' });
+            expect(unchanged.statusCode).toBe(503);
+            expect(unchanged.headers.etag).toBeUndefined();
+            fontIo.afterRead = async () => {
+                await unpublishPublicProfile(owner.id);
+                throw new Error('retired paint failed');
+            };
+            const retired = await app.inject({ method: 'GET', url: '/@delivery_owner/card.svg', headers: { 'if-none-match': '*' } });
+            expect(retired.statusCode).toBe(200);
+            expect(retired.headers.etag).toBeUndefined();
+            expect(retired.rawPayload).toEqual(unavailable.rawPayload);
+        });
+        harness.restoreEnv();
+    });
+
+    it('cold-renders the admitted selected picture at shared responsive geometry and rechecks its policy and ref before validators', async () => {
+        harness.resetEnv(env);
+        const owner = await publishedAccount();
+        await applyPicture(owner.id, 17, { author: 'Ada <Painter>', source: 'Local collection', url: 'https://example.test/credit', licence: 'CC0' });
+        await withAuthenticatedTestApp(app => { registerAccountPublicProfileRoutes(app); registerPublicProfileReadRoutes(app); }, async app => {
+            const url = '/@delivery_owner';
+            const startedAt = performance.now();
+            const first = await app.inject({ method: 'GET', url });
+            expect(first.statusCode).toBe(200);
+            expect(first.body).toContain('public-profile-hero-band');
+            const stylesheet = first.body.match(/<style>([\s\S]*?)<\/style>/)?.[1];
+            if (!stylesheet) throw new Error('Expected the actual cold HTTP stylesheet');
+            // Parse and lower equivalent range/not-min forms; an escaped '<'
+            // becomes an unknown feature instead of this strict width condition.
+            const normalized = await transform(stylesheet, { loader: 'css', supported: { 'media-range': false }, minify: true });
+            expect(normalized.code.match(/@media not\s*\(min-width:640px\)\{\.public-profile-wide\{display:none\}\.public-profile-phone\{display:block\}\}/)?.[0]).toBeDefined();
+            expect(first.body).toContain('Ada &lt;Painter&gt; · Local collection');
+            expect(first.body).not.toContain('data:image/png;base64,');
+            const images = new Set([...first.body.matchAll(/https:[^"\s,]+\/background\?[^"\s,]+/g)].map(match => match[0].replaceAll('&amp;', '&')));
+            expect(images.size).toBe(8);
+            const dimensions = await Promise.all([...images].map(async source => {
+                const image = new URL(source);
+                expect(image.origin).toBe('https://profiles.example.test');
+                expect(image.pathname).toBe('/prefix/@delivery_owner/background');
+                const response = await app.inject({ method: 'GET', url: `/@delivery_owner/background${image.search}` });
+                expect(response.statusCode).toBe(200);
+                expect(response.headers['cache-control']).toBe('public, no-cache, must-revalidate');
+                expect((await app.inject({ method: 'GET', url: `/@delivery_owner/background${image.search}`,
+                    headers: { 'if-none-match': response.headers.etag } })).statusCode).toBe(304);
+                const metadata = await sharp(response.rawPayload).metadata();
+                return `${metadata.width}x${metadata.height}`;
+            }));
+            for (const kind of ['wide', 'phone'] as const) {
+                for (const density of [1, 2]) expect(dimensions).toContain(`${HAPPIER_PUBLIC_PROFILE_HERO_METRICS.rasterWidthPx[kind] * density}x${HAPPIER_PUBLIC_PROFILE_HERO_METRICS.bandHeightPx[kind] * density}`);
+            }
+            expect(first.body).toContain(' 2x');
+            expect(first.body).not.toContain('<script');
+            const validator = String(first.headers.etag);
+            expect((await app.inject({ method: 'GET', url, headers: { 'if-none-match': validator } })).statusCode).toBe(304);
+
+            const actualRead = files.readPrivateFile;
+            vi.spyOn(files, 'readPrivateFile').mockImplementationOnce(async (...args) => {
+                const bytes = await actualRead(...args);
+                const policy = structuredClone(DEFAULT_PUBLIC_PROFILE_POLICY_V1);
+                policy.fields.name = false;
+                await updatePublicProfile(owner.id, { policy });
+                return bytes;
+            });
+            const hidden = await app.inject({ method: 'GET', url, headers: { 'if-none-match': validator } });
+            expect(hidden.statusCode).toBe(200);
+            expect(hidden.body).not.toContain('Reviewed owner');
+            expect(hidden.headers.etag).not.toBe(validator);
+            await applyPicture(owner.id, 233);
+            const replacement = await app.inject({ method: 'GET', url, headers: { 'if-none-match': hidden.headers.etag } });
+            expect(replacement.statusCode).toBe(200);
+            expect(replacement.headers.etag).not.toBe(hidden.headers.etag);
+            expect(replacement.body).not.toBe(hidden.body);
+            expect(replacement.body).not.toContain('Ada &lt;Painter&gt;');
+            await unpublishPublicProfile(owner.id);
+            const withdrawn = await app.inject({ method: 'GET', url, headers: { 'if-none-match': replacement.headers.etag } });
+            expect(withdrawn.statusCode).toBe(404);
+            expect(withdrawn.headers.etag).toBeUndefined();
+            expect(withdrawn.body).not.toContain('public-profile-hero-band');
+        });
+        harness.restoreEnv();
+    });
+
+    it.each(['replace', 'hide', 'pause', 'unpublish'] as const)('rechecks referenced hero pixels before old validators after %s', async change => {
+        harness.resetEnv(env);
+        const owner = await publishedAccount();
+        await applyPicture(owner.id, 17);
+        await withAuthenticatedTestApp(app => registerPublicProfileReadRoutes(app), async app => {
+            const url = '/@delivery_owner/background?theme=dark&viewport=phone&density=2';
+            const first = await app.inject({ method: 'GET', url });
+            expect(first.statusCode).toBe(200);
+            if (change === 'replace') await applyPicture(owner.id, 233);
+            if (change === 'hide') await updatePublicProfile(owner.id, { appearance: { theme: 'auto', atmosphere: { source: 'none' } } });
+            if (change === 'pause') await pausePublicProfile(owner.id);
+            if (change === 'unpublish') await unpublishPublicProfile(owner.id);
+            const current = await app.inject({ method: 'GET', url, headers: { 'if-none-match': first.headers.etag } });
+            expect(current.statusCode).toBe(change === 'replace' ? 200 : 404);
+            expect(current.headers.etag).not.toBe(first.headers.etag);
+            expect(current.rawPayload).not.toEqual(first.rawPayload);
+            if (change !== 'replace') expect(current.headers.etag).toBeUndefined();
+        });
+        harness.restoreEnv();
+    });
 
     it.each(['plain', 'e2ee'] as const)('publishes reviewed picture bytes atomically without changing %s Account keys', async encryptionMode => {
         const owner = await db.account.create({ data: { encryptionMode, username: 'delivery_owner',
