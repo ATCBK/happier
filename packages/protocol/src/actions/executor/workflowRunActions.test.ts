@@ -508,7 +508,7 @@ describe('shared Account workflow run owner', () => {
     })).resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
     expect(admitted).toBe(false);
   });
-  it.each(['admitted', 'scale', 'originless', 'retry', 'wrong_attempt', 'other_slot', 'different', 'revoked', 'miswired', 'foreign_home', 'session_caller', 'untyped', 'unreadable', 'no_witness', 'other_action'] as const)(
+  it.each(['admitted', 'scale', 'originless', 'retry', 'recovered_parent', 'revoked_recovered_parent', 'wrong_attempt', 'other_slot', 'different', 'revoked', 'miswired', 'foreign_home', 'session_caller', 'untyped', 'unreadable', 'no_witness', 'other_action'] as const)(
     'restricts Workflow Action scope to the current accepted typed reviewSession: %s', async scenario => {
       const address = { serverId: 'home', sessionId: 'review-target' };
       const scopedActionId = scenario === 'other_action' ? 'session.stop' : 'reviews.comments.list';
@@ -518,10 +518,13 @@ describe('shared Account workflow run owner', () => {
         },
       };
       const unrelated = scenario === 'scale' ? Array.from({ length: 500 }, (_, index) => ({ ...action, id: `unrelated-${index}` })) : [];
+      const recoveredParent = scenario === 'recovered_parent' || scenario === 'revoked_recovered_parent';
       const scopedDefinition = { ...definition, inputs: [{ name: 'reviewSession', valueType: 'json' as const, required: true,
-        ...(scenario === 'untyped' ? {} : { inputType: { hostType: 'session' as const } }) }], blocks: [{
-          ...action,
-        }, ...unrelated] };
+        ...(scenario === 'untyped' ? {} : { inputType: { hostType: 'session' as const } }) }], blocks: recoveredParent ? [{
+          kind: 'if' as const, id: 'selected', when: { kind: 'compare' as const, operator: 'eq' as const,
+            left: { kind: 'literal' as const, value: true }, right: { kind: 'literal' as const, value: true } },
+          then: [action], otherwise: [],
+        }] : [action, ...unrelated] };
       const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: scopedDefinition,
         context: { source: { kind: 'inline' }, inputs: { reviewSession: address }, machineId: 'machine-a',
           executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
@@ -540,7 +543,7 @@ describe('shared Account workflow run owner', () => {
       const rootId = '22222222-2222-4222-8222-222222222222';
       const actionId = '33333333-3333-4333-8333-333333333333';
       const physicalId = '44444444-4444-4444-8444-444444444444';
-      const retry = scenario === 'retry' || scenario === 'wrong_attempt' || scenario === 'other_slot';
+      const retry = recoveredParent || scenario === 'retry' || scenario === 'wrong_attempt' || scenario === 'other_slot';
       const invocations = [rootId, actionId, ...(retry ? [physicalId] : [])].map((id, position) => {
         const index = WorkflowRunInvocationIndexV1Schema.parse({ id, runId, parentRecordId: position ? rootId : null,
           sequence: String(position), memberOrdinal: position === 2 && scenario === 'other_slot' ? '1' : '0',
@@ -555,6 +558,29 @@ describe('shared Account workflow run owner', () => {
             recordId: id, sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress,
         })) };
       });
+      if (recoveredParent) {
+        const parentIds = ['66666666-6666-4666-8666-666666666666', '77777777-7777-4777-8777-777777777777', '88888888-8888-4888-8888-888888888888'];
+        for (const [attempt, id] of parentIds.entries()) {
+          const index = WorkflowRunInvocationIndexV1Schema.parse({ ...invocations[0]!.index, id, parentRecordId: rootId,
+            sequence: String(invocations.length), attempt: String(attempt), lifecycle: attempt === 2 ? 'running' : 'superseded' });
+          const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1',
+            blockKind: 'if', invocationPath: { blockId: 'selected', scope: [] }, attempt: index.attempt,
+            logicalInvocationRecordId: parentIds[0], ...(attempt ? { previousAttemptRecordId: parentIds[attempt - 1] } : {}),
+            container: { kind: 'if', selected: 'then', nextBlockOrdinal: '0' } });
+          invocations.push({ index, parentRevision: 0, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+            mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId,
+              recordId: id, sequence: index.sequence, parentRecordId: rootId, memberOrdinal: index.memberOrdinal, attempt: index.attempt }, progress })) });
+        }
+        for (const position of [1, 2]) {
+          const item = invocations[position]!;
+          item.index.parentRecordId = position === 1 ? parentIds[0]! : parentIds[2]!;
+          item.contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: item.index.id,
+              sequence: item.index.sequence, parentRecordId: item.index.parentRecordId, memberOrdinal: item.index.memberOrdinal, attempt: item.index.attempt },
+            progress: { kind: 'happier.workflow-progress.v1', blockKind: 'action', invocationPath: { blockId: 'read', scope: [] },
+              attempt: item.index.attempt, logicalInvocationRecordId: actionId, ...(position === 2 ? { previousAttemptRecordId: actionId } : {}) } }));
+        }
+      }
       for (let ordinal = 0; ordinal < unrelated.length; ordinal += 1) {
         const id = `55555555-5555-4555-8555-${String(ordinal).padStart(12, '0')}`;
         const index = WorkflowRunInvocationIndexV1Schema.parse({ ...invocations[1]!.index,
@@ -605,7 +631,7 @@ describe('shared Account workflow run owner', () => {
         },
         resolveSessionReference: async ({ sessionId }) => {
           reads.push(sessionId ?? '');
-          return scenario === 'revoked' ? { kind: 'none' as const } : { kind: 'unique' as const,
+          return scenario === 'revoked' || scenario === 'revoked_recovered_parent' ? { kind: 'none' as const } : { kind: 'unique' as const,
             address: scenario === 'miswired' ? { ...address, sessionId: 'other' } : address };
         },
       } satisfies Pick<ActionExecutorDeps, 'sessionList' | 'workflowAction' | 'resolveSessionReference'>;
@@ -613,10 +639,12 @@ describe('shared Account workflow run owner', () => {
         sessionId: scenario === 'different' ? 'other' : address.sessionId,
         ...(scenario === 'foreign_home' ? { serverId: 'other-home' } : {}),
       }, context, { sessionId: 'current_session' }, deps);
-      if (scenario === 'admitted' || scenario === 'scale' || scenario === 'originless' || scenario === 'retry') {
+      if (scenario === 'admitted' || scenario === 'scale' || scenario === 'originless' || scenario === 'retry' || scenario === 'recovered_parent') {
         expect(failure).toBeNull();
         expect(reads).toEqual([address.sessionId]);
       } else expect(failure).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      if (scenario === 'revoked_recovered_parent') expect(reads).toEqual([address.sessionId]);
+      if (recoveredParent) expect(cost.historyPages).toBe(0);
       if (scenario === 'scale') {
         expect(cost.historyPages).toBe(0);
         expect(cost.envelopes).toBe(2);
