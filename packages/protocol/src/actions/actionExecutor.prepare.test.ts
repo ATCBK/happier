@@ -66,6 +66,7 @@ describe('ActionExecutor prepared invocation', () => {
     const prepared = await executor.prepare('session.activity.get', { sessionId: 'child', view: 'awareness' }, harness.caller('parent'));
     if (prepared.kind !== 'ready') throw new Error(`Expected admitted led-child read: ${JSON.stringify(prepared.result)}`);
     expect(prepared.kind).toBe('ready');
+    expect(prepared).toEqual({ kind: 'ready', invocation: { run: expect.any(Function) } });
     expect(harness.sessionActivityGet).not.toHaveBeenCalled();
     await expect(prepared.invocation.run()).resolves.toMatchObject({ ok: true, result: { sessionId: 'child' } });
     expect(harness.sessionList).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ underSessionId: 'parent' }) }));

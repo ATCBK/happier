@@ -2953,7 +2953,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     | { ok: true; input: unknown }
     | ActionExecuteFailure
   >> {
-    const schema = hostInternal ? spec.inputSchema : callerInputSchema(spec, ctx);
+    // Private children have no surface binding. Core admission parses their
+    // semantic input after resolving targets, just as it does for bound input.
+    if (hostInternal) return { ok: true, input };
+    const schema = callerInputSchema(spec, ctx);
     const parsed = schema.safeParse(input ?? {});
     if (!parsed.success) {
       const timingIssue = spec.id === 'session.permission_mode.set'
@@ -2961,7 +2964,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         : undefined;
       return { ...actionInputValidationFailure(parsed.error), error: timingIssue?.message ?? 'invalid_parameters' };
     }
-    if (hostInternal) return { ok: true, input: parsed.data };
     const caller = ctx.actionCaller ?? { kind: 'host' as const };
     const apiBinding = ctx.surface === 'api'
       ? spec.surfaceBindings?.api
@@ -3962,6 +3964,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     operationObserved?: true;
   }>;
 
+  type PrivatePrepareResult =
+    | Extract<ActionPrepareResult, { kind: 'settled' }>
+    | Readonly<{ kind: 'ready'; invocation: ActionPreparedInvocation; admission: PreparedCoreAdmission }>;
+
   const createOneShotInvocation = (runOnce: () => Promise<ActionExecuteResult>): ActionPreparedInvocation => {
     let resultPromise: Promise<ActionExecuteResult> | null = null;
     return Object.freeze({
@@ -3975,8 +3981,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
   const ready = (
     admission: PreparedCoreAdmission,
     runOnce?: () => Promise<ActionExecuteResult>,
-  ): ActionPrepareResult => ({
+  ): PrivatePrepareResult => ({
     kind: 'ready',
+    admission,
     invocation: createOneShotInvocation(runOnce
       ? async () => settleActionOutput(admission.actionId, await runOnce())
       : () => executeCoreTerminal(
@@ -4013,8 +4020,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
   function settlePrepareResult(
     actionId: ActionId,
-    result: ActionExecuteResult | ActionPrepareResult,
-  ): ActionPrepareResult {
+    result: ActionExecuteResult | PrivatePrepareResult,
+  ): PrivatePrepareResult {
     return 'kind' in result ? result : { kind: 'settled', result: settleActionOutput(actionId,
       result.ok ? result : classifyExecutionRunStartPreDispatchFailure(actionId, result)) };
   }
@@ -4038,7 +4045,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       /** Private Home binding from the already-verified approval replay owner. */
       sameHome?: ActionHomeEquivalence;
     }>,
-  ): Promise<ActionExecuteResult | ActionPrepareResult> => {
+  ): Promise<ActionExecuteResult | PrivatePrepareResult> => {
     // Child positions belong to this parent invocation, including its local
     // and routed branches. Count per Action so a completed grant/read on retry
     // cannot shift another Action's slots. Nested parents extend the same path.
@@ -11802,7 +11809,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     context?: ActionExecutorContext,
     hostInternal = false,
     confirmUiDefault = false,
-  ): Promise<ActionPrepareResult> => {
+  ): Promise<PrivatePrepareResult> => {
     const normalizedContext = normalizeActionCallerContext(context ?? {});
     if (!normalizedContext) return settlePrepareResult(actionId, {
       ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters',
@@ -12029,6 +12036,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
     return {
       kind: 'ready',
+      admission: prepared.admission,
       invocation: createOneShotInvocation(async () => {
         const result = await prepared.invocation.run();
         await observeResult(result);
@@ -12043,7 +12051,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     context?: ActionExecutorContext,
     hostInternal = false,
     confirmUiDefault = false,
-  ): Promise<ActionPrepareResult> => {
+  ): Promise<PrivatePrepareResult> => {
     try {
       return await prepareInvocationCore(actionId, input, context, hostInternal, confirmUiDefault);
     } catch (error) {
@@ -12062,9 +12070,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const prepared = await prepareInvocation(actionId, input, context, hostInternal, true);
     if (hostInternal && prepared.kind === 'ready' && deps.routeHostChildAction) {
       const spec = getActionSpec(actionId);
-      const admitted = spec.inputSchema.safeParse(input);
-      if (admitted.success && resolveActionExecutionPlacementForInput(spec, admitted.data) === 'machine') {
-        const routed = await deps.routeHostChildAction({ actionId, input: admitted.data, context: context ?? {} });
+      const admitted = prepared.admission;
+      if (resolveActionExecutionPlacementForInput(spec, admitted.input) === 'machine') {
+        const routed = await deps.routeHostChildAction({ actionId, input: admitted.input, context: admitted.context });
         if (routed) return settleActionOutput(actionId, routed);
       }
     }
@@ -12079,8 +12087,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     return result;
   };
 
-  const prepare = (actionId: ActionId, input: unknown, context?: ActionExecutorContext) =>
-    prepareInvocation(actionId, input, context);
+  const prepare = async (actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionPrepareResult> => {
+    const prepared = await prepareInvocation(actionId, input, context);
+    return prepared.kind === 'ready' ? { kind: 'ready', invocation: prepared.invocation } : prepared;
+  };
   const execute = (actionId: ActionId, input: unknown, context?: ActionExecutorContext) =>
     executeInvocation(actionId, input, context);
 
