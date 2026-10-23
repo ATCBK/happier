@@ -78,7 +78,7 @@ export async function applyPlannedChangeActions(params: {
      * Account-change applier hands the canonical page to those owners before
      * checkpointing; this callback creates no second durable cursor.
      */
-    publishAccountChanges?: (changes: readonly ApiChangeEntry[]) => void;
+    publishAccountChanges?: (changes: readonly ApiChangeEntry[], options?: Readonly<{ workflowRunsMaterialized: true }>) => void;
     invalidateMessagesForSession: (sessionId: string) => Promise<void>;
     repairSessionTranscriptRevision?: (repair: PlannedChangeActions['sessionTranscriptRepairs'][number]) => Promise<void>;
     invalidateScmStatusForSession: (sessionId: string) => void;
@@ -94,7 +94,13 @@ export async function applyPlannedChangeActions(params: {
     // Registering Data's wakeup before any awaited work preserves the
     // subscribe-then-initial-query race contract without giving UI a second
     // AccountChange broker or a collection query engine.
-    params.publishAccountChanges?.(planned.changes);
+    // Runs have an awaited row materialization below. Notify their windows
+    // after publication, so they consume its answer instead of racing it.
+    const workflowRunEntities = new Set(planned.workflowRunIdsToRefresh.map(runId => `workflow-run:${runId}`));
+    const isWorkflowRunChange = (change: ApiChangeEntry) => change.kind === 'account' && workflowRunEntities.has(change.entityId);
+    const workflowRunChanges = planned.changes.filter(isWorkflowRunChange);
+    const earlyChanges = workflowRunChanges.length === 0 ? planned.changes : planned.changes.filter(change => !isWorkflowRunChange(change));
+    if (earlyChanges.length > 0) params.publishAccountChanges?.(earlyChanges);
 
     const concurrencyLimit = typeof params.concurrencyLimit === 'number' && params.concurrencyLimit > 0
         ? Math.trunc(params.concurrencyLimit)
@@ -110,6 +116,7 @@ export async function applyPlannedChangeActions(params: {
                 if (!params.refreshWorkflowRuns) throw new Error('workflow_run_refresh_unavailable');
                 await params.refreshWorkflowRuns(runIds);
                 for (const runId of runIds) completedWorkflowRunIds.add(runId);
+                if (workflowRunChanges.length > 0) params.publishAccountChanges?.(workflowRunChanges, { workflowRunsMaterialized: true });
             } catch {
                 for (const runId of runIds) failedWorkflowRunIds.add(runId);
             }

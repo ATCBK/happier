@@ -31,6 +31,15 @@ describe('managed creation preferences on the addressed Account', () => {
         expect(harness.requestsFor('/v2/account/settings').every(request => request.serverId === target)).toBe(true);
         const savedPreferences = hook.getCurrent().preferences.settings;
         const settingsReads = harness.requestsFor('/v2/account/settings').length;
+        for (const kind of ['session', 'machine'] as const) {
+            await act(async () => publishHomeAccountChange(target, ['unrelated-row'], { changeKinds: [kind] }));
+            await flushHookEffects();
+        }
+        await act(async () => publishHomeAccountChange(target, ['workflow-run:unrelated'], {
+            changeKinds: ['account'], accountSettingsAffects: false,
+        }));
+        await flushHookEffects();
+        expect(harness.requestsFor('/v2/account/settings')).toHaveLength(settingsReads);
         await act(async () => publishHomeAccountChange(target, ['approval-artifact'], { changeKinds: ['artifact'] }));
         await flushHookEffects();
         expect(hook.getCurrent().preferences.settings).toBe(savedPreferences);
@@ -50,7 +59,7 @@ describe('managed creation preferences on the addressed Account', () => {
         await hook.unmount();
     });
 
-    it('keeps the saved preferences while a profile refresh binds the same Account again', async () => {
+    it('keeps the binding and preferences when an unrelated Home profile changes', async () => {
         const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://compute.example', serverIdentityId: 'srv_compute', accountId: 'owner' });
         const settings = { managedMachineCreationEnabled: true, machineRetentionDefaultsV1: undefined };
         harness.answer(target, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
@@ -65,12 +74,12 @@ describe('managed creation preferences on the addressed Account', () => {
         await waitForHomeGovernance(() => expect(hook.getCurrent().preferences.settings?.managedMachineCreationEnabled).toBe(true));
         const firstBinding = hook.getCurrent().binding;
         const firstEnabled = enabledByRender.indexOf(true);
-        // A profile publication retires the credential binding; the Account behind it is unchanged.
+        const reads = harness.requestsFor('/v2/account/settings').length;
+        // Only the exact Home URL/credentials affect this binding, not a sibling profile.
         await act(async () => { await harness.addHome({ name: 'Other', serverUrl: 'https://other.example', serverIdentityId: 'srv_other', accountId: 'other' }); });
-        await waitForHomeGovernance(() => {
-            expect(hook.getCurrent().binding).not.toBe(firstBinding);
-            expect(hook.getCurrent().binding).not.toBeNull();
-        });
+        await flushHookEffects();
+        expect(hook.getCurrent().binding).toBe(firstBinding);
+        expect(harness.requestsFor('/v2/account/settings')).toHaveLength(reads);
         expect(enabledByRender.slice(firstEnabled).every(Boolean)).toBe(true);
         await hook.unmount();
     });

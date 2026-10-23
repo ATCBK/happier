@@ -12368,7 +12368,7 @@ class Sync {
                             resolveSessionLiveConsumption(sessionId).isFullContentConsumer,
                         getSessionMaterializedMaxSeq: (sessionId) => this.sessionMaterializedMaxSeqById[sessionId] ?? 0,
                         isSessionMessagesDeferred: (sessionId) => this.hasDeferredNewerMessages(sessionId),
-                        publishAccountChanges: (changes) => {
+                        publishAccountChanges: (changes, materialization) => {
                             // Audience/grant changes need not alter the published Machine blobs.
                             // The existing focused AccountChange cursor is their freshness signal.
                             for (const change of changes) {
@@ -12401,9 +12401,11 @@ class Sync {
                                         return [[change.entityId, hint.revision]];
                                     })),
                                     changeKinds: changes.map(change => change.kind),
-                                    sessionListQueryAffects: plannedChangesAffectSessionListQuery(planned),
-                                    profileCatalogAffects: plannedChangesAffectProfileCatalog(planned),
-                                    usageQueryAffects: plannedChangesAffectUsageQuery(planned),
+                                    ...(materialization?.workflowRunsMaterialized ? { workflowRunsMaterialized: true as const } : {}),
+                                    sessionListQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectSessionListQuery(planned),
+                                    profileCatalogAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectProfileCatalog(planned),
+                                    accountSettingsAffects: materialization?.workflowRunsMaterialized ? false : planned.invalidate.settings || planned.unsupportedChanges.length > 0,
+                                    usageQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectUsageQuery(planned),
                                 });
                             }
                             publishActivePluginCollectionUiQueryChanges(changes);

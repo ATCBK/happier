@@ -1,4 +1,4 @@
-import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1, type ChangeEntry } from '@happier-dev/protocol/changes';
+import { ChangeKindSchema, HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1, type ChangeEntry } from '@happier-dev/protocol/changes';
 import {
     subscribeHomeCredentialMutations,
     type HomeCredentialMutationEvent,
@@ -23,6 +23,8 @@ export type HomeAccountChangeEvent = Readonly<{
     entityIds?: readonly string[];
     /** Revision hints from the consumed change page; never inferred from a socket wake. */
     entityRevisions?: Readonly<Record<string, number>>;
+    /** The focused change applier has already published these exact Run summaries to the shared store. */
+    workflowRunsMaterialized?: true;
     /** Present when the publisher knows the changed domains; omitted wakes remain conservative. */
     changeKinds?: readonly ChangeEntry['kind'][];
     /**
@@ -34,6 +36,8 @@ export type HomeAccountChangeEvent = Readonly<{
     sessionListQueryAffects?: boolean | 'structural';
     /** Exact focused-page Profile/Artifact/source decision; content-free wakes omit it. */
     profileCatalogAffects?: boolean;
+    /** The focused planner's settings decision; unknown/coarse wakes remain conservative. */
+    accountSettingsAffects?: boolean;
     /** Machine-only focused pages are covered by the Usage store's material-input subscription. */
     usageQueryAffects?: boolean;
     /** An acknowledged local Artifact deletion; no private content or replay guarantee. */
@@ -42,10 +46,12 @@ export type HomeAccountChangeEvent = Readonly<{
 
 type HomeAccountChangeDetails = Readonly<{
     entityRevisions?: Readonly<Record<string, number>>;
+    workflowRunsMaterialized?: true;
     source?: 'connected' | 'catch-up-pending';
     changeKinds?: readonly ChangeEntry['kind'][];
     sessionListQueryAffects?: boolean | 'structural';
     profileCatalogAffects?: boolean;
+    accountSettingsAffects?: boolean;
     usageQueryAffects?: boolean;
     deletedArtifactIds?: readonly string[];
 }>;
@@ -140,11 +146,15 @@ export function publishHomeAccountChange(
         ...(details?.source ? { source: details.source } : {}),
         ...(entityIds ? { entityIds: Object.freeze([...new Set(entityIds)]) } : {}),
         ...(details?.entityRevisions ? { entityRevisions: Object.freeze({ ...details.entityRevisions }) } : {}),
+        ...(details?.workflowRunsMaterialized ? { workflowRunsMaterialized: true as const } : {}),
         ...(details?.changeKinds ? { changeKinds: Object.freeze([...new Set(details.changeKinds)]) } : {}),
         ...(details?.sessionListQueryAffects !== undefined
             ? { sessionListQueryAffects: details.sessionListQueryAffects }
             : {}),
         ...(details?.profileCatalogAffects !== undefined ? { profileCatalogAffects: details.profileCatalogAffects } : {}),
+        accountSettingsAffects: details?.accountSettingsAffects ?? (details?.changeKinds === undefined
+            || details.changeKinds.length === 0
+            || details.changeKinds.some(kind => kind === 'account' || !ChangeKindSchema.safeParse(kind).success)),
         ...(details?.usageQueryAffects !== undefined ? { usageQueryAffects: details.usageQueryAffects } : {}),
         ...(details?.deletedArtifactIds ? { deletedArtifactIds: Object.freeze([...new Set(details.deletedArtifactIds)]) } : {}),
     });

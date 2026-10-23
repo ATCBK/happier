@@ -24,14 +24,14 @@ export function subscribeVisibleWorkflowRunListInvalidation(params: Readonly<{
     runId?: string;
     source?: 'workflow' | 'automation';
     isVisibleWindowLoaded: () => boolean;
-    invalidate: () => void;
+    invalidate: (options: Readonly<{ summaryCurrent: boolean }>) => void;
 }>): () => void {
     const unsubscribe = subscribeHomeAccountChange((event) => {
         if (!params.lifetime.isCurrent()) return;
         if (!areServerProfileIdentifiersEquivalent(event.serverId, params.lifetime.scope.serverId)) return;
         if (!accountChangeAffectsWorkflowRunList(event, params.runId, params.source)) return;
         if (!params.isVisibleWindowLoaded()) return;
-        params.invalidate();
+        params.invalidate({ summaryCurrent: event.workflowRunsMaterialized === true });
     });
     const retirement = params.lifetime.onRetire(unsubscribe);
     return () => {

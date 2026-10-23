@@ -5,7 +5,7 @@ import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/acc
 import { subscribeAccountSettingsPersistenceMutations } from '@/sync/domains/state/accountSettingsPersistence';
 import { storage } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
 export type ManagedMachineAccountSettings = Pick<Settings, 'machineRetentionDefaultsV1' | 'managedMachineCreationEnabled'>;
@@ -16,7 +16,7 @@ const NO_SETTINGS = Object.freeze({ settings: null, loading: false, error: null 
 
 /**
  * Narrow display projection over the canonical exact-Account settings reader, not another settings store.
- * A profile refresh retires the credential binding and binds the same Account again (the resolution stays
+ * An exact Home credential/URL refresh can retire the binding and bind the same Account again (the resolution stays
  * `bound` meanwhile): the last answer stays while the replacement reads. Another Account never sees it.
  */
 export function useManagedMachineAccountSettings(binding: ServerCredentialAccountScopeBinding | null | undefined,
@@ -30,7 +30,7 @@ export function useManagedMachineAccountSettings(binding: ServerCredentialAccoun
     React.useEffect(() => {
         if (!binding) return;
         const unsubscribeHome = subscribeHomeAccountChange(event => {
-            if (isArtifactOnlyHomeAccountChange(event)) return;
+            if (event.accountSettingsAffects === false) return;
             if (areServerProfileIdentifiersEquivalent(event.serverId, binding.serverId) && binding.isCurrent()) refresh();
         });
         const unsubscribePersistence = subscribeAccountSettingsPersistenceMutations(scope => {

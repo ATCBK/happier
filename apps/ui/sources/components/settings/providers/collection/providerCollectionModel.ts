@@ -5,7 +5,7 @@ import type { ProviderConnectionV1 } from '@happier-dev/protocol/providers/conne
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { AccountProviderCatalogCountV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
 import type { ProviderDeclarationContext } from '@/providers/catalog/accountProviderDeclarations';
-import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { readAccountProviderDeclaration } from '@/providers/catalog/accountProviderDeclarations';
 
 import {
     presentProviderConnection,
@@ -213,7 +213,8 @@ export function readProviderGatewayPurposeDeclarations(
     declarationContext: ProviderDeclarationContext,
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
     if (saved.deployment.kind !== 'managedLocal' || saved.source.kind !== 'contribution') return null;
-    return readProviderGatewayContributionPurposes(saved.source.contributionKey, readAccountProviderDeclarations(declarationContext));
+    const declaration = readAccountProviderDeclaration(saved.source.contributionKey, declarationContext);
+    return readProviderGatewayContributionPurposes(saved.source.contributionKey, declaration ? [declaration] : []);
 }
 
 /** Projected rows use the same admitted declaration source as saved connections. */
@@ -222,7 +223,8 @@ export function readProviderGatewayViewDeclarations(
     declarationContext: ProviderDeclarationContext,
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
     if (view.deployment.kind !== 'managedLocal' || !view.contributionKey) return null;
-    return readProviderGatewayContributionPurposes(view.contributionKey, readAccountProviderDeclarations(declarationContext));
+    const declaration = readAccountProviderDeclaration(view.contributionKey, declarationContext);
+    return readProviderGatewayContributionPurposes(view.contributionKey, declaration ? [declaration] : []);
 }
 
 /** Declaration completeness only; unknown sources never block independently admitted gateway rows. */
