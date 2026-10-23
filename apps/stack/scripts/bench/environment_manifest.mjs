@@ -15,6 +15,7 @@ const ENV_PRESENCE_KEYS = [
 const TOOL_PROBES = {
   node: () => [process.execPath, ['--version']],
   git: () => ['git', ['--version']],
+  pnpm: () => ['pnpm', ['--version']],
   yarn: () => ['yarn', ['--version']],
   rg: () => ['rg', ['--version']],
   mutagen: () => ['mutagen', ['version']],
