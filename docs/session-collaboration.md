@@ -378,6 +378,13 @@ policy used by Artifacts. View reads, edit posts, and owner/admin manages the re
 Self-leave removes only the caller's direct grant; inherited Team/Group access can remain.
 The owner must transfer ownership or archive instead of leaving an ownerless resource.
 
+Selected committed messages use exact selection on the existing `discussion.read`
+owner rather than scanning conversation history. Reply ancestors and approved-publication
+recovery retain fresh Discussion access and key acquisition; a protected question's
+`throughSeq` ceiling is applied before disclosure. Local retry IDs are readable only
+for the authenticated author's messages. This is the current undeployed 0.3 contract,
+not a compatibility adapter or a second message cache.
+
 Clients capture the Home/Account scope with `{serverId, discussionId}`. Create and first
 post have separate retry identities, retained across an uncertain response. A raw Discussion
 id or a newly selected Home cannot retarget an existing operation or draft.
