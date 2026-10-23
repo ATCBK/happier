@@ -434,8 +434,9 @@ export function createNodePtyProvider(params?: Readonly<{
   const platform = params?.platform ?? process.platform;
   const readSpawnFailureLimits = params?.readSpawnFailureLimits;
   const currentExecPath = params?.currentExecPath ?? process.execPath;
+  const argv = params?.argv;
   const requireBase = resolvePtyProviderRequireBase({
-    argv: params?.argv,
+    argv,
     currentExecPath,
   });
   const require = createRequire(requireBase);
@@ -460,44 +461,11 @@ export function createNodePtyProvider(params?: Readonly<{
   const fallbackBackendName =
     params?.fallbackBackendName
     ?? (fallbackProvider ? (defaultNodeRelayProvider ? 'node-relay' : 'python-relay') : null);
-  const nativeLoadErrors: Array<{ id: string; message: string }> = [];
-
-  const tryResolveModule = (moduleId: string): { id: string; module: typeof import('node-pty') } | null => {
-    for (const candidateId of resolvePtyProviderModuleIds(moduleId, {
-      argv: params?.argv,
-      currentExecPath,
-    })) {
-      try {
-        return { id: moduleId, module: require(candidateId) as typeof import('node-pty') };
-      } catch (error) {
-        nativeLoadErrors.push({
-          id: candidateId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    return null;
-  };
-
   // Both POSIX backends use tty.ReadStream for the nonblocking PTY master.
   // Bun can return a successful spawn while silently losing input/output
   // (oven-sh/bun#25822). Use the existing external relay until the bundled
   // Bun runtime passes interactive PTY input/output and cleanup validation.
   const useNativePty = platform === 'win32' || !isBun();
-  const nodePty = useNativePty ? tryResolveModule('node-pty') : null;
-  const homebridgePty = useNativePty ? tryResolveModule('@homebridge/node-pty-prebuilt-multiarch') : null;
-  const nativeCandidates = [nodePty, homebridgePty];
-  const preferred = nativeCandidates.find((candidate) => candidate !== null) ?? null;
-  const fallback = nativeCandidates.find((candidate) => candidate !== null && candidate !== preferred) ?? null;
-
-  logger.debug('[terminal-pty] backend resolution', {
-    platform,
-    requireBase,
-    preferredBackend: preferred?.id ?? null,
-    secondaryBackend: fallback?.id ?? null,
-    fallbackBackend: fallbackProvider ? fallbackBackendName : null,
-    nativeLoadErrors,
-  });
 
   let loggedNativeMissingFallback = false;
   let loggedNativeFailureFallback = false;
@@ -518,6 +486,33 @@ export function createNodePtyProvider(params?: Readonly<{
         } }) : null;
       const params = scoped ? { ...spawnParams, file: scoped.filePath, args: scoped.args,
         options: { ...spawnParams.options, env: scoped.env } } : spawnParams;
+      const nativeLoadErrors: Array<{ id: string; message: string }> = [];
+      const tryResolveModule = (moduleId: string): { id: string; module: typeof import('node-pty') } | null => {
+        for (const candidateId of resolvePtyProviderModuleIds(moduleId, {
+          argv,
+          currentExecPath,
+        })) {
+          try {
+            return { id: moduleId, module: require(candidateId) as typeof import('node-pty') };
+          } catch (error) {
+            nativeLoadErrors.push({
+              id: candidateId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return null;
+      };
+      const preferred = useNativePty
+        ? tryResolveModule('node-pty') ?? tryResolveModule('@homebridge/node-pty-prebuilt-multiarch')
+        : null;
+      logger.debug('[terminal-pty] backend resolution', {
+        platform,
+        requireBase,
+        preferredBackend: preferred?.id ?? null,
+        fallbackBackend: fallbackProvider ? fallbackBackendName : null,
+        nativeLoadErrors,
+      });
       let lastError: unknown = null;
       if (!preferred) {
         if (fallbackProvider) {
@@ -539,6 +534,18 @@ export function createNodePtyProvider(params?: Readonly<{
         ), platform);
       } catch (e) {
         lastError = new SpawnFailureError(e, { platform, ...(platform !== 'win32' ? { syscall: platform === 'darwin' ? 'posix_spawn' as const : 'forkpty' as const } : {}), limits: readSpawnFailureLimits?.() });
+        const fallback = preferred.id === 'node-pty'
+          ? tryResolveModule('@homebridge/node-pty-prebuilt-multiarch') : null;
+        if (preferred.id === 'node-pty') {
+          logger.debug('[terminal-pty] backend resolution', {
+            platform,
+            requireBase,
+            preferredBackend: preferred.id,
+            secondaryBackend: fallback?.id ?? null,
+            fallbackBackend: fallbackProvider ? fallbackBackendName : null,
+            nativeLoadErrors,
+          });
+        }
         if (fallback) {
           if (!loggedSecondaryNativeFallback) {
             logger.debug('[terminal-pty] preferred PTY backend failed, trying secondary native backend', {
