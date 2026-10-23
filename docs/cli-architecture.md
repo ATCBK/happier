@@ -823,6 +823,17 @@ effect is not a setup-trust grant. Restart reviews the current declaration befor
 Stop and then uses the independent full Start Action; it never replays captured
 argv after a changed declaration or treats failed replacement as rollback.
 
+Each declaration review freshly admits authority before its private reads and
+before returning its result. Awaited passive reads retain requester custody,
+cancellation and service eligibility checks; effect-capable preparation and native
+command resolution retain their fresh authority fences. Worker Start reviews
+SOURCE at approval, launcher admission and executor entry. After that invocation's
+clean copy, destination reviews compare current manifest and execution inputs with
+the approved SOURCE basis, while rereading placement, linked roots, setup and native
+invocation facts. A held setup resume reviews SOURCE and performs clean preparation
+again. The basis belongs only to that accepted Start and is not reused by another
+operation or Restart.
+
 `managedServicesOwner.ts` and `managedProcessSupervisor.ts` retain the one actual
 service lifetime and requester attribution. An endpoint-none owned process can
 be Running without being HTTP Healthy. Native resource custody requires an actual
