@@ -4,7 +4,7 @@ import type { core } from 'zod/mini';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from '../../../actions/actionInputJsonSchema.js';
 import { createPluginManifestJsonSchemaV2 } from '../../manifest/jsonSchema.js';
 import { PluginManifestV2Schema } from '../../manifest/v2.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
 
 import {
@@ -23,6 +23,8 @@ import {
 } from './declarativeDocument.js';
 import { QualifiedConnectedAccountRefSchema } from '../../../connect/qualifiedConnectedAccountPersistence.js';
 import { projectPluginPortableUiDeclarationsV1 } from './declarationProjection.js';
+import { InputHintsSchema } from '../../../inputs/inputFields.js';
+import { PluginJsonSchemaV2Schema } from '../publicTypes.js';
 
 /**
  * The declarative vocabulary is a bounded host-rendered document language
@@ -134,6 +136,39 @@ describe('declarative node vocabulary v2', () => {
     expect(PluginUiViewV2Schema.safeParse({ ...widget, connectedAccountPurposeBindings: [{ ...widget.connectedAccountPurposeBindings[0], path: 'unknown' }] }).success).toBe(false);
     expect(PluginUiViewV2Schema.safeParse({ ...widget, connectedAccountPurposeBindings: [{ path: 'account', purpose: 'metrics' }] }).success).toBe(false);
     expect(PluginUiViewV2Schema.safeParse({ ...widget, resources: [] }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, resources: undefined }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, inputs: undefined }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, connectedAccountPurposeBindings: [...widget.connectedAccountPurposeBindings, ...widget.connectedAccountPurposeBindings] }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, connectedAccountPurposeBindings: [{ ...widget.connectedAccountPurposeBindings[0], consumer: { pluginId: 'com.acme.other', localId: 'metrics' } }] }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, resources: [{ ...widget.resources[0], authority: true }] }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, resources: [null] }).success).toBe(false);
+    expect(PluginUiViewV2Schema.safeParse({ ...widget, connectedAccountPurposeBindings: [{ ...widget.connectedAccountPurposeBindings[0], consumer: null }] }).success).toBe(false);
+  });
+  it('refines admitted Widget fields without reparsing hints or JSON Schema', () => {
+    const widget = {
+      id: 'external-viewer', container: 'widget', renderer: 'native', target: { kind: 'app' },
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      inputs: { fields: [{ path: 'account', title: ' Account ', widget: 'select', connectedAccountOptions: true }] },
+      inputSchema: { type: 'object', properties: { account: QualifiedConnectedAccountRefSchema.jsonSchema }, additionalProperties: false },
+      resources: [{ pluginId: 'com.acme.external', localId: 'metrics' }],
+      connectedAccountPurposeBindings: [{ path: 'account', purpose: 'metrics', consumer: { pluginId: 'com.acme.external', localId: 'metrics' } }],
+    };
+    // Instrument the real native schemas without replacing their implementations.
+    const hintsParses = vi.spyOn(InputHintsSchema, 'safeParse');
+    const schemaParses = vi.spyOn(PluginJsonSchemaV2Schema, 'safeParse');
+    try {
+      expect(PluginUiViewV2Schema.parse(widget)).toMatchObject({
+        inputs: { fields: [{ path: 'account', title: 'Account' }] },
+        resources: widget.resources, connectedAccountPurposeBindings: widget.connectedAccountPurposeBindings,
+      });
+      expect({ hints: hintsParses.mock.calls.length, jsonSchema: schemaParses.mock.calls.length }).toEqual({ hints: 0, jsonSchema: 0 });
+      expect(PluginUiViewV2Schema.parse({ ...widget, inputs: {}, connectedAccountPurposeBindings: [] })).toMatchObject({ inputs: { fields: [] } });
+      expect(PluginUiViewV2Schema.safeParse({ ...widget, inputs: { fields: [{ ...widget.inputs.fields[0], authority: true }] } }).success).toBe(false);
+      expect(PluginUiViewV2Schema.safeParse({ ...widget, inputSchema: { type: 'object', authority: true } }).success).toBe(false);
+    } finally {
+      hintsParses.mockRestore();
+      schemaParses.mockRestore();
+    }
   });
   it('admits universal widget inputs and refuses removed physical placement declarations', () => {
     const widget = { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' }, id: 'glance', container: 'widget', renderer: 'native', target: { kind: 'session' } };

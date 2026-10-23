@@ -538,23 +538,30 @@ function createPluginUiViewBindingSchemaV2() {
 
 // Public Widget snapshots reuse the declarative grammar in this module. Wait
 // until use before capturing their presentation schema through the reverse edge.
-const PluginUiViewV2SchemaRaw = lazyZodSchema(() => createPluginUiViewBindingSchemaV2().check(z.superRefine((view, ctx) => {
+const PluginUiViewV2SchemaRaw = lazyZodSchema(() => {
+  const schema = createPluginUiViewBindingSchemaV2();
+  // Registry mapping widens conditional widget fields away. Retain their
+  // admitted types for this refinement without widening the schema's output.
+  return schema.check(z.superRefine((view: z.output<typeof schema> & Partial<Pick<
+      PluginUiViewInlineBindingV2,
+      'inputs' | 'inputSchema' | 'connectedAccountPurposeBindings' | 'resources'
+    >>, ctx) => {
   if (view.container === 'widget') {
-    const inputs = 'inputs' in view ? InputHintsSchema.safeParse(view.inputs) : null;
-    const inputSchema = 'inputSchema' in view ? PluginJsonSchemaV2Schema.safeParse(view.inputSchema) : null;
+    const inputs = 'inputs' in view ? view.inputs : undefined;
+    const inputSchema = 'inputSchema' in view ? view.inputSchema : undefined;
     const purposeBindings = 'connectedAccountPurposeBindings' in view
-      ? z.array(WidgetConnectedAccountPurposeBindingV1Schema).safeParse(view.connectedAccountPurposeBindings ?? []) : null;
-    if (purposeBindings?.success && (!hasValidPluginConnectedAccountPurposeBindingsV2(inputSchema?.success ? inputSchema.data : undefined, purposeBindings.data)
-      || purposeBindings.data.some((binding) => !inputs?.success || !inputs.data.fields.some((field) => field.path === binding.path)))) {
+      ? view.connectedAccountPurposeBindings ?? [] : [];
+    if (!hasValidPluginConnectedAccountPurposeBindingsV2(inputSchema, purposeBindings)
+      || purposeBindings.some((binding) => !inputs?.fields.some((field) => field.path === binding.path))) {
       ctx.addIssue({ code: "custom", path: ['connectedAccountPurposeBindings'], message: 'Widget viewer purposes must bind exact declared Connected Account input fields.' });
     }
-    const resources = 'resources' in view ? z.array(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(view.resources) : null;
-    if (purposeBindings?.success && purposeBindings.data.some(binding => !resources?.success || !resources.data.some(resource =>
+    const resources = 'resources' in view ? view.resources ?? [] : [];
+    if (purposeBindings.some(binding => !resources.some(resource =>
       resource.pluginId === binding.consumer.pluginId && resource.localId === binding.consumer.localId))) {
       ctx.addIssue({ code: "custom", path: ['connectedAccountPurposeBindings'], message: 'Widget purposes must name a declared read Resource consumer.' });
     }
     if ('sessionInputPath' in view && view.sessionInputPath !== undefined
-      && (!inputs?.success || !inputs.data.fields.some((field) => field.path === view.sessionInputPath))) {
+      && !inputs?.fields.some((field) => field.path === view.sessionInputPath)) {
       ctx.addIssue({ code: "custom", path: ['sessionInputPath'], message: 'The exact Session path must name a declared widget input.' });
     }
   }
@@ -568,7 +575,8 @@ const PluginUiViewV2SchemaRaw = lazyZodSchema(() => createPluginUiViewBindingSch
       path: issue.path,
     }));
   }
-})));
+  }));
+});
 
 /**
  * `Array#map` necessarily widens the dynamic Zod union above: the mapped
