@@ -266,6 +266,12 @@ This shared fallback covers polling, ingress admission, outward delivery and
 Automation result handoff. A longer provider Retry-After remains authoritative;
 accepted, partial, and unknown effects never resend automatically.
 
+In the development source, an empty poll that leaves its checkpoint unchanged
+performs no Collection mutation. A permanent storage or admission failure parks
+that connection's poll work until a Collection change prompts a fresh read;
+transient failures keep their automatic retry. Poll failure logs include the
+connection and Collection identifiers without message content.
+
 If Happier temporarily cannot read the current Account or route authority before
 calling the provider, it retains the message for that same backoff and checks
 the authority again on the next attempt. A confirmed route mismatch or invalid
