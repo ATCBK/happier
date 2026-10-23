@@ -1,6 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
 
 describe('voiceTargetStore', () => {
+  it('publishes only real changes to the tracked qualified targets', async () => {
+    const { useVoiceTargetStore } = await import('./voiceTargetStore');
+    const original = useVoiceTargetStore.getState();
+    const targets = Array.from({ length: 1000 }, (_, index) => ({ serverId: 'home-a', sessionId: `s-${index}` }));
+    original.setVoiceLiveContextSessionAddresses(targets);
+    const admitted = useVoiceTargetStore.getState().voiceLiveContextSessionAddresses;
+    let notifications = 0;
+    const off = useVoiceTargetStore.subscribe(() => { notifications += 1; });
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        const actions = useVoiceTargetStore.getState();
+        actions.setVoiceLiveContextSessionAddresses([...targets].reverse());
+        actions.addVoiceLiveContextSessionAddress({ serverId: ' home-a ', sessionId: ' s-1 ' });
+        actions.removeVoiceLiveContextSessionAddress({ serverId: 'other-home', sessionId: 's-1' });
+      }
+      expect(notifications).toBe(0);
+      expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toBe(admitted);
+
+      useVoiceTargetStore.getState().addVoiceLiveContextSessionAddress({ serverId: 'home-b', sessionId: 's-1' });
+      expect(notifications).toBe(1);
+      expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses.find((address) => address.serverId === 'home-a' && address.sessionId === 's-1'))
+        .toBe(admitted.find((address) => address.sessionId === 's-1'));
+      useVoiceTargetStore.getState().removeVoiceLiveContextSessionAddress({ serverId: 'home-b', sessionId: 's-1' });
+      expect(notifications).toBe(2);
+      expect(useVoiceTargetStore.getState().voiceLiveContextSessionAddresses).toEqual(admitted);
+    } finally {
+      off();
+      useVoiceTargetStore.setState(original, true);
+    }
+  });
+
   it('shares default scope/capability policy while preserving explicit composer and Home intents', async () => {
     const { resolveVoiceIdleTarget } = await import('./voiceTargetStore');
     const focusedSessionAddress = { serverId: 'home-b', sessionId: 'open' };

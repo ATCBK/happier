@@ -71,15 +71,19 @@ export function resolveVoiceActionTargetAddress(input: Readonly<{
 
 function normalizeVoiceLiveContextSessionAddresses(
   values: ReadonlyArray<SessionAddress> | null | undefined,
+  current: ReadonlyArray<SessionAddress>,
 ): ReadonlyArray<SessionAddress> {
-  if (!Array.isArray(values)) return [];
+  if (!Array.isArray(values)) return current.length === 0 ? current : [];
+  const currentByKey = new Map(current.map((address) => [sessionAddressKey(address), address]));
   const out = new Map<string, SessionAddress>();
   for (const raw of values) {
     const address = normalizeAddress(raw);
     if (!address) continue;
-    out.set(sessionAddressKey(address), address);
+    const key = sessionAddressKey(address);
+    out.set(key, currentByKey.get(key) ?? address);
   }
-  return [...out.values()].sort((left, right) => sessionAddressKey(left).localeCompare(sessionAddressKey(right)));
+  const next = [...out.values()].sort((left, right) => sessionAddressKey(left).localeCompare(sessionAddressKey(right)));
+  return next.length === current.length && next.every((address, index) => address === current[index]) ? current : next;
 }
 
 export const useVoiceTargetStore = create<VoiceTargetState>((set) => ({
@@ -104,23 +108,28 @@ export const useVoiceTargetStore = create<VoiceTargetState>((set) => ({
         : { primaryActionSessionAddress };
     }),
   setVoiceLiveContextSessionAddresses: (addresses) =>
-    set(() => ({ voiceLiveContextSessionAddresses: normalizeVoiceLiveContextSessionAddresses(addresses) })),
+    set((state) => {
+      const voiceLiveContextSessionAddresses = normalizeVoiceLiveContextSessionAddresses(addresses, state.voiceLiveContextSessionAddresses);
+      return voiceLiveContextSessionAddresses === state.voiceLiveContextSessionAddresses ? state : { voiceLiveContextSessionAddresses };
+    }),
   addVoiceLiveContextSessionAddress: (address) =>
-    set((state) => ({
-      voiceLiveContextSessionAddresses: normalizeVoiceLiveContextSessionAddresses([
+    set((state) => {
+      const normalized = normalizeAddress(address);
+      if (!normalized || state.voiceLiveContextSessionAddresses.some((candidate) => areSessionAddressesEqual(candidate, normalized))) return state;
+      return { voiceLiveContextSessionAddresses: normalizeVoiceLiveContextSessionAddresses([
         ...state.voiceLiveContextSessionAddresses,
-        address,
-      ]),
-    })),
+        normalized,
+      ], state.voiceLiveContextSessionAddresses) };
+    }),
   removeVoiceLiveContextSessionAddress: (address) =>
     set((state) => {
       const normalized = normalizeAddress(address);
       if (!normalized) return state;
-      return {
-        voiceLiveContextSessionAddresses: state.voiceLiveContextSessionAddresses.filter(
-          (candidate) => !areSessionAddressesEqual(candidate, normalized),
-        ),
-      };
+      const voiceLiveContextSessionAddresses = state.voiceLiveContextSessionAddresses.filter(
+        (candidate) => !areSessionAddressesEqual(candidate, normalized),
+      );
+      return voiceLiveContextSessionAddresses.length === state.voiceLiveContextSessionAddresses.length
+        ? state : { voiceLiveContextSessionAddresses };
     }),
   setLastFocusedSessionAddress: (address) =>
     set((state) => {
