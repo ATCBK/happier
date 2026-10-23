@@ -13,7 +13,6 @@ export type PluginReactNativeLoaderBackend = Readonly<{
         identity: PluginReactNativeBundleCacheIdentity;
         bytes: Uint8Array;
         moduleReference?: PluginReactNativeExecutableModuleReference;
-        evaluationScopeKey?: string;
     }>) => Promise<PluginReactNativeExecutableExport>;
     unavailableReason?: string;
     diagnostics?: readonly string[];
@@ -58,7 +57,6 @@ export async function loadPluginReactNativeBundleExport(params: Readonly<{
     moduleReference?: PluginReactNativeExecutableModuleReference;
     backend?: PluginReactNativeLoaderBackend;
     hostPlatform?: string;
-    evaluationScopeKey?: string;
 }>): Promise<PluginReactNativeExportLoaderResult> {
     const backend = params.backend ?? createPluginUiCommonJsLoaderBackend();
     if (!backend.available || typeof backend.loadInstalledBundle !== 'function') {
@@ -87,7 +85,6 @@ export async function loadPluginReactNativeBundleExport(params: Readonly<{
         identity: params.identity,
         bytes: cached.bytes,
         ...(params.moduleReference ? { moduleReference: params.moduleReference } : {}),
-        ...(params.evaluationScopeKey !== undefined ? { evaluationScopeKey: params.evaluationScopeKey } : {}),
     });
     if (typeof exported !== 'function') {
         return Object.freeze({

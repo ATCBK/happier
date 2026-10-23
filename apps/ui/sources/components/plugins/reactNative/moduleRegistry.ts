@@ -1,5 +1,4 @@
 import type { PluginReactNativeSurfaceModule } from './PluginReactNativeSurface';
-import { instantiatePluginUiCommonJsBundle, type PluginUiCommonJsModule } from './commonJsEvaluator';
 
 /**
  * An active-projection admission captured before an asynchronous module load.
@@ -11,12 +10,6 @@ export type PluginReactNativeModuleRegistryWriteFence = Readonly<{
 }>;
 
 export type PluginReactNativeModuleRegistry = Readonly<{
-    /** Retain evaluation only for a caller's exact authority/activation scope. */
-    loadExecutableExport: (
-        input: Omit<Parameters<typeof instantiatePluginUiCommonJsBundle>[0], 'hostModules'> & Readonly<{
-            evaluationScopeKey?: string;
-        }>,
-    ) => (...args: never[]) => unknown;
     read: (cacheKey: string | undefined) => PluginReactNativeSurfaceModule | null;
     /** Capture the key-local admission fact before beginning asynchronous work. */
     captureWriteFence: (cacheKey: string | undefined) => PluginReactNativeModuleRegistryWriteFence | null;
@@ -32,24 +25,8 @@ export type PluginReactNativeModuleRegistry = Readonly<{
 
 export function createPluginReactNativeModuleRegistry(): PluginReactNativeModuleRegistry {
     const modules = new Map<string, PluginReactNativeSurfaceModule>();
-    const executableModules = new Map<string, PluginUiCommonJsModule>();
     const activeKeyTokens = new Map<string, symbol>();
     return Object.freeze({
-        loadExecutableExport: (input) => {
-            // A plugin may capture its activation API in module-level state.
-            // Unscoped loads retain the evaluator's fresh-namespace semantics.
-            if (input.evaluationScopeKey === undefined) {
-                return instantiatePluginUiCommonJsBundle(input).readExport(input.requestedExport);
-            }
-            const key = JSON.stringify([input.identity.pluginId, input.identity.artifactId,
-                input.identity.digest, input.evaluationScopeKey]);
-            let module = executableModules.get(key);
-            if (!module) {
-                module = instantiatePluginUiCommonJsBundle(input);
-                executableModules.set(key, module);
-            }
-            return module.readExport(input.requestedExport);
-        },
         read: (cacheKey) => cacheKey ? modules.get(cacheKey) ?? null : null,
         captureWriteFence: (cacheKey) => {
             if (!cacheKey) return null;

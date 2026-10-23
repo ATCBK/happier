@@ -233,7 +233,6 @@ export function createPluginUiExecutableModuleHost(): PluginUiExecutableModuleHo
                 moduleReference: input.moduleReference,
                 backend: input.backend,
                 hostPlatform: input.hostPlatform,
-                evaluationScopeKey: JSON.stringify([getPluginUiExecutableAuthorityKey(input.authority), key]),
             }).catch(() => null);
             if (loaded === null) {
                 return Object.freeze({

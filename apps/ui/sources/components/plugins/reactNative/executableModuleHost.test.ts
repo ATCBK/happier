@@ -44,9 +44,9 @@ function backend(exported: PluginReactNativeExecutableExport): PluginReactNative
 }
 
 describe('PluginUiExecutableModuleHost', () => {
-    it('evaluates unchanged CommonJS bytes once across reconciliation and activation invalidation', async () => {
+    it('reuses a current activation but reevaluates CommonJS bytes after activation retirement', async () => {
         // Forward the real loader and evaluator; count the expensive operation itself.
-        const evaluations = vi.spyOn(commonJs, 'instantiatePluginUiCommonJsBundle');
+        const evaluations = vi.spyOn(commonJs, 'evaluatePluginUiCommonJsBundle');
         onTestFinished(() => evaluations.mockRestore());
         const host = createPluginUiExecutableModuleHost();
         onTestFinished(() => host.unload());
@@ -63,23 +63,54 @@ describe('PluginUiExecutableModuleHost', () => {
         expect(evaluations).toHaveBeenCalledTimes(1);
         await host.invalidatePlugin(identity.pluginId);
         expect(await host.activate(input)).toEqual({ ok: true });
-        expect(evaluations).toHaveBeenCalledTimes(1);
+        expect(evaluations).toHaveBeenCalledTimes(2);
+        const replacement = { ...identity, artifactDigest: 'sha256:replacement' };
+        cache.putInstalledArtifact({ identity: replacement, format: 'plainJs',
+            bytes: new TextEncoder().encode('exports.activateClientRuntime = function () {};') });
+        expect(await host.activate({ ...input, identity: replacement })).toEqual({ ok: true });
+        expect(await host.activate({ ...input, identity: replacement })).toEqual({ ok: true });
+        expect(evaluations).toHaveBeenCalledTimes(3);
     });
 
-    it('retains one evaluated artifact across seven lifetimes of the same authority and activation target', async () => {
+    it('releases all executable namespaces across seven retired external Account activations', async () => {
         vi.stubGlobal('__dg8AccountRuntimeEvaluations', 0);
         onTestFinished(() => { vi.unstubAllGlobals(); });
-        const artifactIdentity = { ...identity, artifactId: 'dg8-account-runtime' };
+        const artifactIdentity = { ...identity, pluginId: 'external.account-runtime', artifactId: 'dg8-account-runtime' };
         const bytes = new TextEncoder().encode(`
             globalThis.__dg8AccountRuntimeEvaluations++;
+            const namespace = {};
             exports.activateClientRuntime = api => {
                 let calls = 0;
+                api.capture(namespace);
                 api.register(() => [api.accountId, ++calls]);
                 return () => api.cleaned();
             };
         `);
         const readers: Array<() => readonly [string, number]> = [];
+        const namespaces = new Set<object>();
         const cleaned = vi.fn();
+        // Observe real registry retention without replacing its evaluator or adding diagnostics.
+        const retained = new Map<Map<unknown, unknown>, Set<unknown>>();
+        const originalSet = Map.prototype.set;
+        const originalDelete = Map.prototype.delete;
+        const originalClear = Map.prototype.clear;
+        const writes = vi.spyOn(Map.prototype, 'set').mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+            if (value !== null && typeof value === 'object' && typeof Reflect.get(value, 'readExport') === 'function') {
+                let keys = retained.get(this);
+                if (!keys) { keys = new Set(); originalSet.call(retained, this, keys); }
+                keys.add(key);
+            }
+            return originalSet.call(this, key, value);
+        });
+        const deletes = vi.spyOn(Map.prototype, 'delete').mockImplementation(function (this: Map<unknown, unknown>, key: unknown) {
+            retained.get(this)?.delete(key);
+            return originalDelete.call(this, key);
+        });
+        const clears = vi.spyOn(Map.prototype, 'clear').mockImplementation(function (this: Map<unknown, unknown>) {
+            retained.get(this)?.clear();
+            return originalClear.call(this);
+        });
+        try {
         for (let index = 0; index < 7; index += 1) {
             const host = createPluginUiExecutableModuleHost();
             const accountId = `account-${index}`;
@@ -91,15 +122,59 @@ describe('PluginUiExecutableModuleHost', () => {
                 cache, identity: { ...artifactIdentity }, moduleReference, authority: accountAuthority,
                 hostPlatform: 'web', backend: createPluginUiCommonJsLoaderBackend(),
                 createScope: () => ({
-                    api: { accountId, register: (read: () => readonly [string, number]) => readers.push(read), cleaned },
+                    api: { accountId, capture: (namespace: object) => namespaces.add(namespace),
+                        register: (read: () => readonly [string, number]) => readers.push(read), cleaned },
                     commit: () => {}, unwind: () => {},
                 }),
             })).toEqual({ ok: true });
             await host.unload();
         }
-        expect(Reflect.get(globalThis, '__dg8AccountRuntimeEvaluations')).toBe(1);
+        expect([...retained.values()].reduce((count, keys) => count + keys.size, 0)).toBe(0);
+        expect(namespaces.size).toBe(7);
+        expect(Reflect.get(globalThis, '__dg8AccountRuntimeEvaluations')).toBe(7);
         expect(readers.map(read => read())).toEqual(Array.from({ length: 7 }, (_, index) => [`account-${index}`, 1]));
         expect(cleaned).toHaveBeenCalledTimes(7);
+        } finally {
+            clears.mockRestore();
+            deletes.mockRestore();
+            writes.mockRestore();
+        }
+    });
+
+    it('does not reuse a real external namespace whose asynchronous load settled after Account retirement', async () => {
+        const evaluations = vi.spyOn(commonJs, 'evaluatePluginUiCommonJsBundle');
+        onTestFinished(() => evaluations.mockRestore());
+        const host = createPluginUiExecutableModuleHost();
+        onTestFinished(() => host.unload());
+        const externalIdentity = { ...identity, pluginId: 'external.late-account' };
+        const accountAuthority = { kind: 'account' as const, serverId: 'home', accountId: 'account', custodyId: 'release' };
+        const cache = createPluginReactNativeBundleCache();
+        cache.putInstalledArtifact({ identity: externalIdentity, format: 'plainJs',
+            bytes: new TextEncoder().encode('exports.activateClientRuntime = function () {};') });
+        const realBackend = createPluginUiCommonJsLoaderBackend();
+        let finishLoad: (() => void) | undefined;
+        const waiting = new Promise<void>(resolve => { finishLoad = resolve; });
+        const delayedBackend: PluginReactNativeLoaderBackend = {
+            ...realBackend,
+            loadInstalledBundle: async input => {
+                await waiting;
+                return realBackend.loadInstalledBundle!(input);
+            },
+        };
+        const createScope = vi.fn(() => ({ api: Object.freeze({}), commit() {}, unwind() {} }));
+        const input = { cache, identity: externalIdentity, moduleReference, authority: accountAuthority,
+            hostPlatform: 'web', backend: delayedBackend, createScope };
+        await host.replaceAuthority(accountAuthority);
+        const pending = host.activate(input);
+        await host.unload();
+        finishLoad?.();
+        expect(await pending).toMatchObject({ ok: false, code: 'artifact_replaced' });
+        expect(createScope).not.toHaveBeenCalled();
+        expect(evaluations).toHaveBeenCalledTimes(1);
+        await host.replaceAuthority(accountAuthority);
+        expect(await host.activate({ ...input, backend: realBackend })).toEqual({ ok: true });
+        expect(createScope).toHaveBeenCalledTimes(1);
+        expect(evaluations).toHaveBeenCalledTimes(2);
     });
 
     it('isolates module-level captured APIs between concurrent authorities and activation exports', async () => {

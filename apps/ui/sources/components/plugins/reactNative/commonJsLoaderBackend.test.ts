@@ -16,47 +16,13 @@ describe('createPluginUiCommonJsLoaderBackend', () => {
             exports.activate = () => 'ready';
         `);
         const load = () => createPluginUiCommonJsLoaderBackend().loadInstalledBundle!({
-            identity, bytes, moduleReference: { exportName: 'activate' }, evaluationScopeKey: 'retry-scope',
+            identity, bytes, moduleReference: { exportName: 'activate' },
         });
         await expect(load()).rejects.toMatchObject({ code: 'module_instantiation_failed' });
         const ready = await load();
         expect(ready()).toBe('ready');
-        expect(await load()).toBe(ready);
-        expect(Reflect.get(globalThis, '__dg8FailedEvaluations')).toBe(2);
-    });
-
-    it('shares an evaluated namespace within one scope, but evaluates changed artifact identities', async () => {
-        vi.stubGlobal('__dg8LoaderEvaluations', 0);
-        onTestFinished(() => { vi.unstubAllGlobals(); });
-        const source = new TextEncoder().encode(`
-            globalThis.__dg8LoaderEvaluations++;
-            const token = {};
-            exports.activate = () => token;
-            exports.renderSurface = () => token;
-        `);
-        const identity: PluginReactNativeBundleCacheIdentity = { pluginId: 'external.dg8', contributionId: 'first', artifactId: 'runtime',
-            artifactDigest: 'sha256:dg8-original', platform: 'web' };
-        const load = (inputIdentity = identity, exportName = 'activate', evaluationScopeKey = 'same-scope') => createPluginUiCommonJsLoaderBackend()
-            .loadInstalledBundle!({ identity: inputIdentity, bytes: new Uint8Array(source), moduleReference: { exportName },
-                evaluationScopeKey });
-        const first = await load();
-        const otherExport = await load({ ...identity, contributionId: 'second' }, 'renderSurface');
-        expect(first()).toBe(otherExport());
-        expect(Reflect.get(globalThis, '__dg8LoaderEvaluations')).toBe(1);
-        await expect(load(identity, 'missing')).rejects.toMatchObject({ code: 'invalid_executable_export' });
-        expect(await load()).toBe(first);
-        const changed = await load({ ...identity, artifactDigest: 'sha256:dg8-replacement' });
-        expect(changed()).not.toBe(first());
-        expect(Reflect.get(globalThis, '__dg8LoaderEvaluations')).toBe(2);
-        await load({ ...identity, pluginId: 'other.dg8' });
-        await load({ ...identity, artifactId: 'other-runtime' });
-        expect(Reflect.get(globalThis, '__dg8LoaderEvaluations')).toBe(4);
-        const otherScope = await load(identity, 'activate', 'other-scope');
-        expect(otherScope()).not.toBe(first());
-        expect(await load(identity, 'activate', 'other-scope')).toBe(otherScope);
-        const unscoped = () => createPluginUiCommonJsLoaderBackend().loadInstalledBundle!({ identity, bytes: source,
-            moduleReference: { exportName: 'activate' } });
-        expect((await unscoped())()).not.toBe((await unscoped())());
+        expect(await load()).not.toBe(ready);
+        expect(Reflect.get(globalThis, '__dg8FailedEvaluations')).toBe(3);
     });
 
     it.each(['web', 'ios', 'android'] as const)(

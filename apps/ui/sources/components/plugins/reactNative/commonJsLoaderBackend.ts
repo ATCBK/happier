@@ -1,5 +1,5 @@
 import type { PluginReactNativeLoaderBackend } from './loader';
-import { getInstalledPluginReactNativeModuleRegistry } from './moduleRegistry';
+import { evaluatePluginUiCommonJsBundle } from './commonJsEvaluator';
 
 /** The sole installed executable-artifact backend on web, iOS, and Android. */
 export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBackend {
@@ -7,7 +7,8 @@ export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBa
         backendId: 'commonJs',
         available: true,
         diagnostics: Object.freeze([]),
-        loadInstalledBundle: async (input) => getInstalledPluginReactNativeModuleRegistry().loadExecutableExport({
+        // Current active/pending reuse belongs to the executable activation host.
+        loadInstalledBundle: async (input) => evaluatePluginUiCommonJsBundle({
             bytes: input.bytes,
             identity: {
                 pluginId: input.identity.pluginId,
@@ -15,7 +16,6 @@ export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBa
                 digest: input.identity.artifactDigest,
             },
             requestedExport: input.moduleReference?.exportName ?? 'renderSurface',
-            ...(input.evaluationScopeKey !== undefined ? { evaluationScopeKey: input.evaluationScopeKey } : {}),
         }),
     });
 }
