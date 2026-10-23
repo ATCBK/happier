@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -48,11 +48,23 @@ test('Composer dogfood public source and typecheck config contain no workspace a
     'src/index.mjs',
     'src/index.ts',
     'src/discussionComposer.mjs',
+    'src/discussionHosted.mjs',
+    '.happier-plugin/ui/hosted-web/discussion-surface-hosted/entry.ts',
     'src/issueComposer.mjs',
     'src/issueSurface.mjs',
     'src/uiBuildIdentity.mjs',
   ]) {
     const source = await readFile(join(fixtureRoot, sourceFile), 'utf8');
-    assert.doesNotMatch(source, /(?:from\s+|import\s*\()['"](?:@happier-dev\/protocol|@\/|apps\/|[^'"]*\/src\/)/u);
+    for (const [, specifier] of source.matchAll(/(?:from\s+|import\s*\()['"]([^'"]+)['"]/gu)) {
+      assert.doesNotMatch(specifier, /^(?:@happier-dev\/protocol|@\/|apps\/)/u);
+      assert.equal(isAbsolute(specifier), false);
+      if (specifier.startsWith('.')) {
+        const pathFromFixture = relative(fixtureRoot, resolve(dirname(join(fixtureRoot, sourceFile)), specifier));
+        assert.equal(pathFromFixture === '..' || pathFromFixture.startsWith(`..${sep}`) || isAbsolute(pathFromFixture), false,
+          `${sourceFile} must not import source outside the external fixture`);
+      } else {
+        assert.doesNotMatch(specifier, /\/src\//u);
+      }
+    }
   }
 });

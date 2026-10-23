@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginTestkit, createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import * as composerHelpers from 'happier-composer-external-dogfood/composer';
 
 const {
@@ -111,6 +111,55 @@ test('external fixture declares a runnable Discussion control through its real U
   assert.equal(renderer.kind, 'reactNative');
   assert.equal(renderer.artifact, 'issue-surface-native');
   assert.ok(renderer.requiredHostMethods.includes('readDiscussionComposer'));
+});
+
+test('external fixture admits both Discussion transports through its public manifest', async () => {
+  const { activate, manifest } = await loadDogfoodPlugin();
+  const control = manifest.contributes.composerControls.find(({ id }) => id === 'discussion-helper-hosted');
+  assert.ok(control, 'The installed external fixture must expose its hosted Discussion control');
+  assert.deepEqual(control.scopes, ['discussion']);
+  const renderer = manifest.contributes.ui.renderers.find(({ id }) => id === control.interaction.renderer.renderer);
+  assert.equal(renderer?.kind, 'hostedWeb');
+  assert.deepEqual(renderer.source, { kind: 'artifact', artifact: 'discussion-surface-hosted' });
+  const testkit = await createPluginTestkit({ manifest, module: { activate } });
+  await testkit.dispose();
+});
+
+test('external fixture admits both Discussion transports with safe malformed-Home and retirement probes', async () => {
+  const helpers = await import('../src/discussionComposer.mjs');
+  assert.equal(typeof helpers.probeDiscussionComposerRead, 'function');
+  const composer = { kind: 'discussion', discussionId: 'external-discussion' };
+  const fixture = await createPluginUiTestkit({
+    identity: { instanceId: 'external-probe', mountNonce: 'external-probe-nonce' },
+    authorPlugin: { id: 'acme.composer.issue-dogfood', version: '0.0.0' },
+    surfaceContext: createSurfaceContextFixture(),
+    surface: null,
+    // The framework boundary is irrelevant here: exercise the real public client and host parser.
+    adapter: { async mount() { return {
+      async snapshot() { return { revision: 0, nodes: [] }; },
+      async update() {}, async invoke() {}, async dispose() {},
+    }; } },
+    handlers: {
+      readComposer: () => ({ status: 'unavailable', reason: 'notFound' }),
+      applyComposer: () => ({ status: 'applied', revision: 1 }),
+    },
+  });
+  try {
+    const api = fixture.context.hostApi;
+    assert.deepEqual(await helpers.probeDiscussionComposerRead(api, composer), {
+      status: 'unavailable', code: 'notFound',
+    });
+    assert.deepEqual(await helpers.probeDiscussionComposerRead(api, composer, true), {
+      status: 'rejected', code: 'invalid_payload',
+    });
+    await fixture.retire('external_fixture_unmounted');
+    assert.deepEqual(await helpers.probeDiscussionComposerRead(api, composer), {
+      status: 'rejected', code: 'ui_host_unavailable',
+    });
+    assert.deepEqual(await helpers.probeDiscussionComposerWrite(api, composer, { revision: 0, text: 'Private draft' }), {
+      status: 'rejected', code: 'ui_host_unavailable',
+    });
+  } finally { await fixture.dispose(); }
 });
 
 test('external Action invocation observes current settings, host surface, and cancellation', async () => {
@@ -498,7 +547,10 @@ test('external Composer runtime proves prepare retry, acceptance timing, fresh r
     );
     const references = testkit.registration('composerReferences', 'issues');
     assert.ok(references);
-    assert.deepEqual(await references.search('EXT', new AbortController().signal), []);
+    assert.deepEqual(await references.search('EXT', new AbortController().signal), [
+      { id: 'EXT-42', label: 'Issue EXT-42', description: 'External issue context' },
+    ]);
+    assert.deepEqual(await references.search('unmatched', new AbortController().signal), []);
     assert.deepEqual(await references.resolve('EXT-42', new AbortController().signal), {
       id: 'EXT-42',
       label: 'Issue',

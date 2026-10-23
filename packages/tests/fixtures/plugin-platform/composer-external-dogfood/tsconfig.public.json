@@ -16,6 +16,8 @@
     "src/issueComposer.mjs",
     "src/issueSurface.mjs",
     "src/uiBuildIdentity.mjs",
-    "src/discussionComposer.mjs"
+    "src/discussionComposer.mjs",
+    "src/discussionHosted.mjs",
+    ".happier-plugin/ui/hosted-web/discussion-surface-hosted/entry.ts"
   ]
 }

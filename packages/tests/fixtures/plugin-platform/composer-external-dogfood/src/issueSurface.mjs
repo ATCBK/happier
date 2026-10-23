@@ -20,7 +20,13 @@ import {
   createIssueAttachmentAuthorValue,
   inspectAndReleaseIssueMediaFromCurrentComposer,
 } from './issueComposer.mjs';
-import { applyDiscussionParticipantReference, createDiscussionParticipantQuestion } from './discussionComposer.mjs';
+import {
+  applyDiscussionParticipantReference,
+  armDiscussionComposerRetirementProbe,
+  createDeclaredIssueReferenceDraft,
+  createDiscussionParticipantQuestion,
+  probeDiscussionComposerRead,
+} from './discussionComposer.mjs';
 
 export { attachIssueWithoutControl };
 
@@ -113,12 +119,14 @@ function ComposerIssueCompact() {
 }
 
 /** The real mounted handle owns the draft, observation and lock; this fixture owns only its controls. */
-function DiscussionComposerSurface() {
+/** @param {{signal:AbortSignal}} props */
+function DiscussionComposerSurface({ signal }) {
   const hostApi = usePluginHostApi();
   const handle = useComposer().current();
   const view = useComposerView(handle);
   const [participant, setParticipant] = useState('');
   const [status, setStatus] = useState('');
+  const [retirementArmed, setRetirementArmed] = useState(false);
   const lock = useRef(/** @type {import('@happier-dev/plugin-sdk').Disposable | null} */ (null));
   useEffect(() => () => {
     void lock.current?.dispose();
@@ -148,6 +156,14 @@ function DiscussionComposerSurface() {
         setStatus(result.status === 'applied' ? 'Participant mention applied. Close this control and use Send.' : `Composer: ${result.status}`);
       }),
     }),
+    createElement(Button, { title: 'Apply declared Issue 42 reference', variant: 'plain', testID: 'discussion-helper-apply-issue',
+      disabled: !ready || !snapshot.state.editable || !snapshot.capabilities.references,
+      onPress: () => run(async () => {
+        if (handle?.ref.kind !== 'discussion') return;
+        const result = await applyDiscussionParticipantReference(hostApi, handle.ref, createDeclaredIssueReferenceDraft());
+        setStatus(`Issue reference: ${result.status}`);
+      }),
+    }),
     createElement(Button, { title: 'Focus composer', variant: 'plain', testID: 'discussion-helper-focus', disabled: !ready,
       onPress: () => run(async () => { if (handle) setStatus(`Composer: ${(await handle.focus()).status}`); }),
     }),
@@ -164,6 +180,22 @@ function DiscussionComposerSurface() {
         }
       }),
     }),
+    createElement(Button, { title: 'Probe forged Home refusal', variant: 'plain', testID: 'discussion-helper-forged-home', disabled: !ready,
+      onPress: () => run(async () => {
+        if (!handle) return;
+        const result = await probeDiscussionComposerRead(hostApi, handle.ref, true);
+        console.info('external-composer-forged-home', JSON.stringify(result));
+        setStatus(JSON.stringify(result));
+      }),
+    }),
+    createElement(Button, { title: 'Probe after this surface retires', variant: 'plain', testID: 'discussion-helper-retire', disabled: !ready || retirementArmed,
+      onPress: () => {
+        if (!handle || !snapshot) return;
+        armDiscussionComposerRetirementProbe(hostApi, handle.ref, signal, snapshot);
+        setRetirementArmed(true);
+        setStatus('Retirement probe armed. Close this control or withdraw this plugin.');
+      },
+    }),
     status ? createElement(Status, { tone: 'neutral', label: status, testID: 'discussion-helper-status' }) : null,
   );
 }
@@ -171,14 +203,14 @@ function DiscussionComposerSurface() {
 /**
  * @param {import('@happier-dev/plugin-sdk/ui').RenderContext} context
  */
-function ComposerIssueSurface({ launchInput }) {
+function ComposerIssueSurface({ launchInput, signal }) {
   const composers = useComposer();
   const [pickerStatus, setPickerStatus] = useState(
     /** @type {string | undefined} */ (undefined),
   );
   const role = readSurfaceRole(launchInput);
 
-  if (role === 'controlInteraction') return createElement(DiscussionComposerSurface);
+  if (role === 'controlInteraction') return createElement(DiscussionComposerSurface, { signal });
 
   if (role === 'controlCompact') {
     return createElement(ComposerIssueCompact);

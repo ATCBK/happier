@@ -325,6 +325,18 @@ const issueDogfoodPlugin = definePlugin({
         'focusComposer',
         'acquireComposerInputLock',
       ],
+    }, {
+      id: 'discussion-surface-hosted',
+      kind: 'hostedWeb',
+      source: { kind: 'artifact', artifact: 'discussion-surface-hosted' },
+      requiredHostMethods: [
+        'activeComposer',
+        'readDiscussionComposer',
+        'watchComposer',
+        'applyComposer',
+        'focusComposer',
+        'acquireComposerInputLock',
+      ],
     }],
   },
   resources: {
@@ -346,10 +358,13 @@ const issueDogfoodPlugin = definePlugin({
         title: 'Issues',
         icon: 'error',
         triggers: ['@', '$'],
-        search: async () => [],
+        search: async (query) => [
+          { id: 'issue-42', label: 'Issue 42', description: 'External issue context' },
+          { id: 'EXT-42', label: 'Issue EXT-42', description: 'External issue context' },
+        ].filter(candidate => `${candidate.id} ${candidate.label}`.toLowerCase().includes(query.toLowerCase())),
         resolve: async (candidateId) => ({
           id: candidateId,
-          label: 'Issue',
+          label: candidateId === 'issue-42' ? 'Issue 42' : 'Issue',
           context: `External issue ${candidateId}`,
         }),
       }),
@@ -385,6 +400,17 @@ const issueDogfoodPlugin = definePlugin({
       }),
     },
     controls: {
+      'discussion-helper-hosted': defineComposerControl({
+        label: 'Discussion helper (web)',
+        icon: 'preview',
+        scopes: ['discussion'],
+        interaction: {
+          kind: 'surface',
+          renderer: 'discussion-surface-hosted',
+          presentation: 'popover',
+          layout: 'content',
+        },
+      }),
       'discussion-helper': defineComposerControl({
         label: 'Discussion helper',
         icon: 'preview',
