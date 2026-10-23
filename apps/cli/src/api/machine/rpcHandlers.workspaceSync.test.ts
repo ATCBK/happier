@@ -38,7 +38,7 @@ describe('workspace sync machine RPC handlers', () => {
       rpcHandlerManager,
       service: {
         controller: {
-          get: vi.fn(), list: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
+          get: vi.fn(), list: vi.fn(), watchStatuses: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
           listConflicts: vi.fn(), listRelationships: vi.fn(), inspectConflict: vi.fn(),
           resolveConflict: vi.fn(), readFile: vi.fn(),
         },
@@ -79,7 +79,7 @@ describe('workspace sync machine RPC handlers', () => {
       rpcHandlerManager,
       service: {
         controller: {
-          get: vi.fn(), list: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
+          get: vi.fn(), list: vi.fn(), watchStatuses: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
           listConflicts: vi.fn(), listRelationships, inspectConflict,
           resolveConflict: vi.fn(), readFile: vi.fn(),
         },
@@ -116,7 +116,7 @@ describe('workspace sync machine RPC handlers', () => {
       rpcHandlerManager,
       service: {
         controller: {
-          get: vi.fn(), list: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
+          get: vi.fn(), list: vi.fn(), watchStatuses: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
           listConflicts: vi.fn(), listRelationships: vi.fn(), inspectConflict: vi.fn(),
           resolveConflict: vi.fn(), readFile: vi.fn(),
         },
@@ -159,6 +159,7 @@ describe('workspace sync machine RPC handlers', () => {
     const controller = {
       get: vi.fn(async () => status),
       list: vi.fn(async () => [status]),
+      watchStatuses: vi.fn(async () => ({ changed: false as const })),
       flush: vi.fn(async () => status),
       pause: vi.fn(async () => ({ ...status, state: 'paused' as const })),
       resume: vi.fn(async () => status),
@@ -271,7 +272,7 @@ describe('workspace sync machine RPC handlers', () => {
       rpcHandlerManager: first.rpcHandlerManager,
       service: {
         controller: {
-          get: vi.fn(), list: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
+          get: vi.fn(), list: vi.fn(), watchStatuses: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
           listConflicts: vi.fn(), listRelationships: vi.fn(), inspectConflict: vi.fn(),
           resolveConflict: vi.fn(), readFile: vi.fn(),
         },
@@ -327,7 +328,7 @@ describe('workspace sync target bootstrap RPC handlers', () => {
       rpcHandlerManager,
       service: {
         controller: {
-          get: vi.fn(), list: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
+          get: vi.fn(), list: vi.fn(), watchStatuses: vi.fn(), flush: vi.fn(), pause: vi.fn(), resume: vi.fn(), terminate: vi.fn(),
           listConflicts: vi.fn(), listRelationships: vi.fn(), inspectConflict: vi.fn(),
           resolveConflict: vi.fn(), readFile: vi.fn(),
         },

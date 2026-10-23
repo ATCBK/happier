@@ -751,6 +751,7 @@ function managedSync(overrides: Partial<ManagedWorkspaceSync> = {}): ManagedWork
     resolveLocalResolutionEndpoint: vi.fn(async () => null),
     borrowSourceRootForCopy: vi.fn(async () => null),
     get: vi.fn(async () => null), list: vi.fn(async () => []), subscribe: vi.fn(() => ({ async *[Symbol.asyncIterator]() {} })),
+    watchStatuses: vi.fn(async () => ({ changed: false as const })),
     ensure: vi.fn(async () => relationshipStatus), copyOnce: vi.fn(async () => copyStatus),
     flush: vi.fn(async () => relationshipStatus), pause: vi.fn(async () => ({ ...relationshipStatus, state: 'paused' as const })),
     resume: vi.fn(async () => relationshipStatus), terminate: vi.fn(async () => undefined),

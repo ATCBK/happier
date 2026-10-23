@@ -1044,6 +1044,22 @@ export const WorkspaceSyncStatusV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 export type WorkspaceSyncStatusV1 = z.infer<typeof WorkspaceSyncStatusV1Schema>;
 
+/** Private current-development Machine watch; the daemon owns its park window. */
+export const WorkspaceSyncStatusWatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sinceRevision: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
+}));
+export type WorkspaceSyncStatusWatchRequestV1 = z.infer<typeof WorkspaceSyncStatusWatchRequestV1Schema>;
+export const WorkspaceSyncStatusWatchSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  statuses: z.readonly(z.array(WorkspaceSyncStatusV1Schema)),
+}));
+export type WorkspaceSyncStatusWatchSnapshotV1 = z.infer<typeof WorkspaceSyncStatusWatchSnapshotV1Schema>;
+export const WorkspaceSyncStatusWatchResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('changed', [
+  z.strictObject({ changed: z.literal(false) }),
+  z.strictObject({ changed: z.literal(true), snapshot: WorkspaceSyncStatusWatchSnapshotV1Schema }),
+]));
+export type WorkspaceSyncStatusWatchResultV1 = z.infer<typeof WorkspaceSyncStatusWatchResultV1Schema>;
+
 /**
  * Controller-scoped relationship inventory for the read Actions. The queried
  * controller is addressed by transport; it never appears in the body. An

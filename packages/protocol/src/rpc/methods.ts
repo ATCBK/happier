@@ -334,6 +334,7 @@ export const RPC_METHODS = {
   DAEMON_SESSION_HANDOFF_STATUS_GET_V3: 'daemon.sessionHandoff.status.get.v3',
   DAEMON_WORKSPACE_SYNC_GET: 'daemon.workspaceSync.get.v1',
   DAEMON_WORKSPACE_SYNC_LIST: 'daemon.workspaceSync.list.v1',
+  DAEMON_WORKSPACE_SYNC_WATCH: 'daemon.workspaceSync.watch.v1',
   DAEMON_WORKSPACE_SYNC_FLUSH: 'daemon.workspaceSync.flush.v1',
   DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN: 'daemon.workspaceSync.prepareBetween.v1',
   DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE: 'daemon.workspaceSync.handoffSourcePhase.v1',

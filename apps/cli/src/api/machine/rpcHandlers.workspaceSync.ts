@@ -4,6 +4,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RpcError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { z } from 'zod/mini';
 import type { RpcHandler, RpcHandlerRegistrar, RpcHandlerContext } from '../rpc/types';
+import { WorkspaceSyncStatusWatchRequestV1Schema, WorkspaceSyncStatusWatchResultV1Schema,
+  type WorkspaceSyncStatusWatchRequestV1, type WorkspaceSyncStatusWatchResultV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, WorkspaceSyncHandoffSourcePhaseResultV1Schema,
   type WorkspaceSyncHandoffSourcePhaseRequestV1, type WorkspaceSyncHandoffSourcePhaseResultV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import type { DirectPeerOnDemandTransferScope } from '@/machines/transfer/directPeerTransport';
@@ -19,6 +21,7 @@ import { WorkspaceSyncCommittedCopyTargetV1Schema, WorkspaceSyncCommittedCopyTar
 export type WorkspaceSyncRpcController = Readonly<{
   get(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1 | null>;
   list(signal?: AbortSignal): Promise<readonly WorkspaceSyncStatusV1[]>;
+  watchStatuses(request: WorkspaceSyncStatusWatchRequestV1, signal?: AbortSignal): Promise<WorkspaceSyncStatusWatchResultV1>;
   flush(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
   pause(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
   resume(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
@@ -270,6 +273,12 @@ export function registerMachineWorkspaceSyncRpcHandlers(params: Readonly<{
     requireEmptyRequest(raw);
     const statuses = await service().controller.list(signal(context?.signal));
     return { statuses: statuses.map((status) => WorkspaceSyncStatusV1Schema.parse(status)) };
+  });
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH, async (raw, context) => {
+    const request = WorkspaceSyncStatusWatchRequestV1Schema.parse(raw);
+    return WorkspaceSyncStatusWatchResultV1Schema.parse(
+      await service().controller.watchStatuses(request, signal(context?.signal)),
+    );
   });
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH, async (raw, context) => {

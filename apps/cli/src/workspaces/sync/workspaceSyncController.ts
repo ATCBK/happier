@@ -22,6 +22,9 @@ import { observeWorkspaceSyncEntryAtRoot, readWorkspaceSyncFileAtRoot } from './
 import { assertWorkspaceSyncStatusClean, isWorkspaceSyncStatusClean } from './workspaceSyncPreparation';
 import type { LiveWorkProducerV1, LiveWorkInventoryV1, LiveWorkItemV1 } from '@/daemon/lifecycle/managedActivity';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
+import { createParkWatch } from '@/daemon/lifecycle/parkWatch';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import type { WorkspaceSyncStatusWatchRequestV1, WorkspaceSyncStatusWatchResultV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 export type WorkspaceSyncResolvedRef = Readonly<{
   serverId?: string;
@@ -300,6 +303,7 @@ function areWorkspaceSyncStatusesEqual(left: WorkspaceSyncStatusV1, right: Works
     && left.endpointStates.beta?.transitionProblemCount === right.endpointStates.beta?.transitionProblemCount
     && left.conflictCount === right.conflictCount
     && left.lastCycleObservedAtMs === right.lastCycleObservedAtMs
+    && left.lastCleanSyncAtMs === right.lastCleanSyncAtMs
     && left.errorCode === right.errorCode;
 }
 
@@ -351,7 +355,6 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   private readonly probeGit: NonNullable<WorkspaceSyncControllerOptions['probeGitRuntimeDependency']>;
   private readonly assertStateAvailable: () => void;
   private readonly onStatusPublished: (status: WorkspaceSyncStatusV1) => void;
-  private readonly observePersistentStatus: boolean;
   private readonly definitions = new Map<string, WorkspaceSyncRelationshipV1>();
   /** Prepared Action relationships retained until their matching Settings record is published. */
   private readonly transientDefinitions = new Set<string>();
@@ -379,6 +382,15 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   private readonly queues = new Map<string, { task: Promise<unknown>; material: boolean }>();
   private readonly activityListeners = new Set<() => void>();
   private readonly listeners = new Map<string, Set<(status: WorkspaceSyncStatusV1) => void>>();
+  private statusRevision = 0;
+  private readonly statusWatchListeners = new Set<() => void>();
+  private readonly statusWatches = createParkWatch({
+    onWatcherCountChanged: () => {
+      for (const id of new Set([...this.statuses.keys(), ...this.definitions.keys(), ...this.statusObservations.keys()])) {
+        this.reconcileStatusObservation(id);
+      }
+    },
+  });
   private readonly statusObservations = new Map<string, Readonly<{
     abort: AbortController;
     task: Promise<void>;
@@ -425,7 +437,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     }
   }
 
-  constructor(options: WorkspaceSyncControllerOptions) { assertCompleteAdapter(options.adapter); this.adapter = options.adapter; this.lifecycle = options.lifecycle; this.localServerId = options.localServerId?.trim() || null; this.localMachineId = options.localMachineId; this.resolveRef = options.resolveWorkspaceRef; this.rootOwnershipManager = options.rootOwnershipManager; this.resolveDefinition = options.resolveRelationshipDefinition ?? (() => null); this.prepareTarget = options.prepareRelationshipTarget ?? (async () => undefined); this.recoverCopyTarget = options.recoverCopyOnceTarget; this.borrowLinkedSourceRoot = options.borrowLinkedSourceRoot; this.openMachineCarrier = options.openMachineCarrierTunnel; this.openLocalAgent = options.openLocalWorkspaceAgentStream; this.readAtTarget = options.readFileAtTarget; this.observeEntryAtTarget = options.observeEntryAtTarget; this.stageConflictResolutionAtTarget = options.stageConflictResolutionAtTarget; this.applyStagedConflictResolutionAtTarget = options.applyStagedConflictResolutionAtTarget; this.discardStagedConflictResolutionAtTarget = options.discardStagedConflictResolutionAtTarget; this.releaseConflictResolutionCaptureAtSource = options.releaseConflictResolutionCaptureAtSource; this.recoverConflictResolutionAtTarget = options.recoverConflictResolutionAtTarget; this.resolveAllDefinitions = options.resolveAllRelationshipDefinitions; this.assertConflictResolutionAuthorized = options.assertConflictResolutionAuthorized; this.probeGit = options.probeGitRuntimeDependency ?? (async (signal) => await probeScmExecutableAvailable({ bin: 'git', ...(signal ? { signal } : {}) })); this.assertStateAvailable = options.assertLegacyStateAvailable ?? (() => undefined); this.observePersistentStatus = options.onStatusPublished !== undefined; this.onStatusPublished = options.onStatusPublished ?? (() => undefined); }
+  constructor(options: WorkspaceSyncControllerOptions) { assertCompleteAdapter(options.adapter); this.adapter = options.adapter; this.lifecycle = options.lifecycle; this.localServerId = options.localServerId?.trim() || null; this.localMachineId = options.localMachineId; this.resolveRef = options.resolveWorkspaceRef; this.rootOwnershipManager = options.rootOwnershipManager; this.resolveDefinition = options.resolveRelationshipDefinition ?? (() => null); this.prepareTarget = options.prepareRelationshipTarget ?? (async () => undefined); this.recoverCopyTarget = options.recoverCopyOnceTarget; this.borrowLinkedSourceRoot = options.borrowLinkedSourceRoot; this.openMachineCarrier = options.openMachineCarrierTunnel; this.openLocalAgent = options.openLocalWorkspaceAgentStream; this.readAtTarget = options.readFileAtTarget; this.observeEntryAtTarget = options.observeEntryAtTarget; this.stageConflictResolutionAtTarget = options.stageConflictResolutionAtTarget; this.applyStagedConflictResolutionAtTarget = options.applyStagedConflictResolutionAtTarget; this.discardStagedConflictResolutionAtTarget = options.discardStagedConflictResolutionAtTarget; this.releaseConflictResolutionCaptureAtSource = options.releaseConflictResolutionCaptureAtSource; this.recoverConflictResolutionAtTarget = options.recoverConflictResolutionAtTarget; this.resolveAllDefinitions = options.resolveAllRelationshipDefinitions; this.assertConflictResolutionAuthorized = options.assertConflictResolutionAuthorized; this.probeGit = options.probeGitRuntimeDependency ?? (async (signal) => await probeScmExecutableAvailable({ bin: 'git', ...(signal ? { signal } : {}) })); this.assertStateAvailable = options.assertLegacyStateAvailable ?? (() => undefined); this.onStatusPublished = options.onStatusPublished ?? (() => undefined); }
 
   private assertLocalSourcePlacement(ref: WorkspaceSyncResolvedRef | null): asserts ref is WorkspaceSyncResolvedRef {
     const serverMatches = this.localServerId === null || ref?.serverId?.trim() === this.localServerId;
@@ -590,7 +602,10 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     }
   }
   private publish(status: WorkspaceSyncStatusV1): WorkspaceSyncStatusV1 {
+    const previous = this.statuses.get(status.relationshipId);
+    if (previous && areWorkspaceSyncStatusesEqual(previous, status)) return previous;
     this.statuses.set(status.relationshipId, status);
+    this.notifyStatusWatch();
     this.notifyActivity();
     for (const listener of this.listeners.get(status.relationshipId) ?? []) listener(status);
     this.onStatusPublished(status);
@@ -599,12 +614,14 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   }
 
   private shouldObserveStatus(id: string): boolean {
-    if (this.shuttingDown) return false;
-    if ((this.listeners.get(id)?.size ?? 0) > 0) return true;
-    const definition = this.definitions.get(id);
-    return this.observePersistentStatus
-      && definition?.enabled === true
-      && !this.transientDefinitions.has(id);
+    // Publication forwards our own commands; it is not a status consumer.
+    return !this.shuttingDown && ((this.listeners.get(id)?.size ?? 0) > 0 || this.statusWatches.watcherCount() > 0);
+  }
+
+  private notifyStatusWatch(): void {
+    // Match the existing Machine-watch timestamp cursor convention across restarts.
+    this.statusRevision = Math.max(this.statusRevision + 1, Date.now());
+    for (const listener of this.statusWatchListeners) listener();
   }
 
   private reconcileStatusObservation(id: string): void {
@@ -635,9 +652,9 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
           await this.lifecycle.start();
           return await this.adapter.get(id, signal);
         }, false);
-        if (observed && !signal.aborted && this.shouldObserveStatus(id)) {
-          const previous = this.statuses.get(id);
-          if (!previous || !areWorkspaceSyncStatusesEqual(previous, observed)) this.publish(observed);
+        if (!signal.aborted && this.shouldObserveStatus(id)) {
+          if (observed) this.publish(observed);
+          else if (this.statuses.delete(id)) this.notifyStatusWatch();
         }
       } catch (error) {
         if (signal.aborted || this.shuttingDown || (error instanceof Error && error.name === 'AbortError')) return;
@@ -1182,6 +1199,39 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   }
   async get(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1 | null> { this.assertStateAvailable(); abortIfRequested(signal); await this.lifecycle.start(); return await this.adapter.get(id, signal); }
   async list(signal?: AbortSignal): Promise<readonly WorkspaceSyncStatusV1[]> { this.assertStateAvailable(); abortIfRequested(signal); await this.lifecycle.start(); return await this.adapter.list(signal); }
+  async watchStatuses(request: WorkspaceSyncStatusWatchRequestV1, signal?: AbortSignal): Promise<WorkspaceSyncStatusWatchResultV1> {
+    this.assertStateAvailable();
+    if (signal?.aborted) return { changed: false };
+    if (this.shuttingDown) throw Object.assign(new Error('Workspace sync runtime is unavailable'), { code: 'workspace_sync_unavailable' });
+    // A new viewer reads fresh, including changes made while nobody was watching.
+    // Renewals use the retained projection; only parked demand observes the engine.
+    if (request.sinceRevision === undefined) {
+      const previous = new Map(this.statuses);
+      const statuses = await this.list(signal);
+      abortIfRequested(signal);
+      const ids = new Set(statuses.map(status => status.relationshipId));
+      for (const [id, status] of previous) {
+        if (!ids.has(id) && this.statuses.get(id) === status && this.statuses.delete(id)) this.notifyStatusWatch();
+      }
+      // A lifecycle command can publish while the native read is in flight.
+      // Preserve its newer fact rather than overwriting it with that read.
+      for (const status of statuses) {
+        if (this.statuses.get(status.relationshipId) === previous.get(status.relationshipId)) this.publish(status);
+      }
+    }
+    const result = await this.statusWatches.parkWatch({
+      isNewer: () => request.sinceRevision !== this.statusRevision,
+      subscribe: listener => {
+        this.statusWatchListeners.add(listener);
+        return () => { this.statusWatchListeners.delete(listener); };
+      },
+      read: () => ({ revision: this.statusRevision, statuses: [...this.statuses.values()] }),
+      signal,
+      windowMs: MACHINE_WATCH_WINDOW_MS,
+    });
+    if (this.shuttingDown) throw Object.assign(new Error('Workspace sync runtime is unavailable'), { code: 'workspace_sync_unavailable' });
+    return result;
+  }
   async ensure(definition: WorkspaceSyncRelationshipV1, signal?: AbortSignal, preparation?: WorkspaceSyncRelationshipPreparation): Promise<WorkspaceSyncStatusV1> {
     this.assertStateAvailable();
     const valid = validateWorkspaceSyncRelationship(definition);
@@ -2387,6 +2437,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   }
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    for (const listener of this.statusWatchListeners) listener();
     this.notifyActivity();
     const cleanupFailures: unknown[] = [];
     try {
@@ -2702,7 +2753,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
         await this.releaseRelationshipOwnership(id);
         this.definitions.delete(id);
         this.transientDefinitions.delete(id);
-        this.statuses.delete(id);
+        if (this.statuses.delete(id)) this.notifyStatusWatch();
         this.reconcileStatusObservation(id);
       }
       const statuses: WorkspaceSyncStatusV1[] = [];

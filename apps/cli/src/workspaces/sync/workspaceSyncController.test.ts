@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceSyncController } from './workspaceSyncController';
 import { deriveWorkspaceSyncConflictAsidePaths } from '@happier-dev/protocol';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1, type WorkspaceSyncStatusV1 } from './workspaceSyncTypes';
-import { deriveWorkspaceSyncEndpointId } from './transport/workspaceSyncBrokerProtocol';
+import { deriveWorkspaceSyncEndpointId, type MutagenControlCommandV1, type MutagenSessionSummaryV1 } from './transport/workspaceSyncBrokerProtocol';
 import { access, mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,11 @@ import { createWorkspaceRootOwnershipManager } from './workspaceSyncRootOwnershi
 import { createWorkspaceSyncMutagenAdapter } from './workspaceSyncMutagenAdapter';
 import { createWorkspaceSyncTargetAuthority } from './workspaceSyncTargetAuthority';
 import type { ActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { registerMachineWorkspaceSyncRpcHandlers } from '@/api/machine/rpcHandlers.workspaceSync';
+import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { WorkspaceSyncStatusWatchResultV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
 const definition = { v: 1 as const, relationshipId: 'r1', controllerMachineId: 'm1', alphaWorkspaceRefId: 'a', betaWorkspaceRefId: 'b', mode: 'keep_synced' as const, contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, enabled: true, createdAtMs: 1, updatedAtMs: 1 };
@@ -2957,29 +2962,156 @@ describe('WorkspaceSyncController', () => {
     await controller.shutdown();
   });
 
-  it('publishes engine-only status changes for enabled production relationships and stops on shutdown', async () => {
-    let observedStatus = status;
-    const get = vi.fn(async () => observedStatus);
+  it('does no status observation work for ten settled minutes without a subscriber, even with a publication callback', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let engineSession: MutagenSessionSummaryV1 = {
+      identifier: 'mutagen-r1', name: 'r1',
+      labels: {
+        'external.owner': 'happier-workspace-sync', 'external.relationship_id': 'r1',
+        'external.endpoint_role': 'alpha|beta', 'external.schema': 'workspace-sync-v1',
+        'external.policy_digest': definition.contentPolicy.policyDigest,
+        'external.alpha_workspace_ref_id': 'a', 'external.beta_workspace_ref_id': 'b',
+        'external.controller_machine_id': 'm1', 'external.operation_kind': 'relationship',
+        'external.policy_selection': 'all_files',
+      },
+      alpha: { protocol: 'external', host: deriveWorkspaceSyncEndpointId('r1', 'alpha'), path: '', state: status.endpointStates.alpha },
+      beta: { protocol: 'external', host: deriveWorkspaceSyncEndpointId('r1', 'beta'), path: '', state: status.endpointStates.beta },
+      mode: 'one-way-safe', paused: false, status: 'watching', successfulCycles: 1, conflictCount: 0,
+    };
+    // Native broker commands and process/root handles are the system boundaries.
+    const send = vi.fn(async (command: MutagenControlCommandV1) => {
+      if (command.t === 'list') return { sessions: [engineSession], nextCursor: null };
+      if (command.t === 'get') return engineSession;
+      throw new Error(`Unexpected broker command: ${command.t}`);
+    });
     const published: WorkspaceSyncStatusV1[] = [];
+    const managerLifecycle = lifecycle();
     const controller = new WorkspaceSyncController({
-      adapter: completeAdapter({ get }),
-      lifecycle: lifecycle(),
+      adapter: createWorkspaceSyncMutagenAdapter({ send, resolveWorkspaceRef: fixtureWorkspaceRef }),
+      lifecycle: managerLifecycle,
       rootOwnershipManager: rootOwnership(),
       localMachineId: 'm1',
       resolveWorkspaceRef: fixtureWorkspaceRef,
       onStatusPublished: (next) => published.push(next),
     });
-    await controller.ensure(definition);
-    await Promise.resolve();
-    published.length = 0;
+    try {
+      await controller.ensure(definition);
+      await vi.advanceTimersByTimeAsync(0);
+      send.mockClear();
+      managerLifecycle.start.mockClear();
+      published.length = 0;
 
-    observedStatus = { ...status, state: 'disconnected' };
-    await vi.waitFor(() => expect(published).toEqual([{ ...status, state: 'disconnected' }]), { timeout: 2_000 });
+      engineSession = { ...engineSession, status: 'disconnected' };
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(send.mock.calls.length).toBe(0);
+      expect(managerLifecycle.start).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
 
-    await controller.shutdown();
-    const callsAfterShutdown = get.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    expect(get).toHaveBeenCalledTimes(callsAfterShutdown);
+      const abort = new AbortController();
+      const iterator = controller.subscribe('r1', abort.signal)[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({ done: false, value: { state: 'disconnected' } });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0].t).toBe('get');
+      abort.abort();
+      await iterator.next();
+      send.mockClear();
+      managerLifecycle.start.mockClear();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(send.mock.calls.length).toBe(0);
+      expect(managerLifecycle.start).not.toHaveBeenCalled();
+
+      // Real Machine registration -> controller -> adapter -> native broker boundary.
+      const handlers = new Map<string, (raw: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+      registerMachineWorkspaceSyncRpcHandlers({
+        rpcHandlerManager: { registerHandler<TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) {
+          handlers.set(method, (raw, context) => Promise.resolve(handler(raw as TRequest, context)));
+        } },
+        service: { controller, prepareBetween: vi.fn(), relationshipOwner: { setEnabled: vi.fn(), stop: vi.fn(), create: vi.fn() },
+          readFileAtTarget: vi.fn(), observeEntryAtTarget: vi.fn(), preflightHandoffTargetReplacement: vi.fn(),
+          prepareBootstrapAtTarget: vi.fn(), releaseBootstrapAtTarget: vi.fn(), inspectRetiredState: vi.fn() },
+      });
+      const watch = handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_WATCH);
+      if (!watch) throw new Error('Workspace Sync status watch is not registered');
+      const first = WorkspaceSyncStatusWatchResultV1Schema.parse(await watch({}));
+      expect(first).toMatchObject({ changed: true, snapshot: { statuses: [{ state: 'disconnected' }] } });
+      if (!first.changed) throw new Error('Initial watch did not return fresh status');
+      await expect(watch({ sinceRevision: first.snapshot.revision, rootPath: '/caller-controlled' })).rejects.toThrow();
+      let revision = first.snapshot.revision;
+      let latest = first.snapshot;
+      let watchCalls = 0;
+      const parkedAbort = new AbortController();
+      const observing = (async () => {
+        while (!parkedAbort.signal.aborted) {
+          watchCalls += 1;
+          const reply = WorkspaceSyncStatusWatchResultV1Schema.parse(await watch({ sinceRevision: revision }, { signal: parkedAbort.signal }));
+          if (reply.changed) { latest = reply.snapshot; revision = reply.snapshot.revision; }
+        }
+      })();
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        send.mockClear();
+        published.length = 0;
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(watchCalls - 1).toBe(600_000 / MACHINE_WATCH_WINDOW_MS);
+        expect(send.mock.calls.length).toBeGreaterThan(0);
+        expect(send.mock.calls.every(([command]) => command.t === 'get')).toBe(true);
+        expect(published).toEqual([]);
+
+        engineSession = { ...engineSession, status: 'watching' };
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(latest.statuses[0]?.state).toBe('watching');
+        expect(published).toHaveLength(1);
+        send.mockRejectedValueOnce(new Error('engine temporarily unavailable'));
+        engineSession = { ...engineSession, status: 'watching', conflictCount: 1 };
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(latest.statuses[0]?.state).toBe('watching');
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(latest.statuses[0]).toMatchObject({ state: 'conflicted', conflictCount: 1 });
+        const secondAbort = new AbortController();
+        const secondWatch = watch({ sinceRevision: revision }, { signal: secondAbort.signal });
+        try {
+          parkedAbort.abort();
+          await observing;
+          engineSession = { ...engineSession, conflictCount: 3 };
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(WorkspaceSyncStatusWatchResultV1Schema.parse(await secondWatch))
+            .toMatchObject({ changed: true, snapshot: { statuses: [{ conflictCount: 3 }] } });
+        } finally { secondAbort.abort(); }
+      } finally {
+        parkedAbort.abort();
+        await observing;
+      }
+      send.mockClear();
+      managerLifecycle.start.mockClear();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(send).not.toHaveBeenCalled();
+      expect(managerLifecycle.start).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      engineSession = { ...engineSession, status: 'disconnected', conflictCount: 0 };
+      expect(WorkspaceSyncStatusWatchResultV1Schema.parse(await watch({})))
+        .toMatchObject({ changed: true, snapshot: { statuses: [{ state: 'disconnected' }] } });
+      let releaseList!: () => void;
+      let enteredList!: () => void;
+      const listGate = new Promise<void>(resolve => { releaseList = resolve; });
+      const listStarted = new Promise<void>(resolve => { enteredList = resolve; });
+      send.mockImplementationOnce(async command => {
+        if (command.t !== 'list') throw new Error('Expected a fresh watch read');
+        const captured = engineSession;
+        enteredList();
+        await listGate;
+        return { sessions: [captured], nextCursor: null };
+      });
+      const staleRead = watch({});
+      await listStarted;
+      engineSession = { ...engineSession, status: 'watching', conflictCount: 2 };
+      try { await controller.ensure(definition); } finally { releaseList(); }
+      expect(WorkspaceSyncStatusWatchResultV1Schema.parse(await staleRead))
+        .toMatchObject({ changed: true, snapshot: { statuses: [{ state: 'conflicted', conflictCount: 2 }] } });
+    } finally {
+      await controller.shutdown();
+      vi.useRealTimers();
+    }
   });
 
   it('preserves the last known status across a transient observation failure and publishes recovery', async () => {
