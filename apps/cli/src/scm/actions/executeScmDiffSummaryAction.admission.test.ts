@@ -413,10 +413,16 @@ describe('SCM generation through real host admission', () => {
                 } };
                 const pendingInputs = new Map<string, ExecutionRunAdmittedPendingInputV1[]>();
                 const durableAcceptance = new Map<string, DurableProviderInputAcceptanceV1>();
+                const committedMessages: Parameters<MutableApiSessionClientFixture['enqueueAgentMessageCommitted']>[] = [];
                 // Pending custody is the parent Session's network/persistence boundary.
                 // Its real retained consumer, delivery, native codec and publisher run below.
                 const session: MutableApiSessionClientFixture = createMutableApiSessionClientFixture({ sessionId,
                     metadata: createTestMetadata({ path: fixture.rootPath, flavor: 'claude' }), overrides: {
+                    // This online Session boundary commits and acknowledges the host's saved-result notice.
+                    enqueueAgentMessageCommitted: async (...message) => {
+                        committedMessages.push(message);
+                        return { persisted: true, delivered: true };
+                    },
                     enqueueSessionUserMessageWithDisposition: async input => {
                         if (input.recipient?.kind !== 'execution_run') throw new Error('Expected exact Run recipient');
                         observedPrompts.push(input.text);
@@ -673,6 +679,9 @@ describe('SCM generation through real host admission', () => {
                         resultId })).toMatchObject({ success: true, result: { output: { outputs: {
                             walkthrough: { state: 'complete' }, commitPlan: { state: 'complete' },
                         } } } }));
+                    const { ScmDiffSummaryPublicationReceiptSchema } = await import('@happier-dev/protocol/scm/diffSummaryResult');
+                    await vi.waitFor(() => expect(committedMessages.some(([, body, options]) => body.type === 'message'
+                        && ScmDiffSummaryPublicationReceiptSchema.safeParse(options?.meta?.scmResultUpdate).success)).toBe(true));
                     expect(observedModel).toBe(modelId);
                     const retainedRun = manager.getPublic(output.runId);
                     if (!retainedRun) throw new Error('Missing retained generation Run');
