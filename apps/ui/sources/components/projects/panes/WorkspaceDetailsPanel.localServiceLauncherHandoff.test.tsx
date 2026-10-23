@@ -8,11 +8,6 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storageStore';
 import {
-    applyLocalServiceLauncherSnapshot,
-    createLocalServiceLauncherState,
-} from '@/sync/domains/local/services/launch';
-import { createBrowserLaunchpadDetailsTab } from '@/components/browser/surfaces';
-import {
     EMPTY_PLUGIN_BROWSER_PROJECTION,
     type PluginBrowserProjectionModel,
 } from '@/sync/domains/plugins/browser/targets';
@@ -20,6 +15,9 @@ import { installSessionDetailsPanelCommonModuleMocks } from '@/components/sessio
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 
 installSessionDetailsPanelCommonModuleMocks();
+// These runtime barrels load RPC clients; the incumbent pane harness installs Socket first.
+const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
+const { createBrowserLaunchpadDetailsTab } = await import('@/components/browser/surfaces');
 await loadSyncSingletonForTests();
 const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
 const runtime = installSessionPaneRuntimeTestHarness({

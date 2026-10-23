@@ -111,7 +111,7 @@ function ServiceOperationObserver(props: Readonly<{
     const machines = new Set([props.source.machineId, operation!.snapshot.scope.machineId]);
     const destination = props.attachment.destination;
     if (destination.kind === 'workers' && destination.destination.kind === 'machine') machines.add(destination.destination.machineId);
-    for (const machineId of machines) invalidateLocalServiceLauncherStores({ serverId: props.source.serverId, machineId,
+    for (const machineId of machines) invalidateLocalServiceLauncherStores({ serverId: props.binding.scope.serverId, machineId,
       accountId: props.binding.accountId, credentialKey: props.binding.credentialKey });
   }, [state, props.attachment, props.binding, props.source.machineId, props.source.serverId]);
   return null;

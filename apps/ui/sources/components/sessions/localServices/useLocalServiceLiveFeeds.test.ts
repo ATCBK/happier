@@ -32,7 +32,78 @@ let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined
 afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServiceLauncherStoreForTests(); resetLocalServiceInventoryStoreForTests();
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
+async function readCatalogBinding(serverId: string) {
+  const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+  const resolved = await resolveServerCredentialAccountScope(serverId);
+  if (resolved.kind !== 'bound' || !resolved.credentialKey) throw new Error('Expected the fixture Home credential binding');
+  return { serverId: resolved.scope.serverId, accountId: resolved.scope.accountId, credentialKey: resolved.credentialKey };
+}
+
 describe('Project Services source feed plus actual native binding', () => {
+  it('shares canonical controller demand and current Action publication for an admitted Project Home alias', async () => {
+    home = await createPlainArtifactHomeFixture('https://project-services-alias.test', { handleRequest: async path =>
+      path === '/v1/machines?includeRevoked=true' ? Response.json([{ id: 'source', revokedAt: null, replacedByMachineId: null }]) : null });
+    const { setServerProfileIdentityForUrl, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const { resolveAuthCredentialsScopeKey } = await import('@/auth/storage/resolveAuthCredentialsScopeKey');
+    const { createLocalServicesRuntimeActionExecutor } = await import('@/sync/domains/local/services/actions/runtimeActionExecutor');
+    const { fetchLocalServiceLauncherSnapshotViaMachineRpc } = await import('@/sync/domains/local/services/launch/machineRpc');
+    const identified = await setServerProfileIdentityForUrl(home.home.serverUrl, 'srv_project_services_alias');
+    if (!identified?.serverIdentityId) throw new Error('Expected the actual Home identity owner to admit its portable alias');
+    const canonicalServerId = resolveServerProfileScopeIdForIdentifier(identified.id);
+    const serverId = identified.id === canonicalServerId ? identified.serverIdentityId : identified.id;
+    expect(serverId).not.toBe(canonicalServerId);
+    expect(resolveServerProfileScopeIdForIdentifier(serverId)).toBe(canonicalServerId);
+    const account = await captureLazyActionAccountContext(serverId);
+    const scope = account.accountLifetime.scope;
+    storage.setState({ profileScope: scope });
+    const source = { id: 'source-ref', machineId: 'source', serverId, rootPath: '/source', createdAtMs: 1 };
+    storage.getState().activateProjectAccountRowsScope(scope);
+    storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+      workspaceRefs: [source], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+    const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-service', source: 'managed_service', machineId: source.machineId,
+      workspaceId: source.id, workspace: { serverId, machineId: source.machineId, workspaceId: source.id, rootPath: source.rootPath },
+      declaration: { workspaceRefId: source.id, selection: { kind: 'manifest', name: 'web' } }, cwd: source.rootPath,
+      title: 'web', confidence: 'high', state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [] });
+    const actual = LocalServiceLaunchTargetV1Schema.parse({ ...declaration, id: 'native-instance',
+      sourceClass: { kind: 'managed_service', managedServiceId: 'native-instance' }, serviceState: 'healthy',
+      state: 'available', unavailableReason: undefined, readiness: 'ready', actions: ['manage'] });
+    const watchSignals: AbortSignal[] = [];
+    let running = false;
+    remote.mockImplementation(async ({ method, machineId, payload, signal }: {
+      method: string; machineId: string; payload: { projection?: 'managed_bindings' }; signal: AbortSignal;
+    }) => {
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+        watchSignals.push(signal);
+        return new Promise(() => {});
+      }
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
+        snapshot: { v: 1, machineId, updatedAt: running ? 2 : 1,
+          targets: payload.projection ? running ? [actual] : [] : [declaration] } };
+      return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
+      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }));
+    const readRows = () => buildLocalServiceRows({ inventoryRows: [],
+      launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
+      rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
+    try {
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
+      expect(watchSignals).toHaveLength(1);
+      running = true;
+      const execute = createLocalServicesRuntimeActionExecutor({
+        catalogBinding: { lifetime: account.accountLifetime, credentialKey: resolveAuthCredentialsScopeKey(account.credentials) },
+        fetchLauncherSnapshot: fetchLocalServiceLauncherSnapshotViaMachineRpc,
+      });
+      await act(async () => { await execute({ actionId: 'localServices.launcher.snapshot',
+        input: { machineId: source.machineId, scope: 'workspace', workspaceRoot: source.rootPath }, context: { serverId } }); });
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
+      expect(watchSignals).toHaveLength(1);
+      expect(storage.getState().projectAccountRows?.workspaceRefs[0]?.serverId).toBe(serverId);
+    } finally { await hook.unmount(); account.dispose(); }
+    expect(watchSignals.every(signal => signal.aborted)).toBe(true);
+  });
+
   it.each(['watch', 'home-reconnect', 'home-reconnect-invalid', 'daemon-restart', 'visibility'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
     home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
       path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
@@ -95,7 +166,8 @@ describe('Project Services source feed plus actual native binding', () => {
             && Boolean(request.payload.projection) === bindings).length;
         const sourceReads = countReads(false);
         const bindingReads = countReads(true);
-        const key = { machineId: source.machineId, serverId, scope: 'workspace' as const, workspaceRoot: source.rootPath };
+        const key = { ...(await readCatalogBinding(serverId)), machineId: source.machineId,
+          scope: 'workspace' as const, workspaceRoot: source.rootPath };
         // Replay 75 required source reads at the brief's four-second observation cadence.
         // Unchanged facts must not republish rows or restart the admitted binding census.
         for (let generation = 2; generation <= 76; generation++) {
@@ -218,7 +290,7 @@ describe('Project Services source feed plus actual native binding', () => {
         target: { unavailableMachineId: pausedWorker.machineId } }));
       expect(observedMachines.has(pausedWorker.machineId)).toBe(true);
       pausedAvailable = true;
-      await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: pausedWorker.machineId }, {
+      await act(async () => { publishLocalServiceInventorySnapshot({ ...(await readCatalogBinding(serverId)), machineId: pausedWorker.machineId }, {
         v: 1, machineId: pausedWorker.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject(expected));
     } finally { await hook.unmount(); }
@@ -315,7 +387,7 @@ describe('Project Services source feed plus actual native binding', () => {
         // A scan's timestamp alone does not change native bindings. Re-reading the
         // census here can suspend an already-settled page behind another slow request.
         await act(async () => {
-          publishLocalServiceLauncherSnapshot({ machineId: source.machineId, serverId, accountId: scope.accountId,
+          publishLocalServiceLauncherSnapshot({ ...(await readCatalogBinding(serverId)), machineId: source.machineId,
             scope: 'workspace', workspaceRoot: source.rootPath, projection: 'managed_bindings' },
           { v: 1, machineId: source.machineId, updatedAt: 2, targets: [] });
           await flushHookEffects();
@@ -446,7 +518,7 @@ describe('Project Services source feed plus actual native binding', () => {
     await act(async () => { clearMachineRequestReachabilityForMachine(scope, 'worker'); });
     await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
     running = false;
-    await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: 'worker' }, {
+    await act(async () => { publishLocalServiceInventorySnapshot({ ...(await readCatalogBinding(serverId)), machineId: 'worker' }, {
       v: 1, machineId: 'worker', generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
     await vi.waitFor(() => expect(refreshing).toBe(true));
     expect([...hook.getCurrent().launcherState!.targetsById.values()]).toEqual([actual]);

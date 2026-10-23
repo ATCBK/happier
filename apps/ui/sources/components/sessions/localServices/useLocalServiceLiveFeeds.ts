@@ -135,7 +135,7 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
         const retirement = binding?.onRetire(release);
         return () => { retirement?.dispose(); release(); };
     }, [binding, subscriptions]);
-    const [observation, setObservation] = React.useState<Readonly<{ subscriptions: typeof subscriptions; declarations: typeof declarations; values: ReadonlyMap<string, ServiceActual> }> | null>(null);
+    const [observation, setObservation] = React.useState<Readonly<{ binding: typeof binding; rows: typeof rows; declarations: typeof declarations; values: ReadonlyMap<string, ServiceActual> }> | null>(null);
     React.useEffect(() => {
         let current = true;
         if (!canObserve || !binding || !rows) return;
@@ -154,7 +154,7 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 workspaceRefs: rows.workspaceRefs, relationships: rows.relationships, ...facts,
                 context: { normalizeServerId: resolveServerProfileScopeIdForIdentifier }, isCurrent,
                 readSnapshot: async request => {
-                    const key: LocalServiceLauncherStoreKeyInput = { machineId: request.machineId, serverId: input.serverId,
+                    const key: LocalServiceLauncherStoreKeyInput = { machineId: request.machineId, serverId: binding.scope.serverId,
                         accountId: binding.accountId, credentialKey: binding.credentialKey,
                         scope: 'workspace', workspaceRoot: request.workspaceRoot, projection: 'managed_bindings' };
                     const id = JSON.stringify(key);
@@ -188,8 +188,8 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             return [target.id, actual] as const;
             }));
           } finally { account.dispose(); }
-        })().then(values => { if (isCurrent()) setObservation({ subscriptions, declarations, values: new Map(values) }); })
-            .catch(() => { if (isCurrent()) setObservation({ subscriptions, declarations,
+        })().then(values => { if (isCurrent()) setObservation({ binding, rows, declarations, values: new Map(values) }); })
+            .catch(() => { if (isCurrent()) setObservation({ binding, rows, declarations,
                 values: new Map(declarations.map(target => [target.id, { status: 'unavailable' as const }])) }); });
         return () => { current = false; abort.abort(); };
     }, [binding, canObserve, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
@@ -199,8 +199,9 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     // Reconcile that collection once per structural change; carry freshness separately below.
     const projection = React.useMemo(() => {
         if (!enabled || !sourceTargetIds || !sourceTargetsById || !declarations.length) return null;
-        const values = canObserve && observation?.subscriptions === subscriptions ? observation.values : null;
+        const values = canObserve && observation?.binding === binding && observation.rows === rows ? observation.values : null;
         const rowIdsByTargetId = new Map<string, string>();
+        let pending = false;
         const targets = sourceTargets.flatMap(target => {
             if (!declarations.includes(target)) return [target];
             // A fresh SOURCE target can change native facts without changing the
@@ -209,6 +210,7 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             const observedDeclaration = observation?.declarations.find(previous => previous.id === target.id);
             const actual = observedDeclaration && sameStrictJsonValue(observedDeclaration.declaration, target.declaration)
                 && sameStrictJsonValue(observedDeclaration.workspace, target.workspace) ? values?.get(target.id) : undefined;
+            if (!actual && canObserve) pending = true;
             if (actual?.status === 'present') {
                 // Moving changes native custody, not the declared Service the person opened.
                 // Keep presentation identity separate from the native target used by Actions.
@@ -223,8 +225,8 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 ...(actual?.status === 'unavailable' && actual.machineId ? { unavailableMachineId: actual.machineId } : {}), actions: [] }];
         });
         return { collection: reconcileLocalServiceLauncherTargets({ targetIds: sourceTargetIds, targetsById: sourceTargetsById }, targets),
-            rowIdsByTargetId, pending: !values && canObserve };
-    }, [canObserve, declarations, enabled, observation, sourceTargetIds, sourceTargetsById, sourceTargets, subscriptions]);
+            rowIdsByTargetId, pending };
+    }, [binding, canObserve, declarations, enabled, observation, rows, sourceTargetIds, sourceTargetsById, sourceTargets]);
     const state = React.useMemo(() => !projection || !sourceState ? sourceState : {
         ...sourceState,
         targetIds: projection.collection.targetIds,
