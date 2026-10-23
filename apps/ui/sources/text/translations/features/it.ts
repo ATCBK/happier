@@ -5903,8 +5903,6 @@ const machineDetailPageTranslations = { it: translated({
                 overview: "Panoramica",
             },
             thisMachineTitle: "Questa macchina",
-            projectWorkWorkspaces: "Spazi di lavoro",
-            projectWorkWorkspacesSummary: ({ count, names }) => `${count} · ${names}`,
             connectionFollowsAccount: "Segue il tuo account",
             subPages: {
                 sharing: "Condivisione",
@@ -5914,10 +5912,8 @@ const machineDetailPageTranslations = { it: translated({
                 tools: "Strumenti",
                 doctor: "Diagnostica",
                 details: "Dettagli",
-                work: "Lavoro dei progetti",
             },
             summaries: {
-                work: "Esecuzioni, sessioni recenti e terminali",
                 terminalDirect: "Le sessioni si aprono direttamente",
                 sharedByOwner: ({ owner }) => `Condivisa con te da ${owner}`,
                 sharedWithYou: "Condivisa con te",

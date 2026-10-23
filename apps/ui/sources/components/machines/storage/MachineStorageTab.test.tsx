@@ -942,7 +942,10 @@ describe('MachineStorageTab', () => {
             if (rpc.method === RPC_METHODS.DAEMON_STORAGE_SCAN_GET) return { state: scan, coverage: [], nodes: [node] };
             return undefined;
         });
-        await act(async () => { await vi.waitFor(() => expect(screen.getTextContent()).toContain('Keep · in use'), { timeout: 5000 }); });
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.getTextContent()).toContain('Keep · in use');
+        }, { timeout: 5000 });
         expect(screen.getTextContent().match(/in use/giu)).toHaveLength(1);
     });
 

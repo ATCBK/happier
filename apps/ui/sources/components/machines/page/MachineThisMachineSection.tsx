@@ -10,7 +10,6 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useSettings } from '@/sync/domains/state/storage';
-import { useWorkspaceRefs } from '@/sync/store/hooks';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { t } from '@/text';
@@ -23,12 +22,10 @@ import {
     describeMachineDoctorSummary,
     describeMachineSharingSummary,
     describeMachineTerminalHost,
-    describeMachineWorkspaces,
 } from './machineThisMachineSummaries';
 import { MACHINE_THIS_MACHINE_PAGES, MACHINE_SUB_PAGE_TITLE_KEYS, type MachineThisMachinePageId } from './machineSubPages';
 
 const ROW_ICONS: Readonly<Record<MachineThisMachinePageId, IconName>> = {
-    work: 'folder',
     sharing: 'users',
     agents: 'sparkle',
     terminal: 'terminal',
@@ -61,15 +58,12 @@ export const MachineThisMachineSection = React.memo(function MachineThisMachineS
         () => describeMachineAgentsReady(agents.agents.filter((agent) => agent.state === 'ready' || agent.state === 'updateAvailable').map((agent) => agent.title)),
         [language, agents.agents],
     );
-    const workspaceRefs = useWorkspaceRefs();
-    const workspaces = React.useMemo(() => describeMachineWorkspaces(workspaceRefs, { machineId, serverId: props.serverId }), [language, machineId, props.serverId, workspaceRefs]);
     const platform = formatOSPlatform(props.machine.metadata?.platform);
     const host = props.machine.metadata?.host?.trim();
 
     // Plan 10 MPG-10: a summary is a fact already held (cached or in settings), never a description. A row with no
     // fact yet is its title alone, and the line appears when the cache has state; nothing here fetches.
     const summaries: Readonly<Record<MachineThisMachinePageId, string | undefined>> = {
-        work: undefined,
         sharing: describeMachineSharingSummary(props.machine),
         agents: agentsReady ?? undefined,
         terminal: describeMachineTerminalHost(terminalHost),
@@ -85,20 +79,8 @@ export const MachineThisMachineSection = React.memo(function MachineThisMachineS
 
     return (
         <View testID="machine-page-this-machine">
-            {/* Project work leads (plan 10 MPG-8, lab `rv` O): what is worked on here, then the machine's own pages. */}
-            <ItemGroup title={t('machineDetailPage.subPages.work')}>
-                <Item
-                    testID="machine-page-row-work"
-                    // With no workspace the row says what the page holds, never "Project work" again under its own heading.
-                    title={workspaces ? t('machineDetailPage.projectWorkWorkspaces') : t('machineDetailPage.summaries.work')}
-                    subtitle={workspaces ?? undefined}
-                    icon={<Icon name={ROW_ICONS.work} />}
-                    showChevron
-                    onPress={() => open('work')}
-                />
-            </ItemGroup>
             <ItemGroup title={t('machineDetailPage.thisMachineTitle')}>
-                {MACHINE_THIS_MACHINE_PAGES.filter((page) => page !== 'work').map((page) => (
+                {MACHINE_THIS_MACHINE_PAGES.map((page) => (
                     <Item
                         key={page}
                         testID={`machine-page-row-${page}`}

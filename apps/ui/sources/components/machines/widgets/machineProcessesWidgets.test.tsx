@@ -258,6 +258,8 @@ describe('Using the most widget', () => {
     const calls: Rpc[] = [];
     const { screen } = await mount({
       Body: MachineTopConsumersWidget,
+      answer: createProcessesAnswer({ owners: createProcessesAnswer().owners.map(owner =>
+        owner.owner.kind === 'service' ? { ...owner, canStartAgain: true } : owner) }),
       waitFor: 'widget.stop-o:service:website',
       reply: (rpc) => {
         if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_STOP) {

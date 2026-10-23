@@ -1,6 +1,10 @@
 import * as React from 'react';
 
+import { MachineProjectTerminalsSection } from '@/components/machines/MachineProjectTerminalsSection';
+import { MachineRunsSection } from '@/components/machines/runs/MachineRunsSection';
+import { MachineRecentSessionsSection } from '@/components/machines/sessions/MachineRecentSessionsSection';
 import { MachineVitalsOverview } from '@/components/machines/vitals/MachineVitalsOverview';
+import { MachineProjectWorkSection } from '@/components/projects/workers/MachineProjectWorkSection';
 import { ManagedEnrolledMachineSectionsView } from '@/components/settings/machines/managed/ManagedMachineSections';
 import { managedPowerExplainsOffline } from '@/components/settings/machines/managed/managedCreationPresentation';
 import { splitHappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
@@ -29,11 +33,12 @@ function offlineHelpPoints() {
 /**
  * The machine page's Overview (MPG-8): what blocks use first, then (for a machine Happier created)
  * Managed, then plan 20's vitals body (CPU, memory, disk, network, what else the machine reports and its
- * Alerts), Ask an agent, then "This machine", whose rows push the machine's work (Project work: workers,
- * runs, recent sessions, project terminals) and its own settings and diagnostics (lab `R`).
+ * Alerts) and Ask an agent, then the machine's work in place (Project work: workers, then runs, recent
+ * sessions and project terminals, each only once the machine has some), then "This machine", whose rows push
+ * its own settings and diagnostics (lab `R`).
  */
 export function MachineOverview(props: MachinePageTabBodyProps) {
-    const { target, managedEnrolled, reload } = useMachinePageState();
+    const { target, managedEnrolled, refreshKey, reload } = useMachinePageState();
     const machine = target.machine;
     const { binding } = useServerCredentialAccountScopeBinding(target.serverId);
     const machineAccountScope = binding?.isCurrent() ? binding.scope : null;
@@ -84,10 +89,18 @@ export function MachineOverview(props: MachinePageTabBodyProps) {
             {/* The page answers first; the agent is there when it is not enough (lab `ra` A1). */}
             <MachineResourcesAskBlock serverId={props.serverId} machineId={props.machineId} machineName={props.machineName} />
 
+            {/* Project work, in place (MPG-8): what this machine takes on and runs now, then its runs, recent sessions and
+                project terminals, each section present only once there is something in it. */}
+            <MachineProjectWorkSection serverId={props.serverId} machineId={props.machineId} machineName={target.machineSentenceName} />
+            <MachineRunsSection machine={machine} serverId={props.serverId} online={target.online}
+                isServerSwitching={target.isServerSwitching} refreshKey={refreshKey} />
+            <MachineRecentSessionsSection machineId={props.machineId} serverId={props.serverId} />
+            <MachineProjectTerminalsSection machineId={props.machineId} serverId={props.serverId} />
+
             {/* Skills and MCP servers (Capabilities P8 U8.6): what sessions on this machine get, before This machine. */}
             <MachineCapabilitiesSection machineId={props.machineId} machineName={props.machineName} offline={props.online === false} />
 
-            {/* Project work (the workspaces held here; its page has workers, runs, recent sessions, terminals), then This machine. */}
+            {/* The machine's own settings and diagnostics, one pushed page each. */}
             <MachineThisMachineSection serverId={props.serverId} machine={machine} />
         </>
     );

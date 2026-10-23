@@ -5898,8 +5898,6 @@ const machineDetailPageTranslations = { ja: translated({
                 overview: "概要",
             },
             thisMachineTitle: "このマシン",
-            projectWorkWorkspaces: "ワークスペース",
-            projectWorkWorkspacesSummary: ({ count, names }) => `${count} · ${names}`,
             connectionFollowsAccount: "アカウントの設定に従う",
             subPages: {
                 sharing: "共有",
@@ -5909,10 +5907,8 @@ const machineDetailPageTranslations = { ja: translated({
                 tools: "ツール",
                 doctor: "診断",
                 details: "詳細",
-                work: "プロジェクトの作業",
             },
             summaries: {
-                work: "実行、最近のセッション、ターミナル",
                 terminalDirect: "セッションは直接開きます",
                 sharedByOwner: ({ owner }) => `${owner} が共有`,
                 sharedWithYou: "共有されています",

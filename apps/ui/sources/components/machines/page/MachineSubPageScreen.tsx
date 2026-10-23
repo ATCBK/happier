@@ -9,10 +9,6 @@ import { MachineDetailsSection } from '@/components/machines/details/MachineDeta
 import { MachineDoctorPageBody } from '@/components/machines/doctorSnapshot/MachineDoctorPageBody';
 import { MachineInstallablesSection } from '@/components/machines/installables/MachineInstallablesSection';
 import { MachineTerminalPageBody } from '@/components/machines/terminal/MachineTerminalPageBody';
-import { MachineProjectTerminalsSection } from '@/components/machines/MachineProjectTerminalsSection';
-import { MachineRunsSection } from '@/components/machines/runs/MachineRunsSection';
-import { MachineRecentSessionsSection } from '@/components/machines/sessions/MachineRecentSessionsSection';
-import { MachineProjectWorkSection } from '@/components/projects/workers/MachineProjectWorkSection';
 import { MachineAlertsPage } from '@/components/machines/vitals/MachineAlertsPage';
 import { MachineDirectConnectionSection } from '@/components/settings/connections/DirectConnectionSettings';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
@@ -153,17 +149,6 @@ function MachineSubPageBody(props: Readonly<{
             return <MachineDoctorPageBody machine={machine} serverId={serverId} switchReady={target.switchReady} refreshKey={props.refreshKey} />;
         case 'details':
             return <MachineDetailsSection machine={machine} serverId={serverId} />;
-        case 'work':
-            // The owners the Overview used to inline, unchanged and in their order (plan 10 MPG-8).
-            return (
-                <>
-                    <MachineProjectWorkSection serverId={serverId} machineId={machine.id} machineName={target.machineSentenceName} />
-                    <MachineRunsSection machine={machine} serverId={serverId} online={target.online}
-                        isServerSwitching={target.isServerSwitching} refreshKey={props.refreshKey} />
-                    <MachineRecentSessionsSection machineId={machine.id} serverId={serverId} />
-                    <MachineProjectTerminalsSection machineId={machine.id} serverId={serverId} />
-                </>
-            );
         case 'alerts':
             return <MachineAlertsPage serverId={serverId} machine={machine} machineName={target.machineSentenceName} />;
     }

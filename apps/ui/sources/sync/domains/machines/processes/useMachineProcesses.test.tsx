@@ -7,6 +7,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { publishMachineInventoryForTest } from '@/dev/testkit/harness/machinePresence';
 
 // The machine RPC connection is the network boundary. Hooks, credential lifetimes and store remain real.
 const network = vi.hoisted(() => ({ execute: vi.fn() }));
@@ -61,6 +62,8 @@ it('pauses an inactive panel without erasing its rows and aborts its parked netw
 it('reports an offline empty read as unavailable and resumes without losing the last good answer', async () => {
     const serverId = await homes.addHome({ name: 'Offline processes', serverUrl: 'http://process-offline-hook.test', accountId: 'a', currentAccount: true });
     storage.setState({ profileScope: { serverId, accountId: 'a' } });
+    const machine = createMachineFixture({ id: 'm', active: false, activeAt: 1 });
+    await publishMachineInventoryForTest({ serverId, accountId: 'a' }, [machine]);
     network.execute.mockImplementation(async (input: { method: string; signal: AbortSignal }) => {
         if (input.method === RPC_METHODS.DAEMON_PROCESSES_WATCH) {
             return new Promise(resolve => input.signal.addEventListener('abort', () => resolve({ changed: false }), { once: true }));
@@ -71,9 +74,11 @@ it('reports an offline empty read as unavailable and resumes without losing the 
     const hook = await renderHook(({ online }: { online: boolean }) => useMachineProcesses({ serverId, machineId: 'm', scope: 'happier', view: 'tree', online }), { initialProps: { online: false } });
     expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', answer: null });
     expect(network.execute).not.toHaveBeenCalled();
+    await act(async () => { await publishMachineInventoryForTest({ serverId, accountId: 'a' }, [{ ...machine, active: true, activeAt: Date.now() }]); });
     await hook.rerender({ online: true });
     await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready')); });
     const answer = hook.getCurrent().answer;
+    await act(async () => { await publishMachineInventoryForTest({ serverId, accountId: 'a' }, [machine]); });
     await hook.rerender({ online: false });
     expect(hook.getCurrent().answer).toBe(answer);
     expect(hook.getCurrent().paused).toBe(true);

@@ -8,6 +8,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { publishMachineInventoryForTest } from '@/dev/testkit/harness/machinePresence';
 
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -33,8 +34,9 @@ function report(revision: number): HappierStorageSummaryV1 {
     ], suggestionsTop: [], pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 }, wholeDisk: { enabled: false, scans: [] } };
 }
 
+const beforeState = storage.getState();
 beforeEach(async () => { await home.reset(); machineStorageStore.reset(); transport.rpc.mockReset(); });
-afterEach(async () => { standardCleanup(); machineStorageStore.reset(); await home.reset(); });
+afterEach(async () => { standardCleanup(); machineStorageStore.reset(); storage.setState(beforeState); await home.reset(); });
 
 describe('machine storage hooks', () => {
     it('retires a failed read when the existing heartbeat grace expires without a store update', async () => {
@@ -83,6 +85,8 @@ describe('machine storage hooks', () => {
     });
     it('reads a private scan view through the bound Action and refuses mutations while offline', async () => {
         const serverId = await home.addHome({ name: 'Storage Home', serverUrl: 'https://storage-scan.test', serverIdentityId: 'srv_storage_scan', accountId: 'owner' });
+        const machine = createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() });
+        await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [machine]);
         home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
         const page = { state: null, nodes: [], coverage: [], indexedAt: 100 };
         const scan = { scanId: 'scan', target: { volumeId: 'volume' }, status: 'running', startedAt: 100,
@@ -105,6 +109,7 @@ describe('machine storage hooks', () => {
         });
         expect(transport.rpc).toHaveBeenCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_STORAGE_SCAN_SKIP,
             serverId: 'srv_storage_scan', accountId: 'owner', payload: { machineId: 'machine', serverId: 'srv_storage_scan', scanId: 'scan', path: '/slow' } }));
+        await act(async () => { await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [{ ...machine, active: false, activeAt: 1 }]); });
         await hook.rerender({ ...input, online: false });
         expect(hook.getCurrent()).toMatchObject({ offline: true, page });
         const count = transport.rpc.mock.calls.length;
@@ -115,6 +120,7 @@ describe('machine storage hooks', () => {
     it('ticks the pile through the bound Account Action and settles optimistic membership from the daemon', async () => {
         const serverId = await home.addHome({ name: 'Storage Home', serverUrl: 'https://storage-pile.test',
             serverIdentityId: 'srv_storage_pile', accountId: 'owner' });
+        await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() })]);
         home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
         const pending = createDeferred<unknown>();
         const ref = { itemId: 'log', path: '/logs/old', identity: { dev: '1', ino: '2', kind: 'file' as const },
@@ -142,6 +148,7 @@ describe('machine storage hooks', () => {
     it('keeps the bound Home projection without rereading credentials when only its label changes', async () => {
         const serverUrl = 'https://storage-rebind.test';
         const serverId = await home.addHome({ name: 'Storage Home', serverUrl, serverIdentityId: 'srv_storage_rebind', accountId: 'owner' });
+        await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() })]);
         home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
         transport.rpc.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.DAEMON_STORAGE_WATCH ? new Promise(() => {}) : report(1));
         const hook = await renderHook(() => useMachineStorageSummary({ serverId, machineId: 'machine', online: true }));
@@ -166,6 +173,8 @@ describe('machine storage hooks', () => {
 
     it('shares demand, keeps unchanged projection consumers still, and retains reports while offline', async () => {
         const serverId = await home.addHome({ name: 'Storage Home', serverUrl: 'https://storage-home.test', serverIdentityId: 'srv_storage_home', accountId: 'owner' });
+        const machine = createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() });
+        await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [machine]);
         home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
         const watches: { signal?: AbortSignal; answer: ReturnType<typeof createDeferred<MachineStorageWatchResultV1>> }[] = [];
         let revision = 1;
@@ -200,6 +209,7 @@ describe('machine storage hooks', () => {
         expect(summary.getCurrent().sizeAgain).toBe(oldCallbacks.sizeAgain);
         await category.unmount(); await pile.unmount(); await scan.unmount();
         expect(watches.at(-1)?.signal?.aborted).toBe(false);
+        await act(async () => { await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [{ ...machine, active: false, activeAt: 1 }]); });
         await summary.rerender({ ...input, online: false });
         expect(summary.getCurrent()).toMatchObject({ offline: true, status: 'ready', summary: { revision: 2 } });
         expect(watches.at(-1)?.signal?.aborted).toBe(true);

@@ -54,6 +54,7 @@ import { describeFleetTitle, selectAttentionSubjects } from '@/components/machin
 
 import { machineHeaderOriginKey, setMachineHeaderOrigin } from '@/components/machines/page/machineHeaderOrigin';
 import { measureInWindow } from '@/components/ui/popover/measure';
+import { unionWindowFlightRects } from '@/components/ui/motion/rectFlight';
 
 import { collectMachineAttention } from '@/components/machines/attention/collectMachineAttention';
 
@@ -128,16 +129,17 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
         const result = runGuardedNavigation(() => router.push(href as never));
         if (result !== true) fireAndForget(result, { tag });
     }, [router]);
-    const openRow = React.useCallback((row: MachineCollectionRow, event?: unknown) => {
-        // The row's rectangle travels to the machine page's header (MPG-32): measured on press, handed over once.
-        const node = (event as { currentTarget?: unknown } | undefined)?.currentTarget;
+    const openRow = React.useCallback((row: MachineCollectionRow, identity?: readonly unknown[]) => {
+        // The row's mark + name rectangle travels to the machine page's header's mark + name (MPG-32): measured in
+        // window coordinates on press, handed over once.
+        const nodes = (identity ?? []).filter(Boolean);
         const machineId = row.kind === 'machine' ? row.machineId : row.enrolledMachineId;
-        if (!node || !machineId) {
+        if (nodes.length === 0 || !machineId) {
             open(machineCollectionHref(row, 'rail'), 'SidebarMachines.openMachine');
             return;
         }
-        fireAndForget(measureInWindow(node).then(rect => {
-            setMachineHeaderOrigin(machineHeaderOriginKey({ serverId: row.serverId, machineId }), rect);
+        fireAndForget(Promise.all(nodes.map(node => measureInWindow(node))).then(rects => {
+            setMachineHeaderOrigin(machineHeaderOriginKey({ serverId: row.serverId, machineId }), unionWindowFlightRects(rects));
             open(machineCollectionHref(row, 'rail'), 'SidebarMachines.openMachine');
         }), { tag: 'SidebarMachines.openMachine' });
     }, [open]);
@@ -299,7 +301,7 @@ const MachinesPopoverSection = React.memo(function MachinesPopoverSection(props:
     section: MachineCollectionSection;
     caption: React.ReactNode;
     thisComputerMachineId: string | null;
-    onOpenRow: (row: MachineCollectionRow, event?: unknown) => void;
+    onOpenRow: (row: MachineCollectionRow, identity?: readonly unknown[]) => void;
 }>) {
     const { section } = props;
     // An empty group is not drawn: the glance lists machines, not the places they could be.
@@ -328,7 +330,7 @@ const MachinesPopoverSection = React.memo(function MachinesPopoverSection(props:
 const MachinesPopoverRow = React.memo(function MachinesPopoverRow(props: Readonly<{
     row: MachineCollectionRow;
     thisComputer: boolean;
-    onOpen: (row: MachineCollectionRow, event?: unknown) => void;
+    onOpen: (row: MachineCollectionRow, identity?: readonly unknown[]) => void;
 }>) {
     const { theme } = useUnistyles();
     const { row, onOpen } = props;
@@ -341,9 +343,10 @@ const MachinesPopoverRow = React.memo(function MachinesPopoverRow(props: Readonl
     const detail = row.reason
         ?? (row.online ? (working > 0 ? t('machineDetailPage.work.working', { count: working }) : t('machineDetailPage.work.none')) : row.presence);
     const id = row.kind === 'managed' ? row.managedId : row.machineId;
-    // The mark is where the page's header grows from (MPG-32): measured in window coordinates on press.
+    // The mark and the name are where the page header's mark and name travel from (MPG-32): measured on press.
     const markRef = React.useRef<View>(null);
-    const onPress = React.useCallback(() => onOpen(row, { currentTarget: markRef.current }), [onOpen, row]);
+    const nameRef = React.useRef<React.ComponentRef<typeof Text>>(null);
+    const onPress = React.useCallback(() => onOpen(row, [markRef.current, nameRef.current]), [onOpen, row]);
     const setting = useMachineSummarySettingValue();
     const availability = useMachineResourceSummary({ serverId: row.serverId, machineId });
     // Every online machine carries its strip under the name; a machine that does not report says why there.
@@ -362,6 +365,7 @@ const MachinesPopoverRow = React.memo(function MachinesPopoverRow(props: Readonl
         <Item
             testID={`sidebar-machines-row.${row.serverId}.${id}`}
             title={row.title}
+            titleRef={nameRef}
             // A roster row keeps the name on its one line, as the list column does (lab `rm` P).
             titleLines={1}
             subtitle={awayLine ?? strip}

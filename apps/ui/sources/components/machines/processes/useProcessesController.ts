@@ -295,14 +295,11 @@ export function useProcessesController(
               (current) => current + (freed ?? optimistic),
             );
             settledAt.current = Date.now();
-            const restartable =
-              item.owner.owner.kind === 'service' ||
-              item.owner.owner.kind === 'browser_sidecar';
             setMeterNote({
               kind: 'freed',
               bytes: freed,
               name,
-              startAgain: restartable
+              startAgain: item.owner.canStartAgain === true
                 ? () => startAgain(item.rootRef!, name)
                 : null,
             });

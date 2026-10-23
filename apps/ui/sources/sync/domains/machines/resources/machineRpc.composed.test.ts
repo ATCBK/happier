@@ -8,7 +8,8 @@ import { readRpcRequestDisposition, socketRpcCodec } from '@happier-dev/sync-cli
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { publishMachineInventoryForTest } from '@/dev/testkit/harness/machinePresence';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { MachineVitalsHistoryV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
@@ -42,6 +43,8 @@ const { subscribeLocalServiceInventoryStore, getLocalServiceInventoryState, rese
 const { DEFAULT_BROWSER_CAPABILITIES } = await import('@happier-dev/protocol/features/payload/capabilities/browserCapabilities');
 const { useLocalServiceInventoryState } = await import('@/sync/domains/local/services/inventory/useLocalServiceInventoryState');
 const { clearMachineRequestReachabilityForMachine } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const beforeState = storage.getState();
 
 type MachineCall = Readonly<{ method: string; requestId: string; params: unknown; reply(value: unknown): Promise<void>; refuse(errorCode: string): void }>;
 
@@ -78,6 +81,9 @@ async function withMachineHome(run: (home: Readonly<{
     const serverId = await homes.addHome({ name: 'Resources seam', serverUrl, accountId: 'owner', currentAccount: true });
     const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'owner' });
     homes.answer(serverId, '/v1/machines/shared-machine', { body: { machine } });
+    await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [createMachineFixture({
+        id: 'shared-machine', active: true, activeAt: Date.now(), storageMode: 'plain',
+    })]);
     const calls: MachineCall[] = [];
     const cancellations: string[] = [];
     let answer: (call: MachineCall) => Promise<void> = async () => {};
@@ -215,6 +221,7 @@ afterEach(async () => {
     machineStorageStore.reset(); machineProcessesStore.reset(); machineGuardStore.reset();
     await serverScopedRpcSocketPool.stopAll();
     resetScopedMachineTransportCacheForTests();
+    storage.setState(beforeState);
     await homes.reset();
 });
 

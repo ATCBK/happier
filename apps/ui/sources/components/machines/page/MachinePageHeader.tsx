@@ -45,7 +45,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { describeMachineSentence, readMachinePublishedResources, resolveMachineReasonAction, selectHeadlineReason } from '@/components/machines/summary/machineResourceSentences';
 import { resolveMachineAttentionWordColor } from '@/components/machines/summary/machineSummaryStripModel';
 import { MachineWorkingCountsProvider, useMachineWorkingCount } from '@/components/machines/work/machineWorkingCounts';
-import { useEnterFromRect } from '@/components/ui/motion/rectFlight';
+import { trackEnterFromRectTargets, useEnterFromRect, useEnterFromRectMember } from '@/components/ui/motion/rectFlight';
 import { measureInWindow } from '@/components/ui/popover/measure';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -165,14 +165,11 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
     const published = React.useMemo(() => readMachinePublishedResources(daemonState), [daemonState]);
     const headline = published && target.online && published.attention.level !== 'calm' ? selectHeadlineReason(published.attention) : null;
     const needsYouAction = headline ? resolveMachineReasonAction(headline) : null;
-    // A row opened from the rail popover hands its rectangle over once: the header grows from it (MPG-32).
+    // A row opened from the rail popover hands its mark + name rectangle over once (MPG-32): the header's mark and
+    // name travel from it as one piece, and the sentence, facts and actions fade in over the travel's last part.
     const reducedMotion = useReducedMotionPreference();
     const [origin] = React.useState(() => (target.machineId ? takeMachineHeaderOrigin(machineHeaderOriginKey(target)) : null));
-    const enter = useEnterFromRect(origin, { reducedMotion });
-    const enterRef = React.useRef<View>(null);
-    const onEnterLayout = React.useCallback(() => {
-        fireAndForget(measureInWindow(enterRef.current).then(enter.onTarget), { tag: 'MachinePageHeader.enter' });
-    }, [enter.onTarget]);
+    const wrapPart = useMachineHeaderEnter(origin, reducedMotion);
 
     // The composer owns starting a session: once this machine is chosen its path chip lists the
     // machine's recent paths, so the page hands off with the machine and its Home seeded rather than
@@ -226,10 +223,9 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
 
     const fallbackDescription = props.managedIdentity?.description ?? t('machineDetailPage.description');
     return (
-        <Animated.View ref={enterRef} collapsable={false} onLayout={origin ? onEnterLayout : undefined}
-            style={[enter.style, enter.ready ? null : { opacity: 0 }]}>
         <PageHeader
             testID="machine-detail-header"
+            wrapPart={wrapPart}
             alwaysShowTitle
             // The mark and the actions hang from the name's line; the sentence and facts wrap beneath it.
             actionsLayout="inline"
@@ -284,9 +280,39 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
                 </View>
             ) : undefined}
         />
-        </Animated.View>
     );
 });
+
+/**
+ * The header's entrance from a popover row (MPG-32, §4.12): its mark and its title are the two members of one
+ * group, measured from the layout effect (web: `getBoundingClientRect`, before paint) and followed while they
+ * travel, held unseen until the move is armed; everything else in the header is supporting content. Without an
+ * origin nothing is wrapped.
+ */
+function useMachineHeaderEnter(origin: ReturnType<typeof takeMachineHeaderOrigin>, reducedMotion: boolean) {
+    const enter = useEnterFromRect(origin, { reducedMotion });
+    const markStyle = useEnterFromRectMember(enter.group, 0);
+    const titleStyle = useEnterFromRectMember(enter.group, 1);
+    // Each member is measured at an untransformed anchor around it, so a read during the move is its layout rect.
+    const markRef = React.useRef<View>(null);
+    const titleRef = React.useRef<View>(null);
+    const { onTargets, retarget, contentStyle } = enter;
+    React.useLayoutEffect(() => {
+        if (!origin) return;
+        return trackEnterFromRectTargets(() => Promise.all([measureInWindow(markRef.current), measureInWindow(titleRef.current)]), { onTargets, retarget });
+    }, [onTargets, origin, retarget]);
+    return React.useMemo(() => origin ? (part: 'mark' | 'title' | 'supporting', node: React.ReactNode) => (
+        part === 'supporting'
+            ? <Animated.View style={contentStyle}>{node}</Animated.View>
+            : (
+                <View ref={part === 'mark' ? markRef : titleRef} collapsable={false} style={{ alignSelf: 'flex-start', maxWidth: '100%' }}>
+                    <Animated.View testID={`machine-detail-header-enter-${part}`} style={part === 'mark' ? markStyle : titleStyle}>
+                        {node}
+                    </Animated.View>
+                </View>
+            )
+    ) : undefined, [contentStyle, markStyle, origin, titleStyle]);
+}
 
 /**
  * The sentence under a machine's name (R2): its lead word toned only when the machine needs a look

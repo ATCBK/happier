@@ -9,6 +9,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { publishMachineInventoryForTest } from '@/dev/testkit/harness/machinePresence';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineGuardViewFixture } from './guardViewFixtures';
@@ -105,6 +106,8 @@ it('distinguishes an empty or held pending read, failure and offline without los
     expect(hook.getCurrent().view).toBe(last.view);
     await act(async () => { hook.getCurrent().retry(); });
     await act(async () => { await vi.waitFor(() => expect(replies).toHaveLength(3)); });
+    await act(async () => { await publishMachineInventoryForTest({ serverId, accountId: 'owner' },
+        storage.getState().machineListByServerId[serverId]!.map(machine => ({ ...machine, active: false, activeAt: 1 }))); });
     await hook.rerender({ online: false });
     expect(hook.getCurrent()).toMatchObject({ offline: true, pending: false, on: false, receivedAtMs: last.receivedAtMs });
     expect(hook.getCurrent().view).toBe(last.view);

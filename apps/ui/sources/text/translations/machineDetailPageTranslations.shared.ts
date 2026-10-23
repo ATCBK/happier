@@ -39,8 +39,6 @@ export const english = {
             overview: "Overview",
         },
         thisMachineTitle: "This machine",
-        projectWorkWorkspaces: "Workspaces",
-        projectWorkWorkspacesSummary: ({ count, names }: { count: number; names: string }) => `${count} · ${names}`,
         connectionFollowsAccount: "Follows your account",
         subPages: {
             sharing: "Sharing",
@@ -50,10 +48,8 @@ export const english = {
             tools: "Tools",
             doctor: "Doctor",
             details: "Details",
-            work: "Project work",
         },
         summaries: {
-            work: "Runs, recent sessions and terminals",
             terminalDirect: "Sessions open directly",
             sharedByOwner: ({ owner }: { owner: string }) => `Shared with you by ${owner}`,
             sharedWithYou: "Shared with you",

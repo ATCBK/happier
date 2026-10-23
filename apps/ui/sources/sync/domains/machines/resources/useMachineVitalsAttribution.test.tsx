@@ -6,6 +6,8 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { publishMachineInventoryForTest } from '@/dev/testkit/harness/machinePresence';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 installDisconnectedServerSocketBoundary();
 const network = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -17,11 +19,14 @@ const { machineProcessesStore } = await import('../processes/machineProcessesSto
 const { machineStorageStore } = await import('../storage/machineStorageStore');
 const { useMachineVitalsAttribution } = await import('./useMachineVitalsAttribution');
 const { useMachineProcesses } = await import('../processes/useMachineProcesses');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const beforeState = storage.getState();
 beforeEach(async () => { await home.reset(); machineProcessesStore.reset(); machineStorageStore.reset(); network.rpc.mockReset(); });
-afterEach(async () => { standardCleanup(); machineProcessesStore.reset(); machineStorageStore.reset(); await home.reset(); });
+afterEach(async () => { standardCleanup(); machineProcessesStore.reset(); machineStorageStore.reset(); storage.setState(beforeState); await home.reset(); });
 
 it.each(['transport', 'native'] as const)('shares Processes recovery after an Overview %s failure, including paused attribution and re-entry', async failure => {
     const serverId = await home.addHome({ name: 'Shared census', serverUrl: 'https://shared-census.test', serverIdentityId: 'srv_shared_census', accountId: 'owner', currentAccount: true });
+    await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() })]);
     const answer = { v: 1, machineId: 'machine', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
         totals: { happier: { processCount: 2, memoryBytes: 60, cpuPercent: 25 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
     let failed = false;
@@ -63,6 +68,7 @@ it.each(['transport', 'native'] as const)('shares Processes recovery after an Ov
 
 it('combines canonical totals without dividing whole-machine CPU again, leaves left-behind out of everything else and clamps to zero', async () => {
     const serverId = await home.addHome({ name: 'Attribution', serverUrl: 'https://attribution.test', serverIdentityId: 'srv_attribution', accountId: 'owner', currentAccount: true });
+    await publishMachineInventoryForTest({ serverId, accountId: 'owner' }, [createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() })]);
     home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
     network.rpc.mockImplementation(async ({ method, signal }: { method: string; signal?: AbortSignal }) => {
         if (method === RPC_METHODS.DAEMON_PROCESSES_WATCH || method === RPC_METHODS.DAEMON_STORAGE_WATCH) {

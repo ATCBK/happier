@@ -90,7 +90,9 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
         };
     }, [isOnline, isServerSwitching, machineId, machineServerId, props.refreshKey]);
 
-    if (executionRunsState.status === 'idle') return null;
+    // On the Overview (MPG-8) Runs is there once the machine has some: no section, and no loading line, for a machine
+    // that has none or whose first read is still out. A failed read still says so once.
+    if (executionRunsState.runs.length === 0 && executionRunsState.status !== 'error') return null;
     return (
         <ItemGroup title={t('runs.title')} description={t('machineDetailPage.runsSectionDescription')}>
             {executionRunsState.runs.some((run) => run.status !== 'running') ? <Item
@@ -109,10 +111,9 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                     message={t('approvals.status.open')}
                     onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(stopExecution.approval.approvalId!)}?serverId=${encodeURIComponent(machineServerId)}`)} />
             ) : null}
-            {/* The section's states are the one in-sheet state line, like the Project work sections above it. */}
-            {executionRunsState.status === 'loading' ? (
-                <SurfaceStateCard testID="machine-runs-loading" size="line" kind="loading" title={t('common.loading')} />
-            ) : executionRunsState.status === 'error' ? (
+            {/* The section's states are the one in-sheet state line, like the Project work sections above it. A refresh
+                keeps the runs it already shows. */}
+            {executionRunsState.status === 'error' ? (
                 <SurfaceStateCard testID="machine-runs-error" size="line" kind="error" title={t('machineDetailPage.runsLoadFailed')} reason={executionRunsState.error || undefined} />
             ) : (showFinishedRuns ? executionRunsState.runs : executionRunsState.runs.filter((r) => r.status === 'running')).length === 0 ? (
                 <SurfaceStateCard testID="machine-runs-empty" size="line" kind="empty" title={t('runs.empty')} />

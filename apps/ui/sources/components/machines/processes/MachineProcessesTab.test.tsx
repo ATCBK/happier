@@ -751,10 +751,18 @@ describe('MachineProcessesTab', () => {
     await act(async () => { await vi.waitFor(() => expect(effects).toEqual([RPC_METHODS.MACHINES_PROCESSES_STOP])); });
   });
 
-  it('stopping a service lets its row go and says what was freed, with the way back', async () => {
+  it.each([true, false, undefined])('stopping a service offers Start again only when its owner reports availability (%s)', async (canStartAgain) => {
     const stops: unknown[] = [];
+    const starts: unknown[] = [];
+    const answer = createProcessesAnswer();
+    answer.owners = answer.owners.map(owner => owner.owner.kind === 'service' ? { ...owner, canStartAgain } : owner);
     const { screen } = await mount({
+      answer,
       reply: (rpc) => {
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_START_AGAIN) {
+          starts.push(rpc.payload);
+          return { status: 'started' };
+        }
         if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP)
           return undefined;
         stops.push(rpc.payload);
@@ -780,7 +788,11 @@ describe('MachineProcessesTab', () => {
         ).toContain('1.2 GB freed'),
       );
     });
-    expect(screen.findByTestId('machine-processes-start-again')).not.toBeNull();
+    expect(screen.findByTestId('machine-processes-start-again') !== null).toBe(canStartAgain === true);
+    if (canStartAgain) {
+      await act(async () => { screen.pressByTestId('machine-processes-start-again'); });
+      await act(async () => { await vi.waitFor(() => expect(starts).toMatchObject([{ machineId: 'machine', ref: 'website' }])); });
+    }
     expect(stops[0]).toMatchObject({
       targets: [
         {

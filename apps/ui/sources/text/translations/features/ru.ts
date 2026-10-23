@@ -5930,8 +5930,6 @@ const machineDetailPageTranslations = { ru: translated({
                 overview: "Обзор",
             },
             thisMachineTitle: "Эта машина",
-            projectWorkWorkspaces: "Рабочие пространства",
-            projectWorkWorkspacesSummary: ({ count, names }) => `${count} · ${names}`,
             connectionFollowsAccount: "Как в аккаунте",
             subPages: {
                 sharing: "Доступ",
@@ -5941,10 +5939,8 @@ const machineDetailPageTranslations = { ru: translated({
                 tools: "Инструменты",
                 doctor: "Диагностика",
                 details: "Сведения",
-                work: "Работа проектов",
             },
             summaries: {
-                work: "Запуски, недавние сеансы и терминалы",
                 terminalDirect: "Сессии открываются напрямую",
                 sharedByOwner: ({ owner }) => `${owner} поделился с вами`,
                 sharedWithYou: "Доступно вам",

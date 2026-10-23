@@ -55,7 +55,6 @@ const rpcRequests = installSessionActionRpcBoundary(request => {
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
 const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
-const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { ModalProvider } = await import('@/modal');
@@ -79,7 +78,7 @@ function AccountBoundary({ children }: React.PropsWithChildren) {
 function renderScreen(element: React.ReactElement) {
     return renderTestScreen(element, { wrapper: AccountBoundary, createNodeMock: element => Object.assign(
         document.createElement(element.type === 'TextInput' ? 'textarea' : 'div'), {
-            setNativeProps() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+            setNativeProps() {}, setDropCaret() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
         }) });
 }
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
@@ -88,12 +87,15 @@ function runGroups(screen: Screen) { return screen.findAllByType(ItemGroup).filt
 function finishedFilters(screen: Screen) { return screen.findAllByType(Item).filter(item => item.props.title === 'runs.showFinished'); }
 function listRequests() { return rpcRequests.filter(request => request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST || request.method.endsWith(`:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`)); }
 function machineRequests() { return homes.requests.filter(request => new URL(request.path, request.serverUrl).pathname === '/v1/machines'); }
+// Runs are part of the Overview's Project work (plan 10 MPG-8), shown in place once the machine has any.
 async function renderRuns() {
-    const screen = await renderScreen(<MachineSubPageScreen />);
-    await waitForHomeGovernance(() => expect(runGroups(screen)).toHaveLength(1));
-    if (!pendingRuns) await waitForHomeGovernance(() => expect(screen.findByTestId('machine-runs-loading')).toBeNull());
+    const screen = await renderScreen(<MachinePageScreen />);
+    await waitForHomeGovernance(() => expect(listRequests().length).toBeGreaterThan(0));
+    if (runs.length > 0) await waitForHomeGovernance(() => expect(runGroups(screen)).toHaveLength(1));
+    else await flushHookEffects();
     return screen;
 }
+function groupTitles(screen: Screen) { return screen.findAllByType(ItemGroup).map(group => group.props.title); }
 function createExecutionRun(overrides: Partial<DaemonExecutionRunEntry> & Pick<DaemonExecutionRunEntry, 'runId'>): DaemonExecutionRunEntry {
     return { happyHomeDir: '/tmp/happier-test-home', pid: 123, happySessionId: 'sess-1', callId: 'call-1', sidechainId: 'side-1',
         intent: 'review', backendTarget: { kind: 'backend', backendId: 'codex' }, runClass: 'bounded', ioMode: 'request_response',
@@ -120,7 +122,7 @@ beforeEach(async () => {
     await sync.awaitBootstrapForegroundAcquisition();
     const machine = createMachineFixture({ activeAt: Date.now() });
     getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverA]: [machine], [serverB]: [machine] } });
-    route.params = { id: 'machine-1', page: 'work' };
+    route.params = { id: 'machine-1' };
 });
 afterEach(async () => {
     standardCleanup();
@@ -136,27 +138,48 @@ afterEach(async () => {
 });
 
 describe('MachineDetailScreen (execution runs section)', () => {
-    it('keeps runs off the Overview, which leads to them through its Project work row', async () => {
-        route.params = { id: 'machine-1' };
-        const screen = await renderScreen(<MachinePageScreen />);
-        await flushHookEffects();
-        expect(runGroups(screen)).toHaveLength(0);
-        expect(listRequests()).toHaveLength(0);
-        expect(screen.findByTestId('machine-page-row-work')).toBeTruthy();
-    });
-    it('loads daemon execution runs for online machines', async () => {
+    it('composes Project work in place on the Overview, after the vitals and before This machine', async () => {
+        runs = [createExecutionRun({ runId: 'run-1' })];
         const screen = await renderRuns();
         await flushHookEffects();
-        expect(listRequests().map(request => request.method)).toContain(`machine-1:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`);
-        expect(getActiveServerSnapshot().serverId).toBe(serverA);
-        expect(runGroups(screen)).toHaveLength(1);
+        // No row leads away to it: the machine's work is on the Overview itself (plan 10 MPG-8).
+        expect(screen.findByTestId('machine-page-row-work')).toBeNull();
+        const titles = groupTitles(screen);
+        const workAt = titles.indexOf('projectWorkers.workSection');
+        expect(workAt).toBeGreaterThanOrEqual(0);
+        expect(titles.indexOf('runs.title')).toBeGreaterThan(workAt);
+        expect(titles.indexOf('machineDetailPage.thisMachineTitle')).toBeGreaterThan(titles.indexOf('runs.title'));
     });
-    it('does not leave the runs section loading when the machine goes offline before they arrive', async () => {
+    it('keeps the Runs section absent while the machine has none, and shows nothing while the first read is out', async () => {
         pendingRuns = new Promise(resolve => { releaseRuns = () => resolve({ runs: [] }); });
         const screen = await renderRuns();
         await flushHookEffects();
+        expect(runGroups(screen)).toHaveLength(0);
+        expect(screen.findByTestId('machine-runs-loading')).toBeNull();
+        await act(async () => { releaseRuns?.(); });
+        await flushHookEffects();
+        expect(runGroups(screen)).toHaveLength(0);
+        expect(listRequests().map(request => request.method)).toContain(`machine-1:${RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST}`);
+        expect(getActiveServerSnapshot().serverId).toBe(serverA);
+    });
+    it('sends an old Project work link to the Overview', async () => {
+        route.params = { id: 'machine-1', page: 'work' };
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const screen = await renderScreen(<MachineSubPageScreen />);
+        await flushHookEffects();
+        expect(screen.findByTestId('machine-sub-page-header-work')).toBeNull();
+    });
+    it('does not leave the runs section loading when the machine goes offline before they arrive', async () => {
+        runs = [createExecutionRun({ runId: 'run-1' })];
+        const screen = await renderRuns();
+        await flushHookEffects();
         expect(runGroups(screen)).toHaveLength(1);
-        expect(screen.findByTestId('machine-runs-loading')).toBeTruthy();
+        pendingRuns = new Promise(resolve => { releaseRuns = () => resolve({ runs: [] }); });
+        const scrollView = screen.findAll(node => Boolean(node.props.refreshControl))[0];
+        await act(async () => { void scrollView!.props.refreshControl.props.onRefresh(); });
+        await flushHookEffects();
+        // The refresh keeps the runs it shows rather than swapping them for a loading line.
+        expect(runRows(screen, 'run-1')).toHaveLength(1);
         await act(async () => {
             const machine = createMachineFixture({ active: false, activeAt: 0 });
             getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverA]: [machine], [serverB]: [machine] } });
@@ -176,7 +199,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(breadcrumb).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ phase: 'success' }) }));
     });
     it('uses the requested route server when loading execution runs', async () => {
-        route.params = { id: 'machine-1', serverId: serverB, page: 'work' };
+        route.params = { id: 'machine-1', serverId: serverB };
         await renderRuns();
         await flushHookEffects();
         expect(getActiveServerSnapshot().serverId).toBe(serverB);
@@ -194,7 +217,7 @@ describe('MachineDetailScreen (execution runs section)', () => {
         route.params = { id: 'machine-1' };
         const screen = await renderScreen(<MachinePageScreen />);
         await flushHookEffects();
-        for (const page of ['work', 'sharing', 'agents', 'terminal', 'connection', 'installables', 'doctor', 'details']) {
+        for (const page of ['sharing', 'agents', 'terminal', 'connection', 'installables', 'doctor', 'details']) {
             expect(screen.findByTestId(`machine-page-row-${page}`)).toBeTruthy();
         }
         expect(screen.findByTestId('machine-detail-stop-daemon')).toBeNull();
@@ -217,10 +240,6 @@ describe('MachineDetailScreen (execution runs section)', () => {
         expect(runRows(screen, 'run-finished')).toHaveLength(1);
     });
     it('offers the finished-run filter only when finished runs exist', async () => {
-        const empty = await renderRuns();
-        await flushHookEffects();
-        expect(finishedFilters(empty)).toHaveLength(0);
-        await act(async () => empty.tree.unmount());
         runs = [createExecutionRun({ runId: 'running' })];
         const running = await renderRuns();
         await flushHookEffects();

@@ -5893,8 +5893,6 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 overview: "概覽",
             },
             thisMachineTitle: "此機器",
-            projectWorkWorkspaces: "工作區",
-            projectWorkWorkspacesSummary: ({ count, names }) => `${count} · ${names}`,
             connectionFollowsAccount: "跟隨你的帳號",
             subPages: {
                 sharing: "共享",
@@ -5904,10 +5902,8 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 tools: "工具",
                 doctor: "診斷",
                 details: "詳細資料",
-                work: "專案工作",
             },
             summaries: {
-                work: "執行、最近的工作階段和終端機",
                 terminalDirect: "工作階段直接開啟",
                 sharedByOwner: ({ owner }) => `${owner} 與你共享`,
                 sharedWithYou: "已與你共享",
