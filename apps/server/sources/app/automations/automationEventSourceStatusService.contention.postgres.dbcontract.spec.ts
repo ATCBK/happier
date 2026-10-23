@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { normalizePluginReleaseFactsV1 } from "@happier-dev/protocol";
 import { createPluginEventAutomationSetupResultV1JsonSchema } from "@happier-dev/protocol/automations/event-setup-result";
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { eventRouter } from "@/app/events/eventRouter";
 import { deleteAutomation, ensureAutomationEventCatalogStateTx } from "./automationCrudService";
 import { reportAutomationEventSourceStatusV1 } from "./automationEventSourceStatusService";
 
@@ -46,6 +47,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         await db.$connect();
         connected = true;
     });
+    afterEach(() => vi.restoreAllMocks());
     afterAll(async () => {
         if (connected) {
             const where = { accountId: { in: accountIds } };
@@ -99,7 +101,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         const catalog = { kind: "catalogReconciliation" as const, scope: { kind: "checkpointedPull" as const },
             observedRevision: "7", adoptedRevision: "7", state: "current" as const,
             scanStartedAt: Date.now(), nextRetryAt: null };
-        const report = (input: ReturnType<typeof source> | typeof catalog) =>
+        const report = (input: unknown) =>
             reportAutomationEventSourceStatusV1({ accountId: account.id, caller, input });
         return { account, automation, trigger, source, catalog, report };
     }
@@ -131,8 +133,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
         expect(interleaved).toBe(true);
     });
 
-    it.each([true, false])("preserves concurrent catalog status revisions when a row already exists: %s", async exists => {
+    it.each([true, false])("coalesces concurrent equal catalog receipts and publishes one semantic change: %s", async exists => {
         const input = await fixture();
+        const emitUpdate = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
         if (exists) await input.report(input.catalog);
         let interleaved = false;
         await observeTransactions(tx => {
@@ -144,7 +147,22 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
             }) as unknown as typeof tx.automationEventSourceCatalogStatus.findUnique;
         }, () => input.report(input.catalog));
         expect(await db.automationEventSourceCatalogStatus.findFirstOrThrow({ where: { accountId: input.account.id } }))
-            .toMatchObject({ revision: exists ? 3 : 2, observedRevision: 7n, state: "current" });
+            .toMatchObject({ revision: 1, observedRevision: 7n, state: "current" });
+        expect(emitUpdate.mock.calls.filter(([update]) => (
+            update.payload.body.t === "automation-source-status-updated"
+        ))).toHaveLength(1);
+
+        await input.report({
+            ...input.catalog,
+            adoptedRevision: null,
+            state: "reconciling",
+            nextRetryAt: Date.now() + 60_000,
+        });
+        expect(await db.automationEventSourceCatalogStatus.findFirstOrThrow({ where: { accountId: input.account.id } }))
+            .toMatchObject({ revision: 2, observedRevision: 7n, adoptedRevision: null, state: "reconciling" });
+        expect(emitUpdate.mock.calls.filter(([update]) => (
+            update.payload.body.t === "automation-source-status-updated"
+        ))).toHaveLength(2);
         expect(interleaved).toBe(true);
     });
 

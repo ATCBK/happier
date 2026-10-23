@@ -765,7 +765,7 @@ describe("Automation Event source status", () => {
         });
     });
 
-    it("publishes one content-free Automation invalidation after each committed source and catalog status", async () => {
+    it("publishes catalog status only for semantic changes, not unchanged receipts", async () => {
         await seed();
         const emitUpdate = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
         const changeKey = {
@@ -844,6 +844,62 @@ describe("Automation Event source status", () => {
             }),
             recipientFilter: { type: "user-scoped-only" },
         }));
+
+        const unchangedCatalogReceipt = {
+            kind: "catalogReconciliation" as const,
+            scope: { kind: "checkpointedPull" as const },
+            observedRevision: "7",
+            adoptedRevision: "7",
+            state: "current" as const,
+            scanStartedAt: 1_723_247_200_000,
+            nextRetryAt: null,
+        };
+        for (let receipt = 0; receipt < 3; receipt += 1) {
+            await reportAutomationEventSourceStatusV1({
+                accountId: ACCOUNT_ID,
+                caller,
+                input: unchangedCatalogReceipt,
+            });
+        }
+
+        await expect(db.automationEventSourceCatalogStatus.findFirstOrThrow({
+            where: { accountId: ACCOUNT_ID },
+            select: { revision: true },
+        })).resolves.toEqual({ revision: 1 });
+        await expect(db.accountChange.findUnique({
+            where: { accountId_kind_entityId: changeKey },
+            select: { cursor: true },
+        })).resolves.toEqual({ cursor: 2 });
+        expect(emitUpdate.mock.calls.filter(([update]) => (
+            update.payload.body.t === "automation-source-status-updated"
+        ))).toHaveLength(2);
+
+        await reportAutomationEventSourceStatusV1({
+            accountId: ACCOUNT_ID,
+            caller,
+            input: {
+                ...unchangedCatalogReceipt,
+                adoptedRevision: null,
+                state: "reconciling",
+                nextRetryAt: 1_723_247_260_000,
+            },
+        });
+
+        await expect(db.automationEventSourceCatalogStatus.findFirstOrThrow({
+            where: { accountId: ACCOUNT_ID },
+            select: { revision: true, state: true, nextRetryAt: true },
+        })).resolves.toEqual({
+            revision: 2,
+            state: "reconciling",
+            nextRetryAt: new Date(1_723_247_260_000),
+        });
+        await expect(db.accountChange.findUnique({
+            where: { accountId_kind_entityId: changeKey },
+            select: { cursor: true },
+        })).resolves.toEqual({ cursor: 3 });
+        expect(emitUpdate.mock.calls.filter(([update]) => (
+            update.payload.body.t === "automation-source-status-updated"
+        ))).toHaveLength(3);
     });
 
     it("does not create an Automation change or event for a rejected source report", async () => {

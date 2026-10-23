@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import { AutomationEventSourceStatusReportV1Schema, automationEventSourceCatalogScopeKeyV1, type AutomationEventSourceStatusReportV1 } from '@happier-dev/protocol/automations/automationActionSpecsV1';
 import { type ParsedPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest/v2';
 
@@ -447,9 +449,19 @@ async function reportCatalogStatus(params: CatalogStatusParams): Promise<void> {
             accountId_eventPluginId_reporterMaterializationId_scopeKey:
                 key,
         },
-        select: { revision: true },
+        select: {
+            reporterMachineId: true,
+            reporterMachineInstallationId: true,
+            reporterSourceCustody: true,
+            observedRevision: true,
+            adoptedRevision: true,
+            state: true,
+            scanStartedAt: true,
+            nextRetryAt: true,
+            revision: true,
+        },
     });
-    const values = {
+    const semanticValues = {
         reporterMachineId: params.caller.machineId,
         reporterMachineInstallationId: params.caller.machineInstallationId,
         reporterSourceCustody: params.caller.sourceCustody,
@@ -458,6 +470,20 @@ async function reportCatalogStatus(params: CatalogStatusParams): Promise<void> {
         state: params.input.state,
         scanStartedAt: toNullableDate(params.input.scanStartedAt),
         nextRetryAt: toNullableDate(params.input.nextRetryAt),
+    };
+    if (
+        existing
+        && existing.reporterMachineId === semanticValues.reporterMachineId
+        && existing.reporterMachineInstallationId === semanticValues.reporterMachineInstallationId
+        && isDeepStrictEqual(existing.reporterSourceCustody, semanticValues.reporterSourceCustody)
+        && existing.observedRevision === semanticValues.observedRevision
+        && existing.adoptedRevision === semanticValues.adoptedRevision
+        && existing.state === semanticValues.state
+        && existing.scanStartedAt?.getTime() === semanticValues.scanStartedAt?.getTime()
+        && existing.nextRetryAt?.getTime() === semanticValues.nextRetryAt?.getTime()
+    ) return;
+    const values = {
+        ...semanticValues,
         reportedAt: new Date(),
         revision: addBoundedCounter(existing?.revision ?? 0, 1),
     };
