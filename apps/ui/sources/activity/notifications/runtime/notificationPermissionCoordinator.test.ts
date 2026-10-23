@@ -4,7 +4,7 @@ import { createNotificationPermissionCoordinator } from './notificationPermissio
 const request = { serverId: 'server', accountId: 'account', sessionId: 'session', requestId: 'request', occurrenceId: 'occurrence', action: 'allow' as const };
 
 describe('notification permission callback coordination', () => {
-    it('joins concurrent listener/task work and excludes a conflicting active decision', async () => {
+    it('joins listener/task work and excludes conflicting decisions before and after confirmation', async () => {
         const run = createNotificationPermissionCoordinator();
         let finish!: (value: unknown) => void;
         const send = vi.fn(async (issued: () => void) => {
@@ -17,6 +17,8 @@ describe('notification permission callback coordination', () => {
         await expect(run({ ...request, action: 'deny' }, send)).resolves.toEqual({ status: 'conflict' });
         finish({ ok: true });
         await expect(first).resolves.toEqual({ status: 'confirmed' });
+        expect(run(request, send)).toBe(first);
+        await expect(run({ ...request, action: 'deny' }, send)).resolves.toEqual({ status: 'conflict' });
         expect(send).toHaveBeenCalledTimes(1);
     });
 
@@ -48,12 +50,25 @@ describe('notification permission callback coordination', () => {
         expect(send).toHaveBeenCalledTimes(2);
     });
 
-    it('never automatically retries an unknown outcome or executes a saved response', async () => {
+    it('does not reuse another authenticated account\'s confirmation', async () => {
         const run = createNotificationPermissionCoordinator();
-        const send = vi.fn(async (issued: () => void) => { issued(); throw new Error('lost acknowledgement'); });
+        let accepted = true;
+        const send = vi.fn(async (issued: () => void) => { issued(); return { ok: accepted }; });
+        await expect(run(request, send)).resolves.toEqual({ status: 'confirmed' });
+        accepted = false;
+        await expect(run({ ...request, accountId: 'another-account' }, send)).resolves.toEqual({ status: 'rejected' });
+        expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaves an unknown outcome for a fresh press without automatically retrying or executing a saved response', async () => {
+        const run = createNotificationPermissionCoordinator();
+        const send = vi.fn<(issued: () => void) => Promise<unknown>>(async (issued) => { issued(); throw new Error('lost acknowledgement'); });
         await expect(run(request, send)).resolves.toEqual({ status: 'unconfirmed' });
         await expect(run(request, send, { allowExecution: false })).resolves.toEqual({ status: 'not_sent' });
         expect(send).toHaveBeenCalledTimes(1);
+        send.mockImplementation(async (issued) => { issued(); return { ok: true }; });
+        await expect(run(request, send)).resolves.toEqual({ status: 'confirmed' });
+        expect(send).toHaveBeenCalledTimes(2);
     });
 
     it.each([false, true])('releases cancelled work and fences late issuance, issued=%s', async (wasIssued) => {

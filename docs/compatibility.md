@@ -602,8 +602,11 @@ does not resume background sync or change the active server.
 
 The foreground listener and native task share one coordinator. Identical active
 decisions share work; conflicting active decisions cannot overwrite it. Only
-explicit application success confirms the response. Failed or uncertain sends
-are not automatically retried. Runtime response-consumption notes prevent a
+explicit application success confirms the response. Within the same JS runtime,
+an identical Account, occurrence, and action reuses that confirmed acknowledgement
+so a second native delivery cannot produce a false recovery notice. Other outcomes
+release their work slot and require fresh intent to retry; no confirmation memory
+survives JS runtime recreation. Runtime response-consumption notes prevent a
 handled cached response from navigating again after remount. Only a generic
 presentation-recovery flag is persisted, without permission decisions, tokens,
 tool arguments, or a lifetime request quota.

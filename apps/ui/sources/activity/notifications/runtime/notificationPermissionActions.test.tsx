@@ -141,8 +141,29 @@ describe('Android notification permission entry points', () => {
         await hook.unmount();
     });
 
-    it('uses the current application result rather than historical local success', async () => {
+    it('keeps a confirmed background response from becoming a false review notice on later listener delivery', async () => {
+        const { consumeNotificationPermissionRecoveryNeeded } = await import('./notificationPermissionRecovery');
+        consumeNotificationPermissionRecoveryNeeded();
+        const nativeResponse = response();
+        const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
+        try {
+            expect(boundary.listener).toEqual(expect.any(Function));
+            await expect(handleNotificationBackgroundTask({ data: nativeResponse })).resolves.toMatchObject({ status: 'confirmed' });
+            // The actual CLI no longer has a pending waiter after accepting this occurrence.
+            boundary.rpc.mockResolvedValue({ ok: true, result: { ok: false, errorCode: 'permission_request_not_found' } });
+            await act(async () => { boundary.listener?.(nativeResponse); });
+            await flushHookEffects();
+            expect(boundary.rpc).toHaveBeenCalledTimes(1);
+            expect(boundary.alert).not.toHaveBeenCalled();
+            expect(consumeNotificationPermissionRecoveryNeeded()).toBe(false);
+            expect(boundary.push).not.toHaveBeenCalled();
+            expect(boundary.navigate).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); }
+    });
+
+    it('uses the current application result for a later permission occurrence', async () => {
         await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'confirmed' });
+        responseSequence += 1;
         boundary.rpc.mockResolvedValue({ ok: true, result: { ok: false, errorCode: 'permission_request_not_found' } });
         await expect(handleNotificationBackgroundTask({ data: response(undefined, 'another') })).resolves.toMatchObject({ status: 'rejected' });
         await expect(handleNotificationBackgroundTask({ data: response(undefined, null) })).resolves.toMatchObject({ status: 'rejected' });

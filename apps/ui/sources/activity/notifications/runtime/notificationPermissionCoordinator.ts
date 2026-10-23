@@ -10,9 +10,9 @@ export type NotificationPermissionOutcome = Readonly<{
     status: 'not_sent' | 'confirmed' | 'rejected' | 'unconfirmed' | 'ignored' | 'conflict';
 }>;
 
-/** Coordinates active callbacks only. The CLI owns permission admission and settlement. */
+/** Shares callback work and confirmed CLI acknowledgements within this JS runtime. */
 export function createNotificationPermissionCoordinator() {
-    const inFlight = new Map<string, { action: 'allow' | 'deny'; promise: Promise<NotificationPermissionOutcome> }>();
+    const responses = new Map<string, { action: 'allow' | 'deny'; promise: Promise<NotificationPermissionOutcome> }>();
 
     return function run(
         request: NotificationPermissionRequest,
@@ -20,8 +20,8 @@ export function createNotificationPermissionCoordinator() {
         options: Readonly<{ allowExecution?: boolean; signal?: AbortSignal }> = {},
     ): Promise<NotificationPermissionOutcome> {
         const key = JSON.stringify([request.serverId, request.accountId, request.sessionId, request.requestId, request.occurrenceId]);
-        const pending = inFlight.get(key);
-        if (pending) return pending.action === request.action ? pending.promise : Promise.resolve({ status: 'conflict' });
+        const previous = responses.get(key);
+        if (previous) return previous.action === request.action ? previous.promise : Promise.resolve({ status: 'conflict' });
         // Observing a cached response must never acquire execution ownership.
         if (options.allowExecution === false || options.signal?.aborted) return Promise.resolve({ status: 'not_sent' });
 
@@ -55,8 +55,12 @@ export function createNotificationPermissionCoordinator() {
                 lifetime.abort();
             }
         })();
-        inFlight.set(key, { action: request.action, promise });
-        void promise.finally(() => { if (inFlight.get(key)?.promise === promise) inFlight.delete(key); });
+        responses.set(key, { action: request.action, promise });
+        void promise.then((outcome) => {
+            // Retain only an actual CLI acknowledgement for this immutable occurrence.
+            // Every other outcome stays retryable; nothing survives JS runtime recreation.
+            if (outcome.status !== 'confirmed' && responses.get(key)?.promise === promise) responses.delete(key);
+        });
         return promise;
     };
 }
