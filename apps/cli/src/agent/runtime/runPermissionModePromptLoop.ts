@@ -1606,21 +1606,36 @@ export async function runPermissionModePromptLoop(opts: {
                 ...(localId ? { contextOnlyWorkerLocalId: localId } : {}),
               } : {}),
             }) ?? null;
-        const withdrawnFollowLocalInputIds = preparedHostContext?.withdrawnFollowLocalInputIds;
+        const preparedFollowContext = preparedHostContext;
         if (!hostContextOnly && preparedHostContext?.recheckAdmission
           && !await preparedHostContext.recheckAdmission(dispatchAbortSignal)) preparedHostContext = null;
-        const withdrawnFollowFailure = { code: 'session_follow_original_withdrawn',
-          message: 'The followed Run permission request is no longer outstanding', retryable: false };
+        const withdrawnFollowLocalInputIds = preparedFollowContext?.withdrawnFollowLocalInputIds;
+        const withdrawFollowInput = async (localId: string) => {
+          if (!await opts.session.withdrawSessionInputBeforeProviderDispatch({ localId, signal: dispatchAbortSignal })) {
+            throw new PreTurnPromptFailure({ code: 'session_follow_withdrawal_unavailable',
+              message: 'The followed request withdrawal could not be confirmed', retryable: true,
+              reason: 'provider_unavailable_before_acceptance' });
+          }
+        };
         for (const follow of message.message.followDeliveries ?? []) {
           if (!withdrawnFollowLocalInputIds?.includes(follow.localInputId) || follow.localInputId === localId) continue;
-          await observePreTurnFailureSettlement({ session: opts.session, error: withdrawnFollowFailure,
-            message: { text: '', localId: follow.localInputId, userMessageSeq: follow.userMessageSeq } });
+          await withdrawFollowInput(follow.localInputId);
           opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
             && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
         }
-        if (localId && withdrawnFollowLocalInputIds?.includes(localId)) throw new PreTurnPromptFailure(withdrawnFollowFailure);
+        if (localId && withdrawnFollowLocalInputIds?.includes(localId)) {
+          await withdrawFollowInput(localId);
+          inputWithdrawnBeforeTurn = true;
+          return;
+        }
         if (message.message.followDeliveries?.some(delivery => delivery.localInputId === message.message.localId)
           && !preparedHostContext?.representedFollowLocalInputIds?.includes(localId ?? '')) {
+          // Losing the route also removes the source observation, so hydration
+          // cannot prove withdrawal. Pending still owns that exact original.
+          if (localId && await opts.session.reconcileSessionInputForProviderDispatch({ localId, signal: dispatchAbortSignal }) === 'withdrawn') {
+            inputWithdrawnBeforeTurn = true;
+            return;
+          }
           throw new PreTurnPromptFailure({ code: 'session_follow_context_unavailable',
             message: 'Follow context is unavailable before provider dispatch', retryable: true,
             reason: 'provider_unavailable_before_acceptance' });

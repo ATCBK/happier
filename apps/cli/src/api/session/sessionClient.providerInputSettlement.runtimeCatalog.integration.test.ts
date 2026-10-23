@@ -191,7 +191,8 @@ describe('ApiSessionClient provider-input settlement', () => {
     }
   });
 
-  it.each(['before hydration', 'at final recheck', 'after manager detaches', 'after manager detaches (legacy)'] as const)('cancels a resolved Follow question %s before dispatching the next human input', async resolvedAt => {
+  it.each(['before hydration', 'at final recheck', 'after manager detaches', 'after manager detaches (legacy)',
+    'while source observation is unavailable', 'while admission is unavailable'] as const)('reconciles a queued Follow original %s before the next human input', async resolvedAt => {
     const localId = 'resolved-question-input';
     const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
       original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 1,
@@ -200,19 +201,25 @@ describe('ApiSessionClient provider-input settlement', () => {
     const observed = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 1, turn: null };
     const detached = resolvedAt.startsWith('after manager detaches');
     const legacy = resolvedAt.endsWith('(legacy)');
+    const unavailable = resolvedAt.startsWith('while');
     const admission = buildTrustedHostSessionInputAdmissionV1('agent');
     const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedAccount', actorAccountId: 'account',
       sessionRelationship: 'owner', admittedTarget: { homeId: 'home', accountId: 'account', sessionId: 's1',
         machineId: 'machine', installationId: 'installation' }, followDeliveryV1: delivery });
     vi.mocked(axios.get).mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
-      if (path === `/v2/sessions/s1/messages/by-local-id/${localId}`) return { status: 200, data: { message: {
+      if (path === '/v2/sessions/s1/delivery-mutes') return { status: 200, data: { scopes: [] } };
+      if (path === `/v2/sessions/s1/messages/by-local-id/${localId}`) {
+        if (resolvedAt === 'while admission is unavailable') throw createTranscriptLookupHttpError({
+          message: 'Home unavailable', status: 503, data: { error: 'unavailable' } });
+        return { status: 200, data: { message: {
         id: 'retained-follow-message', seq: 11, localId, createdAt: 1, updatedAt: 1, messageRole: 'user',
         inputAdmissionReceipt: receipt,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Followed source changed.' },
           ...(legacy ? {} : { meta: { happierInputRequestV1: { ...admission.request, followDeliveryV1: delivery },
             happierProvenanceV1: admission.provenance } }) } },
-      } } };
+        } } };
+      }
       if (path === '/v2/sessions/s1/pending') return { data: { pending: [] } };
       throw new Error(`Unexpected HTTP GET: ${path}`);
     });
@@ -222,7 +229,7 @@ describe('ApiSessionClient provider-input settlement', () => {
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
       requests.push({ event, payload });
       if (event === SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) return { ok: true, v: 1, sessionId: 's1',
-        publisherGeneration: '1', currentSourceSessionIds: detached ? [] : ['source'], observations: !detached && pending.get(localId) === 'delivering' ? [{
+        publisherGeneration: '1', currentSourceSessionIds: detached || unavailable ? [] : ['source'], observations: !detached && !unavailable && pending.get(localId) === 'delivering' ? [{
           kind: 'admitted_input', localInputId: localId, delivery, sourceSessionId: 'source', destinationSessionId: 's1',
           delivered: { ...observed, agentStateVersion: 0 }, observed,
         }] : [] };
@@ -280,6 +287,16 @@ describe('ApiSessionClient provider-input settlement', () => {
         setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {}, formatPromptErrorMessage: String,
         registerProviderAcceptedEffect() {}, onPromptFailure,
       });
+      if (unavailable) {
+        expect(sendTurnPrompt).not.toHaveBeenCalled();
+        expect(activePending()).toEqual([localId, 'next-human-input']);
+        expect(session.hasPendingProviderInput(localId)).toBe(true);
+        expect(onPromptFailure).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          settlement: expect.objectContaining({ code: 'session_follow_context_unavailable', retryable: true }),
+        }));
+        expect(requests.some(request => request.event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1)).toBe(false);
+        return;
+      }
       expect(sendTurnPrompt).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('A new human request'),
         expect.objectContaining({ localId: 'next-human-input' }));
       expect(activePending()).toEqual(['next-human-input']);

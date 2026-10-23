@@ -2971,8 +2971,14 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     /** Reuse original protected-input custody at the final native dispatch boundary. */
-    reconcileSessionInputForProviderDispatch(input: Parameters<SessionClientInteractionApi['reconcileSessionInputForProviderDispatch']>[0]) {
-        return this.interactionApi.reconcileSessionInputForProviderDispatch(input);
+    async reconcileSessionInputForProviderDispatch(input: Parameters<SessionClientInteractionApi['reconcileSessionInputForProviderDispatch']>[0]) {
+        const result = await this.interactionApi.reconcileSessionInputForProviderDispatch(input);
+        if (result === 'withdrawn' && this.hasPendingProviderInput(input.localId)
+            && !this.dispatchedPendingProviderInputLocalIds.has(input.localId)) {
+            this.deletePendingProviderInputLocalState(input.localId);
+            this.emit('pending-provider-input-retired', input.localId);
+        }
+        return result;
     }
 
     /** Exact committed row lookup for host reply publication and native final outcomes. */

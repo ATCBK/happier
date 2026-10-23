@@ -297,14 +297,18 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             return result.status === 'held' ? { status: 'held' }
                 : result.status === 'rejected' ? { status: 'rejected', code: result.code } : { status: 'outcomeUnknown' };
         }
-        if (requestEqualityEvidenceV1) {
+        const retainedFollowInput = retainedReceipt.success && retainedReceipt.data.followDeliveryV1 !== undefined;
+        if (requestEqualityEvidenceV1 || retainedFollowInput) {
             const result = await settlePendingQueueV2Admission({
                 signal: params.signal,
                 socket: params.socket, sessionId: params.sessionId, localId,
-                decision: { kind: 'admit', finalContent: params.message.content, requestEqualityEvidenceV1 },
+                decision: { kind: 'admit', finalContent: params.message.content,
+                    ...(requestEqualityEvidenceV1 ? { requestEqualityEvidenceV1 } : {}) },
             });
             if (result.status === 'rejected') return { status: 'rejected', code: result.code };
+            if (result.status === 'held') return { status: 'held' };
             if (result.status === 'outcomeUnknown' || result.localId !== localId) return { status: 'outcomeUnknown' };
+            if (retainedFollowInput) return { status: 'admitted', message: params.message };
         }
         return { status: 'legacy', message: params.message };
     }
