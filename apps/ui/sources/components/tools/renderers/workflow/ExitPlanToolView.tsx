@@ -7,6 +7,7 @@ import { ToolSectionView } from '../../shell/presentation/ToolSectionView';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { knownTools } from '../../catalog';
 import { resolvePermissionRequestId } from '../core/resolvePermissionRequestId';
+import { normalizeToolNameForView } from '@/components/tools/normalization/policy/normalizeToolNameForView';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -142,6 +143,9 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
     const findActive = useTranscriptFindActive();
     const source = useSessionTranscriptSource();
     const sourceInteraction = source.useInteraction();
+    const agentState = source.useAgentState();
+    const currentAgentState = React.useRef(agentState);
+    currentAgentState.current = agentState;
     const actions = source.actions;
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -156,14 +160,21 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
 
     const isRunning = tool.state === 'running';
     const canApprovePermissions = actions !== null && sourceInteraction.canApprovePermissions && interaction?.canApprovePermissions !== false;
-    const canInteract = isRunning && !isResponded && sessionId && canApprovePermissions;
+    const permissionRequestId = resolvePermissionRequestId(tool);
+    const activeRequest = permissionRequestId ? agentState?.requests?.[permissionRequestId] : null;
+    const hasActivePlanRequest = typeof activeRequest?.tool === 'string'
+        && normalizeToolNameForView(activeRequest.tool) === 'ExitPlanMode';
+    const canInteract = isRunning && !isResponded && sessionId && canApprovePermissions && hasActivePlanRequest;
+    const hasLivePlanRequest = React.useCallback(() => {
+        const request = permissionRequestId ? currentAgentState.current?.requests?.[permissionRequestId] : null;
+        return typeof request?.tool === 'string' && normalizeToolNameForView(request.tool) === 'ExitPlanMode';
+    }, [permissionRequestId]);
     const disabledMessage =
         resolvePermissionDisabledMessage(interaction?.permissionDisabledReason ?? sourceInteraction.permissionDisabledReason);
-    const permissionRequestId = resolvePermissionRequestId(tool);
     const primaryAnswerRef = usePendingPromptPrimaryFocus(permissionRequestId,
         Boolean(canInteract) && !isApproving && !isRejecting && !isRequestingChanges, messageId);
     const handleApprove = React.useCallback(async (mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', opts?: { updatedPermissions?: unknown }) => {
-        if (!sessionId || isApproving || isRejecting || !canInteract) return;
+        if (!sessionId || isApproving || isRejecting || !canInteract || !hasLivePlanRequest()) return;
         const permissionId = permissionRequestId;
         if (!permissionId) {
             Modal.alert(t('common.error'), t('errors.missingPermissionId'));
@@ -185,10 +196,10 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
         } finally {
             setIsApproving(false);
         }
-    }, [actions, source, sessionId, permissionRequestId, canInteract, isApproving, isRejecting]);
+    }, [actions, source, sessionId, permissionRequestId, canInteract, hasLivePlanRequest, isApproving, isRejecting]);
 
     const handleApproveOptions = React.useCallback(() => {
-        if (!canInteract || isApproving || isRejecting) return;
+        if (!canInteract || isApproving || isRejecting || !hasLivePlanRequest()) return;
 
         const suggestionsRaw = tool.permission?.suggestions;
         const suggestionList = Array.isArray(suggestionsRaw) ? suggestionsRaw : [];
@@ -251,10 +262,10 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
                 style: 'cancel',
             },
         ]);
-    }, [canInteract, isApproving, isRejecting, handleApprove, tool.permission?.suggestions]);
+    }, [canInteract, hasLivePlanRequest, isApproving, isRejecting, handleApprove, tool.permission?.suggestions]);
 
     const handleReject = React.useCallback(async () => {
-        if (!sessionId || isApproving || isRejecting || !canInteract) return;
+        if (!sessionId || isApproving || isRejecting || !canInteract || !hasLivePlanRequest()) return;
         const permissionId = permissionRequestId;
         if (!permissionId) {
             Modal.alert(t('common.error'), t('errors.missingPermissionId'));
@@ -272,12 +283,12 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
         } finally {
             setIsRejecting(false);
         }
-    }, [actions, source, sessionId, permissionRequestId, canInteract, isApproving, isRejecting]);
+    }, [actions, source, sessionId, permissionRequestId, canInteract, hasLivePlanRequest, isApproving, isRejecting]);
 
     const handleRequestChanges = React.useCallback(() => {
-        if (!canInteract || isApproving || isRejecting) return;
+        if (!canInteract || isApproving || isRejecting || !hasLivePlanRequest()) return;
         setIsRequestingChanges(true);
-    }, [canInteract, isApproving, isRejecting]);
+    }, [canInteract, hasLivePlanRequest, isApproving, isRejecting]);
 
     const handleCancelRequestChanges = React.useCallback(() => {
         if (isApproving || isRejecting) return;
@@ -286,7 +297,7 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
     }, [isApproving, isRejecting]);
 
     const handleSendChangeRequest = React.useCallback(async () => {
-        if (!sessionId || isApproving || isRejecting || !canInteract) return;
+        if (!sessionId || isApproving || isRejecting || !canInteract || !hasLivePlanRequest()) return;
         const permissionId = permissionRequestId;
         if (!permissionId) {
             Modal.alert(t('common.error'), t('errors.missingPermissionId'));
@@ -311,7 +322,7 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, me
         } finally {
             setIsRejecting(false);
         }
-    }, [actions, source, sessionId, permissionRequestId, canInteract, isApproving, isRejecting, changeRequestText]);
+    }, [actions, source, sessionId, permissionRequestId, canInteract, hasLivePlanRequest, isApproving, isRejecting, changeRequestText]);
 
     return (
         <ToolSectionView>

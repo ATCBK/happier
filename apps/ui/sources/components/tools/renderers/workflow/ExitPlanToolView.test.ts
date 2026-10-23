@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import type { ToolCall } from "@happier-dev/session-core/messages";
+import type { AgentState } from "@happier-dev/session-core/state";
 import { collectHostText, makeToolCall, makeToolViewProps, standardCleanup } from '@/dev/testkit';
 import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource } from '@/dev/testkit';
 
@@ -10,6 +11,18 @@ const sessionAllow = vi.fn();
 const sessionAllowWithPermissionUpdates = vi.fn();
 const sessionDeny = vi.fn();
 const sendMessage = vi.fn();
+let liveRequests: NonNullable<AgentState['requests']> = {};
+let activeSource: ReturnType<typeof createTestSessionTranscriptSource>;
+
+function setLivePlanRequest(id: string, tool = 'ExitPlanMode') {
+    liveRequests = { [id]: { tool, arguments: { plan: 'plan' }, createdAt: 1 } };
+}
+
+async function retirePlanRequest() {
+    await act(async () => {
+        activeSource.update({ messages: [], reducerState: null, metadata: null, agentState: { requests: {} } });
+    });
+}
 vi.mock('react-native', async () =>
     (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 // Radix is the DOM boundary; alert registration, display and dismissal stay real.
@@ -63,21 +76,20 @@ describe('ExitPlanToolView', () => {
     }
 
     async function renderView(tool: ToolCall, overrides: Record<string, unknown> = {}) {
-        let tree: renderer.ReactTestRenderer | undefined;
-        tree = (await renderWithSessionTranscriptSource(React.createElement(ModalProvider, null, React.createElement(
-                    ExitPlanToolView,
-                    makeToolViewProps(tool, { sessionId: 's1', ...overrides }),
-                )), createTestSessionTranscriptSource({
-                    sessionId: 's1', serverId: typeof overrides.serverId === 'string' ? overrides.serverId : null,
-                    interaction: { canSendMessages: true, canApprovePermissions: true },
-                    actions: {
-                        respondToPermission: (params) => params.approved
-                            ? params.updatedPermissions !== undefined ? sessionAllowWithPermissionUpdates(params) : sessionAllow(params)
-                            : sessionDeny(params),
-                        answerUserAction: async () => {}, abort: async () => {}, submitMessage: (params) => sendMessage(params),
-                    },
-                }))).tree;
-        return tree!;
+        activeSource = createTestSessionTranscriptSource({
+            sessionId: 's1', serverId: typeof overrides.serverId === 'string' ? overrides.serverId : null,
+            agentState: { requests: liveRequests },
+            interaction: { canSendMessages: true, canApprovePermissions: true },
+            actions: {
+                respondToPermission: (params) => params.approved
+                    ? params.updatedPermissions !== undefined ? sessionAllowWithPermissionUpdates(params) : sessionAllow(params)
+                    : sessionDeny(params),
+                answerUserAction: async () => {}, abort: async () => {}, submitMessage: (params) => sendMessage(params),
+            },
+        });
+        return (await renderWithSessionTranscriptSource(React.createElement(ModalProvider, null, React.createElement(
+            ExitPlanToolView, makeToolViewProps(tool, { sessionId: 's1', ...overrides }),
+        )), activeSource)).tree;
     }
 
     beforeAll(async () => {
@@ -89,8 +101,49 @@ describe('ExitPlanToolView', () => {
         sessionAllowWithPermissionUpdates.mockReset();
         sessionDeny.mockReset();
         sendMessage.mockReset();
+        setLivePlanRequest('perm1');
     });
     afterEach(async () => { await standardCleanup(); });
+
+    it.each(['missing', 'native-wrapper', 'same-id-question'] as const)('hides original plan actions for a %s request', async (request) => {
+        liveRequests = request === 'missing' ? {} : {
+            [request === 'native-wrapper' ? 'claude_dialog_choice_native' : 'perm1']: {
+                tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [] }, createdAt: 1,
+            },
+        };
+        const tree = await renderView(makeRunningTool());
+        expect(tree.findAllByTestId('exit-plan-approve')).toHaveLength(0);
+        expect(tree.findAllByTestId('exit-plan-reject')).toHaveLength(0);
+        expect(tree.findAllByTestId('exit-plan-request-changes')).toHaveLength(0);
+        expect(sessionAllow).not.toHaveBeenCalled();
+        expect(sessionDeny).not.toHaveBeenCalled();
+    });
+
+    it.each(['approve', 'reject', 'request-changes'] as const)('does not dispatch stale %s after the source request retires', async (action) => {
+        const tree = await renderView(makeRunningTool());
+        if (action === 'request-changes') {
+            await tree.pressByTestIdAsync('exit-plan-request-changes');
+            await act(async () => { tree.changeTextByTestId('exit-plan-request-changes-input', 'Change the plan'); });
+        }
+        const button = tree.findByTestId(action === 'request-changes' ? 'exit-plan-request-changes-send' : `exit-plan-${action}`);
+        expect(button).toBeTruthy();
+        const onPress: () => unknown = button!.props.onPress;
+        await retirePlanRequest();
+        await act(async () => { await onPress(); });
+        expect(sessionAllow).not.toHaveBeenCalled();
+        expect(sessionDeny).not.toHaveBeenCalled();
+        expect(tree.findAllByTestId('exit-plan-approve')).toHaveLength(0);
+        expect(collectHostText(tree)).not.toContain('tools.exitPlanMode.responded');
+    });
+
+    it('does not dispatch an approval menu choice after the source request retires', async () => {
+        const tree = await renderView(makeRunningTool());
+        await tree.pressByTestIdAsync('exit-plan-approve-menu');
+        await retirePlanRequest();
+        await pressAlertChoice(tree, 'agentInput.permissionMode.acceptEdits');
+        expect(sessionAllowWithPermissionUpdates).not.toHaveBeenCalled();
+        expect(collectHostText(tree)).not.toContain('tools.exitPlanMode.responded');
+    });
 
     it('approves via permission RPC and does not send a follow-up user message', async () => {
         sessionAllow.mockResolvedValueOnce(undefined);
@@ -199,6 +252,7 @@ describe('ExitPlanToolView', () => {
     });
 
     it('falls back to tool.id when approve is pressed before permission metadata is reattached', async () => {
+        setLivePlanRequest('toolu_reconnect', 'ExitPlanMode');
         sessionAllow.mockResolvedValueOnce(undefined);
         const tree = await renderView(makeRunningTool({ id: 'toolu_reconnect', permission: undefined }));
 
@@ -212,6 +266,7 @@ describe('ExitPlanToolView', () => {
     });
 
     it('falls back to tool.id when reject is pressed before permission metadata is reattached', async () => {
+        setLivePlanRequest('toolu_reconnect', 'exit_plan_mode');
         sessionDeny.mockResolvedValueOnce(undefined);
         const tree = await renderView(makeRunningTool({ id: 'toolu_reconnect', permission: undefined }));
 
@@ -225,6 +280,7 @@ describe('ExitPlanToolView', () => {
     });
 
     it('falls back to tool.id when requesting changes before permission metadata is reattached', async () => {
+        setLivePlanRequest('toolu_reconnect', 'ExitPlanMode');
         sessionDeny.mockResolvedValueOnce(undefined);
         const tree = await renderView(makeRunningTool({ id: 'toolu_reconnect', permission: undefined }));
 
@@ -283,32 +339,11 @@ describe('ExitPlanToolView', () => {
         expectAlert(tree, 'tools.exitPlanMode.requestChangesEmpty');
     });
 
-    it('does not mark as responded when approve is pressed without any permission request id', async () => {
+    it('hides actions without any permission request id', async () => {
         const tree = await renderView(makeRunningTool({ id: undefined, permission: undefined }));
-
-        await act(async () => {
-            await tree.pressByTestIdAsync('exit-plan-approve');
-        });
-
-        expect(sessionAllow).toHaveBeenCalledTimes(0);
-        expectAlert(tree, 'errors.missingPermissionId');
-
-        const buttonsAfter = tree.findAllByType('TouchableOpacity' as any);
-        expect(buttonsAfter.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('does not mark as responded when reject is pressed without any permission request id', async () => {
-        const tree = await renderView(makeRunningTool({ id: undefined, permission: undefined }));
-
-        await act(async () => {
-            await tree.pressByTestIdAsync('exit-plan-reject');
-        });
-
-        expect(sessionDeny).toHaveBeenCalledTimes(0);
-        expectAlert(tree, 'errors.missingPermissionId');
-
-        const buttonsAfter = tree.findAllByType('TouchableOpacity' as any);
-        expect(buttonsAfter.length).toBeGreaterThanOrEqual(2);
+        expect(tree.findAllByTestId('exit-plan-approve')).toHaveLength(0);
+        expect(tree.findAllByTestId('exit-plan-reject')).toHaveLength(0);
+        expectNoAlert(tree);
     });
 
     it('does not allow responding when canApprovePermissions is false', async () => {

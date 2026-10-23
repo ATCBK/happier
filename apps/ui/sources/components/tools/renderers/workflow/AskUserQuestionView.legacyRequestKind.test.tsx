@@ -162,6 +162,7 @@ describe('AskUserQuestionView legacy request-kind fallback', () => {
             permission: { id: 'plan-1', status: 'pending' } });
         const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a',
             interaction: { canSendMessages: true, canApprovePermissions: true },
+            agentState: { requests: { 'plan-1': { tool: 'ExitPlanMode', arguments: { plan: 'Build the feature' }, createdAt: 1 } } },
             actions: { respondToPermission, answerUserAction: async () => {}, abort: async () => {}, submitMessage: async () => {} },
         });
         const screen = await renderScreen(wrapWithSessionTranscriptSource(
